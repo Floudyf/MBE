@@ -19,6 +19,7 @@ artifacts/
 *.csv
 *.jsonl
 *.jsonl.gz
+!tests/golden/*.jsonl.gz
 
 # Local tooling
 .env

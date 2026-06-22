@@ -1,0 +1,15 @@
+{
+  "tx_count": 2,
+  "actual_tx_mix": {
+    "asset_transfer": 0.5,
+    "reward_claim": 0.5
+  },
+  "actual_hot_key_ratio": 0.0,
+  "actual_cross_shard_ratio": 0.0,
+  "avg_read_set_size": 1.0,
+  "avg_write_set_size": 1.5,
+  "seed": 42,
+  "trace_format": "jsonl",
+  "compression": "gzip",
+  "schema_version": "v0"
+}

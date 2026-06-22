@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "V0 single-chain transaction trace",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tx_id", "tx_type", "timestamp", "chain_id", "contract", "function", "args", "read_set", "write_set", "access_list", "commutative", "update_type", "status", "chain_latency_ms"],
+  "properties": {
+    "tx_id": {"type": "string", "minLength": 1}, "tx_type": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "number"}, "chain_id": {"type": "string", "minLength": 1},
+    "contract": {"type": "string"}, "function": {"type": "string"}, "args": {"type": "object"},
+    "read_set": {"type": "array", "items": {"type": "string"}}, "write_set": {"type": "array", "items": {"type": "string"}},
+    "access_list": {"type": "array", "items": {"type": "string"}}, "commutative": {"type": "boolean"},
+    "update_type": {"type": "string"}, "status": {"type": "string"}, "chain_latency_ms": {"type": "number", "minimum": 0}
+  }
+}
