@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import io
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import TextIO
@@ -26,7 +27,11 @@ class TraceJSONLWriter:
 
     def __enter__(self) -> "TraceJSONLWriter":
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._stream = gzip.open(self.path, "wt", encoding="utf-8") if self.path.suffix == ".gz" else self.path.open("w", encoding="utf-8")
+        if self.path.suffix == ".gz":
+            raw = self.path.open("wb")
+            self._stream = io.TextIOWrapper(gzip.GzipFile(fileobj=raw, mode="wb", mtime=0), encoding="utf-8")
+        else:
+            self._stream = self.path.open("w", encoding="utf-8")
         return self
 
     def write(self, record: Mapping[str, object]) -> None:

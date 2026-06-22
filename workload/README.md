@@ -1,3 +1,3 @@
 # Workload
 
-Reserved for the V0 `asset_hotspot` synthetic workload. Its later implementation will generate the permitted transaction shapes and stream trace records; no chain-backed or hybrid workload is included in V0.
+V0 contains only the deterministic `asset_hotspot` synthetic workload. It streams records to the shared trace writer; chain-backed and hybrid workloads remain out of scope.
