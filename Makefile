@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help check-config sanity generate-trace test-workload
+.PHONY: help check-config sanity generate-trace test-workload replay
 
 help:
 	@echo "MBE V0 platform skeleton"
@@ -8,6 +8,10 @@ help:
 	@echo "  make sanity        Reserved for the V0 sanity test"
 	@echo "  make generate-trace Generate the default asset_hotspot trace"
 	@echo "  make test-workload Run the asset_hotspot workload test"
+	@echo "  make replay        Run the V0 serial executor replay"
+
+replay:
+	cd executor && go run ./cmd/replay
 
 generate-trace:
 	python -m workload.asset_hotspot.cli --config configs/experiments/v0_default_asset_hotspot.yaml --output experiments/runs/v0_default_asset_hotspot
