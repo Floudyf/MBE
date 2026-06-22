@@ -21,6 +21,14 @@ export async function fetchSummary(): Promise<Summary> {
   return request<Summary>(`${experimentPath}/summary`);
 }
 
+export async function fetchExperimentFiles(): Promise<string[]> {
+  return request<string[]>(`${experimentPath}/files`);
+}
+
+export function experimentFileDownloadURL(filename: string): string {
+  return `${requestBaseURL}${experimentPath}/files/${encodeURIComponent(filename)}`;
+}
+
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${requestBaseURL}${path}`, init);
   if (!response.ok) {

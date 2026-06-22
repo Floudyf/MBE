@@ -7,10 +7,12 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
 RUN = ROOT / "experiments/runs/v0_default_asset_hotspot"
+DOWNLOADABLE_OUTPUT_FILES = frozenset({"config.yaml", "trace_meta.json", "summary.csv", "latency.csv", "runtime.log"})
 app = FastAPI(title="MBE V0")
 
 
@@ -73,6 +75,17 @@ def summary(experiment_id: str) -> dict[str, str]:
 def files(experiment_id: str) -> list[str]:
     check(experiment_id)
     return [name for name in ("config.yaml", "trace.jsonl.gz", "trace_meta.json", "summary.csv", "latency.csv", "runtime.log") if (RUN / name).exists()]
+
+
+@app.get("/api/v0/experiments/{experiment_id}/files/{filename}")
+def download_file(experiment_id: str, filename: str) -> FileResponse:
+    check(experiment_id)
+    if filename not in DOWNLOADABLE_OUTPUT_FILES:
+        raise HTTPException(404, "unknown output file")
+    path = RUN / filename
+    if not path.is_file():
+        raise HTTPException(404, "output file not generated")
+    return FileResponse(path, filename=filename)
 
 
 @app.get("/api/v0/experiments/{experiment_id}/logs")

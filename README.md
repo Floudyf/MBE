@@ -85,3 +85,11 @@ make v0-sanity
 ```
 
 Sanity check 生成的 `experiments/runs/` 文件是本地实验产物，不会提交到 Git。
+
+## Windows 一键启动
+
+在仓库根目录双击 `start_mbe.bat`，或在 PowerShell 中运行 `./start_mbe.bat`。脚本会检查 `.venv` 和 `frontend/node_modules`，分别打开后端与前端 PowerShell 窗口，等待两个本地服务就绪后自动打开 `http://127.0.0.1:5173`。
+
+## 前端结果文件下载
+
+运行完成后，在前端“结果文件”区域点击“刷新文件列表”。页面会标示 `config.yaml`、`trace_meta.json`、`summary.csv`、`latency.csv` 与 `runtime.log` 是否已生成，并为存在的文件提供下载链接。
