@@ -1,11 +1,12 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help check-config sanity generate-trace test-workload test-backend frontend-dev frontend-build replay
+.PHONY: help check-config sanity v0-sanity generate-trace test-workload test-backend frontend-dev frontend-build replay
 
 help:
 	@echo "MBE V0 platform skeleton"
 	@echo "  make check-config  Check the default V0 configuration exists"
 	@echo "  make sanity        Reserved for the V0 sanity test"
+	@echo "  make v0-sanity     Run the V0 end-to-end sanity check"
 	@echo "  make generate-trace Generate the default asset_hotspot trace"
 	@echo "  make test-workload Run the asset_hotspot workload test"
 	@echo "  make test-backend  Run the FastAPI health smoke test"
@@ -37,3 +38,6 @@ check-config:
 
 sanity:
 	@echo "V0 sanity test is not implemented yet."
+
+v0-sanity:
+	python scripts/v0_sanity.py

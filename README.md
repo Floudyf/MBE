@@ -73,3 +73,15 @@ npm run dev
 ```
 
 默认前端地址由 Vite 输出（通常为 `http://127.0.0.1:5173`），并连接本地后端 `http://127.0.0.1:8000`。页面提供默认实验运行、V0 Composer 插件预览、`runtime.log` 刷新和 summary 指标刷新。也可从根目录使用 `make frontend-dev` 或 `make frontend-build`。
+
+## V0 端到端 Sanity Check
+
+从仓库根目录运行以下命令，可重新生成默认 `asset_hotspot` trace、执行 Go replay，并检查 trace、summary、latency 与 runtime log 的关键产物和指标：
+
+```powershell
+python scripts/v0_sanity.py
+# 或
+make v0-sanity
+```
+
+Sanity check 生成的 `experiments/runs/` 文件是本地实验产物，不会提交到 Git。
