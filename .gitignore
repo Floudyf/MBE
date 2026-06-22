@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node.js
+node_modules/
+dist/
+
+# Go
+*.exe
+*.test
+
+# Generated experiment outputs
+data/
+results/
+artifacts/
+*.log
+*.csv
+*.jsonl
+*.jsonl.gz
+
+# Local tooling
+.env
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

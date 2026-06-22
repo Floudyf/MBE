@@ -21,6 +21,21 @@ V0 means:
 
 Do not implement V1/V2/V3 features unless explicitly requested.
 
+## Runtime and language versions
+
+V0 must use these versions unless the user explicitly approves a change:
+
+- Python: 3.12.x
+- Go: 1.24.x
+- Node.js: 22 LTS
+- React: 18.x
+- TypeScript: 5.x
+- FastAPI: 0.115.x
+- Uvicorn: 0.30.x
+
+Keep dependency manifests and local development tooling aligned with these
+constraints when the corresponding V0 module is introduced.
+
 ## V0 default plugins
 
 Use only these default plugins in V0:

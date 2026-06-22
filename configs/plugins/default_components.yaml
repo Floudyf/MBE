@@ -1,0 +1,20 @@
+# The sole V0 component composition. No alternative or advanced plugin is enabled.
+schema_version: v0
+plugins:
+  chain_backend: mockchain
+  workload: asset_hotspot
+  trace: jsonl_gzip
+  consensus_protocol: simple_ordering
+  consensus_sharding: single_group
+  state_sharding: hash_state_sharding
+  execution_sharding: hash_execution_sharding
+  routing: hash_routing
+  cross_shard_protocol: local_only
+  cross_chain_protocol: disabled
+  execution: serial_execution
+  commit: normal_commit
+  clock: virtual_clock
+  network_model: fixed_latency_model
+  metrics: basic_metrics
+  composer: default_composer
+  frontend_template: default_single_chain_experiment

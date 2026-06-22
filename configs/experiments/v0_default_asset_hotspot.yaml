@@ -1,0 +1,39 @@
+# Default reproducible single-chain V0 experiment.
+experiment:
+  name: v0_default_asset_hotspot
+  mode: full_pipeline
+  seed: 42
+  output_dir: data/results/v0_default_asset_hotspot
+
+frontend_template: { plugin: default_single_chain_experiment }
+composer: { plugin: default_composer }
+chain_backend: { plugin: mockchain }
+
+workload:
+  plugin: asset_hotspot
+  tx_count: 10000
+  zipf_theta: 1.2
+  hot_key_ratio: 0.05
+  cross_shard_ratio: 0.2
+
+trace: { plugin: jsonl_gzip, output: trace.jsonl.gz }
+runtime: { clock_mode: virtual, event_simulation: true }
+clock: { plugin: virtual_clock }
+network_model: { plugin: fixed_latency_model, remote_fetch_latency_ms: 5 }
+
+consensus_protocol:
+  plugin: simple_ordering
+  block_size: 500
+  block_interval_ms: 100
+  finality_delay_ms: 100
+consensus_sharding: { plugin: single_group }
+state_sharding: { plugin: hash_state_sharding, shard_count: 4 }
+execution_sharding: { plugin: hash_execution_sharding, shard_count: 4 }
+routing: { plugin: hash_routing }
+cross_shard_protocol: { plugin: local_only }
+cross_chain_protocol: { plugin: disabled }
+execution: { plugin: serial_execution }
+commit: { plugin: normal_commit }
+metrics:
+  plugin: basic_metrics
+  outputs: [summary.csv, latency.csv, runtime.log]
