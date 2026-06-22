@@ -37,3 +37,27 @@ python -m pytest tests/workload/test_asset_hotspot.py -q
 ```
 
 也可运行 `make test-workload`。
+
+## V0 后端控制层
+
+从仓库根目录安装后端依赖并启动 FastAPI 控制层：
+
+```powershell
+python -m pip install -r backend/requirements.txt
+python -m uvicorn backend.app.main:app --reload
+```
+
+健康检查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+运行默认实验并查看指标：
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v0/experiments/v0_default_asset_hotspot/run
+Invoke-RestMethod http://127.0.0.1:8000/api/v0/experiments/v0_default_asset_hotspot/summary
+```
+
+运行产生的 `experiments/runs/` 产物仅供本地查看，已由 `.gitignore` 排除，不会提交。
