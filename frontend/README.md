@@ -4,7 +4,7 @@ The V0 frontend is a minimal React + Vite control panel for the default single-c
 
 ## Run locally
 
-Use Node.js 22 LTS. From this directory:
+Use Node.js 22 LTS or Node.js 24 LTS. From this directory:
 
 ```powershell
 npm install

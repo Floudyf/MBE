@@ -6,7 +6,7 @@
 
 V0 只使用默认 MockChain 单链组件包。它不包含 Fabric、EVM、PBFT、HotStuff、DAG、复杂路由或执行、跨链协议、Grafana、多用户权限或分布式部署。
 
-运行时版本固定为 Python 3.12.x、Go 1.24.x、Node.js 22 LTS、React 18.x、TypeScript 5.x、FastAPI 0.115.x 与 Uvicorn 0.30.x。完整实施依据见 `AGENTS.md`、`docs/v0_implementation_plan.md` 和 `docs/platform_plan_full.md`。
+运行时版本固定为 Python 3.12.x、Go 1.24.x、Node.js 22 LTS 或 Node.js 24 LTS、React 18.x、TypeScript 5.x、FastAPI 0.115.x 与 Uvicorn 0.30.x。完整实施依据见 `AGENTS.md`、`docs/v0_implementation_plan.md` 和 `docs/platform_plan_full.md`。
 
 ## 当前目录
 
@@ -64,7 +64,7 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v0/experiments/v0_default_asset_hots
 
 ## V0 前端
 
-前端使用 Node.js 22 LTS、React 18、TypeScript 5 和 Vite。在启动 FastAPI 后端后，从仓库根目录运行：
+前端使用 Node.js 22 LTS 或 Node.js 24 LTS、React 18、TypeScript 5 和 Vite。在启动 FastAPI 后端后，从仓库根目录运行：
 
 ```powershell
 cd frontend
