@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help check-config sanity generate-trace test-workload test-backend replay
+.PHONY: help check-config sanity generate-trace test-workload test-backend frontend-dev frontend-build replay
 
 help:
 	@echo "MBE V0 platform skeleton"
@@ -9,6 +9,8 @@ help:
 	@echo "  make generate-trace Generate the default asset_hotspot trace"
 	@echo "  make test-workload Run the asset_hotspot workload test"
 	@echo "  make test-backend  Run the FastAPI health smoke test"
+	@echo "  make frontend-dev  Start the V0 React development server"
+	@echo "  make frontend-build Build the V0 React frontend"
 	@echo "  make replay        Run the V0 serial executor replay"
 
 replay:
@@ -22,6 +24,12 @@ test-workload:
 
 test-backend:
 	python -m pytest backend/tests/test_health.py -q
+
+frontend-dev:
+	cd frontend && npm run dev
+
+frontend-build:
+	cd frontend && npm run build
 
 check-config:
 	@test -f configs/experiments/v0_default_asset_hotspot.yaml

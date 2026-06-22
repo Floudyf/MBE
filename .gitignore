@@ -29,3 +29,6 @@ experiments/runs/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# TypeScript build cache
+frontend/tsconfig.tsbuildinfo

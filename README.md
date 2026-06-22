@@ -61,3 +61,15 @@ Invoke-RestMethod http://127.0.0.1:8000/api/v0/experiments/v0_default_asset_hots
 ```
 
 运行产生的 `experiments/runs/` 产物仅供本地查看，已由 `.gitignore` 排除，不会提交。
+
+## V0 前端
+
+前端使用 Node.js 22 LTS、React 18、TypeScript 5 和 Vite。在启动 FastAPI 后端后，从仓库根目录运行：
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+默认前端地址由 Vite 输出（通常为 `http://127.0.0.1:5173`），并连接本地后端 `http://127.0.0.1:8000`。页面提供默认实验运行、V0 Composer 插件预览、`runtime.log` 刷新和 summary 指标刷新。也可从根目录使用 `make frontend-dev` 或 `make frontend-build`。
