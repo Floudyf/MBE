@@ -1,0 +1,8 @@
+name: v1_fabric_chain_backed
+stage: v1.1
+fixed_components: {runtime: virtual_clock, routing: hash_routing, execution: serial_execution, commit: normal_commit}
+replaceable_components: [workload, trace]
+required_trace_fields: [tx_id, timestamp, contract, function, args, read_set, write_set, access_list, status]
+output_metrics: [throughput_tps, p99_latency_ms, success_count, failed_count]
+runnable: false
+description: Planned Fabric chain-backed trace validation template; Fabric is not implemented in V1.1.

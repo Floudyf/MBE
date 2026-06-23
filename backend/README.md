@@ -39,4 +39,14 @@ Preview the completed default Composer package and its validation result:
 Invoke-RestMethod http://127.0.0.1:8000/api/v0/composer/default
 ```
 
+## V1.1 declaration preview
+
+V1.1 exposes templates and experiment declarations without adding a V1 execution endpoint. Only the hash-serial declaration is marked runnable; all other declarations are planned.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/composer/templates
+Invoke-RestMethod http://127.0.0.1:8000/api/v1/composer/experiments
+Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v1/composer/preview -ContentType 'application/json' -Body '{"experiment_id":"v1_baseline_hash_serial"}'
+```
+
 Generated experiment artifacts under `experiments/runs/` are local outputs and are not committed to the repository.

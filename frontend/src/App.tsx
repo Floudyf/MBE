@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   API_BASE_URL,
@@ -6,8 +6,12 @@ import {
   fetchExperimentFiles,
   fetchRuntimeLog,
   fetchSummary,
+  fetchV1Experiments,
+  fetchV1Templates,
   runDefaultExperiment,
   type Summary,
+  type V1Experiment,
+  type V1Template,
 } from "./api";
 
 const plugins = [
@@ -31,6 +35,18 @@ function App() {
   const [availableFiles, setAvailableFiles] = useState<string[]>([]);
   const [fileError, setFileError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [v1Templates, setV1Templates] = useState<V1Template[]>([]);
+  const [v1Experiments, setV1Experiments] = useState<V1Experiment[]>([]);
+  const [v1Error, setV1Error] = useState("");
+
+  useEffect(() => { void loadV1Composer(); }, []);
+
+  async function loadV1Composer() {
+    try {
+      const [templates, experiments] = await Promise.all([fetchV1Templates(), fetchV1Experiments()]);
+      setV1Templates(templates); setV1Experiments(experiments); setV1Error("");
+    } catch (error) { setV1Error(errorMessage(error)); }
+  }
 
   async function runExperiment() {
     setBusy(true); setRunStatus("正在运行默认实验……");
@@ -61,6 +77,7 @@ function App() {
     <header><p className="eyebrow">元宇宙区块链实验平台</p><h1>V0 默认单链实验</h1><p className="muted">后端地址：{API_BASE_URL}</p></header>
     <section className="panel experiments" aria-labelledby="experiments-title"><div><p className="eyebrow">实验</p><h2 id="experiments-title">v0_default_asset_hotspot</h2><p>使用虚拟时钟串行回放的默认 MockChain asset_hotspot 工作负载。</p><a href={`${API_BASE_URL}/api/v0/config/default`} target="_blank" rel="noreferrer">查看默认配置</a></div><button type="button" onClick={runExperiment} disabled={busy}>{busy ? "运行中……" : "运行默认实验"}</button></section>
     <section className="panel" aria-labelledby="composer-title"><p className="eyebrow">组件编排预览</p><h2 id="composer-title">默认 V0 插件包</h2><dl className="plugin-grid">{plugins.map(([kind, plugin]) => <div key={kind}><dt>{kind}</dt><dd>{plugin}</dd></div>)}</dl></section>
+    <section className="panel" aria-labelledby="v1-title"><div className="section-heading"><div><p className="eyebrow">V1.1</p><h2 id="v1-title">实验模板与策略配置</h2></div><button type="button" onClick={loadV1Composer}>刷新 V1 列表</button></div>{v1Error && <p className="file-error">无法加载 V1 Composer：{v1Error}</p>}<h3>实验模板</h3><ul className="v1-list">{v1Templates.map((template) => <li key={template.name}><strong>{template.name}</strong><span>{template.runnable ? "可运行模板" : "规划中模板"}</span><small>{template.description}</small></li>)}</ul><h3>实验配置</h3><ul className="v1-list">{v1Experiments.map((experiment) => <li key={experiment.id}><strong>{experiment.id}</strong><span className={experiment.runnable && experiment.implemented ? "v1-runnable" : "v1-planned"}>{experiment.runnable && experiment.implemented ? "可运行" : "规划中"}</span><small>{experiment.description}</small></li>)}</ul></section>
     <section className="panel" aria-labelledby="console-title"><div className="section-heading"><div><p className="eyebrow">运行控制台</p><h2 id="console-title">{runStatus}</h2></div><button type="button" onClick={refreshLog}>刷新 runtime.log</button></div><h3>运行 API 返回内容</h3><pre>{runResponse}</pre><h3>runtime.log</h3><pre>{runtimeLog}</pre></section>
     <section className="panel" aria-labelledby="results-title"><div className="section-heading"><div><p className="eyebrow">结果</p><h2 id="results-title">基础指标</h2></div><button type="button" onClick={refreshSummary}>刷新 summary</button></div><dl className="metrics-grid">{metricKeys.map((key) => <div key={key}><dt>{key}</dt><dd>{summary?.[key] ?? "—"}</dd></div>)}</dl><div className="section-heading files-heading"><div><h3>结果文件</h3><p className="muted">运行完成后可下载当前实验产物。</p></div><button type="button" onClick={refreshFiles}>刷新文件列表</button></div>{fileError && <p className="file-error">{fileError}</p>}<ul className="file-list">{resultFiles.map((filename) => { const exists = availableFiles.includes(filename); return <li key={filename}><span>{filename}</span><span className={exists ? "file-present" : "file-missing"}>{exists ? "已生成" : "未生成"}</span>{exists ? <a href={experimentFileDownloadURL(filename)}>下载</a> : <span>—</span>}</li>; })}</ul></section>
   </main>;

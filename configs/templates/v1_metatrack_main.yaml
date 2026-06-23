@@ -1,0 +1,8 @@
+name: v1_metatrack_main
+stage: v1.1
+fixed_components: {workload: asset_hotspot, trace: jsonl_gzip, runtime: virtual_clock}
+replaceable_components: [routing, execution, commit]
+required_trace_fields: [tx_id, timestamp, read_set, write_set, access_list, commutative, update_type, status]
+output_metrics: [throughput_tps, p99_latency_ms, remote_wait_ms, aggregation_ratio]
+runnable: false
+description: Planned main V1 MetaTrack experiment template.

@@ -1,0 +1,10 @@
+experiment: {name: v1_ablation_no_hot_aggregation, version: v1, stage: v1.1, runnable: false, implemented: false, description: Planned no-hot-aggregation ablation declaration only., seed: 42}
+template: v1_ablation
+workload: {plugin: asset_hotspot}
+trace: {plugin: jsonl_gzip}
+runtime: {clock_mode: virtual}
+routing: {plugin: metatrack_routing}
+execution: {plugin: dual_track_execution}
+commit: {plugin: normal_commit}
+metrics: {plugin: basic_metrics}
+output: {dir: experiments/runs/v1_ablation_no_hot_aggregation}

@@ -46,6 +46,12 @@ pre { background: #171717; color: #f3f3f3; margin: 0; max-height: 18rem; overflo
 .file-list a { font-weight: 700; }
 .file-present { color: #222222; }
 .file-missing, .file-error { color: #666666; }
+.v1-list { list-style: none; margin: 0; padding: 0; }
+.v1-list li { border-top: 1px solid #d5d5d5; display: grid; gap: 0.3rem; grid-template-columns: minmax(190px, 1fr) auto; padding: 0.65rem 0; }
+.v1-list small { color: #555555; grid-column: 1 / -1; }
+.v1-runnable, .v1-planned { font-size: 0.85rem; font-weight: 700; }
+.v1-runnable { color: #111111; }
+.v1-planned { color: #666666; }
 
 @media (max-width: 600px) {
   .experiments, .section-heading { align-items: stretch; flex-direction: column; }

@@ -1,0 +1,8 @@
+name: v1_execution_comparison
+stage: v1.1
+fixed_components: {workload: asset_hotspot, trace: jsonl_gzip, runtime: virtual_clock, routing: hash_routing, commit: normal_commit}
+replaceable_components: [execution]
+required_trace_fields: [tx_id, timestamp, read_set, write_set, access_list, status]
+output_metrics: [throughput_tps, avg_latency_ms, p95_latency_ms, p99_latency_ms, success_count, failed_count]
+runnable: true
+description: Comparison template for serial and planned execution strategies.

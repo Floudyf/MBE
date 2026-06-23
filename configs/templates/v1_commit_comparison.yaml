@@ -1,0 +1,8 @@
+name: v1_commit_comparison
+stage: v1.1
+fixed_components: {workload: asset_hotspot, trace: jsonl_gzip, runtime: virtual_clock, routing: hash_routing, execution: serial_execution}
+replaceable_components: [commit]
+required_trace_fields: [tx_id, timestamp, commutative, update_type, status]
+output_metrics: [throughput_tps, p99_latency_ms, aggregation_count]
+runnable: false
+description: Planned commit comparison template; aggregation is not implemented in V1.1.

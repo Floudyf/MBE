@@ -7,6 +7,8 @@ const requestBaseURL = configuredBaseURL ?? "";
 const experimentPath = "/api/v0/experiments/v0_default_asset_hotspot";
 
 export type Summary = Record<string, string>;
+export type V1Template = { name: string; stage: string; runnable: boolean; description: string };
+export type V1Experiment = { id: string; stage: string; runnable: boolean; implemented: boolean; description: string; template: string };
 
 export async function runDefaultExperiment(): Promise<unknown> {
   return request(`${experimentPath}/run`, { method: "POST" });
@@ -27,6 +29,14 @@ export async function fetchExperimentFiles(): Promise<string[]> {
 
 export function experimentFileDownloadURL(filename: string): string {
   return `${requestBaseURL}${experimentPath}/files/${encodeURIComponent(filename)}`;
+}
+
+export async function fetchV1Templates(): Promise<V1Template[]> {
+  return request<V1Template[]>("/api/v1/composer/templates");
+}
+
+export async function fetchV1Experiments(): Promise<V1Experiment[]> {
+  return request<V1Experiment[]>("/api/v1/composer/experiments");
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {

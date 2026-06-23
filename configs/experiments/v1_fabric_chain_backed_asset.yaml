@@ -1,0 +1,10 @@
+experiment: {name: v1_fabric_chain_backed_asset, version: v1, stage: v1.1, runnable: false, implemented: false, description: Planned Fabric chain-backed trace validation declaration only., seed: 42}
+template: v1_fabric_chain_backed
+workload: {plugin: fabric_asset_workload}
+trace: {plugin: jsonl_gzip}
+runtime: {clock_mode: virtual}
+routing: {plugin: hash_routing}
+execution: {plugin: serial_execution}
+commit: {plugin: normal_commit}
+metrics: {plugin: basic_metrics}
+output: {dir: experiments/runs/v1_fabric_chain_backed_asset}

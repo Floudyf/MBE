@@ -12,6 +12,8 @@ from fastapi.responses import FileResponse
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
 DEFAULT_COMPONENTS = ROOT / "configs/plugins/default_components.yaml"
+V1_EXPERIMENTS = ROOT / "configs/experiments"
+V1_TEMPLATES = ROOT / "configs/templates"
 RUN = ROOT / "experiments/runs/v0_default_asset_hotspot"
 DOWNLOADABLE_OUTPUT_FILES = frozenset({"config.yaml", "trace_meta.json", "summary.csv", "latency.csv", "runtime.log"})
 app = FastAPI(title="MBE V0")
@@ -27,6 +29,23 @@ def run(command: list[str], cwd: Path) -> str:
     if result.returncode != 0:
         raise HTTPException(500, detail={"message": "process failed", "stderr": result.stderr})
     return result.stdout
+
+
+def v1_experiment_documents() -> list[dict]:
+    documents = []
+    for path in sorted(V1_EXPERIMENTS.glob("v1_*.yaml")):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        experiment = document["experiment"]
+        documents.append({
+            "id": experiment["name"],
+            "stage": experiment["stage"],
+            "description": experiment["description"],
+            "runnable": bool(experiment["runnable"]),
+            "implemented": bool(experiment["implemented"]),
+            "template": document["template"],
+            "config": document,
+        })
+    return documents
 
 
 @app.get("/health")
@@ -54,6 +73,33 @@ def composer_preview() -> dict:
         "errors": [],
         "components": components,
     }
+
+
+@app.get("/api/v1/composer/templates")
+def v1_templates() -> list[dict]:
+    return [yaml.safe_load(path.read_text(encoding="utf-8")) for path in sorted(V1_TEMPLATES.glob("v1_*.yaml"))]
+
+
+@app.get("/api/v1/composer/experiments")
+def v1_experiments() -> list[dict]:
+    return [{key: value for key, value in document.items() if key != "config"} for document in v1_experiment_documents()]
+
+
+@app.post("/api/v1/composer/preview")
+def v1_preview(payload: dict[str, str]) -> dict:
+    experiment_id = payload.get("experiment_id")
+    for document in v1_experiment_documents():
+        if document["id"] == experiment_id:
+            return {
+                "experiment_id": document["id"],
+                "stage": document["stage"],
+                "description": document["description"],
+                "runnable": document["runnable"],
+                "implemented": document["implemented"],
+                "status": "runnable" if document["runnable"] and document["implemented"] else "planned",
+                "config": document["config"],
+            }
+    raise HTTPException(404, "unknown V1 experiment")
 
 
 @app.post("/api/v0/experiments")
