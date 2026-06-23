@@ -1,0 +1,9 @@
+name: hash_execution_sharding
+type: execution_sharding
+version: v0
+maturity: v0-default
+description: Hash-based logical execution placement.
+default_params: {shard_count: 4}
+inputs: [transaction_trace]
+outputs: [execution_shards]
+metrics: [throughput_tps]

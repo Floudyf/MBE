@@ -1,0 +1,9 @@
+name: default_single_chain_experiment
+type: frontend_template
+version: v0
+maturity: v0-default
+description: Minimal frontend template for the default V0 single-chain experiment.
+default_params: {}
+inputs: [completed_component_composition]
+outputs: [experiment_ui]
+metrics: [run_status]

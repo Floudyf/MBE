@@ -1,0 +1,9 @@
+name: hash_routing
+type: routing
+version: v0
+maturity: v0-default
+description: Hash-based routing for V0 state access.
+default_params: {}
+inputs: [state_shards]
+outputs: [route]
+metrics: [remote_fetch_count]

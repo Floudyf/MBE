@@ -1,0 +1,9 @@
+name: basic_metrics
+type: metrics
+version: v0
+maturity: v0-default
+description: CSV metrics output for the V0 pipeline.
+default_params: {outputs: [summary.csv, latency.csv, runtime.log]}
+inputs: [committed_transaction, virtual_timestamps]
+outputs: [summary.csv, latency.csv, runtime.log]
+metrics: [throughput_tps, avg_latency_ms, p95_latency_ms, p99_latency_ms, success_count, failed_count]

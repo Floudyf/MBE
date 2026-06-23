@@ -1,0 +1,9 @@
+name: jsonl_gzip
+type: trace
+version: v0
+maturity: v0-default
+description: Streaming gzip-compressed JSONL trace format.
+default_params: {output: trace.jsonl.gz}
+inputs: [transaction_trace]
+outputs: [trace.jsonl.gz, trace_meta.json]
+metrics: [tx_count]

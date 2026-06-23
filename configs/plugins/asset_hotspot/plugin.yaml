@@ -1,0 +1,9 @@
+name: asset_hotspot
+type: workload
+version: v0
+maturity: v0-default
+description: Deterministic synthetic metaverse asset hotspot workload.
+default_params: {tx_count: 10000, zipf_theta: 1.2, hot_key_ratio: 0.05, cross_shard_ratio: 0.2}
+inputs: [experiment_seed]
+outputs: [transaction_trace]
+metrics: [tx_count, actual_hot_key_ratio, actual_cross_shard_ratio]

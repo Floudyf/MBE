@@ -1,0 +1,9 @@
+name: single_group
+type: consensus_sharding
+version: v0
+maturity: v0-default
+description: One consensus group for the V0 single-chain pipeline.
+default_params: {}
+inputs: [ordered_blocks]
+outputs: [ordered_blocks]
+metrics: [throughput_tps]

@@ -1,0 +1,9 @@
+name: normal_commit
+type: commit
+version: v0
+maturity: v0-default
+description: Normal V0 commit completion.
+default_params: {}
+inputs: [execution_result]
+outputs: [committed_transaction]
+metrics: [avg_latency_ms, p95_latency_ms, p99_latency_ms]

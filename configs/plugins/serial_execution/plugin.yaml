@@ -1,0 +1,9 @@
+name: serial_execution
+type: execution
+version: v0
+maturity: v0-default
+description: Deterministic serial replay execution.
+default_params: {}
+inputs: [local_execution]
+outputs: [execution_result]
+metrics: [success_count, failed_count]

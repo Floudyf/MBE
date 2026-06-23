@@ -1,0 +1,9 @@
+name: hash_state_sharding
+type: state_sharding
+version: v0
+maturity: v0-default
+description: Hash-based logical state placement.
+default_params: {shard_count: 4}
+inputs: [access_list]
+outputs: [state_shards]
+metrics: [cross_shard_ratio, remote_fetch_count]

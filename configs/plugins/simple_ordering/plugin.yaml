@@ -1,0 +1,9 @@
+name: simple_ordering
+type: consensus_protocol
+version: v0
+maturity: v0-default
+description: Deterministic single-stream block ordering.
+default_params: {block_size: 500, block_interval_ms: 100, finality_delay_ms: 100}
+inputs: [transaction_trace]
+outputs: [ordered_blocks]
+metrics: [throughput_tps, avg_latency_ms, p95_latency_ms, p99_latency_ms]

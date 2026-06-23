@@ -1,0 +1,9 @@
+name: mockchain
+type: chain_backend
+version: v0
+maturity: v0-default
+description: Deterministic in-process V0 chain backend.
+default_params: {}
+inputs: [transaction_trace]
+outputs: [mockchain_receipt]
+metrics: [success_count, failed_count]

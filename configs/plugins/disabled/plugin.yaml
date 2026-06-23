@@ -1,0 +1,9 @@
+name: disabled
+type: cross_chain_protocol
+version: v0
+maturity: v0-default
+description: Explicitly disables cross-chain execution in V0.
+default_params: {enabled: false}
+inputs: []
+outputs: []
+metrics: []

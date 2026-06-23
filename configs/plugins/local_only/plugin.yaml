@@ -1,0 +1,9 @@
+name: local_only
+type: cross_shard_protocol
+version: v0
+maturity: v0-default
+description: Local-only V0 cross-shard handling.
+default_params: {}
+inputs: [route]
+outputs: [local_execution]
+metrics: [cross_shard_ratio]

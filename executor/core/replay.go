@@ -16,9 +16,16 @@ import (
 
 const defaultShardCount = 4
 
+type replayTiming struct {
+	BlockSize            int
+	BlockIntervalMS      float64
+	FinalityDelayMS      float64
+	RemoteFetchLatencyMS float64
+}
+
 // Summary contains the V0 replay metrics written to summary.csv.
 type Summary struct {
-	TxCount, SuccessCount, FailedCount, RemoteFetchCount int
+	TxCount, SuccessCount, FailedCount, RemoteFetchCount                                         int
 	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS float64
 }
 
@@ -28,7 +35,14 @@ func Replay(config, trace, out string) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	timing, err := replayTimingFromConfig(config)
+	if err != nil {
+		return Summary{}, err
+	}
 	if err := os.MkdirAll(out, 0o755); err != nil {
+		return Summary{}, err
+	}
+	if err := writeConfigSnapshot(config, out); err != nil {
 		return Summary{}, err
 	}
 
@@ -58,7 +72,12 @@ func Replay(config, trace, out string) (Summary, error) {
 	for tx := range txs {
 		summary.TxCount++
 		arrival := tx.Timestamp
-		commitDone := arrival + tx.ChainLatencyMS
+		blockIndex := (summary.TxCount - 1) / timing.BlockSize
+		startTime := math.Max(arrival, float64(blockIndex)*timing.BlockIntervalMS)
+		crossShard, remoteFetches := stateAccessMetrics(tx, shardCount)
+		virtualLatency := tx.ChainLatencyMS + timing.FinalityDelayMS + float64(remoteFetches)*timing.RemoteFetchLatencyMS
+		commitDone := startTime + virtualLatency
+		latency := commitDone - arrival
 		if !hasTransactions || arrival < firstArrival {
 			firstArrival = arrival
 		}
@@ -73,16 +92,16 @@ func Replay(config, trace, out string) (Summary, error) {
 			summary.FailedCount++
 		} else {
 			summary.SuccessCount++
-			latencies = append(latencies, tx.ChainLatencyMS)
+			latencies = append(latencies, latency)
 		}
 
-		if crossShard, remoteFetches := stateAccessMetrics(tx, shardCount); crossShard {
+		if crossShard {
 			crossShardCount++
 			summary.RemoteFetchCount += remoteFetches
 		}
 		if err := latencyWriter.Write([]string{
-			tx.TxID, tx.TxType, fmt.Sprint(arrival), fmt.Sprint(arrival), fmt.Sprint(commitDone),
-			fmt.Sprint(tx.ChainLatencyMS), status, fmt.Sprint(tx.ChainLatencyMS),
+			tx.TxID, tx.TxType, fmt.Sprint(arrival), fmt.Sprint(startTime), fmt.Sprint(commitDone),
+			fmt.Sprint(latency), status, fmt.Sprint(tx.ChainLatencyMS),
 		}); err != nil {
 			latencyFile.Close()
 			return summary, err
@@ -129,6 +148,48 @@ func Replay(config, trace, out string) (Summary, error) {
 		"replay done",
 	)
 	return summary, os.WriteFile(filepath.Join(out, "runtime.log"), []byte(strings.Join(logLines, "\n")+"\n"), 0o644)
+}
+
+func writeConfigSnapshot(config, out string) error {
+	contents, err := os.ReadFile(config)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(out, "config.yaml"), contents, 0o644)
+}
+
+func replayTimingFromConfig(path string) (replayTiming, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return replayTiming{}, err
+	}
+	text := string(contents)
+	return replayTiming{
+		BlockSize:            configPositiveInt(text, "block_size", 1),
+		BlockIntervalMS:      configNonNegativeFloat(text, "block_interval_ms", 0),
+		FinalityDelayMS:      configNonNegativeFloat(text, "finality_delay_ms", 1),
+		RemoteFetchLatencyMS: configNonNegativeFloat(text, "remote_fetch_latency_ms", 0),
+	}, nil
+}
+
+func configPositiveInt(contents, field string, fallback int) int {
+	value := configNonNegativeFloat(contents, field, float64(fallback))
+	if value <= 0 {
+		return fallback
+	}
+	return int(value)
+}
+
+func configNonNegativeFloat(contents, field string, fallback float64) float64 {
+	matches := regexp.MustCompile(regexp.QuoteMeta(field) + `:\s*([0-9]+(?:\.[0-9]+)?)`).FindStringSubmatch(contents)
+	if len(matches) != 2 {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(matches[1], 64)
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
 }
 
 func shardCountFromConfig(path string) (int, error) {

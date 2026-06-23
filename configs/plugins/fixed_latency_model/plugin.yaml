@@ -1,0 +1,9 @@
+name: fixed_latency_model
+type: network_model
+version: v0
+maturity: v0-default
+description: Fixed virtual remote-fetch latency model.
+default_params: {remote_fetch_latency_ms: 5}
+inputs: [route]
+outputs: [virtual_network_delay]
+metrics: [remote_fetch_count]

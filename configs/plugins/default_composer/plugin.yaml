@@ -1,0 +1,9 @@
+name: default_composer
+type: composer
+version: v0
+maturity: v0-default
+description: Completes the sole valid V0 default component composition.
+default_params: {schema_version: v0}
+inputs: [default_components]
+outputs: [completed_component_composition]
+metrics: [composition_valid]

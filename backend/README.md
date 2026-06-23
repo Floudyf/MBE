@@ -33,4 +33,10 @@ View its summary metrics after the run completes:
 Invoke-RestMethod http://127.0.0.1:8000/api/v0/experiments/v0_default_asset_hotspot/summary
 ```
 
+Preview the completed default Composer package and its validation result:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/v0/composer/default
+```
+
 Generated experiment artifacts under `experiments/runs/` are local outputs and are not committed to the repository.

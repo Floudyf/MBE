@@ -45,7 +45,7 @@ def validate_summary(path: Path) -> None:
         actual = summary.get(key)
         if actual != expected:
             raise RuntimeError(f"summary.csv 字段 {key} 应为 {expected}，实际为 {actual!r}")
-    for key in ("throughput_tps", "cross_shard_ratio", "remote_fetch_count"):
+    for key in ("throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "cross_shard_ratio", "remote_fetch_count"):
         try:
             value = float(summary[key])
         except (KeyError, ValueError) as error:
@@ -103,6 +103,7 @@ def main() -> None:
     validate_summary(RUN_DIR / "summary.csv")
     validate_latency(RUN_DIR / "latency.csv")
     validate_runtime_log(RUN_DIR / "runtime.log")
+    require_file(RUN_DIR / "config.yaml")
     print("[v0-sanity] 通过：V0 workload、trace、replay 与指标产物均符合预期。")
 
 

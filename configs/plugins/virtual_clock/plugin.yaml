@@ -1,0 +1,9 @@
+name: virtual_clock
+type: clock
+version: v0
+maturity: v0-default
+description: Event timestamp based virtual clock without wall-clock delay simulation.
+default_params: {mode: virtual}
+inputs: [transaction_trace, ordered_blocks]
+outputs: [virtual_timestamps]
+metrics: [avg_latency_ms, p95_latency_ms, p99_latency_ms, wall_clock_runtime_ms]

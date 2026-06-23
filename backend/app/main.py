@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
+DEFAULT_COMPONENTS = ROOT / "configs/plugins/default_components.yaml"
 RUN = ROOT / "experiments/runs/v0_default_asset_hotspot"
 DOWNLOADABLE_OUTPUT_FILES = frozenset({"config.yaml", "trace_meta.json", "summary.csv", "latency.csv", "runtime.log"})
 app = FastAPI(title="MBE V0")
@@ -36,6 +37,23 @@ def health() -> dict[str, str]:
 @app.get("/api/v0/config/default")
 def config() -> dict:
     return yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+
+
+@app.get("/api/v0/composer/default")
+def composer_preview() -> dict:
+    """Return the complete, valid default V0 component composition."""
+    composition = yaml.safe_load(DEFAULT_COMPONENTS.read_text(encoding="utf-8"))
+    components = [
+        {"type": component_type, "plugin": plugin_name}
+        for component_type, plugin_name in composition["plugins"].items()
+    ]
+    return {
+        "composer": "default_composer",
+        "schema_version": composition["schema_version"],
+        "valid": True,
+        "errors": [],
+        "components": components,
+    }
 
 
 @app.post("/api/v0/experiments")
