@@ -14,7 +14,7 @@ if (-not (Test-Path -LiteralPath $frontendNodeModules)) {
     exit 1
 }
 if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-    Write-Host "npm was not found. Install Node.js 22 LTS or 24 LTS, then reopen PowerShell." -ForegroundColor Red
+    Write-Host "npm was not found. Install Node.js 22 LTS, then reopen PowerShell." -ForegroundColor Red
     exit 1
 }
 

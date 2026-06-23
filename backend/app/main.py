@@ -80,8 +80,10 @@ def files(experiment_id: str) -> list[str]:
 @app.get("/api/v0/experiments/{experiment_id}/files/{filename}")
 def download_file(experiment_id: str, filename: str) -> FileResponse:
     check(experiment_id)
+    if "/" in filename or "\\" in filename or filename in {".", ".."}:
+        raise HTTPException(400, "invalid output filename")
     if filename not in DOWNLOADABLE_OUTPUT_FILES:
-        raise HTTPException(404, "unknown output file")
+        raise HTTPException(403, "output file is not downloadable")
     path = RUN / filename
     if not path.is_file():
         raise HTTPException(404, "output file not generated")

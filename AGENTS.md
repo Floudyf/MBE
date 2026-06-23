@@ -26,7 +26,7 @@ Do not implement V1/V2/V3 features unless explicitly requested.
 V0 must use these versions unless the user explicitly approves a change:
 
 - Python: 3.12.x
-- Go: 1.24.x
+- Go: 1.26.1
 - Node.js: 22 LTS
 - React: 18.x
 - TypeScript: 5.x

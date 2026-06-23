@@ -60,6 +60,7 @@ Use exactly these default plugins:
 5. Keep frontend minimal and functional.
 6. Keep black/white/gray UI styling only.
 7. Add or update tests when creating core logic.
+8. Use Go 1.26.1 for the V0 executor.
 
 ## V0 config example
 

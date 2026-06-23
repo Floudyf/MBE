@@ -27,10 +27,10 @@ jobs:
       - name: Test backend health endpoint
         run: python -m pytest backend/tests/test_health.py -q
 
-      - name: Set up Go 1.24
+      - name: Set up Go 1.26.1
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: "1.26.1"
 
       - name: Test Go executor
         working-directory: executor
@@ -39,10 +39,10 @@ jobs:
       - name: Run V0 end-to-end sanity check
         run: python scripts/v0_sanity.py
 
-      - name: Set up Node 24
+      - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: "24.x"
+          node-version: "22.x"
 
       - name: Install frontend dependencies
         working-directory: frontend

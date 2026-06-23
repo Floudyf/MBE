@@ -1,3 +1,3 @@
 module metaverse-chainlab/executor
 
-go 1.24
+go 1.26.1
