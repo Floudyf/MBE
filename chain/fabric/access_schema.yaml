@@ -1,0 +1,52 @@
+contracts:
+  asset:
+    TransferAsset:
+      tx_type: asset_transfer
+      read_set: ["asset:{asset_id}"]
+      write_set: ["asset:{asset_id}"]
+      access_list: ["asset:{asset_id}"]
+      commutative: false
+      update_type: assign
+      primary_key: "asset:{asset_id}"
+      dependency_hint: asset_ownership_update
+    TradeAsset:
+      tx_type: asset_trade
+      read_set: ["asset:{asset_id}", "balance:{seller}", "balance:{buyer}"]
+      write_set: ["asset:{asset_id}", "balance:{seller}", "balance:{buyer}"]
+      access_list: ["asset:{asset_id}", "balance:{seller}", "balance:{buyer}"]
+      commutative: false
+      update_type: transfer
+      primary_key: "asset:{asset_id}"
+      dependency_hint: asset_trade
+  scene:
+    JoinScene:
+      tx_type: scene_join
+      read_set: ["scene:{scene_id}", "avatar:{user_id}"]
+      write_set: ["scene_member:{scene_id}:{user_id}"]
+      access_list: ["scene:{scene_id}", "avatar:{user_id}", "scene_member:{scene_id}:{user_id}"]
+      commutative: false
+      update_type: assign
+      primary_key: "scene:{scene_id}"
+      dependency_hint: scene_membership_update
+  reward:
+    AddReward:
+      tx_type: add_reward
+      read_set: ["reward_pool:{pool_id}"]
+      write_set: ["reward_pool:{pool_id}"]
+      access_list: ["reward_pool:{pool_id}"]
+      commutative: true
+      update_type: delta
+      primary_key: "reward_pool:{pool_id}"
+      dependency_hint: hot_delta_update
+      delta_arg: amount
+    ClaimReward:
+      tx_type: reward_claim
+      read_set: ["reward_pool:{pool_id}", "balance:{user_id}"]
+      write_set: ["reward_pool:{pool_id}", "balance:{user_id}"]
+      access_list: ["reward_pool:{pool_id}", "balance:{user_id}"]
+      commutative: true
+      update_type: delta
+      primary_key: "reward_pool:{pool_id}"
+      dependency_hint: hot_delta_update
+      delta_arg: amount
+      delta_sign: negative

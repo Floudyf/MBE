@@ -1,4 +1,4 @@
-experiment: {name: v1_fabric_chain_backed_asset, version: v1, stage: v1.1, runnable: false, implemented: false, description: Planned Fabric chain-backed trace validation declaration only., seed: 42}
+experiment: {name: v1_fabric_chain_backed_asset, version: v1, stage: v1.4, runnable: false, implemented: false, description: V1.4 planned/manual Fabric chain-backed trace declaration; not runnable by default., seed: 42}
 template: v1_fabric_chain_backed
 workload: {plugin: fabric_asset_workload}
 trace: {plugin: jsonl_gzip}
