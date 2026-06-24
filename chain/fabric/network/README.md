@@ -1,0 +1,2 @@
+# Fabric network wrapper
+Set `FABRIC_SAMPLES_DIR` to an external fabric-samples checkout. `python scripts/v1_fabric_network.py --check` uses graceful skip if absent; `--dry-run --action deploy-asset` only prints a command. `--strict` returns nonzero for missing environment. The wrapper detects `test-network` and generates `network.sh` commands only. Windows users should use Git Bash or WSL for future network.sh use. No Fabric command is executed; V1.4-d will add the real runner.
