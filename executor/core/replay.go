@@ -15,8 +15,9 @@ import (
 
 // Summary contains the V0 replay metrics written to summary.csv.
 type Summary struct {
-	TxCount, SuccessCount, FailedCount, RemoteFetchCount                                         int
-	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS float64
+	TxCount, SuccessCount, FailedCount, RemoteFetchCount, RoutingCrossShardTxCount, RoutingRemoteKeyCount, CoAccessGroupCount             int
+	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS, RoutingCrossShardTxRatio, RoutingTimeMS float64
+	RoutingPolicy                                                                                                                         string
 }
 
 // Replay streams a V0 trace, records per-transaction virtual-clock latency, and writes metrics.
@@ -65,6 +66,11 @@ func Replay(config, trace, out string) (Summary, error) {
 		// V1.2 builds the default M_t for the current streaming batch. M_t is
 		// execution-side state routing and leaves phi persistent placement intact.
 		route := modules.Routing.BuildRouting([]routing.Transaction{{ID: tx.TxID, AccessKeys: keys}}, modules.StateSharding)
+		summary.RoutingPolicy = route.Metrics.RoutingPolicy
+		summary.RoutingCrossShardTxCount += route.Metrics.CrossShardTxCount
+		summary.RoutingRemoteKeyCount += route.Metrics.RemoteKeyCount
+		summary.CoAccessGroupCount += route.Metrics.CoAccessGroupCount
+		summary.RoutingTimeMS += route.Metrics.RoutingTimeMS
 		// psi_t is calculated even though serial execution preserves V0 timing.
 		_ = modules.ExecutionSharding.Assign(execution_sharding.Transaction{ID: tx.TxID, AccessKeys: keys}, execution_sharding.Context{StateToExecution: route.StateToExecution})
 		crossShard, remoteFetches := stateAccessMetrics(keys, modules)
@@ -118,6 +124,7 @@ func Replay(config, trace, out string) (Summary, error) {
 	summary.AvgLatencyMS, summary.P95LatencyMS, summary.P99LatencyMS = latencyMetrics(latencies)
 	if summary.TxCount > 0 {
 		summary.CrossShardRatio = float64(crossShardCount) / float64(summary.TxCount)
+		summary.RoutingCrossShardTxRatio = float64(summary.RoutingCrossShardTxCount) / float64(summary.TxCount)
 		virtualSpanMS := lastCommit - firstArrival
 		if virtualSpanMS > 0 {
 			summary.ThroughputTPS = float64(summary.TxCount) * 1000 / virtualSpanMS
@@ -138,6 +145,8 @@ func Replay(config, trace, out string) (Summary, error) {
 		fmt.Sprintf("throughput_tps: %g", summary.ThroughputTPS),
 		fmt.Sprintf("cross_shard_ratio: %g", summary.CrossShardRatio),
 		fmt.Sprintf("remote_fetch_count: %d", summary.RemoteFetchCount),
+		fmt.Sprintf("routing_policy: %s", summary.RoutingPolicy),
+		fmt.Sprintf("routing_cross_shard_tx_count: %d", summary.RoutingCrossShardTxCount),
 		"replay done",
 	)
 	return summary, os.WriteFile(filepath.Join(out, "runtime.log"), []byte(strings.Join(logLines, "\n")+"\n"), 0o644)
@@ -215,9 +224,9 @@ func writeSummary(path string, summary Summary) error {
 	defer file.Close()
 	writer := csv.NewWriter(file)
 	writer.WriteAll([][]string{{
-		"tx_count", "success_count", "failed_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "cross_shard_ratio", "remote_fetch_count", "wall_clock_runtime_ms",
+		"tx_count", "success_count", "failed_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "cross_shard_ratio", "remote_fetch_count", "routing_policy", "routing_cross_shard_tx_count", "routing_cross_shard_tx_ratio", "routing_remote_key_count", "co_access_group_count", "routing_time_ms", "wall_clock_runtime_ms",
 	}, {
-		fmt.Sprint(summary.TxCount), fmt.Sprint(summary.SuccessCount), fmt.Sprint(summary.FailedCount), fmt.Sprint(summary.ThroughputTPS), fmt.Sprint(summary.AvgLatencyMS), fmt.Sprint(summary.P95LatencyMS), fmt.Sprint(summary.P99LatencyMS), fmt.Sprint(summary.CrossShardRatio), fmt.Sprint(summary.RemoteFetchCount), fmt.Sprint(summary.WallClockRuntimeMS),
+		fmt.Sprint(summary.TxCount), fmt.Sprint(summary.SuccessCount), fmt.Sprint(summary.FailedCount), fmt.Sprint(summary.ThroughputTPS), fmt.Sprint(summary.AvgLatencyMS), fmt.Sprint(summary.P95LatencyMS), fmt.Sprint(summary.P99LatencyMS), fmt.Sprint(summary.CrossShardRatio), fmt.Sprint(summary.RemoteFetchCount), summary.RoutingPolicy, fmt.Sprint(summary.RoutingCrossShardTxCount), fmt.Sprint(summary.RoutingCrossShardTxRatio), fmt.Sprint(summary.RoutingRemoteKeyCount), fmt.Sprint(summary.CoAccessGroupCount), fmt.Sprint(summary.RoutingTimeMS), fmt.Sprint(summary.WallClockRuntimeMS),
 	}})
 	return writer.Error()
 }

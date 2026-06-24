@@ -14,11 +14,17 @@ type ModuleSet struct {
 	Routing           routing.Builder
 }
 
-// DefaultModuleSet constructs the compatible V0/V1.2 hash-serial module set.
+// DefaultModuleSet constructs V0-compatible hash routing or the V1.5 co-access planner.
 func DefaultModuleSet(config ReplayConfig) ModuleSet {
 	return ModuleSet{
 		StateSharding:     state_sharding.NewHashStateSharding(config.StateShardCount),
 		ExecutionSharding: execution_sharding.NewHashExecutionSharding(config.ExecutionShardCount),
-		Routing:           routing.NewHashRouting(config.ExecutionShardCount),
+		Routing:           selectRouting(config),
 	}
+}
+func selectRouting(config ReplayConfig) routing.Builder {
+	if config.RoutingPolicy == "co_access" {
+		return routing.NewCoAccessRouting(config.ExecutionShardCount, config.CoAccessMinWeight, config.CoAccessMaxGroupSize, config.CoAccessBalanceWeight)
+	}
+	return routing.NewHashRouting(config.ExecutionShardCount)
 }

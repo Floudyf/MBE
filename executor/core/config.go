@@ -12,12 +12,15 @@ const defaultShardCount = 4
 // ReplayConfig is the executor-owned, documented subset of experiment config.
 // It deliberately keeps lightweight parsing while centralising all config reads.
 type ReplayConfig struct {
-	StateShardCount      int
-	ExecutionShardCount  int
-	BlockSize            int
-	BlockIntervalMS      float64
-	FinalityDelayMS      float64
-	RemoteFetchLatencyMS float64
+	StateShardCount                         int
+	ExecutionShardCount                     int
+	BlockSize                               int
+	BlockIntervalMS                         float64
+	FinalityDelayMS                         float64
+	RemoteFetchLatencyMS                    float64
+	RoutingPolicy                           string
+	CoAccessMinWeight, CoAccessMaxGroupSize int
+	CoAccessBalanceWeight                   float64
 }
 
 // LoadReplayConfig reads fields required by the compatible V0/V1.2 replay path.
@@ -34,7 +37,25 @@ func LoadReplayConfig(path string) (ReplayConfig, error) {
 		BlockIntervalMS:      configNonNegativeFloat(text, "block_interval_ms", 0),
 		FinalityDelayMS:      configNonNegativeFloat(text, "finality_delay_ms", 1),
 		RemoteFetchLatencyMS: configNonNegativeFloat(text, "remote_fetch_latency_ms", 0),
+		RoutingPolicy:        configSectionString(text, "routing", "policy", "hash"),
+		CoAccessMinWeight:    configSectionPositiveInt(text, "routing", "co_access_min_weight", 1), CoAccessMaxGroupSize: configSectionPositiveInt(text, "routing", "co_access_max_group_size", 64), CoAccessBalanceWeight: configSectionNonNegativeFloat(text, "routing", "co_access_balance_weight", 1),
 	}, nil
+}
+func configSectionString(contents, section, field, fallback string) string {
+	lines := strings.Split(contents, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), section+":") {
+			for _, c := range append([]string{strings.TrimSpace(line)}, lines[i+1:]...) {
+				if len(c) > 0 && c[0] != ' ' && c[0] != '\t' && c != strings.TrimSpace(line) {
+					break
+				}
+				if m := regexp.MustCompile(regexp.QuoteMeta(field) + `:\s*([A-Za-z_]+)`).FindStringSubmatch(strings.TrimSpace(c)); len(m) == 2 {
+					return m[1]
+				}
+			}
+		}
+	}
+	return fallback
 }
 
 func configSectionPositiveInt(contents, section, field string, fallback int) int {
