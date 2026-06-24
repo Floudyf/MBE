@@ -12,15 +12,18 @@ const defaultShardCount = 4
 // ReplayConfig is the executor-owned, documented subset of experiment config.
 // It deliberately keeps lightweight parsing while centralising all config reads.
 type ReplayConfig struct {
-	StateShardCount                         int
-	ExecutionShardCount                     int
-	BlockSize                               int
-	BlockIntervalMS                         float64
-	FinalityDelayMS                         float64
-	RemoteFetchLatencyMS                    float64
-	RoutingPolicy                           string
-	CoAccessMinWeight, CoAccessMaxGroupSize int
-	CoAccessBalanceWeight                   float64
+	StateShardCount                                                              int
+	ExecutionShardCount                                                          int
+	BlockSize                                                                    int
+	BlockIntervalMS                                                              float64
+	FinalityDelayMS                                                              float64
+	RemoteFetchLatencyMS                                                         float64
+	RoutingPolicy                                                                string
+	CoAccessMinWeight, CoAccessMaxGroupSize                                      int
+	CoAccessBalanceWeight                                                        float64
+	DualTrackEnabled, ConservativeOnConflictHint, ConservativeOnMissingAccessSet bool
+	FastTrackMaxAccessSize                                                       int
+	SchedulerPolicy                                                              string
 }
 
 // LoadReplayConfig reads fields required by the compatible V0/V1.2 replay path.
@@ -39,7 +42,16 @@ func LoadReplayConfig(path string) (ReplayConfig, error) {
 		RemoteFetchLatencyMS: configNonNegativeFloat(text, "remote_fetch_latency_ms", 0),
 		RoutingPolicy:        configSectionString(text, "routing", "policy", "hash"),
 		CoAccessMinWeight:    configSectionPositiveInt(text, "routing", "co_access_min_weight", 1), CoAccessMaxGroupSize: configSectionPositiveInt(text, "routing", "co_access_max_group_size", 64), CoAccessBalanceWeight: configSectionNonNegativeFloat(text, "routing", "co_access_balance_weight", 1),
+		DualTrackEnabled: configSectionBool(text, "execution", "dual_track_enabled", false), FastTrackMaxAccessSize: configSectionPositiveInt(text, "execution", "fast_track_max_access_size", 2), ConservativeOnConflictHint: configSectionBool(text, "execution", "conservative_on_conflict_hint", true), ConservativeOnMissingAccessSet: configSectionBool(text, "execution", "conservative_on_missing_access_set", true), SchedulerPolicy: configSectionString(text, "execution", "scheduler_policy", "fast_first"),
 	}, nil
+}
+func configSectionBool(contents, section, field string, fallback bool) bool {
+	for _, line := range strings.Split(contents, "\n") {
+		if m := regexp.MustCompile(regexp.QuoteMeta(field) + `:\s*(true|false)`).FindStringSubmatch(strings.TrimSpace(line)); len(m) == 2 {
+			return m[1] == "true"
+		}
+	}
+	return fallback
 }
 func configSectionString(contents, section, field, fallback string) string {
 	lines := strings.Split(contents, "\n")

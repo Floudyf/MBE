@@ -15,9 +15,13 @@ import (
 
 // Summary contains the V0 replay metrics written to summary.csv.
 type Summary struct {
-	TxCount, SuccessCount, FailedCount, RemoteFetchCount, RoutingCrossShardTxCount, RoutingRemoteKeyCount, CoAccessGroupCount             int
-	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS, RoutingCrossShardTxRatio, RoutingTimeMS float64
-	RoutingPolicy                                                                                                                         string
+	TxCount, SuccessCount, FailedCount, RemoteFetchCount, RoutingCrossShardTxCount, RoutingRemoteKeyCount, CoAccessGroupCount                        int
+	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS, RoutingCrossShardTxRatio, RoutingTimeMS            float64
+	RoutingPolicy                                                                                                                                    string
+	FastTrackTxCount, ConservativeTrackTxCount, FastTrackExecutedCount, ConservativeTrackExecutedCount, BlockedOrDeferredTxCount, SchedulerIdleCount int
+	DualTrackEnabled                                                                                                                                 bool
+	FastTrackMaxAccessSize                                                                                                                           int
+	TrackPolicy                                                                                                                                      string
 }
 
 // Replay streams a V0 trace, records per-transaction virtual-clock latency, and writes metrics.
@@ -27,6 +31,7 @@ func Replay(config, trace, out string) (Summary, error) {
 		return Summary{}, err
 	}
 	modules := DefaultModuleSet(replayConfig)
+	dualConfig := execution_sharding.DualTrackConfig{Enabled: replayConfig.DualTrackEnabled, FastTrackMaxAccessSize: replayConfig.FastTrackMaxAccessSize, ConservativeOnConflictHint: replayConfig.ConservativeOnConflictHint, ConservativeOnMissingAccessSet: replayConfig.ConservativeOnMissingAccessSet, SchedulerPolicy: replayConfig.SchedulerPolicy}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return Summary{}, err
 	}
@@ -72,7 +77,21 @@ func Replay(config, trace, out string) (Summary, error) {
 		summary.CoAccessGroupCount += route.Metrics.CoAccessGroupCount
 		summary.RoutingTimeMS += route.Metrics.RoutingTimeMS
 		// psi_t is calculated even though serial execution preserves V0 timing.
-		_ = modules.ExecutionSharding.Assign(execution_sharding.Transaction{ID: tx.TxID, AccessKeys: keys}, execution_sharding.Context{StateToExecution: route.StateToExecution})
+		assigned := modules.ExecutionSharding.Assign(execution_sharding.Transaction{ID: tx.TxID, AccessKeys: keys}, execution_sharding.Context{StateToExecution: route.StateToExecution})
+		if s, ok := route.TxToExecution[tx.TxID]; ok {
+			assigned = s
+		}
+		decision := execution_sharding.ClassifyDualTrack(execution_sharding.DualTrackTransaction{ID: tx.TxID, AccessKeys: keys, ExecutionShard: assigned}, dualConfig)
+		if decision.Track == execution_sharding.Fast {
+			summary.FastTrackTxCount++
+			summary.FastTrackExecutedCount++
+		} else {
+			summary.ConservativeTrackTxCount++
+			summary.ConservativeTrackExecutedCount++
+		}
+		summary.DualTrackEnabled = dualConfig.Enabled
+		summary.FastTrackMaxAccessSize = dualConfig.FastTrackMaxAccessSize
+		summary.TrackPolicy = dualConfig.SchedulerPolicy
 		crossShard, remoteFetches := stateAccessMetrics(keys, modules)
 		virtualLatency := tx.ChainLatencyMS + replayConfig.FinalityDelayMS + float64(remoteFetches)*replayConfig.RemoteFetchLatencyMS
 		commitDone := startTime + virtualLatency
@@ -147,6 +166,9 @@ func Replay(config, trace, out string) (Summary, error) {
 		fmt.Sprintf("remote_fetch_count: %d", summary.RemoteFetchCount),
 		fmt.Sprintf("routing_policy: %s", summary.RoutingPolicy),
 		fmt.Sprintf("routing_cross_shard_tx_count: %d", summary.RoutingCrossShardTxCount),
+		fmt.Sprintf("dual_track_enabled: %t", summary.DualTrackEnabled),
+		fmt.Sprintf("fast_track_tx_count: %d", summary.FastTrackTxCount),
+		fmt.Sprintf("conservative_track_tx_count: %d", summary.ConservativeTrackTxCount),
 		"replay done",
 	)
 	return summary, os.WriteFile(filepath.Join(out, "runtime.log"), []byte(strings.Join(logLines, "\n")+"\n"), 0o644)
