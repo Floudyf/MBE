@@ -1,0 +1,10 @@
+experiment: {name: v1_asset_hotspot_v1, version: v1, stage: v1.3, runnable: false, implemented: false, description: V1.3 streaming asset hotspot trace declaration; composer execution remains planned., seed: 42}
+template: v1_execution_comparison
+workload: {plugin: asset_hotspot_v1, tx_count: 1000, zipf_theta: 1.2, hot_key_ratio: 0.05, cross_shard_ratio: 0.2, conflict_injection_ratio: 0.3, commutative_update_ratio: 0.25, access_set_size: 4, arrival_rate: 100, burst_rate: 500, hot_tx_ratio: 0.6, multi_hotspot_count: 3, read_write_ratio: 0.4}
+trace: {plugin: jsonl_gzip}
+runtime: {clock_mode: virtual}
+routing: {plugin: hash_routing}
+execution: {plugin: serial_execution}
+commit: {plugin: normal_commit}
+metrics: {plugin: basic_metrics}
+output: {dir: experiments/runs/v1_asset_hotspot_v1}

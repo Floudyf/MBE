@@ -8,7 +8,7 @@ REQUIRED_FIELDS = {"experiment", "template", "workload", "trace", "runtime", "ro
 EXPECTED = {
     "v1_baseline_hash_serial", "v1_baseline_blockstm_like", "v1_baseline_calvin_like", "v1_baseline_porygon_like",
     "v1_ours_metatrack", "v1_ablation_no_routing", "v1_ablation_no_dual_track", "v1_ablation_no_hot_aggregation",
-    "v1_fabric_chain_backed_asset",
+    "v1_fabric_chain_backed_asset", "v1_asset_hotspot_v1", "v1_reward_burst",
 }
 
 

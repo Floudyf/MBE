@@ -16,4 +16,11 @@ type Transaction struct {
 	UpdateType     string         `json:"update_type"`
 	Status         string         `json:"status"`
 	ChainLatencyMS float64        `json:"chain_latency_ms"`
+	PrimaryKey     *string        `json:"primary_key,omitempty"`
+	AccessSize     *int           `json:"access_size,omitempty"`
+	IsCrossShard   *bool          `json:"is_cross_shard,omitempty"`
+	HotKeyTag      *string        `json:"hot_key_tag,omitempty"`
+	ConflictGroup  *string        `json:"conflict_group,omitempty"`
+	DependencyHint *string        `json:"dependency_hint,omitempty"`
+	DeltaValue     *float64       `json:"delta_value,omitempty"`
 }

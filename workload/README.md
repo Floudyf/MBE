@@ -1,3 +1,3 @@
 # Workload
 
-V0 contains only the deterministic `asset_hotspot` synthetic workload. It streams records to the shared trace writer; chain-backed and hybrid workloads remain out of scope.
+V0 retains the deterministic `asset_hotspot` synthetic workload unchanged. V1.3 adds streaming-only `asset_hotspot_v1` and `reward_burst` generators with optional trace annotations and observed metadata; neither adds routing, execution, aggregation, Fabric, or cross-chain behaviour.

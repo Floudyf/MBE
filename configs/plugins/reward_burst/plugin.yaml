@@ -1,0 +1,9 @@
+name: reward_burst
+type: workload
+version: v1.3
+maturity: v1.3-experimental
+description: Streaming reward-pool burst trace for future aggregation experiments.
+default_params: {tx_count: 1000, commutative_update_ratio: 0.65, burst_rate: 800, multi_hotspot_count: 3}
+inputs: [experiment_seed]
+outputs: [transaction_trace, trace_metadata]
+metrics: [actual_conflict_ratio, actual_commutative_update_ratio, avg_access_set_size, hot_tx_ratio, multi_hotspot_count]

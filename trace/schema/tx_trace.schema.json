@@ -10,6 +10,10 @@
     "contract": {"type": "string"}, "function": {"type": "string"}, "args": {"type": "object"},
     "read_set": {"type": "array", "items": {"type": "string"}}, "write_set": {"type": "array", "items": {"type": "string"}},
     "access_list": {"type": "array", "items": {"type": "string"}}, "commutative": {"type": "boolean"},
-    "update_type": {"type": "string"}, "status": {"type": "string"}, "chain_latency_ms": {"type": "number", "minimum": 0}
+    "update_type": {"type": "string"}, "status": {"type": "string"}, "chain_latency_ms": {"type": "number", "minimum": 0},
+    "primary_key": {"type": ["string", "null"]}, "access_size": {"type": ["integer", "null"], "minimum": 0},
+    "is_cross_shard": {"type": ["boolean", "null"]}, "hot_key_tag": {"type": ["string", "null"]},
+    "conflict_group": {"type": ["string", "null"]}, "dependency_hint": {"type": ["string", "null"]},
+    "delta_value": {"type": ["number", "null"]}
   }
 }

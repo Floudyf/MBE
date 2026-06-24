@@ -1,0 +1,9 @@
+name: asset_hotspot_v1
+type: workload
+version: v1.3
+maturity: v1.3-experimental
+description: Streaming synthetic asset hotspot trace with V1.3 annotations.
+default_params: {tx_count: 1000, conflict_injection_ratio: 0.3, commutative_update_ratio: 0.25, access_set_size: 4, arrival_rate: 100, burst_rate: 500, hot_tx_ratio: 0.6, multi_hotspot_count: 3, read_write_ratio: 0.4}
+inputs: [experiment_seed]
+outputs: [transaction_trace, trace_metadata]
+metrics: [actual_conflict_ratio, actual_commutative_update_ratio, avg_access_set_size, hot_tx_ratio, multi_hotspot_count]
