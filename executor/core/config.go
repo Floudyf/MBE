@@ -12,18 +12,21 @@ const defaultShardCount = 4
 // ReplayConfig is the executor-owned, documented subset of experiment config.
 // It deliberately keeps lightweight parsing while centralising all config reads.
 type ReplayConfig struct {
-	StateShardCount                                                              int
-	ExecutionShardCount                                                          int
-	BlockSize                                                                    int
-	BlockIntervalMS                                                              float64
-	FinalityDelayMS                                                              float64
-	RemoteFetchLatencyMS                                                         float64
-	RoutingPolicy                                                                string
-	CoAccessMinWeight, CoAccessMaxGroupSize                                      int
-	CoAccessBalanceWeight                                                        float64
-	DualTrackEnabled, ConservativeOnConflictHint, ConservativeOnMissingAccessSet bool
-	FastTrackMaxAccessSize                                                       int
-	SchedulerPolicy                                                              string
+	StateShardCount                                                                           int
+	ExecutionShardCount                                                                       int
+	BlockSize                                                                                 int
+	BlockIntervalMS                                                                           float64
+	FinalityDelayMS                                                                           float64
+	RemoteFetchLatencyMS                                                                      float64
+	RoutingPolicy                                                                             string
+	CoAccessMinWeight, CoAccessMaxGroupSize                                                   int
+	CoAccessBalanceWeight                                                                     float64
+	DualTrackEnabled, ConservativeOnConflictHint, ConservativeOnMissingAccessSet              bool
+	FastTrackMaxAccessSize                                                                    int
+	SchedulerPolicy                                                                           string
+	HotUpdateAggregationEnabled, AggregationRequireFastTrack, ConservativeOnConstraintFailure bool
+	AggregationMinHotCount, AggregationMaxGroupSize                                           int
+	AggregationPolicy                                                                         string
 }
 
 // LoadReplayConfig reads fields required by the compatible V0/V1.2 replay path.
@@ -43,6 +46,7 @@ func LoadReplayConfig(path string) (ReplayConfig, error) {
 		RoutingPolicy:        configSectionString(text, "routing", "policy", "hash"),
 		CoAccessMinWeight:    configSectionPositiveInt(text, "routing", "co_access_min_weight", 1), CoAccessMaxGroupSize: configSectionPositiveInt(text, "routing", "co_access_max_group_size", 64), CoAccessBalanceWeight: configSectionNonNegativeFloat(text, "routing", "co_access_balance_weight", 1),
 		DualTrackEnabled: configSectionBool(text, "execution", "dual_track_enabled", false), FastTrackMaxAccessSize: configSectionPositiveInt(text, "execution", "fast_track_max_access_size", 2), ConservativeOnConflictHint: configSectionBool(text, "execution", "conservative_on_conflict_hint", true), ConservativeOnMissingAccessSet: configSectionBool(text, "execution", "conservative_on_missing_access_set", true), SchedulerPolicy: configSectionString(text, "execution", "scheduler_policy", "fast_first"),
+		HotUpdateAggregationEnabled: configSectionBool(text, "commit", "hot_update_aggregation_enabled", false), AggregationMinHotCount: configSectionPositiveInt(text, "commit", "aggregation_min_hot_count", 2), AggregationMaxGroupSize: configSectionPositiveInt(text, "commit", "aggregation_max_group_size", 64), AggregationRequireFastTrack: configSectionBool(text, "commit", "aggregation_require_fast_track", true), ConservativeOnConstraintFailure: configSectionBool(text, "commit", "conservative_on_constraint_failure", true), AggregationPolicy: configSectionString(text, "commit", "aggregation_policy", "by_primary_key"),
 	}, nil
 }
 func configSectionBool(contents, section, field string, fallback bool) bool {

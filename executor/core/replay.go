@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"math"
+	"metaverse-chainlab/executor/commit"
 	"metaverse-chainlab/executor/execution_sharding"
 	"metaverse-chainlab/executor/routing"
 	"os"
@@ -15,13 +16,16 @@ import (
 
 // Summary contains the V0 replay metrics written to summary.csv.
 type Summary struct {
-	TxCount, SuccessCount, FailedCount, RemoteFetchCount, RoutingCrossShardTxCount, RoutingRemoteKeyCount, CoAccessGroupCount                        int
-	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS, RoutingCrossShardTxRatio, RoutingTimeMS            float64
-	RoutingPolicy                                                                                                                                    string
-	FastTrackTxCount, ConservativeTrackTxCount, FastTrackExecutedCount, ConservativeTrackExecutedCount, BlockedOrDeferredTxCount, SchedulerIdleCount int
-	DualTrackEnabled                                                                                                                                 bool
-	FastTrackMaxAccessSize                                                                                                                           int
-	TrackPolicy                                                                                                                                      string
+	TxCount, SuccessCount, FailedCount, RemoteFetchCount, RoutingCrossShardTxCount, RoutingRemoteKeyCount, CoAccessGroupCount                                                                                                                                                   int
+	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS, RoutingCrossShardTxRatio, RoutingTimeMS                                                                                                                                       float64
+	RoutingPolicy                                                                                                                                                                                                                                                               string
+	FastTrackTxCount, ConservativeTrackTxCount, FastTrackExecutedCount, ConservativeTrackExecutedCount, BlockedOrDeferredTxCount, SchedulerIdleCount                                                                                                                            int
+	DualTrackEnabled                                                                                                                                                                                                                                                            bool
+	FastTrackMaxAccessSize                                                                                                                                                                                                                                                      int
+	TrackPolicy                                                                                                                                                                                                                                                                 string
+	AggregationCandidateTxCount, AggregatedTxCount, AggregatedCommitCount, ConservativeCommitCount, AggregationSavedCommitCount, AggregationGroupCount, AggregationHotKeyCount, AggregationConstraintFailureCount, AggregationMissingDeltaCount, AggregationNonCommutativeCount int
+	HotUpdateAggregationEnabled                                                                                                                                                                                                                                                 bool
+	AggregationPolicy                                                                                                                                                                                                                                                           string
 }
 
 // Replay streams a V0 trace, records per-transaction virtual-clock latency, and writes metrics.
@@ -32,6 +36,8 @@ func Replay(config, trace, out string) (Summary, error) {
 	}
 	modules := DefaultModuleSet(replayConfig)
 	dualConfig := execution_sharding.DualTrackConfig{Enabled: replayConfig.DualTrackEnabled, FastTrackMaxAccessSize: replayConfig.FastTrackMaxAccessSize, ConservativeOnConflictHint: replayConfig.ConservativeOnConflictHint, ConservativeOnMissingAccessSet: replayConfig.ConservativeOnMissingAccessSet, SchedulerPolicy: replayConfig.SchedulerPolicy}
+	aggConfig := commit.Config{Enabled: replayConfig.HotUpdateAggregationEnabled, MinHotCount: replayConfig.AggregationMinHotCount, MaxGroupSize: replayConfig.AggregationMaxGroupSize, RequireFastTrack: replayConfig.AggregationRequireFastTrack, ConservativeOnConstraintFailure: replayConfig.ConservativeOnConstraintFailure, Policy: replayConfig.AggregationPolicy}
+	aggUpdates := []commit.Update{}
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return Summary{}, err
 	}
@@ -82,6 +88,11 @@ func Replay(config, trace, out string) (Summary, error) {
 			assigned = s
 		}
 		decision := execution_sharding.ClassifyDualTrack(execution_sharding.DualTrackTransaction{ID: tx.TxID, AccessKeys: keys, ExecutionShard: assigned}, dualConfig)
+		primary := ""
+		if tx.PrimaryKey != nil {
+			primary = *tx.PrimaryKey
+		}
+		aggUpdates = append(aggUpdates, commit.Update{ID: tx.TxID, PrimaryKey: primary, Fast: decision.Track == execution_sharding.Fast, Commutative: tx.Commutative, Delta: tx.DeltaValue})
 		if decision.Track == execution_sharding.Fast {
 			summary.FastTrackTxCount++
 			summary.FastTrackExecutedCount++
@@ -131,6 +142,12 @@ func Replay(config, trace, out string) (Summary, error) {
 			return summary, err
 		}
 	}
+	agg := commit.Aggregate(aggUpdates, aggConfig)
+	am := agg.Metrics
+	summary.HotUpdateAggregationEnabled, summary.AggregationPolicy = aggConfig.Enabled, aggConfig.Policy
+	summary.AggregationCandidateTxCount, summary.AggregatedTxCount, summary.AggregatedCommitCount = am.CandidateTxCount, am.AggregatedTxCount, am.AggregatedCommitCount
+	summary.ConservativeCommitCount, summary.AggregationSavedCommitCount, summary.AggregationGroupCount = am.ConservativeCommitCount, am.SavedCommitCount, am.GroupCount
+	summary.AggregationHotKeyCount, summary.AggregationConstraintFailureCount, summary.AggregationMissingDeltaCount, summary.AggregationNonCommutativeCount = am.HotKeyCount, am.ConstraintFailureCount, am.MissingDeltaCount, am.NonCommutativeCount
 	latencyWriter.Flush()
 	if err := latencyWriter.Error(); err != nil {
 		latencyFile.Close()
@@ -169,6 +186,9 @@ func Replay(config, trace, out string) (Summary, error) {
 		fmt.Sprintf("dual_track_enabled: %t", summary.DualTrackEnabled),
 		fmt.Sprintf("fast_track_tx_count: %d", summary.FastTrackTxCount),
 		fmt.Sprintf("conservative_track_tx_count: %d", summary.ConservativeTrackTxCount),
+		fmt.Sprintf("hot_update_aggregation_enabled: %t", summary.HotUpdateAggregationEnabled),
+		fmt.Sprintf("aggregation_policy: %s", summary.AggregationPolicy),
+		fmt.Sprintf("aggregated_commit_count: %d", summary.AggregatedCommitCount),
 		"replay done",
 	)
 	return summary, os.WriteFile(filepath.Join(out, "runtime.log"), []byte(strings.Join(logLines, "\n")+"\n"), 0o644)
