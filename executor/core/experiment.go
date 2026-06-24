@@ -1,0 +1,24 @@
+package core
+
+import (
+	"metaverse-chainlab/executor/execution_sharding"
+	"metaverse-chainlab/executor/routing"
+	"metaverse-chainlab/executor/state_sharding"
+)
+
+// ModuleSet is the V1.2 single-chain executor composition. Only default hash
+// plugins are instantiated; later routing and execution mechanisms remain out of scope.
+type ModuleSet struct {
+	StateSharding     state_sharding.Locator
+	ExecutionSharding execution_sharding.Assigner
+	Routing           routing.Builder
+}
+
+// DefaultModuleSet constructs the compatible V0/V1.2 hash-serial module set.
+func DefaultModuleSet(config ReplayConfig) ModuleSet {
+	return ModuleSet{
+		StateSharding:     state_sharding.NewHashStateSharding(config.StateShardCount),
+		ExecutionSharding: execution_sharding.NewHashExecutionSharding(config.ExecutionShardCount),
+		Routing:           routing.NewHashRouting(config.ExecutionShardCount),
+	}
+}

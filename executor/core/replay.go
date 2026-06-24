@@ -3,25 +3,15 @@ package core
 import (
 	"encoding/csv"
 	"fmt"
-	"hash/fnv"
 	"math"
+	"metaverse-chainlab/executor/execution_sharding"
+	"metaverse-chainlab/executor/routing"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
-
-const defaultShardCount = 4
-
-type replayTiming struct {
-	BlockSize            int
-	BlockIntervalMS      float64
-	FinalityDelayMS      float64
-	RemoteFetchLatencyMS float64
-}
 
 // Summary contains the V0 replay metrics written to summary.csv.
 type Summary struct {
@@ -31,14 +21,11 @@ type Summary struct {
 
 // Replay streams a V0 trace, records per-transaction virtual-clock latency, and writes metrics.
 func Replay(config, trace, out string) (Summary, error) {
-	shardCount, err := shardCountFromConfig(config)
+	replayConfig, err := LoadReplayConfig(config)
 	if err != nil {
 		return Summary{}, err
 	}
-	timing, err := replayTimingFromConfig(config)
-	if err != nil {
-		return Summary{}, err
-	}
+	modules := DefaultModuleSet(replayConfig)
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return Summary{}, err
 	}
@@ -72,10 +59,16 @@ func Replay(config, trace, out string) (Summary, error) {
 	for tx := range txs {
 		summary.TxCount++
 		arrival := tx.Timestamp
-		blockIndex := (summary.TxCount - 1) / timing.BlockSize
-		startTime := math.Max(arrival, float64(blockIndex)*timing.BlockIntervalMS)
-		crossShard, remoteFetches := stateAccessMetrics(tx, shardCount)
-		virtualLatency := tx.ChainLatencyMS + timing.FinalityDelayMS + float64(remoteFetches)*timing.RemoteFetchLatencyMS
+		blockIndex := (summary.TxCount - 1) / replayConfig.BlockSize
+		startTime := math.Max(arrival, float64(blockIndex)*replayConfig.BlockIntervalMS)
+		keys := uniqueStateKeys(tx)
+		// V1.2 builds the default M_t for the current streaming batch. M_t is
+		// execution-side state routing and leaves phi persistent placement intact.
+		route := modules.Routing.BuildRouting([]routing.Transaction{{ID: tx.TxID, AccessKeys: keys}}, modules.StateSharding)
+		// psi_t is calculated even though serial execution preserves V0 timing.
+		_ = modules.ExecutionSharding.Assign(execution_sharding.Transaction{ID: tx.TxID, AccessKeys: keys}, execution_sharding.Context{StateToExecution: route.StateToExecution})
+		crossShard, remoteFetches := stateAccessMetrics(keys, modules)
+		virtualLatency := tx.ChainLatencyMS + replayConfig.FinalityDelayMS + float64(remoteFetches)*replayConfig.RemoteFetchLatencyMS
 		commitDone := startTime + virtualLatency
 		latency := commitDone - arrival
 		if !hasTransactions || arrival < firstArrival {
@@ -158,66 +151,15 @@ func writeConfigSnapshot(config, out string) error {
 	return os.WriteFile(filepath.Join(out, "config.yaml"), contents, 0o644)
 }
 
-func replayTimingFromConfig(path string) (replayTiming, error) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return replayTiming{}, err
-	}
-	text := string(contents)
-	return replayTiming{
-		BlockSize:            configPositiveInt(text, "block_size", 1),
-		BlockIntervalMS:      configNonNegativeFloat(text, "block_interval_ms", 0),
-		FinalityDelayMS:      configNonNegativeFloat(text, "finality_delay_ms", 1),
-		RemoteFetchLatencyMS: configNonNegativeFloat(text, "remote_fetch_latency_ms", 0),
-	}, nil
-}
-
-func configPositiveInt(contents, field string, fallback int) int {
-	value := configNonNegativeFloat(contents, field, float64(fallback))
-	if value <= 0 {
-		return fallback
-	}
-	return int(value)
-}
-
-func configNonNegativeFloat(contents, field string, fallback float64) float64 {
-	matches := regexp.MustCompile(regexp.QuoteMeta(field) + `:\s*([0-9]+(?:\.[0-9]+)?)`).FindStringSubmatch(contents)
-	if len(matches) != 2 {
-		return fallback
-	}
-	value, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil || value < 0 {
-		return fallback
-	}
-	return value
-}
-
-func shardCountFromConfig(path string) (int, error) {
-	contents, err := os.ReadFile(path)
-	if err != nil {
-		return 0, err
-	}
-	matches := regexp.MustCompile(`shard_count:\s*(\d+)`).FindStringSubmatch(string(contents))
-	if len(matches) != 2 {
-		return defaultShardCount, nil
-	}
-	count, err := strconv.Atoi(matches[1])
-	if err != nil || count <= 0 {
-		return defaultShardCount, nil
-	}
-	return count, nil
-}
-
-func stateAccessMetrics(tx Transaction, shardCount int) (bool, int) {
-	keys := uniqueStateKeys(tx)
+func stateAccessMetrics(keys []string, modules ModuleSet) (bool, int) {
 	if len(keys) < 2 {
 		return false, 0
 	}
-	localShard := stateShard(keys[0], shardCount)
+	localShard := modules.StateSharding.LocateState(keys[0])
 	shards := map[int]struct{}{localShard: {}}
 	remoteFetches := 0
 	for _, key := range keys[1:] {
-		shard := stateShard(key, shardCount)
+		shard := modules.StateSharding.LocateState(key)
 		shards[shard] = struct{}{}
 		if shard != localShard {
 			remoteFetches++
@@ -241,12 +183,6 @@ func uniqueStateKeys(tx Transaction) []string {
 		}
 	}
 	return keys
-}
-
-func stateShard(key string, shardCount int) int {
-	hash := fnv.New32a()
-	_, _ = hash.Write([]byte(key))
-	return int(hash.Sum32() % uint32(shardCount))
 }
 
 func latencyMetrics(latencies []float64) (float64, float64, float64) {
