@@ -1,0 +1,19 @@
+trace: tests/golden/trace_small.jsonl.gz
+execution_shards: 4
+baselines:
+  - name: baseline_hash_only
+    routing_policy: hash
+    dual_track_enabled: false
+    hot_update_aggregation_enabled: false
+  - name: co_access_only
+    routing_policy: co_access
+    dual_track_enabled: false
+    hot_update_aggregation_enabled: false
+  - name: co_access_dual_track
+    routing_policy: co_access
+    dual_track_enabled: true
+    hot_update_aggregation_enabled: false
+  - name: full_v1
+    routing_policy: co_access
+    dual_track_enabled: true
+    hot_update_aggregation_enabled: true
