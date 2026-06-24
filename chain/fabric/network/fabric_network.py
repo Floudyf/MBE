@@ -19,8 +19,12 @@ def detect_fabric_environment(project_root: Path, strict: bool=False) -> FabricE
     for label,path in [('test-network',test),('network.sh',network)]:
         if path is not None and not path.exists(): missing.append(label)
     missing += [str(path.relative_to(project_root)) for path in dirs if not path.is_dir()]
-    docker=shutil.which('docker') is not None; compose=docker; peer=shutil.which('peer') is not None
-    warnings=[] if peer else ['peer command not found (warning only)']
+    docker=shutil.which('docker') is not None; compose=docker
+    peer_path=shutil.which('peer') or (str(root/'bin/peer') if root and (root/'bin/peer').is_file() else None)
+    peer=peer_path is not None
+    if not docker: missing.append('docker')
+    if not peer: missing.append('peer CLI')
+    warnings=[]
     return FabricEnvStatus(root,test,network,docker,compose,peer,*dirs,missing,warnings,not missing)
 
 def build_test_network_commands(project_root: Path, fabric_samples_dir: Path) -> dict[str,str]:

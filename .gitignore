@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .cache/
+chain/fabric/chaincode/*/vendor/
 
 # Node.js
 node_modules/
