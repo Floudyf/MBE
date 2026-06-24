@@ -28,3 +28,35 @@ def test_samples_and_fabric_config_remain_planned():
     config=yaml.safe_load((ROOT/'configs/experiments/v1_fabric_chain_backed_asset.yaml').read_text(encoding='utf-8'))['experiment']
     assert config['runnable'] is False and config['implemented'] is False
     for path in [ROOT/'chain/fabric/README.md',BASE/'README.md',*(BASE/name/'README.md' for name in SPECS)]: assert path.is_file()
+
+def test_chaincode_state_semantics_are_not_skeletons():
+    asset=(BASE/'asset'/'asset_contract.go').read_text(encoding='utf-8')
+    scene=(BASE/'scene'/'scene_contract.go').read_text(encoding='utf-8')
+    reward=(BASE/'reward'/'reward_contract.go').read_text(encoding='utf-8')
+    compact_scene=''.join(scene.split())
+    compact_reward=''.join(reward.split())
+
+    for text in (asset,scene,reward):
+        assert 'GetState' in text
+        assert 'PutState' in text
+        assert 'json.Marshal' in text
+        assert 'json.Unmarshal' in text
+        assert 'SetEvent' in text
+        assert 'return nil,nil' not in text
+
+    for function in ('CreateAsset','TransferAsset','TradeAsset','ReadAsset','GetBalance','SetBalance'):
+        assert function in asset
+    assert 'a.Owner=to' in asset and 'a.Version++' in asset
+    assert 'bb.Amount-=price' in asset and 'sb.Amount+=price' in asset
+
+    for function in ('CreateScene','ReadScene','CreateAvatar','ReadAvatar','JoinScene'):
+        assert function in scene
+    assert 'sceneMemberKey(sceneID,userID)' in compact_scene
+    assert 'PutState(memberKey,member)' in compact_scene
+    assert 'avatar already joined scene' in scene
+
+    for function in ('CreateRewardPool','ReadRewardPool','SetBalance','GetBalance','AddReward','ClaimReward'):
+        assert function in reward
+    assert 'pool.Amount+=amount' in compact_reward
+    assert 'pool.Amount-=amount' in compact_reward
+    assert 'balance.Amount+=amount' in compact_reward
