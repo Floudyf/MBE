@@ -1,0 +1,26 @@
+version: v2
+stage: v2.9
+calibration:
+  id: v2_synthetic_calibration_sample
+  name: Synthetic Calibration Sample
+  runnable: true
+  description: "Synthetic observed-vs-replay calibration sample for tests."
+  data_truth_label: synthetic_replay
+  backend_type: local_virtual
+  calibration_truth: synthetic_observation_sample
+input:
+  trace_file: trace/samples/v2_cross_trace_small.jsonl
+  meta_file: trace/samples/v2_multi_chain_trace_meta.json
+  source_type: synthetic
+replay:
+  mode: virtual_time
+  local_backend_type: local_virtual
+  sleep_enabled: false
+  enforce_trace_validation: true
+  source_block_interval_ms: 100
+  target_block_interval_ms: 300
+  source_finality_depth: 3
+  target_finality_depth: 5
+limitations:
+  - "Synthetic calibration sample only; not real chain execution."
+  - "Used for V2.9 tests and report wiring."

@@ -1,0 +1,33 @@
+version: v2
+stage: v2.9
+calibration:
+  id: v2_fabric_smoke_calibration
+  name: Fabric Smoke Chain-backed Calibration
+  runnable: true
+  description: "Compare Fabric smoke observed trace with local replay calibration fields."
+  data_truth_label: fabric_chain_backed_trace_replay
+  backend_type: trace_replay
+  calibration_truth: chain_backed_observation
+input:
+  trace_file: .cache/fabric_smoke/latest/trace.jsonl.gz
+  meta_file: .cache/fabric_smoke/latest/trace_meta.json
+  source_type: fabric_chain_backed_trace
+replay:
+  mode: virtual_time
+  local_backend_type: local_virtual
+  sleep_enabled: false
+  enforce_trace_validation: true
+calibration_output:
+  compare_fields:
+    - commit_time_ms
+    - finality_time_ms
+    - stage_latency_ms
+  output:
+    summary_csv: calibration_summary.csv
+    summary_json: calibration_summary.json
+    comparison_csv: replay_vs_observed.csv
+    report_md: calibration_report.md
+limitations:
+  - "The web UI does not start Fabric or Docker."
+  - "This is chain-backed trace calibration, not FabricLiveBackend."
+  - "Observed timestamps depend on the smoke trace collector."

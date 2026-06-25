@@ -12,7 +12,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from backend.app.services.config_validator_v2 import validate_planned_topology_file
+from backend.app.services.calibration_runner_v2 import CALIBRATION_CONFIGS, CalibrationBlocked, CalibrationError, get_calibration_config, list_calibration_configs, run_calibration_job, summarize_calibration_config
 from backend.app.services.chain_backend import list_backend_capabilities
+from backend.app.services.chain_backed_trace_adapter import detect_fabric_smoke_trace
 from backend.app.services.dual_chain_profiles import DualChainConfigError
 from backend.app.services.dual_chain_replay import run_dual_chain_replay_job
 from backend.app.services.cross_chain_protocols import list_cross_chain_protocols
@@ -676,6 +678,49 @@ def v2_sweep_run(payload: dict) -> dict:
         return run_sweep_job(config_path, jobs_root=V2_JOBS_ROOT, root=ROOT)
     except SweepError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v2/calibration/configs")
+def v2_calibration_configs() -> dict:
+    try:
+        return {"items": list_calibration_configs(ROOT)}
+    except CalibrationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v2/calibration/fabric-smoke/status")
+def v2_calibration_fabric_smoke_status() -> dict:
+    return detect_fabric_smoke_trace()
+
+
+@app.post("/api/v2/calibration/run")
+def v2_calibration_run(payload: dict) -> dict:
+    try:
+        if payload.get("config_id"):
+            config_id = str(payload["config_id"])
+            if config_id not in CALIBRATION_CONFIGS:
+                raise CalibrationError(f"unknown V2.9 calibration config_id: {config_id}")
+            config_path = CALIBRATION_CONFIGS[config_id].relative_to(ROOT)
+        else:
+            config_path = Path(str(payload.get("config_path", CALIBRATION_CONFIGS["v2_synthetic_calibration_sample"].relative_to(ROOT))))
+        return run_calibration_job(config_path, jobs_root=V2_JOBS_ROOT, root=ROOT)
+    except CalibrationBlocked as exc:
+        return exc.payload
+    except CalibrationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v2/calibration/configs/{config_id}")
+def v2_calibration_config_detail(config_id: str) -> dict:
+    try:
+        config = get_calibration_config(config_id, ROOT)
+    except CalibrationError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {
+        "path": CALIBRATION_CONFIGS[config_id].relative_to(ROOT).as_posix(),
+        "summary": summarize_calibration_config(config),
+        "config": config,
+    }
 
 
 @app.post("/api/v0/experiments")

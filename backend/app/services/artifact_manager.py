@@ -23,6 +23,10 @@ ARTIFACT_ALLOWLIST = frozenset({
     "sweep_summary.json",
     "sweep_report.md",
     "case_artifacts_index.json",
+    "calibration_summary.csv",
+    "calibration_summary.json",
+    "replay_vs_observed.csv",
+    "calibration_report.md",
 })
 
 
