@@ -25,7 +25,14 @@ class JobManager:
     def __init__(self, root: Path = DEFAULT_JOBS_ROOT):
         self.root = root
 
-    def create_run(self, source: str, experiment_name: str, data_truth_label: str = "") -> dict[str, Any]:
+    def create_run(
+        self,
+        source: str,
+        experiment_name: str,
+        data_truth_label: str = "",
+        stage: str = "V2.2",
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self.root.mkdir(parents=True, exist_ok=True)
         run_id = self._unique_run_id()
         run_dir = self.run_dir(run_id)
@@ -35,7 +42,7 @@ class JobManager:
             "run_id": run_id,
             "created_at": now,
             "updated_at": now,
-            "stage": "V2.2",
+            "stage": stage,
             "source": source,
             "experiment_name": experiment_name,
             "status": "created",
@@ -46,6 +53,8 @@ class JobManager:
             "report_available": False,
             "artifact_count": 0,
         }
+        if extra_metadata:
+            metadata.update(extra_metadata)
         self.write_metadata(metadata)
         return metadata
 
@@ -68,7 +77,7 @@ class JobManager:
             raise ValueError(f"invalid run status {status}")
         metadata.update(updates)
         metadata["updated_at"] = utc_now_text()
-        metadata["summary_available"] = (self.run_dir(run_id) / "summary.csv").is_file()
+        metadata["summary_available"] = (self.run_dir(run_id) / "summary.csv").is_file() or (self.run_dir(run_id) / "dual_chain_summary.csv").is_file()
         metadata["report_available"] = (self.run_dir(run_id) / "report.md").is_file()
         metadata["artifact_count"] = len(list_artifacts(self.run_dir(run_id), run_id))
         self.write_metadata(metadata)

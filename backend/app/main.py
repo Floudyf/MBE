@@ -12,6 +12,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from backend.app.services.config_validator_v2 import validate_planned_topology_file
+from backend.app.services.chain_backend import list_backend_capabilities
+from backend.app.services.dual_chain_profiles import DualChainConfigError
+from backend.app.services.dual_chain_replay import run_dual_chain_replay_job
 from backend.app.services.experiment_composer_v2 import preview_experiment
 from backend.app.services.artifact_manager import ArtifactError, ArtifactForbidden, ArtifactMissing, get_artifact_path, list_artifacts, mirror_run_to_latest
 from backend.app.services.job_manager import DEFAULT_JOBS_ROOT, JobManager, JobNotFound
@@ -27,6 +30,7 @@ V1_TEMPLATES = ROOT / "configs/templates"
 V1_SWEEP_OUT = ROOT / ".cache/v1_8_sweeps/latest"
 V1_CUSTOM_OUT = ROOT / ".cache/v1_custom_runs/latest"
 V2_JOBS_ROOT = DEFAULT_JOBS_ROOT
+V2_DUAL_CHAIN_SAMPLE_CONFIG = ROOT / "configs/experiments/v2_dual_chain_sample.yaml"
 V1_FABRIC_SMOKE_OUT = ROOT / ".cache/fabric_smoke/latest"
 RUN = ROOT / "experiments/runs/v0_default_asset_hotspot"
 DOWNLOADABLE_OUTPUT_FILES = frozenset({"config.yaml", "trace_meta.json", "summary.csv", "latency.csv", "runtime.log"})
@@ -587,6 +591,29 @@ def v2_download_artifact(run_id: str, filename: str) -> FileResponse:
     except ArtifactError as exc:
         raise HTTPException(400, str(exc)) from exc
     return FileResponse(path, filename=filename)
+
+
+@app.get("/api/v2/chain-backends")
+def v2_chain_backends() -> dict:
+    return {"items": list_backend_capabilities()}
+
+
+@app.get("/api/v2/dual-chain/sample-config")
+def v2_dual_chain_sample_config() -> dict:
+    return {
+        "path": V2_DUAL_CHAIN_SAMPLE_CONFIG.relative_to(ROOT).as_posix(),
+        "config": yaml.safe_load(V2_DUAL_CHAIN_SAMPLE_CONFIG.read_text(encoding="utf-8")),
+    }
+
+
+@app.post("/api/v2/dual-chain/replay")
+def v2_dual_chain_replay(payload: dict) -> dict:
+    config_path = Path(str(payload.get("config_path", V2_DUAL_CHAIN_SAMPLE_CONFIG.relative_to(ROOT))))
+    try:
+        result = run_dual_chain_replay_job(config_path, jobs_root=V2_JOBS_ROOT, root=ROOT)
+    except DualChainConfigError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return result
 
 
 @app.post("/api/v0/experiments")

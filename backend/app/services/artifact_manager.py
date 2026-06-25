@@ -12,6 +12,9 @@ ARTIFACT_ALLOWLIST = frozenset({
     "latency.csv",
     "runtime.log",
     "report.md",
+    "dual_chain_summary.csv",
+    "dual_chain_summary.json",
+    "stage_metrics.csv",
     "sweep_summary.csv",
     "sweep_summary.json",
 })

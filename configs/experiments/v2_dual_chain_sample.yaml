@@ -1,0 +1,49 @@
+version: v2
+stage: V2.5
+experiment_name: v2_dual_chain_sample
+topology: dual_chain
+status: runnable
+runnable: true
+data_truth_label: synthetic_replay
+reason: "V2.5 local virtual-time replay over V2.4 sample trace records."
+
+trace:
+  path: trace/samples/v2_cross_trace_small.jsonl
+  meta_path: trace/samples/v2_multi_chain_trace_meta.json
+
+chains:
+  chain_a:
+    chain_id: chain_a
+    role: source
+    backend: mock_chain
+    backend_type: local_virtual
+    block_interval_ms: 100
+    finality_depth: 3
+    capabilities:
+      - virtual_time_commit
+      - virtual_time_finality
+  chain_b:
+    chain_id: chain_b
+    role: target
+    backend: mock_chain
+    backend_type: local_virtual
+    block_interval_ms: 300
+    finality_depth: 5
+    capabilities:
+      - virtual_time_commit
+      - virtual_time_finality
+
+outputs:
+  - used_config.yaml
+  - used_config.json
+  - dual_chain_summary.csv
+  - dual_chain_summary.json
+  - stage_metrics.csv
+  - runtime.log
+  - report.md
+
+notes:
+  - "This is a V2.5 local virtual-time dual-chain replay sample."
+  - "It replays V2.4 schema records and does not execute a production cross-chain bridge."
+  - "It does not implement V2.6 protocol baselines, MetaFlow, committee bridge, or Pending Pool."
+  - "It must not start Docker, Fabric, network.sh, or public-chain live nodes."
