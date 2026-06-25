@@ -103,8 +103,11 @@ def list_trace_sources(registry: TraceSourceRegistry | None = None) -> list[dict
             "status": source["status"],
             "maturity": source["maturity"],
             "data_truth_label": source["data_truth_label"],
+            "description": source["description"],
             "entry_mode": source["entry_mode"],
+            "capabilities": source["capabilities"],
             "limitations": source["limitations"],
+            "validation": source["validation"],
         }
         for source in registry.list_sources()
     ]

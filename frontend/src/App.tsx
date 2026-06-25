@@ -31,6 +31,7 @@ import {
   type V1SweepRow,
   type V1WorkloadOption,
 } from "./api";
+import V2Dashboard from "./components/V2Dashboard";
 
 const plugins = [
   ["chain_backend", "mockchain"], ["workload", "asset_hotspot"], ["trace", "jsonl_gzip"],
@@ -299,6 +300,7 @@ function App() {
       <p className="muted">网页不会自动启动 Docker、Fabric、network.sh、deployCC 或 peer invoke。真实 smoke 请在 WSL2 Ubuntu + Docker Desktop + fabric-samples 环境中运行：</p>
       <pre>python scripts/v1_fabric_smoke.py --strict --channel mbechannel --out .cache/fabric_smoke/latest</pre>
     </section>
+    <V2Dashboard />
     <section className="panel" aria-labelledby="console-title"><div className="section-heading"><div><p className="eyebrow">V0 运行控制台</p><h2 id="console-title">{runStatus}</h2></div><button type="button" onClick={refreshLog}>刷新 runtime.log</button></div><h3>运行 API 返回内容</h3><pre>{runResponse}</pre><h3>runtime.log</h3><pre>{runtimeLog}</pre></section>
     <section className="panel" aria-labelledby="results-title"><div className="section-heading"><div><p className="eyebrow">V0 结果</p><h2 id="results-title">基础指标</h2></div><button type="button" onClick={refreshSummary}>刷新 summary</button></div><dl className="metrics-grid">{metricKeys.map((key) => <div key={key}><dt>{key}</dt><dd>{summary?.[key] ?? "—"}</dd></div>)}</dl><div className="section-heading files-heading"><div><h3>结果文件</h3><p className="muted">运行完成后可下载当前实验产物。</p></div><button type="button" onClick={refreshFiles}>刷新文件列表</button></div>{fileError && <p className="file-error">{fileError}</p>}<ul className="file-list">{resultFiles.map((filename) => { const exists = availableFiles.includes(filename); return <li key={filename}><span><b className="file-type">{fileType(filename)}</b>{filename}</span><span className={exists ? "file-present" : "file-missing"}>{exists ? "已生成" : "未生成"}</span>{exists ? <a href={experimentFileDownloadURL(filename)}>下载</a> : <span>—</span>}</li>; })}</ul></section>
   </main>;

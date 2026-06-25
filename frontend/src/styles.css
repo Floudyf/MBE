@@ -270,6 +270,104 @@ pre {
 }
 .fabric-status .muted { margin-bottom: 0; }
 .custom-result { margin-top: 1rem; }
+.v2-dashboard {
+  box-shadow: inset 4px 0 0 #0f766e, var(--shadow);
+}
+.v2-dashboard button {
+  border-radius: 12px;
+  padding: 0.62rem 0.9rem;
+}
+.v2-panel-title {
+  border-top: 1px solid var(--line);
+  margin-top: 1.2rem;
+  padding-top: 1rem;
+}
+.v2-panel-title h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+.v2-card-grid, .v2-list-grid, .v2-badge-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  margin-top: 0.75rem;
+}
+.v2-badge-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.v2-card {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.9rem;
+}
+.v2-card:hover {
+  border-color: rgba(15, 118, 110, 0.34);
+  box-shadow: 0 10px 22px rgba(15, 118, 110, 0.08);
+}
+.v2-card-head, .v2-control-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: space-between;
+}
+.v2-card span, .v2-card small, .v2-boundaries li {
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.55;
+}
+.v2-wide {
+  margin-top: 0.75rem;
+}
+.v2-wide pre {
+  max-height: 18rem;
+}
+.v2-control-row {
+  background: #f7faff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 0.75rem;
+  padding: 0.8rem;
+}
+.v2-control-row label {
+  color: var(--muted);
+  display: grid;
+  flex: 1 1 280px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  gap: 0.35rem;
+}
+.v2-control-row select {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font: inherit;
+  min-width: 0;
+  padding: 0.62rem 0.7rem;
+}
+.v2-result {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+}
+.v2-boundaries {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.7rem 0 0;
+  padding-left: 1.2rem;
+}
+.badge-danger {
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  color: var(--red);
+}
 
 @media (max-width: 600px) {
   .app-shell { padding-inline: 0.75rem; }
@@ -277,4 +375,5 @@ pre {
   .button-row { justify-content: stretch; }
   .file-list li { grid-template-columns: 1fr; }
   .fabric-status { grid-template-columns: 1fr; }
+  .v2-card-head, .v2-control-row { align-items: stretch; flex-direction: column; }
 }
