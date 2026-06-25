@@ -1,0 +1,48 @@
+{
+  "schema_version": "v2.multi_chain_trace_meta.v1",
+  "trace_format": "jsonl",
+  "compression": "none",
+  "trace_file": "v2_cross_trace_small.jsonl",
+  "data_truth_label": "synthetic_replay",
+  "generated_by": "v2.4_sample",
+  "seed": 42,
+  "chain_count": 2,
+  "chains": [
+    {
+      "chain_id": "chain_a",
+      "role": "source",
+      "backend": "mock_chain",
+      "block_interval_ms": 100,
+      "finality_depth": 3
+    },
+    {
+      "chain_id": "chain_b",
+      "role": "target",
+      "backend": "mock_chain",
+      "block_interval_ms": 300,
+      "finality_depth": 5
+    }
+  ],
+  "protocols": ["lock_mint_serial"],
+  "cross_tx_count": 2,
+  "stage_record_count": 9,
+  "status_counts": {
+    "completed": 1,
+    "timeout": 1,
+    "refunded": 1
+  },
+  "metrics_declared": [
+    "cross_tx_count",
+    "cross_success_count",
+    "cross_timeout_count",
+    "avg_e2e_latency_ms",
+    "p99_e2e_latency_ms",
+    "pending_count",
+    "finality_wait_time_ms",
+    "chain_speed_imbalance"
+  ],
+  "limitations": [
+    "Schema sample only; not a replay result.",
+    "V2.4 does not implement dual-chain replay or cross-chain protocol execution."
+  ]
+}

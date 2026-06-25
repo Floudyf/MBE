@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "v2_cross_chain_trace.schema.json",
+  "title": "V2 Cross-chain Trace Stage Record",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "cross_tx_id",
+    "stage_id",
+    "stage",
+    "source_chain",
+    "target_chain",
+    "chain_id",
+    "submit_time_ms",
+    "status",
+    "data_truth_label"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "v2.cross_chain_trace.v1"
+    },
+    "cross_tx_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stage_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "stage": {
+      "type": "string",
+      "enum": [
+        "created",
+        "source_lock",
+        "source_finality",
+        "cert_generated",
+        "target_mint",
+        "target_finality",
+        "completed",
+        "timeout",
+        "refunded",
+        "failed"
+      ]
+    },
+    "scenario": {
+      "type": "string"
+    },
+    "protocol": {
+      "type": "string"
+    },
+    "source_chain": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_chain": {
+      "type": "string",
+      "minLength": 1
+    },
+    "chain_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tx_id": {
+      "type": "string"
+    },
+    "asset_id": {
+      "type": "string"
+    },
+    "user_id": {
+      "type": "string"
+    },
+    "amount": {
+      "type": "number"
+    },
+    "submit_time_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "commit_time_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "finality_time_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "timeout_deadline_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "stage_latency_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "created",
+        "submitted",
+        "committed",
+        "finalized",
+        "completed",
+        "timeout",
+        "refunded",
+        "failed"
+      ]
+    },
+    "data_truth_label": {
+      "type": "string",
+      "enum": [
+        "synthetic_replay",
+        "existing_trace_replay",
+        "fabric_chain_backed_trace_replay",
+        "public_chain_imported_trace_semantic_unknown",
+        "planned_cross_chain_replay"
+      ]
+    },
+    "access_list": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "read_set": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "write_set": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
+  }
+}

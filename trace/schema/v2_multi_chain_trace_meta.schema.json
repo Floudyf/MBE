@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "v2_multi_chain_trace_meta.schema.json",
+  "title": "V2 Multi-chain Trace Metadata",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "trace_format",
+    "data_truth_label",
+    "chain_count",
+    "chains",
+    "cross_tx_count",
+    "stage_record_count",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "v2.multi_chain_trace_meta.v1"
+    },
+    "trace_format": {
+      "type": "string",
+      "enum": ["jsonl", "jsonl_gzip"]
+    },
+    "compression": {
+      "type": "string",
+      "enum": ["none", "gzip"]
+    },
+    "trace_file": {
+      "type": "string"
+    },
+    "data_truth_label": {
+      "type": "string",
+      "enum": [
+        "synthetic_replay",
+        "existing_trace_replay",
+        "fabric_chain_backed_trace_replay",
+        "public_chain_imported_trace_semantic_unknown",
+        "planned_cross_chain_replay"
+      ]
+    },
+    "generated_by": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer"
+    },
+    "chain_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "chains": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "chain_id",
+          "role",
+          "backend",
+          "block_interval_ms",
+          "finality_depth"
+        ],
+        "properties": {
+          "chain_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": ["source", "target", "intermediate", "observer"]
+          },
+          "backend": {
+            "type": "string",
+            "minLength": 1
+          },
+          "block_interval_ms": {
+            "type": "number",
+            "minimum": 0
+          },
+          "finality_depth": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "protocols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cross_tx_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "stage_record_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status_counts": {
+      "type": "object"
+    },
+    "metrics_declared": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
