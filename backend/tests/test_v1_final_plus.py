@@ -37,22 +37,26 @@ def test_fabric_trace_status_missing_does_not_start_fabric(tmp_path, monkeypatch
 
 
 def test_custom_run_synthetic_uses_local_workload_and_replay_only(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(main, "V1_CUSTOM_OUT", tmp_path)
+    latest_dir = tmp_path / "latest"
+    jobs_dir = tmp_path / "jobs"
+    monkeypatch.setattr(main, "V1_CUSTOM_OUT", latest_dir)
+    monkeypatch.setattr(main, "V2_JOBS_ROOT", jobs_dir)
     commands: list[str] = []
 
     def fake_run(command, cwd, text, capture_output):  # noqa: ANN001
         commands.append(" ".join(str(part) for part in command))
+        output_dir = Path(command[-1])
         if "workload.asset_hotspot_v1.cli" in commands[-1]:
-            (tmp_path / "trace.jsonl.gz").write_bytes(b"fake")
-            (tmp_path / "trace_meta.json").write_text("{}", encoding="utf-8")
+            (output_dir / "trace.jsonl.gz").write_bytes(b"fake")
+            (output_dir / "trace_meta.json").write_text("{}", encoding="utf-8")
             return subprocess.CompletedProcess(command, 0, stdout="generated\n", stderr="")
         if "cmd/replay" in commands[-1]:
-            with (tmp_path / "summary.csv").open("w", encoding="utf-8", newline="") as stream:
+            with (output_dir / "summary.csv").open("w", encoding="utf-8", newline="") as stream:
                 writer = csv.DictWriter(stream, fieldnames=["tx_count", "routing_policy", "dual_track_enabled", "hot_update_aggregation_enabled"])
                 writer.writeheader()
                 writer.writerow({"tx_count": "10", "routing_policy": "co_access", "dual_track_enabled": "true", "hot_update_aggregation_enabled": "true"})
-            (tmp_path / "latency.csv").write_text("tx_id\n", encoding="utf-8")
-            (tmp_path / "runtime.log").write_text("ok\n", encoding="utf-8")
+            (output_dir / "latency.csv").write_text("tx_id\n", encoding="utf-8")
+            (output_dir / "runtime.log").write_text("ok\n", encoding="utf-8")
             return subprocess.CompletedProcess(command, 0, stdout="replayed\n", stderr="")
         return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
 
@@ -63,6 +67,8 @@ def test_custom_run_synthetic_uses_local_workload_and_replay_only(tmp_path, monk
     assert response.status_code == 200
     payload = response.json()
     assert payload["source_type"] == "synthetic"
+    assert payload["run_id"].startswith("v2run_")
+    assert payload["latest_compat_dir"] == str(latest_dir)
     assert "not real chain" in payload["truth_label"]
     assert payload["summary"]["tx_count"] == "10"
     joined = " ".join(commands).lower()
@@ -70,4 +76,3 @@ def test_custom_run_synthetic_uses_local_workload_and_replay_only(tmp_path, monk
     files = client.get("/api/v1/custom-run/latest/files")
     assert files.status_code == 200
     assert {item["name"] for item in files.json()["files"]} >= {"summary.csv", "latency.csv", "runtime.log", "trace_meta.json", "used_config.yaml", "used_config.json", "report.md"}
-

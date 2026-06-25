@@ -13,6 +13,8 @@ from fastapi.responses import FileResponse
 
 from backend.app.services.config_validator_v2 import validate_planned_topology_file
 from backend.app.services.experiment_composer_v2 import preview_experiment
+from backend.app.services.artifact_manager import ArtifactError, ArtifactForbidden, ArtifactMissing, get_artifact_path, list_artifacts, mirror_run_to_latest
+from backend.app.services.job_manager import DEFAULT_JOBS_ROOT, JobManager, JobNotFound
 from backend.app.services.plugin_registry import PluginRegistryError, load_registry, registry_payload
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +24,7 @@ V1_EXPERIMENTS = ROOT / "configs/experiments"
 V1_TEMPLATES = ROOT / "configs/templates"
 V1_SWEEP_OUT = ROOT / ".cache/v1_8_sweeps/latest"
 V1_CUSTOM_OUT = ROOT / ".cache/v1_custom_runs/latest"
+V2_JOBS_ROOT = DEFAULT_JOBS_ROOT
 V1_FABRIC_SMOKE_OUT = ROOT / ".cache/fabric_smoke/latest"
 RUN = ROOT / "experiments/runs/v0_default_asset_hotspot"
 DOWNLOADABLE_OUTPUT_FILES = frozenset({"config.yaml", "trace_meta.json", "summary.csv", "latency.csv", "runtime.log"})
@@ -93,6 +96,25 @@ def custom_files() -> list[dict]:
         if path.is_file():
             files.append({"name": filename, "download_url": f"/api/v1/custom-run/latest/files/{filename}", "size_bytes": path.stat().st_size})
     return files
+
+
+def job_manager() -> JobManager:
+    return JobManager(V2_JOBS_ROOT)
+
+
+def v2_artifacts_response(run_id: str) -> dict:
+    manager = job_manager()
+    metadata = manager.get_run(run_id)
+    artifacts = list_artifacts(manager.run_dir(run_id), run_id)
+    return {"run_id": run_id, "status": "ready" if artifacts else "missing", "artifacts": artifacts, "run": metadata}
+
+
+def v1_truth_labels(source_type: str) -> tuple[str, str]:
+    if source_type == "synthetic":
+        return "synthetic_replay", "Synthetic replay: generated workload replay, not real chain execution."
+    if source_type == "existing_trace":
+        return "existing_trace_replay", "Existing trace replay: replaying a local trace file, not launching a chain."
+    return "fabric_chain_backed_trace_replay", "Chain-backed replay: trace was produced by Fabric smoke CLI/WSL; the web UI only replays it."
 
 
 def config_for_custom_run(payload: dict) -> dict:
@@ -269,64 +291,86 @@ def v1_custom_run(payload: dict) -> dict:
     if source_type not in {"synthetic", "existing_trace", "chain_backed"}:
         raise HTTPException(400, "source_type must be synthetic, existing_trace, or chain_backed")
 
-    if V1_CUSTOM_OUT.exists():
-        shutil.rmtree(V1_CUSTOM_OUT)
-    V1_CUSTOM_OUT.mkdir(parents=True, exist_ok=True)
+    data_truth_label, truth_label = v1_truth_labels(source_type)
+    manager = job_manager()
+    metadata = manager.create_run(source="v1_custom_run", experiment_name="v1_custom_interactive", data_truth_label=data_truth_label)
+    run_id = metadata["run_id"]
+    run_dir = manager.run_dir(run_id)
+    manager.mark_running(run_id)
 
     config_doc = config_for_custom_run(payload)
-    config_path = V1_CUSTOM_OUT / "used_config.yaml"
-    config_json_path = V1_CUSTOM_OUT / "used_config.json"
-    config_path.write_text(yaml.safe_dump(config_doc, sort_keys=False), encoding="utf-8")
-    config_json_path.write_text(json.dumps(config_doc, indent=2) + "\n", encoding="utf-8")
+    config_path = run_dir / "used_config.yaml"
+    config_json_path = run_dir / "used_config.json"
+    try:
+        config_path.write_text(yaml.safe_dump(config_doc, sort_keys=False), encoding="utf-8")
+        config_json_path.write_text(json.dumps(config_doc, indent=2) + "\n", encoding="utf-8")
 
-    stdout_parts = []
-    if source_type == "synthetic":
-        workload = config_doc["workload"]["plugin"]
-        command = [sys.executable, "-m", f"workload.{workload}.cli", "--config", str(config_path), "--output", str(V1_CUSTOM_OUT)]
-        generated = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
-        if generated.returncode != 0:
-            raise HTTPException(500, detail={"message": "synthetic workload generation failed", "stdout": generated.stdout, "stderr": generated.stderr})
-        stdout_parts.append(generated.stdout)
-        trace_path = V1_CUSTOM_OUT / "trace.jsonl.gz"
-        truth_label = "Synthetic replay: generated workload replay, not real chain execution."
-    elif source_type == "existing_trace":
-        trace_path = safe_existing_trace(str(payload.get("trace_path", "")))
-        meta = trace_path.with_name("trace_meta.json")
-        if meta.is_file():
-            shutil.copy2(meta, V1_CUSTOM_OUT / "trace_meta.json")
-        truth_label = "Existing trace replay: replaying a local trace file, not launching a chain."
-    else:
-        trace_path = V1_FABRIC_SMOKE_OUT / "trace.jsonl.gz"
-        if not trace_path.is_file():
-            raise HTTPException(400, detail={"message": "Fabric trace missing", "cli_command": FABRIC_SMOKE_COMMAND})
-        meta = V1_FABRIC_SMOKE_OUT / "trace_meta.json"
-        if meta.is_file():
-            shutil.copy2(meta, V1_CUSTOM_OUT / "trace_meta.json")
-        truth_label = "Chain-backed replay: trace was produced by Fabric smoke CLI/WSL; the web UI only replays it."
+        stdout_parts = []
+        if source_type == "synthetic":
+            workload = config_doc["workload"]["plugin"]
+            command = [sys.executable, "-m", f"workload.{workload}.cli", "--config", str(config_path), "--output", str(run_dir)]
+            generated = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+            if generated.returncode != 0:
+                raise HTTPException(500, detail={"message": "synthetic workload generation failed", "stdout": generated.stdout, "stderr": generated.stderr})
+            stdout_parts.append(generated.stdout)
+            trace_path = run_dir / "trace.jsonl.gz"
+        elif source_type == "existing_trace":
+            trace_path = safe_existing_trace(str(payload.get("trace_path", "")))
+            meta = trace_path.with_name("trace_meta.json")
+            if meta.is_file():
+                shutil.copy2(meta, run_dir / "trace_meta.json")
+        else:
+            trace_path = V1_FABRIC_SMOKE_OUT / "trace.jsonl.gz"
+            if not trace_path.is_file():
+                raise HTTPException(400, detail={"message": "Fabric trace missing", "cli_command": FABRIC_SMOKE_COMMAND})
+            meta = V1_FABRIC_SMOKE_OUT / "trace_meta.json"
+            if meta.is_file():
+                shutil.copy2(meta, run_dir / "trace_meta.json")
 
-    replay_command = ["go", "run", "./cmd/replay", "-config", str(config_path.resolve()), "-trace", str(trace_path.resolve()), "-output", str(V1_CUSTOM_OUT.resolve())]
-    replay_result = subprocess.run(replay_command, cwd=ROOT / "executor", text=True, capture_output=True)
-    if replay_result.returncode != 0:
-        raise HTTPException(500, detail={"message": "executor replay failed", "stdout": replay_result.stdout, "stderr": replay_result.stderr})
-    stdout_parts.append(replay_result.stdout)
+        replay_command = ["go", "run", "./cmd/replay", "-config", str(config_path.resolve()), "-trace", str(trace_path.resolve()), "-output", str(run_dir.resolve())]
+        replay_result = subprocess.run(replay_command, cwd=ROOT / "executor", text=True, capture_output=True)
+        if replay_result.returncode != 0:
+            raise HTTPException(500, detail={"message": "executor replay failed", "stdout": replay_result.stdout, "stderr": replay_result.stderr})
+        stdout_parts.append(replay_result.stdout)
 
-    summary_path = V1_CUSTOM_OUT / "summary.csv"
-    summary = read_summary_csv(summary_path)
-    report = [
-        "# V1 custom interactive run",
-        "",
-        truth_label,
-        "",
-        f"- source_type: {source_type}",
-        f"- workload: {config_doc['workload']['plugin']}",
-        f"- preset: {config_doc['truth']['preset']}",
-        f"- routing_policy: {summary.get('routing_policy', '')}",
-        f"- dual_track_enabled: {summary.get('dual_track_enabled', '')}",
-        f"- hot_update_aggregation_enabled: {summary.get('hot_update_aggregation_enabled', '')}",
-        f"- tx_count: {summary.get('tx_count', '')}",
-    ]
-    (V1_CUSTOM_OUT / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
-    return {"run_id": "latest", "status": "completed", "output_dir": str(V1_CUSTOM_OUT), "source_type": source_type, "truth_label": truth_label, "summary": summary, "files": custom_files(), "stdout": "".join(stdout_parts)}
+        summary_path = run_dir / "summary.csv"
+        summary = read_summary_csv(summary_path)
+        report = [
+            "# V1 custom interactive run",
+            "",
+            truth_label,
+            "",
+            f"- run_id: {run_id}",
+            f"- source_type: {source_type}",
+            f"- workload: {config_doc['workload']['plugin']}",
+            f"- preset: {config_doc['truth']['preset']}",
+            f"- routing_policy: {summary.get('routing_policy', '')}",
+            f"- dual_track_enabled: {summary.get('dual_track_enabled', '')}",
+            f"- hot_update_aggregation_enabled: {summary.get('hot_update_aggregation_enabled', '')}",
+            f"- tx_count: {summary.get('tx_count', '')}",
+        ]
+        (run_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+        completed = manager.mark_completed(run_id, data_truth_label=data_truth_label)
+        mirror_run_to_latest(run_dir, V1_CUSTOM_OUT)
+        return {
+            "run_id": run_id,
+            "status": "completed",
+            "output_dir": str(run_dir),
+            "latest_compat_dir": str(V1_CUSTOM_OUT),
+            "source_type": source_type,
+            "truth_label": truth_label,
+            "data_truth_label": data_truth_label,
+            "summary": summary,
+            "files": custom_files(),
+            "stdout": "".join(stdout_parts),
+            "metadata": completed,
+        }
+    except HTTPException as exc:
+        manager.mark_failed(run_id, str(exc.detail))
+        raise
+    except Exception as exc:
+        manager.mark_failed(run_id, str(exc))
+        raise
 
 
 @app.get("/api/v1/custom-run/latest/summary")
@@ -465,6 +509,52 @@ def v2_composer_preview(payload: dict) -> dict:
 @app.get("/api/v2/topologies/v2_dual_chain_planned/validation")
 def v2_planned_topology_validation() -> dict:
     return validate_planned_topology_file()
+
+
+@app.get("/api/v2/runs")
+def v2_runs(limit: int = 50) -> dict:
+    return {"items": job_manager().list_runs(limit=limit)}
+
+
+@app.get("/api/v2/runs/latest")
+def v2_latest_run() -> dict:
+    try:
+        return job_manager().get_latest_run()
+    except JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/v2/runs/{run_id}")
+def v2_run(run_id: str) -> dict:
+    try:
+        return job_manager().get_run(run_id)
+    except JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/v2/runs/{run_id}/artifacts")
+def v2_run_artifacts(run_id: str) -> dict:
+    try:
+        return v2_artifacts_response(run_id)
+    except JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/v2/runs/{run_id}/artifacts/{filename}")
+def v2_download_artifact(run_id: str, filename: str) -> FileResponse:
+    try:
+        manager = job_manager()
+        manager.get_run(run_id)
+        path = get_artifact_path(manager.run_dir(run_id), filename)
+    except JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ArtifactForbidden as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ArtifactMissing as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ArtifactError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return FileResponse(path, filename=filename)
 
 
 @app.post("/api/v0/experiments")
