@@ -1,0 +1,426 @@
+version: v2.1
+stage: V2.1
+plugins:
+  - name: single_chain
+    type: topology
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 runnable single-chain experiment topology.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [single_chain_replay]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+  - name: dual_chain
+    type: topology
+    version: v2
+    status: planned
+    maturity: planned
+    description: Planned local virtual-time dual-chain replay topology.
+    requires:
+      trace_fields: []
+      capabilities: [dual_chain_replay_engine]
+    provides:
+      capabilities: []
+    compatible_topologies: [dual_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [cross_chain_metrics]
+    reason: V2.5 dual-chain replay engine is not implemented yet.
+  - name: cross_chain_replay
+    type: topology
+    version: v2
+    status: planned
+    maturity: planned
+    description: Planned cross-chain protocol replay topology.
+    requires:
+      trace_fields: []
+      capabilities: [cross_chain_protocol_replay]
+    provides:
+      capabilities: []
+    compatible_topologies: [cross_chain_replay]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [cross_chain_metrics]
+    reason: V2.6 cross-chain protocol replay is not implemented yet.
+  - name: multi_chain
+    type: topology
+    version: v2
+    status: planned
+    maturity: planned
+    description: Planned multi-chain replay topology.
+    requires:
+      trace_fields: []
+      capabilities: [multi_chain_replay_engine]
+    provides:
+      capabilities: []
+    compatible_topologies: [multi_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [cross_chain_metrics]
+    reason: Multi-chain replay is planned after the V2 dual-chain substrate.
+
+  - name: synthetic
+    type: trace_source
+    version: v1
+    status: runnable
+    maturity: stable
+    description: Local synthetic workload trace plus Go executor replay; not real on-chain execution.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [trace_replay, access_list, read_set, write_set, commutative_update, update_type]
+    compatible_topologies: [single_chain, dual_chain, cross_chain_replay, multi_chain]
+    compatible_trace_sources: [synthetic]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+  - name: existing_trace
+    type: trace_source
+    version: v1
+    status: runnable
+    maturity: stable
+    description: Replay an existing local trace without starting any chain.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [trace_replay, access_list, read_set, write_set, commutative_update, update_type]
+    compatible_topologies: [single_chain, dual_chain, cross_chain_replay, multi_chain]
+    compatible_trace_sources: [existing_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+  - name: fabric_chain_backed_trace
+    type: trace_source
+    version: v1
+    status: runnable
+    maturity: experimental
+    description: Replay a trace produced by the CLI/WSL Fabric smoke runner; web APIs do not start Fabric.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [trace_replay, access_list, read_set, write_set, commutative_update, update_type, fabric_smoke_source]
+    compatible_topologies: [single_chain, dual_chain, cross_chain_replay, multi_chain]
+    compatible_trace_sources: [fabric_chain_backed_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: Web platform only replays the Fabric smoke trace.
+  - name: public_chain_imported_trace
+    type: trace_source
+    version: v2
+    status: experimental
+    maturity: experimental
+    description: Imported public-chain trace skeleton with semantic_unknown by default.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [trace_replay, semantic_unknown]
+    compatible_topologies: [single_chain, dual_chain, cross_chain_replay, multi_chain]
+    compatible_trace_sources: [public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics]
+    reason: Imported public-chain traces do not provide reliable access-set, delta, or commutative-update semantics by default.
+
+  - name: asset_hotspot
+    type: workload
+    version: v0
+    status: runnable
+    maturity: stable
+    description: Default V0 synthetic asset hotspot workload.
+    requires:
+      trace_fields: []
+      capabilities: [trace_replay]
+    provides:
+      capabilities: [synthetic_workload]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics]
+    reason: ""
+  - name: asset_hotspot_v1
+    type: workload
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 synthetic asset hotspot workload with access-set and commutative-update annotations.
+    requires:
+      trace_fields: []
+      capabilities: [trace_replay]
+    provides:
+      capabilities: [synthetic_workload, v1_access_annotations]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+  - name: reward_burst
+    type: workload
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 reward-pool burst workload for hot-update aggregation experiments.
+    requires:
+      trace_fields: []
+      capabilities: [trace_replay]
+    provides:
+      capabilities: [synthetic_workload, v1_access_annotations]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+
+  - name: hash
+    type: routing
+    version: v1
+    status: runnable
+    maturity: stable
+    description: Hash-based V1 routing.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [hash_routing]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+  - name: co_access
+    type: routing
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 co-access routing that benefits from reliable access-list semantics.
+    requires:
+      trace_fields: [access_list]
+      capabilities: [access_list]
+    provides:
+      capabilities: [co_access_routing]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+
+  - name: serial
+    type: execution
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 default serial execution.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [serial_execution]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+  - name: dual_track
+    type: execution
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 dual-track execution.
+    requires:
+      trace_fields: [read_set, write_set]
+      capabilities: [read_set, write_set]
+    provides:
+      capabilities: [dual_track_execution]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+
+  - name: normal_commit
+    type: commit
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 normal commit path.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [normal_commit]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+  - name: hot_update_aggregation
+    type: commit
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 hot-update aggregation commit path.
+    requires:
+      trace_fields: [commutative_update, update_type]
+      capabilities: [commutative_update, update_type]
+    provides:
+      capabilities: [hot_update_aggregation]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+
+  - name: disabled
+    type: cross_chain_protocol
+    version: v1
+    status: runnable
+    maturity: stable
+    description: No cross-chain protocol; required for V1 single-chain runnable experiments.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [cross_chain_disabled]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [basic_metrics, v1_metrics]
+    reason: ""
+  - name: lock_mint_serial
+    type: cross_chain_protocol
+    version: v2
+    status: planned
+    maturity: planned
+    description: Planned serial lock-mint cross-chain replay baseline.
+    requires:
+      trace_fields: []
+      capabilities: [cross_chain_protocol_replay]
+    provides:
+      capabilities: []
+    compatible_topologies: [dual_chain, cross_chain_replay]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: [single_chain]
+    metrics: [cross_chain_metrics]
+    reason: V2.6 cross-chain protocol baselines are not implemented yet.
+  - name: lock_mint_pipeline
+    type: cross_chain_protocol
+    version: v2
+    status: planned
+    maturity: planned
+    description: Planned pipelined lock-mint cross-chain replay baseline.
+    requires:
+      trace_fields: []
+      capabilities: [cross_chain_protocol_replay]
+    provides:
+      capabilities: []
+    compatible_topologies: [dual_chain, cross_chain_replay]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: [single_chain]
+    metrics: [cross_chain_metrics]
+    reason: V2.6 cross-chain protocol baselines are not implemented yet.
+  - name: fixed_window_baseline
+    type: cross_chain_protocol
+    version: v2
+    status: planned
+    maturity: planned
+    description: Planned fixed-window cross-chain replay baseline.
+    requires:
+      trace_fields: []
+      capabilities: [cross_chain_protocol_replay]
+    provides:
+      capabilities: []
+    compatible_topologies: [dual_chain, cross_chain_replay]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: [single_chain]
+    metrics: [cross_chain_metrics]
+    reason: V2.6 cross-chain protocol baselines are not implemented yet.
+  - name: committee_bridge_basic
+    type: cross_chain_protocol
+    version: v2
+    status: planned
+    maturity: planned
+    description: Planned basic committee-bridge replay baseline declaration only.
+    requires:
+      trace_fields: []
+      capabilities: [cross_chain_protocol_replay]
+    provides:
+      capabilities: []
+    compatible_topologies: [dual_chain, cross_chain_replay]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: [single_chain]
+    metrics: [cross_chain_metrics]
+    reason: Committee bridge is planned only and is not implemented in V2.1.
+  - name: metaflow
+    type: cross_chain_protocol
+    version: future
+    status: planned
+    maturity: planned
+    description: Future MetaFlow protocol plugin candidate declaration only.
+    requires:
+      trace_fields: []
+      capabilities: [cross_chain_protocol_replay, metaflow_protocol]
+    provides:
+      capabilities: []
+    compatible_topologies: [dual_chain, cross_chain_replay]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: [single_chain]
+    metrics: [cross_chain_metrics]
+    reason: MetaFlow is not implemented in V2.1 and must wait for the cross-chain substrate.
+
+  - name: basic_metrics
+    type: metrics
+    version: v0
+    status: runnable
+    maturity: stable
+    description: V0/V1 basic metrics.
+    requires:
+      trace_fields: []
+      capabilities: []
+    provides:
+      capabilities: [basic_metrics]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: []
+    metrics: [tps, average_latency, p95, p99, success_count, failure_count]
+    reason: ""
+  - name: v1_metrics
+    type: metrics
+    version: v1
+    status: runnable
+    maturity: stable
+    description: V1 routing, dual-track, aggregation, sweep, and report metrics.
+    requires:
+      trace_fields: []
+      capabilities: [basic_metrics]
+    provides:
+      capabilities: [v1_metrics]
+    compatible_topologies: [single_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace]
+    forbidden_with: []
+    metrics: [routing, dual_track, aggregation, sweep_report]
+    reason: ""
+  - name: cross_chain_metrics
+    type: metrics
+    version: v2
+    status: planned
+    maturity: planned
+    description: Planned cross-chain replay metrics.
+    requires:
+      trace_fields: []
+      capabilities: [cross_chain_protocol_replay]
+    provides:
+      capabilities: []
+    compatible_topologies: [dual_chain, cross_chain_replay, multi_chain]
+    compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
+    forbidden_with: [single_chain]
+    metrics: [cross_tx_count, cross_success_count, cross_timeout_count, avg_e2e_latency_ms, p99_e2e_latency_ms, pending_count, finality_wait_time_ms, chain_speed_imbalance]
+    reason: Cross-chain metrics are planned for V2.6/V2.8.

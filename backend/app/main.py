@@ -11,6 +11,10 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
+from backend.app.services.config_validator_v2 import validate_planned_topology_file
+from backend.app.services.experiment_composer_v2 import preview_experiment
+from backend.app.services.plugin_registry import PluginRegistryError, load_registry, registry_payload
+
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
 DEFAULT_COMPONENTS = ROOT / "configs/plugins/default_components.yaml"
@@ -431,6 +435,36 @@ def v1_preview(payload: dict[str, str]) -> dict:
                 "config": document["config"],
             }
     raise HTTPException(404, "unknown V1 experiment")
+
+
+@app.get("/api/v2/plugins")
+def v2_plugins() -> dict:
+    try:
+        return registry_payload(load_registry())
+    except PluginRegistryError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.get("/api/v2/plugins/{plugin_type}")
+def v2_plugins_by_type(plugin_type: str) -> dict:
+    try:
+        registry = load_registry()
+    except PluginRegistryError as exc:
+        raise HTTPException(500, str(exc)) from exc
+    return {"type": plugin_type, "plugins": registry.list_plugins(plugin_type)}
+
+
+@app.post("/api/v2/composer/preview")
+def v2_composer_preview(payload: dict) -> dict:
+    try:
+        return preview_experiment(payload)
+    except PluginRegistryError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.get("/api/v2/topologies/v2_dual_chain_planned/validation")
+def v2_planned_topology_validation() -> dict:
+    return validate_planned_topology_file()
 
 
 @app.post("/api/v0/experiments")
