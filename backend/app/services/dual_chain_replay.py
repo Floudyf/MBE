@@ -212,7 +212,7 @@ def run_dual_chain_replay_job(config_path: Path, jobs_root: Path = DEFAULT_JOBS_
     except Exception as exc:
         manager.mark_failed(run_id, str(exc))
         raise
-    completed = manager.mark_completed(run_id, data_truth_label=str(result["data_truth_label"]))
-    manager.update_run(run_id, summary=result["summary"], backend_type=",".join(backend_types))
+    manager.mark_completed(run_id, data_truth_label=str(result["data_truth_label"]))
+    completed = manager.update_run(run_id, summary=result["summary"], backend_type=",".join(backend_types))
     artifacts = list_artifacts(manager.run_dir(run_id), run_id)
     return {**completed, "summary": result["summary"], "artifacts": artifacts}

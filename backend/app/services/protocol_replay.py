@@ -330,6 +330,8 @@ def run_protocol_replay(config_path: Path, output_dir: Path, root: Path = ROOT) 
     if not validation["valid"]:
         raise ProtocolReplayError("schema validation failed: " + "; ".join(validation["errors"]))
     outputs = write_protocol_outputs(config_path, config, output_dir, trace_path, meta_path, validation)
+    profiles = build_chain_profiles(normalize_for_profiles(config))
+    backend_type = ",".join(sorted({profile.backend_type for profile in profiles.values()}))
     metadata = {
         "stage": ENGINE_STAGE,
         "source": "v2_cross_chain_protocol_replay",
@@ -338,6 +340,7 @@ def run_protocol_replay(config_path: Path, output_dir: Path, root: Path = ROOT) 
         "status_message": "completed",
         "output_dir": str(output_dir),
         "data_truth_label": config.get("trace", {}).get("data_truth_label", "synthetic_replay"),
+        "backend_type": backend_type,
         "protocol_truth": "local_baseline_model",
         "artifact_count": len(list_artifacts(output_dir, "manual")),
     }
@@ -354,13 +357,15 @@ def run_protocol_replay_job(config_path: Path, jobs_root: Path = DEFAULT_JOBS_RO
     config_path = resolve_workspace_path(str(config_path), root)
     config = load_protocol_replay_config(config_path)
     data_truth_label = str(config.get("trace", {}).get("data_truth_label", "synthetic_replay"))
+    profiles = build_chain_profiles(normalize_for_profiles(config))
+    backend_type = ",".join(sorted({profile.backend_type for profile in profiles.values()}))
     manager = JobManager(jobs_root)
     run = manager.create_run(
         source="v2_cross_chain_protocol_replay",
         experiment_name=str(config.get("experiment", {}).get("name", "v2_cross_chain_protocol_sample")),
         data_truth_label=data_truth_label,
         stage=ENGINE_STAGE,
-        extra_metadata={"protocol_truth": "local_baseline_model"},
+        extra_metadata={"protocol_truth": "local_baseline_model", "backend_type": backend_type},
     )
     run_id = run["run_id"]
     manager.mark_running(run_id)
@@ -369,7 +374,7 @@ def run_protocol_replay_job(config_path: Path, jobs_root: Path = DEFAULT_JOBS_RO
     except Exception as exc:
         manager.mark_failed(run_id, str(exc))
         raise
-    completed = manager.mark_completed(run_id, data_truth_label=data_truth_label)
-    manager.update_run(run_id, summary=result["summary"], protocol_truth="local_baseline_model")
+    manager.mark_completed(run_id, data_truth_label=data_truth_label)
+    completed = manager.update_run(run_id, summary=result["summary"], protocol_truth="local_baseline_model", backend_type=backend_type)
     artifacts = list_artifacts(manager.run_dir(run_id), run_id)
     return {**completed, "summary": result["summary"], "artifacts": artifacts}
