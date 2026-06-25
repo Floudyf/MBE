@@ -1,0 +1,103 @@
+version: v2.3
+stage: V2.3
+trace_sources:
+  - id: synthetic
+    label: Synthetic Trace
+    status: runnable
+    maturity: stable
+    data_truth_label: synthetic_replay
+    description: Local synthetic workload trace plus Go executor replay; not real on-chain execution.
+    entry_mode: [generate, replay]
+    capabilities:
+      trace_format: jsonl_gzip
+      required_files: []
+      optional_files: [trace_meta.json]
+      provides_fields: [tx_id, timestamp, access_list, read_set, write_set, commutative, update_type]
+      semantic_guarantees: [controlled_generation, v1_access_annotations]
+    limitations:
+      - Synthetic replay is not real chain execution.
+      - Field availability depends on the selected workload generator.
+    validation:
+      workspace_bound: true
+      requires_existing_file: false
+      allows_live_network: false
+      allows_docker_start: false
+    compatible_topologies: [single_chain]
+    notes:
+      - Used by V0/V1 runnable single-chain replay.
+
+  - id: existing_trace
+    label: Existing Trace Replay
+    status: runnable
+    maturity: stable
+    data_truth_label: existing_trace_replay
+    description: Replay a trace file that already exists inside the project workspace.
+    entry_mode: [import, replay]
+    capabilities:
+      trace_format: jsonl_gzip_or_jsonl
+      required_files: [trace_path]
+      optional_files: [trace_meta.json]
+      provides_fields: []
+      semantic_guarantees: [workspace_local_file]
+    limitations:
+      - Does not launch any chain.
+      - Trace semantics depend on the trace file and metadata.
+    validation:
+      workspace_bound: true
+      requires_existing_file: true
+      allows_live_network: false
+      allows_docker_start: false
+    compatible_topologies: [single_chain]
+    notes:
+      - Validator checks path safety and existence without loading the full trace into memory.
+
+  - id: fabric_chain_backed_trace
+    label: Fabric Chain-backed Trace Replay
+    status: runnable
+    maturity: experimental
+    data_truth_label: fabric_chain_backed_trace_replay
+    description: Replay trace.jsonl.gz produced by the CLI/WSL Fabric smoke runner.
+    entry_mode: [replay]
+    capabilities:
+      trace_format: jsonl_gzip
+      required_files: [trace.jsonl.gz, trace_meta.json]
+      optional_files: [raw_chain_log.jsonl, summary.json]
+      provides_fields: [tx_id, timestamp, access_list, read_set, write_set, commutative, update_type]
+      semantic_guarantees: [fabric_smoke_origin, replay_only_in_web]
+    limitations:
+      - The trace source is a real Fabric test-network smoke run.
+      - The web backend only checks and replays files; it never starts Docker, Fabric, or network.sh.
+    validation:
+      workspace_bound: true
+      requires_existing_file: true
+      allows_live_network: false
+      allows_docker_start: false
+    compatible_topologies: [single_chain]
+    notes:
+      - Generate the trace outside the web API with scripts/v1_fabric_smoke.py.
+
+  - id: public_chain_imported_trace
+    label: Public-chain Imported Trace
+    status: experimental
+    maturity: experimental
+    data_truth_label: public_chain_imported_trace_semantic_unknown
+    description: Skeleton for imported public-chain data; semantic access sets and deltas are unknown by default.
+    entry_mode: [import]
+    capabilities:
+      trace_format: jsonl_gzip_or_jsonl
+      required_files: [trace_path]
+      optional_files: [trace_meta.json]
+      provides_fields: [tx_id, timestamp, chain_id, status, raw_event]
+      semantic_guarantees: [externally_real_origin, semantic_unknown]
+    limitations:
+      - No live public-chain node connection is implemented.
+      - No archive node is required or contacted.
+      - access_list, read_set, write_set, commutative, update_type, and delta_semantics are not guaranteed.
+    validation:
+      workspace_bound: true
+      requires_existing_file: true
+      allows_live_network: false
+      allows_docker_start: false
+    compatible_topologies: [single_chain]
+    notes:
+      - This is a V2.3 skeleton only and must not be treated as strong semantic trace input.

@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 
 from backend.app.services.plugin_registry import PluginRegistry
+from backend.app.services.trace_source_service import TraceSourceError, TraceSourceNotFound, infer_data_truth_label
 
 ROOT = Path(__file__).resolve().parents[3]
 PLANNED_TOPOLOGY = ROOT / "configs/topologies/v2_dual_chain_planned.yaml"
@@ -52,7 +53,7 @@ def validate_selection(payload: dict[str, Any], registry: PluginRegistry) -> dic
     topology = str(selection["topology"])
     trace_source = str(selection["trace_source"])
     cross_chain_protocol = str(selection["cross_chain_protocol"])
-    data_truth_label = TRACE_LABELS.get(trace_source, "synthetic_replay")
+    data_truth_label = _trace_truth_label(trace_source)
     if topology in {"dual_chain", "cross_chain_replay", "multi_chain"}:
         data_truth_label = "planned_cross_chain_replay"
 
@@ -125,6 +126,13 @@ def validate_planned_topology_file(path: Path = PLANNED_TOPOLOGY) -> dict[str, A
         "reason": document.get("reason", "planned topology must not be runnable"),
         "blocked_by": ["v2_dual_chain_planned"] if is_planned else ["invalid_planned_topology_declaration"],
     }
+
+
+def _trace_truth_label(trace_source: str) -> str:
+    try:
+        return infer_data_truth_label(trace_source)
+    except (TraceSourceError, TraceSourceNotFound):
+        return TRACE_LABELS.get(trace_source, "synthetic_replay")
 
 
 def _result(

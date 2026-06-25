@@ -16,6 +16,8 @@ from backend.app.services.experiment_composer_v2 import preview_experiment
 from backend.app.services.artifact_manager import ArtifactError, ArtifactForbidden, ArtifactMissing, get_artifact_path, list_artifacts, mirror_run_to_latest
 from backend.app.services.job_manager import DEFAULT_JOBS_ROOT, JobManager, JobNotFound
 from backend.app.services.plugin_registry import PluginRegistryError, load_registry, registry_payload
+from backend.app.services.trace_source_service import TraceSourceError, TraceSourceNotFound, describe_capabilities, infer_data_truth_label, list_trace_sources, load_trace_sources
+from backend.app.services.trace_source_validator import validate_trace_source
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
@@ -509,6 +511,36 @@ def v2_composer_preview(payload: dict) -> dict:
 @app.get("/api/v2/topologies/v2_dual_chain_planned/validation")
 def v2_planned_topology_validation() -> dict:
     return validate_planned_topology_file()
+
+
+@app.get("/api/v2/trace-sources")
+def v2_trace_sources() -> dict:
+    try:
+        return {"items": list_trace_sources(load_trace_sources())}
+    except TraceSourceError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.get("/api/v2/trace-sources/{source_id}")
+def v2_trace_source_detail(source_id: str) -> dict:
+    try:
+        registry = load_trace_sources()
+        source = registry.get_source(source_id)
+        return {**source, "capabilities": describe_capabilities(source_id, registry), "data_truth_label": infer_data_truth_label(source_id, registry)}
+    except TraceSourceNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except TraceSourceError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.post("/api/v2/trace-sources/validate")
+def v2_validate_trace_source(payload: dict) -> dict:
+    try:
+        return validate_trace_source(payload, load_trace_sources(), workspace_root=ROOT, fabric_smoke_dir=V1_FABRIC_SMOKE_OUT)
+    except TraceSourceNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except TraceSourceError as exc:
+        raise HTTPException(500, str(exc)) from exc
 
 
 @app.get("/api/v2/runs")
