@@ -6,19 +6,30 @@ import {
   fetchExperimentFiles,
   fetchRuntimeLog,
   fetchSummary,
+  fetchV1AblationPresets,
+  fetchV1CustomRunFiles,
+  fetchV1CustomRunSummary,
   fetchV1Experiments,
+  fetchV1FabricTraceStatus,
   fetchV1Status,
   fetchV1SweepFiles,
   fetchV1SweepReport,
   fetchV1SweepSummary,
+  fetchV1Workloads,
   runDefaultExperiment,
+  runV1CustomExperiment,
   runV1Sweep,
+  v1CustomRunFileDownloadURL,
   v1SweepFileDownloadURL,
   type Summary,
+  type V1AblationPreset,
+  type V1CustomRunRequest,
+  type V1FabricTraceStatus,
   type V1Experiment,
   type V1StageStatus,
   type V1SweepFile,
   type V1SweepRow,
+  type V1WorkloadOption,
 } from "./api";
 
 const plugins = [
@@ -65,6 +76,25 @@ const routingMetricKeys = ["routing_policy", "routing_cross_shard_tx_count", "ro
 const dualTrackMetricKeys = ["dual_track_enabled", "fast_track_tx_count", "conservative_track_tx_count", "fast_track_tx_ratio", "conservative_track_tx_ratio", "scheduler_idle_count"] as const;
 const aggregationMetricKeys = ["hot_update_aggregation_enabled", "aggregation_policy", "aggregation_candidate_tx_count", "aggregated_tx_count", "aggregated_commit_count", "conservative_commit_count", "aggregation_saved_commit_count", "aggregation_group_count", "aggregation_hot_key_count"] as const;
 
+const defaultCustomForm: V1CustomRunRequest = {
+  workload: "asset_hotspot_v1",
+  source_type: "synthetic",
+  tx_count: 100,
+  seed: 42,
+  hot_tx_ratio: 0.6,
+  conflict_injection_ratio: 0.3,
+  commutative_update_ratio: 0.35,
+  access_set_size: 4,
+  multi_hotspot_count: 3,
+  arrival_rate: 100,
+  burst_rate: 500,
+  routing_policy: "co_access",
+  dual_track_enabled: true,
+  hot_update_aggregation_enabled: true,
+  preset: "full_v1",
+  trace_path: "tests/golden/trace_small.jsonl.gz",
+};
+
 function App() {
   const [runStatus, setRunStatus] = useState("就绪");
   const [runResponse, setRunResponse] = useState("尚未发送运行请求。");
@@ -81,23 +111,43 @@ function App() {
   const [sweepRows, setSweepRows] = useState<V1SweepRow[]>([]);
   const [sweepFiles, setSweepFiles] = useState<V1SweepFile[]>([]);
   const [report, setReport] = useState("");
+  const [workloads, setWorkloads] = useState<V1WorkloadOption[]>([]);
+  const [presets, setPresets] = useState<V1AblationPreset[]>([]);
+  const [fabricTrace, setFabricTrace] = useState<V1FabricTraceStatus | null>(null);
+  const [customForm, setCustomForm] = useState<V1CustomRunRequest>(defaultCustomForm);
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customStatus, setCustomStatus] = useState("尚未运行自定义 V1 实验。");
+  const [customSummary, setCustomSummary] = useState<V1SweepRow | null>(null);
+  const [customFiles, setCustomFiles] = useState<V1SweepFile[]>([]);
+  const [customTruth, setCustomTruth] = useState("");
 
   useEffect(() => { void loadV1Acceptance(); }, []);
 
   async function loadV1Acceptance() {
     try {
-      const [experiments, status, sweepSummary, sweepReport, files] = await Promise.all([
+      const [experiments, status, sweepSummary, sweepReport, files, workloadOptions, presetOptions, fabricStatus, customLatest, customFileList] = await Promise.all([
         fetchV1Experiments(),
         fetchV1Status(),
         fetchV1SweepSummary(),
         fetchV1SweepReport(),
         fetchV1SweepFiles(),
+        fetchV1Workloads(),
+        fetchV1AblationPresets(),
+        fetchV1FabricTraceStatus(),
+        fetchV1CustomRunSummary(),
+        fetchV1CustomRunFiles(),
       ]);
       setV1Experiments(experiments);
       setV1Stages(status.stages);
       setSweepRows(sweepSummary.rows);
       setSweepFiles(files.files);
       setReport(sweepReport.content || sweepReport.message || "");
+      setWorkloads(workloadOptions);
+      setPresets(presetOptions);
+      setFabricTrace(fabricStatus);
+      setCustomSummary(customLatest.summary && Object.keys(customLatest.summary).length ? customLatest.summary : null);
+      setCustomFiles(customFileList.files);
+      setCustomTruth(customLatest.truth_label || customLatest.message || "");
       setSweepStatus(sweepSummary.status === "ready" ? "V1.8 sweep 结果已加载。" : sweepSummary.message ?? "尚未运行 V1.8 sweep。");
       setV1Error("");
     } catch (error) { setV1Error(errorMessage(error)); }
@@ -121,6 +171,42 @@ function App() {
       await loadV1Acceptance();
     } catch (error) { setSweepStatus(`运行失败：${errorMessage(error)}`); }
     finally { setSweepBusy(false); }
+  }
+
+  async function runCustomExperiment() {
+    const validation = validateCustomForm(customForm);
+    if (validation) {
+      setCustomStatus(validation);
+      return;
+    }
+    setCustomBusy(true); setCustomStatus("正在运行自定义 V1 实验…");
+    try {
+      const response = await runV1CustomExperiment(customForm);
+      setCustomSummary(response.summary);
+      setCustomFiles(response.files);
+      setCustomTruth(response.truth_label);
+      setCustomStatus(`运行完成：${response.output_dir}`);
+    } catch (error) { setCustomStatus(`运行失败：${errorMessage(error)}`); }
+    finally { setCustomBusy(false); }
+  }
+
+  async function refreshFabricTrace() {
+    try {
+      const status = await fetchV1FabricTraceStatus();
+      setFabricTrace(status);
+      setCustomStatus(status.message);
+    } catch (error) { setCustomStatus(`无法检查 Fabric trace：${errorMessage(error)}`); }
+  }
+
+  function applyPreset(id: string) {
+    const preset = presets.find((item) => item.id === id);
+    setCustomForm((form) => ({
+      ...form,
+      preset: id,
+      routing_policy: preset?.routing_policy ?? form.routing_policy,
+      dual_track_enabled: preset?.dual_track_enabled ?? form.dual_track_enabled,
+      hot_update_aggregation_enabled: preset?.hot_update_aggregation_enabled ?? form.hot_update_aggregation_enabled,
+    }));
   }
 
   async function refreshLog() {
@@ -161,6 +247,41 @@ function App() {
       <section className="wizard-step"><h3>Step 5：实验套件 / 策略组</h3><div className="suite-list">{suites.map(([title, id, status, strategies]) => <article key={id} className="suite-card"><div><strong>{title}</strong><span>{id}</span></div><b>{status}</b><ul>{strategies.map((strategy) => <li key={strategy}>{strategy}</li>)}</ul></article>)}</div></section>
       <section className="wizard-step"><h3>Step 6：Composer Preview</h3><div className="wizard-grid"><article className="wizard-card selected"><strong>兼容保留的 V1.1 可运行配置</strong><span>{runnableExperiment?.id ?? "v1_baseline_hash_serial"}</span><span>组件：hash_routing + serial_execution + normal_commit</span><small>早期 composer 语义保持不破坏。</small></article><article className="wizard-card"><strong>早期声明仍不可直接运行</strong><ul className="planned-list">{plannedExperiments.map((experiment) => <li key={experiment.id}>{experiment.id}</li>)}</ul><small>V1-final 的运行入口使用 V1.8 baseline sweep。</small></article></div></section>
     </section>
+    <section className="panel interactive-panel" aria-labelledby="interactive-title">
+      <div className="section-heading"><div><p className="eyebrow">V1-final-plus</p><h2 id="interactive-title">交互式 V1 实验配置</h2></div><div className="button-row"><button type="button" onClick={runCustomExperiment} disabled={customBusy}>{customBusy ? "运行中…" : "运行自定义 V1 实验"}</button><button type="button" onClick={loadV1Acceptance}>刷新自定义结果</button></div></div>
+      <p className="muted">该区域只运行 workload generation + executor replay。Synthetic replay 不是真实上链；chain-backed replay 只复用已存在的 Fabric smoke trace；网页不会自动启动 Docker/Fabric。</p>
+      <div className="form-grid">
+        <label><span>Data source</span><select value={customForm.source_type} onChange={(event) => setCustomForm({ ...customForm, source_type: event.target.value })}><option value="synthetic">Synthetic replay</option><option value="existing_trace">Existing trace replay</option><option value="chain_backed">Fabric chain-backed replay</option></select></label>
+        <label><span>Workload</span><select value={customForm.workload} onChange={(event) => setCustomForm({ ...customForm, workload: event.target.value })}>{workloads.filter((item) => item.source_type === "synthetic").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+        <label><span>Ablation preset</span><select value={customForm.preset} onChange={(event) => applyPreset(event.target.value)}>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.id}</option>)}</select></label>
+        <label><span>Trace path</span><input value={customForm.trace_path ?? ""} onChange={(event) => setCustomForm({ ...customForm, trace_path: event.target.value })} disabled={customForm.source_type !== "existing_trace"} /></label>
+        <NumberInput label="tx_count" value={customForm.tx_count} min={1} max={100000} onChange={(value) => setCustomForm({ ...customForm, tx_count: value })} />
+        <NumberInput label="seed" value={customForm.seed} min={0} max={999999} onChange={(value) => setCustomForm({ ...customForm, seed: value })} />
+        <NumberInput label="hot_tx_ratio" value={customForm.hot_tx_ratio} min={0} max={1} step={0.05} onChange={(value) => setCustomForm({ ...customForm, hot_tx_ratio: value })} />
+        <NumberInput label="conflict_injection_ratio" value={customForm.conflict_injection_ratio} min={0} max={1} step={0.05} onChange={(value) => setCustomForm({ ...customForm, conflict_injection_ratio: value })} />
+        <NumberInput label="commutative_update_ratio" value={customForm.commutative_update_ratio} min={0} max={1} step={0.05} onChange={(value) => setCustomForm({ ...customForm, commutative_update_ratio: value })} />
+        <NumberInput label="access_set_size" value={customForm.access_set_size} min={1} max={32} onChange={(value) => setCustomForm({ ...customForm, access_set_size: value })} />
+        <NumberInput label="multi_hotspot_count" value={customForm.multi_hotspot_count} min={1} max={64} onChange={(value) => setCustomForm({ ...customForm, multi_hotspot_count: value })} />
+        <NumberInput label="arrival_rate" value={customForm.arrival_rate} min={1} max={10000} onChange={(value) => setCustomForm({ ...customForm, arrival_rate: value })} />
+        <NumberInput label="burst_rate" value={customForm.burst_rate} min={1} max={20000} onChange={(value) => setCustomForm({ ...customForm, burst_rate: value })} />
+      </div>
+      {customForm.preset === "custom" && <div className="toggle-row">
+        <label><span>routing_policy</span><select value={customForm.routing_policy} onChange={(event) => setCustomForm({ ...customForm, routing_policy: event.target.value })}><option value="hash">hash</option><option value="co_access">co_access</option></select></label>
+        <label><input type="checkbox" checked={customForm.dual_track_enabled} onChange={(event) => setCustomForm({ ...customForm, dual_track_enabled: event.target.checked })} /> dual_track_enabled</label>
+        <label><input type="checkbox" checked={customForm.hot_update_aggregation_enabled} onChange={(event) => setCustomForm({ ...customForm, hot_update_aggregation_enabled: event.target.checked })} /> hot_update_aggregation_enabled</label>
+      </div>}
+      <div className="source-grid">{workloads.map((item) => <article key={item.id} className="source-card"><b className={`badge ${sourceBadgeClass(item.source_type)}`}>{sourceLabel(item.source_type)}</b><strong>{item.label}</strong><span>{item.description}</span><small>{item.limitations.join(" ")}</small></article>)}</div>
+      <div className="fabric-status">
+        <div><b className={`badge ${fabricTrace?.ready ? "badge-success" : "badge-cli"}`}>{fabricTrace?.ready ? "Fabric trace ready" : "CLI/WSL required"}</b><p className="muted">{fabricTrace?.message ?? "尚未检查 Fabric trace 状态。"}</p></div>
+        <button type="button" onClick={refreshFabricTrace}>检查 Fabric trace 状态</button>
+      </div>
+      <pre>cd ~/MBE{"\n"}source .venv/bin/activate{"\n"}python scripts/v1_fabric_smoke.py --strict --channel mbechannel --out .cache/fabric_smoke/latest</pre>
+      <p className="muted">{customStatus}</p>
+      {customTruth && <article className="truth-card"><b className="badge badge-cli">Truth / Source Label</b><strong>{customForm.source_type}</strong><span>{customTruth}</span></article>}
+      {customSummary ? <article className="sweep-row custom-result"><h3>latest custom run</h3><MetricSection title="基础指标" row={customSummary} keys={baseMetricKeys} /><MetricSection title="Routing 指标" row={customSummary} keys={routingMetricKeys} /><MetricSection title="Dual-track 指标" row={customSummary} keys={dualTrackMetricKeys} /><MetricSection title="Aggregation 指标" row={customSummary} keys={aggregationMetricKeys} /></article> : <p className="file-error">尚无自定义实验结果。</p>}
+      <div className="section-heading files-heading"><div><h3>自定义实验产物下载</h3><p className="muted">输出目录为 .cache/v1_custom_runs/latest，不进入 Git。</p></div></div>
+      <ul className="file-list">{["summary.csv", "latency.csv", "runtime.log", "trace_meta.json", "used_config.yaml", "used_config.json", "report.md"].map((filename) => { const file = customFiles.find((item) => item.name === filename); return <li key={filename}><span><b className="file-type">{fileType(filename)}</b>{filename}</span><span className={file ? "file-present" : "file-missing"}>{file ? `${file.size_bytes} bytes` : "未生成"}</span>{file ? <a href={v1CustomRunFileDownloadURL(filename)}>下载</a> : <span>—</span>}</li>; })}</ul>
+    </section>
     <section className="panel" aria-labelledby="sweep-title">
       <div className="section-heading"><div><p className="eyebrow">V1.8 baseline / sweep / report</p><h2 id="sweep-title">一键运行与结果验收</h2></div><div className="button-row"><button type="button" onClick={runSweep} disabled={sweepBusy}>{sweepBusy ? "运行中…" : "运行 V1.8 baseline sweep"}</button><button type="button" onClick={loadV1Acceptance}>刷新 V1.8 结果</button></div></div>
       <p className="muted">{sweepStatus}</p>
@@ -197,6 +318,10 @@ function MetricSection({ title, row, keys }: { title: string; row: V1SweepRow; k
   return <section className={`metric-section ${metricSectionClass(title)}`}><h4>{title}</h4><dl className="metrics-grid compact">{keys.map((key) => <div key={key}><dt>{key}</dt><dd>{formatMetric(row[key])}</dd></div>)}</dl></section>;
 }
 
+function NumberInput({ label, value, min, max, step = 1, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }) {
+  return <label><span>{label}</span><input type="number" value={value} min={min} max={max} step={step} onChange={(event) => onChange(Number(event.target.value))} /></label>;
+}
+
 function statusLabel(status: string): string {
   if (status === "completed_cli_only") return "已完成 · CLI/WSL";
   if (status === "completed") return "已完成";
@@ -229,6 +354,27 @@ function metricSectionClass(title: string): string {
 
 function fileType(filename: string): string {
   return filename.split(".").pop()?.toUpperCase() ?? "FILE";
+}
+
+function sourceLabel(sourceType: string): string {
+  if (sourceType === "synthetic") return "synthetic";
+  if (sourceType === "chain_backed") return "chain-backed";
+  return "existing trace";
+}
+
+function sourceBadgeClass(sourceType: string): string {
+  if (sourceType === "synthetic") return "badge-success";
+  if (sourceType === "chain_backed") return "badge-cli";
+  return "badge-planned";
+}
+
+function validateCustomForm(form: V1CustomRunRequest): string {
+  if (!Number.isFinite(form.tx_count) || form.tx_count < 1 || form.tx_count > 100000) return "tx_count 必须在 1 到 100000 之间。";
+  if (!Number.isFinite(form.hot_tx_ratio) || form.hot_tx_ratio < 0 || form.hot_tx_ratio > 1) return "hot_tx_ratio 必须在 0 到 1 之间。";
+  if (!Number.isFinite(form.conflict_injection_ratio) || form.conflict_injection_ratio < 0 || form.conflict_injection_ratio > 1) return "conflict_injection_ratio 必须在 0 到 1 之间。";
+  if (!Number.isFinite(form.commutative_update_ratio) || form.commutative_update_ratio < 0 || form.commutative_update_ratio > 1) return "commutative_update_ratio 必须在 0 到 1 之间。";
+  if (form.source_type === "existing_trace" && !form.trace_path) return "Existing trace replay 需要 trace_path。";
+  return "";
 }
 
 function formatMetric(value: V1SweepRow[string]): string {

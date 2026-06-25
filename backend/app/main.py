@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,10 +17,21 @@ DEFAULT_COMPONENTS = ROOT / "configs/plugins/default_components.yaml"
 V1_EXPERIMENTS = ROOT / "configs/experiments"
 V1_TEMPLATES = ROOT / "configs/templates"
 V1_SWEEP_OUT = ROOT / ".cache/v1_8_sweeps/latest"
+V1_CUSTOM_OUT = ROOT / ".cache/v1_custom_runs/latest"
+V1_FABRIC_SMOKE_OUT = ROOT / ".cache/fabric_smoke/latest"
 RUN = ROOT / "experiments/runs/v0_default_asset_hotspot"
 DOWNLOADABLE_OUTPUT_FILES = frozenset({"config.yaml", "trace_meta.json", "summary.csv", "latency.csv", "runtime.log"})
 V1_SWEEP_DOWNLOADABLE_FILES = frozenset({"report.md", "sweep_summary.csv", "sweep_summary.json"})
+V1_CUSTOM_DOWNLOADABLE_FILES = frozenset({"trace_meta.json", "summary.csv", "latency.csv", "runtime.log", "report.md", "used_config.yaml", "used_config.json", "config.yaml"})
 app = FastAPI(title="MBE V0")
+
+ABLATION_PRESETS = {
+    "baseline_hash_only": {"routing_policy": "hash", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},
+    "co_access_only": {"routing_policy": "co_access", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},
+    "co_access_dual_track": {"routing_policy": "co_access", "dual_track_enabled": True, "hot_update_aggregation_enabled": False},
+    "full_v1": {"routing_policy": "co_access", "dual_track_enabled": True, "hot_update_aggregation_enabled": True},
+}
+FABRIC_SMOKE_COMMAND = "python scripts/v1_fabric_smoke.py --strict --channel mbechannel --out .cache/fabric_smoke/latest"
 
 
 def check(experiment_id: str) -> None:
@@ -49,6 +61,72 @@ def v1_experiment_documents() -> list[dict]:
             "config": document,
         })
     return documents
+
+
+def read_summary_csv(path: Path) -> dict[str, str]:
+    with path.open(encoding="utf-8", newline="") as stream:
+        return next(csv.DictReader(stream))
+
+
+def safe_existing_trace(path_text: str) -> Path:
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = ROOT / path
+    resolved = path.resolve()
+    try:
+        resolved.relative_to(ROOT.resolve())
+    except ValueError as exc:
+        raise HTTPException(400, "trace_path must stay inside the project workspace") from exc
+    if not resolved.is_file():
+        raise HTTPException(404, "trace_path does not exist")
+    return resolved
+
+
+def custom_files() -> list[dict]:
+    files = []
+    for filename in sorted(V1_CUSTOM_DOWNLOADABLE_FILES):
+        path = V1_CUSTOM_OUT / filename
+        if path.is_file():
+            files.append({"name": filename, "download_url": f"/api/v1/custom-run/latest/files/{filename}", "size_bytes": path.stat().st_size})
+    return files
+
+
+def config_for_custom_run(payload: dict) -> dict:
+    preset = str(payload.get("preset", "full_v1"))
+    settings = dict(ABLATION_PRESETS.get(preset, ABLATION_PRESETS["full_v1"]))
+    if preset == "custom":
+        settings = {
+            "routing_policy": payload.get("routing_policy", "co_access"),
+            "dual_track_enabled": bool(payload.get("dual_track_enabled", True)),
+            "hot_update_aggregation_enabled": bool(payload.get("hot_update_aggregation_enabled", True)),
+        }
+    workload_name = str(payload.get("workload", "asset_hotspot_v1"))
+    tx_count = max(1, min(int(payload.get("tx_count", 100)), 100_000))
+    workload = {
+        "plugin": workload_name if workload_name in {"asset_hotspot_v1", "reward_burst"} else "asset_hotspot_v1",
+        "tx_count": tx_count,
+        "hot_tx_ratio": float(payload.get("hot_tx_ratio", 0.6)),
+        "conflict_injection_ratio": float(payload.get("conflict_injection_ratio", 0.3)),
+        "commutative_update_ratio": float(payload.get("commutative_update_ratio", 0.35)),
+        "access_set_size": max(1, int(payload.get("access_set_size", 4))),
+        "multi_hotspot_count": max(1, int(payload.get("multi_hotspot_count", 3))),
+        "arrival_rate": max(1.0, float(payload.get("arrival_rate", 100.0))),
+        "burst_rate": max(1.0, float(payload.get("burst_rate", 500.0))),
+        "cross_shard_ratio": float(payload.get("cross_shard_ratio", 0.2)),
+        "read_write_ratio": float(payload.get("read_write_ratio", 0.4)),
+    }
+    if workload["plugin"] == "reward_burst":
+        workload = {key: workload[key] for key in ("plugin", "tx_count", "commutative_update_ratio", "burst_rate", "multi_hotspot_count")}
+    return {
+        "experiment": {"name": "v1_custom_interactive", "version": "v1", "stage": "v1-final-plus", "seed": int(payload.get("seed", 42))},
+        "workload": workload,
+        "state_sharding": {"shard_count": 4},
+        "execution_sharding": {"shard_count": 4},
+        "routing": {"policy": settings["routing_policy"], "co_access_min_weight": 1, "co_access_max_group_size": 64, "co_access_balance_weight": 1},
+        "execution": {"dual_track_enabled": settings["dual_track_enabled"], "fast_track_max_access_size": 2, "conservative_on_conflict_hint": True, "conservative_on_missing_access_set": True, "scheduler_policy": "fast_first"},
+        "commit": {"hot_update_aggregation_enabled": settings["hot_update_aggregation_enabled"], "aggregation_min_hot_count": 2, "aggregation_max_group_size": 64, "aggregation_require_fast_track": True, "conservative_on_constraint_failure": True, "aggregation_policy": "by_primary_key"},
+        "truth": {"source_type": payload.get("source_type", "synthetic"), "preset": preset},
+    }
 
 
 @app.get("/health")
@@ -108,6 +186,172 @@ def v1_status() -> dict:
             "v2_v3": "dual-chain, multi-chain, cross-chain protocols, MetaFlow, committee bridge, and Pending Pool remain planned.",
         },
     }
+
+
+@app.get("/api/v1/workloads")
+def v1_workloads() -> dict:
+    return {
+        "items": [
+            {
+                "id": "asset_hotspot_v1",
+                "label": "Synthetic: Asset Hotspot V1",
+                "description": "V1.3 synthetic asset hotspot trace with access-set, conflict, commutative, and hotspot annotations.",
+                "source_type": "synthetic",
+                "supported_params": ["tx_count", "seed", "hot_tx_ratio", "conflict_injection_ratio", "commutative_update_ratio", "access_set_size", "multi_hotspot_count", "arrival_rate", "burst_rate"],
+                "limitations": ["Synthetic replay only; not real chain execution."],
+            },
+            {
+                "id": "reward_burst",
+                "label": "Synthetic: Reward Burst",
+                "description": "V1.3 reward-pool burst trace for hot-update aggregation experiments.",
+                "source_type": "synthetic",
+                "supported_params": ["tx_count", "seed", "commutative_update_ratio", "multi_hotspot_count", "burst_rate"],
+                "limitations": ["Synthetic replay only; useful for aggregation-path visibility."],
+            },
+            {
+                "id": "existing_trace",
+                "label": "Existing Trace Replay",
+                "description": "Replay an existing trace.jsonl.gz already present inside the project workspace.",
+                "source_type": "existing_trace",
+                "supported_params": ["trace_path", "preset", "routing_policy", "dual_track_enabled", "hot_update_aggregation_enabled"],
+                "limitations": ["Does not generate workload; trace_path must stay inside the workspace."],
+            },
+            {
+                "id": "fabric_chain_backed_trace",
+                "label": "Fabric Chain-backed Trace Replay",
+                "description": "Replay .cache/fabric_smoke/latest/trace.jsonl.gz generated by the CLI/WSL Fabric smoke runner.",
+                "source_type": "chain_backed",
+                "supported_params": ["preset", "routing_policy", "dual_track_enabled", "hot_update_aggregation_enabled"],
+                "limitations": ["The web UI never starts Docker, Fabric, network.sh, deployCC, or peer invoke."],
+            },
+        ]
+    }
+
+
+@app.get("/api/v1/ablation-presets")
+def v1_ablation_presets() -> dict:
+    items = [
+        {"id": name, **settings, "description": f"{name} preset for V1-final-plus interactive replay."}
+        for name, settings in ABLATION_PRESETS.items()
+    ]
+    items.append({"id": "custom", "routing_policy": "co_access", "dual_track_enabled": True, "hot_update_aggregation_enabled": True, "description": "Manually choose routing, dual-track, and hot-update aggregation toggles."})
+    return {"items": items}
+
+
+@app.get("/api/v1/fabric/trace-status")
+def v1_fabric_trace_status() -> dict:
+    files = {
+        "trace": V1_FABRIC_SMOKE_OUT / "trace.jsonl.gz",
+        "trace_meta": V1_FABRIC_SMOKE_OUT / "trace_meta.json",
+        "raw_chain_log": V1_FABRIC_SMOKE_OUT / "raw_chain_log.jsonl",
+        "summary": V1_FABRIC_SMOKE_OUT / "summary.json",
+    }
+    existing = {name: path.is_file() for name, path in files.items()}
+    ready = existing["trace"] and existing["trace_meta"]
+    return {
+        "status": "ready" if ready else "missing",
+        "ready": ready,
+        "output_dir": str(V1_FABRIC_SMOKE_OUT),
+        "files": {name: {"path": str(path), "exists": exists} for name, (path, exists) in zip(files.keys(), zip(files.values(), existing.values()))},
+        "message": "Fabric smoke trace is ready for chain-backed replay." if ready else "Fabric smoke trace is missing; run the CLI/WSL command first.",
+        "cli_command": FABRIC_SMOKE_COMMAND,
+        "limitations": ["Status check only; this API does not start Docker, Fabric, network.sh, deployCC, or peer invoke."],
+    }
+
+
+@app.post("/api/v1/custom-run")
+def v1_custom_run(payload: dict) -> dict:
+    source_type = str(payload.get("source_type", "synthetic"))
+    if source_type not in {"synthetic", "existing_trace", "chain_backed"}:
+        raise HTTPException(400, "source_type must be synthetic, existing_trace, or chain_backed")
+
+    if V1_CUSTOM_OUT.exists():
+        shutil.rmtree(V1_CUSTOM_OUT)
+    V1_CUSTOM_OUT.mkdir(parents=True, exist_ok=True)
+
+    config_doc = config_for_custom_run(payload)
+    config_path = V1_CUSTOM_OUT / "used_config.yaml"
+    config_json_path = V1_CUSTOM_OUT / "used_config.json"
+    config_path.write_text(yaml.safe_dump(config_doc, sort_keys=False), encoding="utf-8")
+    config_json_path.write_text(json.dumps(config_doc, indent=2) + "\n", encoding="utf-8")
+
+    stdout_parts = []
+    if source_type == "synthetic":
+        workload = config_doc["workload"]["plugin"]
+        command = [sys.executable, "-m", f"workload.{workload}.cli", "--config", str(config_path), "--output", str(V1_CUSTOM_OUT)]
+        generated = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+        if generated.returncode != 0:
+            raise HTTPException(500, detail={"message": "synthetic workload generation failed", "stdout": generated.stdout, "stderr": generated.stderr})
+        stdout_parts.append(generated.stdout)
+        trace_path = V1_CUSTOM_OUT / "trace.jsonl.gz"
+        truth_label = "Synthetic replay: generated workload replay, not real chain execution."
+    elif source_type == "existing_trace":
+        trace_path = safe_existing_trace(str(payload.get("trace_path", "")))
+        meta = trace_path.with_name("trace_meta.json")
+        if meta.is_file():
+            shutil.copy2(meta, V1_CUSTOM_OUT / "trace_meta.json")
+        truth_label = "Existing trace replay: replaying a local trace file, not launching a chain."
+    else:
+        trace_path = V1_FABRIC_SMOKE_OUT / "trace.jsonl.gz"
+        if not trace_path.is_file():
+            raise HTTPException(400, detail={"message": "Fabric trace missing", "cli_command": FABRIC_SMOKE_COMMAND})
+        meta = V1_FABRIC_SMOKE_OUT / "trace_meta.json"
+        if meta.is_file():
+            shutil.copy2(meta, V1_CUSTOM_OUT / "trace_meta.json")
+        truth_label = "Chain-backed replay: trace was produced by Fabric smoke CLI/WSL; the web UI only replays it."
+
+    replay_command = ["go", "run", "./cmd/replay", "-config", str(config_path.resolve()), "-trace", str(trace_path.resolve()), "-output", str(V1_CUSTOM_OUT.resolve())]
+    replay_result = subprocess.run(replay_command, cwd=ROOT / "executor", text=True, capture_output=True)
+    if replay_result.returncode != 0:
+        raise HTTPException(500, detail={"message": "executor replay failed", "stdout": replay_result.stdout, "stderr": replay_result.stderr})
+    stdout_parts.append(replay_result.stdout)
+
+    summary_path = V1_CUSTOM_OUT / "summary.csv"
+    summary = read_summary_csv(summary_path)
+    report = [
+        "# V1 custom interactive run",
+        "",
+        truth_label,
+        "",
+        f"- source_type: {source_type}",
+        f"- workload: {config_doc['workload']['plugin']}",
+        f"- preset: {config_doc['truth']['preset']}",
+        f"- routing_policy: {summary.get('routing_policy', '')}",
+        f"- dual_track_enabled: {summary.get('dual_track_enabled', '')}",
+        f"- hot_update_aggregation_enabled: {summary.get('hot_update_aggregation_enabled', '')}",
+        f"- tx_count: {summary.get('tx_count', '')}",
+    ]
+    (V1_CUSTOM_OUT / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+    return {"run_id": "latest", "status": "completed", "output_dir": str(V1_CUSTOM_OUT), "source_type": source_type, "truth_label": truth_label, "summary": summary, "files": custom_files(), "stdout": "".join(stdout_parts)}
+
+
+@app.get("/api/v1/custom-run/latest/summary")
+def v1_custom_latest_summary() -> dict:
+    path = V1_CUSTOM_OUT / "summary.csv"
+    if not path.exists():
+        return {"status": "not_run", "message": "No V1 custom run has been generated yet.", "summary": {}, "source_type": "", "truth_label": ""}
+    truth_path = V1_CUSTOM_OUT / "used_config.json"
+    source_type = ""
+    if truth_path.exists():
+        source_type = json.loads(truth_path.read_text(encoding="utf-8")).get("truth", {}).get("source_type", "")
+    return {"status": "ready", "summary": read_summary_csv(path), "source_type": source_type, "truth_label": "Synthetic replay or trace replay; inspect used_config.json for source details.", "output_dir": str(V1_CUSTOM_OUT)}
+
+
+@app.get("/api/v1/custom-run/latest/files")
+def v1_custom_latest_files() -> dict:
+    return {"status": "ready" if custom_files() else "not_run", "output_dir": str(V1_CUSTOM_OUT), "files": custom_files()}
+
+
+@app.get("/api/v1/custom-run/latest/files/{filename}")
+def v1_custom_download_file(filename: str) -> FileResponse:
+    if "/" in filename or "\\" in filename or filename in {".", ".."}:
+        raise HTTPException(400, "invalid custom run output filename")
+    if filename not in V1_CUSTOM_DOWNLOADABLE_FILES:
+        raise HTTPException(403, "custom run output file is not downloadable")
+    path = V1_CUSTOM_OUT / filename
+    if not path.is_file():
+        raise HTTPException(404, "custom run output file not generated")
+    return FileResponse(path, filename=filename)
 
 
 @app.post("/api/v1/sweep/run")
