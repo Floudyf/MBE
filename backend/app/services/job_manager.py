@@ -81,8 +81,9 @@ class JobManager:
             (self.run_dir(run_id) / "summary.csv").is_file()
             or (self.run_dir(run_id) / "dual_chain_summary.csv").is_file()
             or (self.run_dir(run_id) / "protocol_summary.csv").is_file()
+            or (self.run_dir(run_id) / "sweep_summary.csv").is_file()
         )
-        metadata["report_available"] = (self.run_dir(run_id) / "report.md").is_file()
+        metadata["report_available"] = (self.run_dir(run_id) / "report.md").is_file() or (self.run_dir(run_id) / "sweep_report.md").is_file()
         metadata["artifact_count"] = len(list_artifacts(self.run_dir(run_id), run_id))
         self.write_metadata(metadata)
         return metadata

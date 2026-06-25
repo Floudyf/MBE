@@ -21,6 +21,7 @@ from backend.app.services.protocol_replay import ProtocolReplayError, run_protoc
 from backend.app.services.artifact_manager import ArtifactError, ArtifactForbidden, ArtifactMissing, get_artifact_path, list_artifacts, mirror_run_to_latest
 from backend.app.services.job_manager import DEFAULT_JOBS_ROOT, JobManager, JobNotFound
 from backend.app.services.plugin_registry import PluginRegistryError, load_registry, registry_payload
+from backend.app.services.sweep_runner_v2 import SWEEP_CONFIGS, SweepError, get_sweep_config, list_sweeps, run_sweep_job, summarize_sweep_config
 from backend.app.services.trace_source_service import TraceSourceError, TraceSourceNotFound, describe_capabilities, infer_data_truth_label, list_trace_sources, load_trace_sources
 from backend.app.services.trace_source_validator import validate_trace_source
 
@@ -638,6 +639,42 @@ def v2_cross_chain_protocol_replay(payload: dict) -> dict:
     try:
         return run_protocol_replay_job(config_path, jobs_root=V2_JOBS_ROOT, root=ROOT)
     except ProtocolReplayError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v2/sweeps")
+def v2_sweeps() -> dict:
+    try:
+        return {"items": list_sweeps(ROOT)}
+    except SweepError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v2/sweeps/{sweep_id}")
+def v2_sweep_detail(sweep_id: str) -> dict:
+    try:
+        config = get_sweep_config(sweep_id, ROOT)
+    except SweepError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {
+        "path": SWEEP_CONFIGS[sweep_id].relative_to(ROOT).as_posix(),
+        "summary": summarize_sweep_config(config),
+        "config": config,
+    }
+
+
+@app.post("/api/v2/sweeps/run")
+def v2_sweep_run(payload: dict) -> dict:
+    try:
+        if payload.get("sweep_id"):
+            sweep_id = str(payload["sweep_id"])
+            if sweep_id not in SWEEP_CONFIGS:
+                raise SweepError(f"unknown V2.8 sweep_id: {sweep_id}")
+            config_path = SWEEP_CONFIGS[sweep_id].relative_to(ROOT)
+        else:
+            config_path = Path(str(payload.get("config_path", SWEEP_CONFIGS["v2_baseline_sweep"].relative_to(ROOT))))
+        return run_sweep_job(config_path, jobs_root=V2_JOBS_ROOT, root=ROOT)
+    except SweepError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 

@@ -21,6 +21,8 @@ ARTIFACT_ALLOWLIST = frozenset({
     "protocol_events.csv",
     "sweep_summary.csv",
     "sweep_summary.json",
+    "sweep_report.md",
+    "case_artifacts_index.json",
 })
 
 

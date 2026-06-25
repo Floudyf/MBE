@@ -1,0 +1,43 @@
+version: v2
+stage: v2.8
+sweep:
+  id: v2_chain_speed_imbalance_sweep
+  name: Chain Speed Imbalance Sweep
+  runnable: true
+  description: "Local sweep over source/target chain speed imbalance."
+  data_truth_label: synthetic_replay
+  backend_type: local_virtual
+  protocol_truth: local_baseline_model
+input:
+  trace_file: trace/samples/v2_cross_trace_small.jsonl
+  meta_file: trace/samples/v2_multi_chain_trace_meta.json
+chains:
+  source:
+    chain_id: chain_a
+    role: source
+    backend_type: local_virtual
+    backend: mock_chain
+  target:
+    chain_id: chain_b
+    role: target
+    backend_type: local_virtual
+    backend: mock_chain
+parameters:
+  source_block_interval_ms: [100]
+  target_block_interval_ms: [100, 200, 300, 500]
+  source_finality_depth: [3]
+  target_finality_depth: [3, 5]
+protocols:
+  - lock_mint_serial
+  - lock_mint_pipeline
+runner:
+  mode: virtual_time
+  sleep_enabled: false
+  enforce_schema_validation: true
+outputs:
+  summary_csv: sweep_summary.csv
+  summary_json: sweep_summary.json
+  report_md: sweep_report.md
+limitations:
+  - "Local virtual-time sweep only; not real chain execution."
+  - "No live backend, Fabric, Docker, network.sh, or public-chain node is started."

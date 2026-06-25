@@ -1,0 +1,45 @@
+version: v2
+stage: v2.8
+sweep:
+  id: v2_baseline_sweep
+  name: V2 Baseline Sweep
+  runnable: true
+  description: "Local baseline sweep over V2.5 dual-chain replay and V2.6 protocol baselines."
+  data_truth_label: synthetic_replay
+  backend_type: local_virtual
+  protocol_truth: local_baseline_model
+input:
+  trace_file: trace/samples/v2_cross_trace_small.jsonl
+  meta_file: trace/samples/v2_multi_chain_trace_meta.json
+chains:
+  source:
+    chain_id: chain_a
+    role: source
+    backend_type: local_virtual
+    backend: mock_chain
+  target:
+    chain_id: chain_b
+    role: target
+    backend_type: local_virtual
+    backend: mock_chain
+parameters:
+  source_block_interval_ms: [100]
+  target_block_interval_ms: [300]
+  source_finality_depth: [3]
+  target_finality_depth: [5]
+protocols:
+  - lock_mint_serial
+  - lock_mint_pipeline
+  - fixed_window_baseline
+  - committee_bridge_basic
+runner:
+  mode: virtual_time
+  sleep_enabled: false
+  enforce_schema_validation: true
+outputs:
+  summary_csv: sweep_summary.csv
+  summary_json: sweep_summary.json
+  report_md: sweep_report.md
+limitations:
+  - "Local sweep only; not real chain execution."
+  - "Protocol baselines are local models, not production bridges."

@@ -1,0 +1,43 @@
+version: v2
+stage: v2.8
+sweep:
+  id: v2_committee_delay_sweep
+  name: Committee Delay Sweep
+  runnable: true
+  description: "Local committee_bridge_basic sweep over committee_delay_ms."
+  data_truth_label: synthetic_replay
+  backend_type: local_virtual
+  protocol_truth: local_baseline_model
+input:
+  trace_file: trace/samples/v2_cross_trace_small.jsonl
+  meta_file: trace/samples/v2_multi_chain_trace_meta.json
+chains:
+  source:
+    chain_id: chain_a
+    role: source
+    backend_type: local_virtual
+    backend: mock_chain
+  target:
+    chain_id: chain_b
+    role: target
+    backend_type: local_virtual
+    backend: mock_chain
+parameters:
+  source_block_interval_ms: [100]
+  target_block_interval_ms: [300]
+  source_finality_depth: [3]
+  target_finality_depth: [5]
+  committee_delay_ms: [0, 50, 100, 200, 500]
+protocols:
+  - committee_bridge_basic
+runner:
+  mode: virtual_time
+  sleep_enabled: false
+  enforce_schema_validation: true
+outputs:
+  summary_csv: sweep_summary.csv
+  summary_json: sweep_summary.json
+  report_md: sweep_report.md
+limitations:
+  - "committee_delay_ms is a local baseline parameter, not real signature latency."
+  - "This is not a real committee bridge or production security model."
