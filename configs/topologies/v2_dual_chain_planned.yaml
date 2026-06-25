@@ -1,0 +1,55 @@
+version: v2
+topology: dual_chain
+status: planned
+runnable: false
+reason: "V2.5 dual-chain replay engine and V2.6 cross-chain protocol baselines are not implemented yet."
+
+chains:
+  chain_a:
+    chain_id: chain_a
+    role: source
+    backend: mock_chain
+    block_interval_ms: 100
+    finality_depth: 3
+    executor_profile: v1_single_chain_replay
+  chain_b:
+    chain_id: chain_b
+    role: target
+    backend: mock_chain
+    block_interval_ms: 300
+    finality_depth: 5
+    executor_profile: v1_single_chain_replay
+
+cross_chain_protocols:
+  lock_mint_serial:
+    status: planned
+    enabled: false
+  lock_mint_pipeline:
+    status: planned
+    enabled: false
+  fixed_window_baseline:
+    status: planned
+    enabled: false
+  committee_bridge_basic:
+    status: planned
+    enabled: false
+  metaflow:
+    status: planned
+    enabled: false
+    reason: "MetaFlow is a future protocol plugin candidate and is not implemented in V2.0."
+
+metrics:
+  planned:
+    - cross_tx_count
+    - cross_success_count
+    - cross_timeout_count
+    - avg_e2e_latency_ms
+    - p99_e2e_latency_ms
+    - pending_count
+    - finality_wait_time_ms
+    - chain_speed_imbalance
+
+notes:
+  - "This file is a V2 planning scaffold only."
+  - "It must not be treated as runnable by V1 scripts."
+  - "Do not start Fabric, Docker, or network.sh from this planned topology."
