@@ -17,9 +17,10 @@ import (
 // Summary contains the V0 replay metrics written to summary.csv.
 type Summary struct {
 	TxCount, SuccessCount, FailedCount, RemoteFetchCount, RoutingCrossShardTxCount, RoutingRemoteKeyCount, CoAccessGroupCount                                                                                                                                                   int
-	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS, RoutingCrossShardTxRatio, RoutingTimeMS                                                                                                                                       float64
+	ThroughputTPS, AvgLatencyMS, P95LatencyMS, P99LatencyMS, CrossShardRatio, WallClockRuntimeMS, RoutingCrossShardTxRatio, RoutingTimeMS, VirtualTimeMS                                                                                                                        float64
 	RoutingPolicy                                                                                                                                                                                                                                                               string
 	FastTrackTxCount, ConservativeTrackTxCount, FastTrackExecutedCount, ConservativeTrackExecutedCount, BlockedOrDeferredTxCount, SchedulerIdleCount                                                                                                                            int
+	FastTrackTxRatio, ConservativeTrackTxRatio                                                                                                                                                                                                                                  float64
 	DualTrackEnabled                                                                                                                                                                                                                                                            bool
 	FastTrackMaxAccessSize                                                                                                                                                                                                                                                      int
 	TrackPolicy                                                                                                                                                                                                                                                                 string
@@ -161,13 +162,15 @@ func Replay(config, trace, out string) (Summary, error) {
 	if summary.TxCount > 0 {
 		summary.CrossShardRatio = float64(crossShardCount) / float64(summary.TxCount)
 		summary.RoutingCrossShardTxRatio = float64(summary.RoutingCrossShardTxCount) / float64(summary.TxCount)
-		virtualSpanMS := lastCommit - firstArrival
-		if virtualSpanMS > 0 {
-			summary.ThroughputTPS = float64(summary.TxCount) * 1000 / virtualSpanMS
+		summary.VirtualTimeMS = lastCommit - firstArrival
+		if summary.VirtualTimeMS > 0 {
+			summary.ThroughputTPS = float64(summary.TxCount) * 1000 / summary.VirtualTimeMS
 		} else {
 			// A zero virtual interval still represents a completed finite replay.
 			summary.ThroughputTPS = float64(summary.TxCount)
 		}
+		summary.FastTrackTxRatio = float64(summary.FastTrackTxCount) / float64(summary.TxCount)
+		summary.ConservativeTrackTxRatio = float64(summary.ConservativeTrackTxCount) / float64(summary.TxCount)
 	}
 	summary.WallClockRuntimeMS = float64(time.Since(start).Microseconds()) / 1000
 
@@ -266,9 +269,9 @@ func writeSummary(path string, summary Summary) error {
 	defer file.Close()
 	writer := csv.NewWriter(file)
 	writer.WriteAll([][]string{{
-		"tx_count", "success_count", "failed_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "cross_shard_ratio", "remote_fetch_count", "routing_policy", "routing_cross_shard_tx_count", "routing_cross_shard_tx_ratio", "routing_remote_key_count", "co_access_group_count", "routing_time_ms", "wall_clock_runtime_ms",
+		"tx_count", "success_count", "failed_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "cross_shard_ratio", "remote_fetch_count", "routing_policy", "routing_cross_shard_tx_count", "routing_cross_shard_tx_ratio", "routing_remote_key_count", "co_access_group_count", "routing_time_ms", "dual_track_enabled", "fast_track_max_access_size", "track_policy", "fast_track_tx_count", "conservative_track_tx_count", "fast_track_tx_ratio", "conservative_track_tx_ratio", "fast_track_executed_count", "conservative_track_executed_count", "blocked_or_deferred_tx_count", "scheduler_idle_count", "hot_update_aggregation_enabled", "aggregation_policy", "aggregation_candidate_tx_count", "aggregated_tx_count", "aggregated_commit_count", "conservative_commit_count", "aggregation_saved_commit_count", "aggregation_group_count", "aggregation_hot_key_count", "aggregation_constraint_failure_count", "aggregation_missing_delta_count", "aggregation_non_commutative_count", "virtual_time_ms", "wall_clock_runtime_ms",
 	}, {
-		fmt.Sprint(summary.TxCount), fmt.Sprint(summary.SuccessCount), fmt.Sprint(summary.FailedCount), fmt.Sprint(summary.ThroughputTPS), fmt.Sprint(summary.AvgLatencyMS), fmt.Sprint(summary.P95LatencyMS), fmt.Sprint(summary.P99LatencyMS), fmt.Sprint(summary.CrossShardRatio), fmt.Sprint(summary.RemoteFetchCount), summary.RoutingPolicy, fmt.Sprint(summary.RoutingCrossShardTxCount), fmt.Sprint(summary.RoutingCrossShardTxRatio), fmt.Sprint(summary.RoutingRemoteKeyCount), fmt.Sprint(summary.CoAccessGroupCount), fmt.Sprint(summary.RoutingTimeMS), fmt.Sprint(summary.WallClockRuntimeMS),
+		fmt.Sprint(summary.TxCount), fmt.Sprint(summary.SuccessCount), fmt.Sprint(summary.FailedCount), fmt.Sprint(summary.ThroughputTPS), fmt.Sprint(summary.AvgLatencyMS), fmt.Sprint(summary.P95LatencyMS), fmt.Sprint(summary.P99LatencyMS), fmt.Sprint(summary.CrossShardRatio), fmt.Sprint(summary.RemoteFetchCount), summary.RoutingPolicy, fmt.Sprint(summary.RoutingCrossShardTxCount), fmt.Sprint(summary.RoutingCrossShardTxRatio), fmt.Sprint(summary.RoutingRemoteKeyCount), fmt.Sprint(summary.CoAccessGroupCount), fmt.Sprint(summary.RoutingTimeMS), fmt.Sprint(summary.DualTrackEnabled), fmt.Sprint(summary.FastTrackMaxAccessSize), summary.TrackPolicy, fmt.Sprint(summary.FastTrackTxCount), fmt.Sprint(summary.ConservativeTrackTxCount), fmt.Sprint(summary.FastTrackTxRatio), fmt.Sprint(summary.ConservativeTrackTxRatio), fmt.Sprint(summary.FastTrackExecutedCount), fmt.Sprint(summary.ConservativeTrackExecutedCount), fmt.Sprint(summary.BlockedOrDeferredTxCount), fmt.Sprint(summary.SchedulerIdleCount), fmt.Sprint(summary.HotUpdateAggregationEnabled), summary.AggregationPolicy, fmt.Sprint(summary.AggregationCandidateTxCount), fmt.Sprint(summary.AggregatedTxCount), fmt.Sprint(summary.AggregatedCommitCount), fmt.Sprint(summary.ConservativeCommitCount), fmt.Sprint(summary.AggregationSavedCommitCount), fmt.Sprint(summary.AggregationGroupCount), fmt.Sprint(summary.AggregationHotKeyCount), fmt.Sprint(summary.AggregationConstraintFailureCount), fmt.Sprint(summary.AggregationMissingDeltaCount), fmt.Sprint(summary.AggregationNonCommutativeCount), fmt.Sprint(summary.VirtualTimeMS), fmt.Sprint(summary.WallClockRuntimeMS),
 	}})
 	return writer.Error()
 }
