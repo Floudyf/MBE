@@ -32,7 +32,7 @@ plugins:
     compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
     forbidden_with: []
     metrics: [cross_chain_metrics]
-    reason: V2.5 dual-chain replay engine is not implemented yet.
+    reason: V2.5 local dual-chain replay engine is implemented for explicit V2.5 sample configs; generic topology preview remains planned.
   - name: cross_chain_replay
     type: topology
     version: v2
@@ -48,7 +48,7 @@ plugins:
     compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
     forbidden_with: []
     metrics: [cross_chain_metrics]
-    reason: V2.6 cross-chain protocol replay is not implemented yet.
+    reason: V2.6 local protocol baseline replay is implemented for explicit V2.6 sample configs; generic topology preview is not production runnable.
   - name: multi_chain
     type: topology
     version: v2
@@ -298,67 +298,67 @@ plugins:
   - name: lock_mint_serial
     type: cross_chain_protocol
     version: v2
-    status: planned
-    maturity: planned
-    description: Planned serial lock-mint cross-chain replay baseline.
+    status: runnable
+    maturity: experimental
+    description: Local serial lock-mint cross-chain replay baseline.
     requires:
       trace_fields: []
       capabilities: [cross_chain_protocol_replay]
     provides:
-      capabilities: []
+      capabilities: [cross_chain_protocol_replay, local_baseline_model]
     compatible_topologies: [dual_chain, cross_chain_replay]
     compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
     forbidden_with: [single_chain]
     metrics: [cross_chain_metrics]
-    reason: V2.6 cross-chain protocol baselines are not implemented yet.
+    reason: Local baseline replay only; not a production bridge.
   - name: lock_mint_pipeline
     type: cross_chain_protocol
     version: v2
-    status: planned
-    maturity: planned
-    description: Planned pipelined lock-mint cross-chain replay baseline.
+    status: runnable
+    maturity: experimental
+    description: Local pipelined lock-mint cross-chain replay baseline.
     requires:
       trace_fields: []
       capabilities: [cross_chain_protocol_replay]
     provides:
-      capabilities: []
+      capabilities: [cross_chain_protocol_replay, local_baseline_model]
     compatible_topologies: [dual_chain, cross_chain_replay]
     compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
     forbidden_with: [single_chain]
     metrics: [cross_chain_metrics]
-    reason: V2.6 cross-chain protocol baselines are not implemented yet.
+    reason: Local pipeline baseline replay only; not MetaFlow.
   - name: fixed_window_baseline
     type: cross_chain_protocol
     version: v2
-    status: planned
-    maturity: planned
-    description: Planned fixed-window cross-chain replay baseline.
+    status: runnable
+    maturity: experimental
+    description: Local fixed-window cross-chain replay baseline.
     requires:
       trace_fields: []
       capabilities: [cross_chain_protocol_replay]
     provides:
-      capabilities: []
+      capabilities: [cross_chain_protocol_replay, local_baseline_model]
     compatible_topologies: [dual_chain, cross_chain_replay]
     compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
     forbidden_with: [single_chain]
     metrics: [cross_chain_metrics]
-    reason: V2.6 cross-chain protocol baselines are not implemented yet.
+    reason: Local fixed-window baseline only; not dynamic FDA or MetaFlow.
   - name: committee_bridge_basic
     type: cross_chain_protocol
     version: v2
-    status: planned
-    maturity: planned
-    description: Planned basic committee-bridge replay baseline declaration only.
+    status: runnable
+    maturity: experimental
+    description: Local basic committee-delay replay baseline declaration only.
     requires:
       trace_fields: []
       capabilities: [cross_chain_protocol_replay]
     provides:
-      capabilities: []
+      capabilities: [cross_chain_protocol_replay, local_baseline_model]
     compatible_topologies: [dual_chain, cross_chain_replay]
     compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
     forbidden_with: [single_chain]
     metrics: [cross_chain_metrics]
-    reason: Committee bridge is planned only and is not implemented in V2.1.
+    reason: Local delay model only; no real signatures, proofs, or committee security.
   - name: metaflow
     type: cross_chain_protocol
     version: future
@@ -423,4 +423,4 @@ plugins:
     compatible_trace_sources: [synthetic, existing_trace, fabric_chain_backed_trace, public_chain_imported_trace]
     forbidden_with: [single_chain]
     metrics: [cross_tx_count, cross_success_count, cross_timeout_count, avg_e2e_latency_ms, p99_e2e_latency_ms, pending_count, finality_wait_time_ms, chain_speed_imbalance]
-    reason: Cross-chain metrics are planned for V2.6/V2.8.
+    reason: V2.6 local protocol metrics are available for explicit protocol replay runs; V2.8 sweep/report remains planned.

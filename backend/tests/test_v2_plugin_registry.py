@@ -40,10 +40,14 @@ def test_v2_plugins_api_unknown_type_returns_empty_list() -> None:
     assert response.json() == {"type": "not_a_type", "plugins": []}
 
 
-def test_v2_cross_chain_protocols_are_not_runnable_except_disabled() -> None:
+def test_v2_cross_chain_protocols_distinguish_local_baselines_from_metaflow() -> None:
     registry = load_registry()
     protocols = {plugin["name"]: plugin for plugin in registry.list_plugins("cross_chain_protocol")}
 
     assert protocols["disabled"]["status"] == "runnable"
-    for name in ("lock_mint_serial", "lock_mint_pipeline", "fixed_window_baseline", "committee_bridge_basic", "metaflow"):
-        assert protocols[name]["status"] == "planned"
+    for name in ("lock_mint_serial", "lock_mint_pipeline", "fixed_window_baseline", "committee_bridge_basic"):
+        assert protocols[name]["status"] == "runnable"
+        assert protocols[name]["maturity"] == "experimental"
+        assert "Local" in protocols[name]["reason"]
+    assert protocols["metaflow"]["status"] == "planned"
+    assert protocols["metaflow"]["maturity"] == "planned"

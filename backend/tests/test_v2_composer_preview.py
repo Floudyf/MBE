@@ -72,12 +72,12 @@ def test_dual_chain_and_multi_chain_are_planned_not_runnable() -> None:
     assert multi_chain["runnable"] is False
 
 
-def test_cross_chain_protocol_planned_plugin_cannot_be_runnable() -> None:
+def test_cross_chain_protocol_local_baseline_still_cannot_make_generic_dual_chain_runnable() -> None:
     payload = preview({"topology": "dual_chain", "trace_source": "synthetic", "cross_chain_protocol": "lock_mint_serial"})
 
     assert payload["status"] == "planned"
     assert payload["runnable"] is False
-    assert any("cross_chain_protocol:lock_mint_serial" == item for item in payload["blocked_by"])
+    assert any("topology:dual_chain" == item for item in payload["blocked_by"])
 
 
 def test_public_chain_imported_trace_defaults_to_semantic_unknown() -> None:

@@ -77,7 +77,11 @@ class JobManager:
             raise ValueError(f"invalid run status {status}")
         metadata.update(updates)
         metadata["updated_at"] = utc_now_text()
-        metadata["summary_available"] = (self.run_dir(run_id) / "summary.csv").is_file() or (self.run_dir(run_id) / "dual_chain_summary.csv").is_file()
+        metadata["summary_available"] = (
+            (self.run_dir(run_id) / "summary.csv").is_file()
+            or (self.run_dir(run_id) / "dual_chain_summary.csv").is_file()
+            or (self.run_dir(run_id) / "protocol_summary.csv").is_file()
+        )
         metadata["report_available"] = (self.run_dir(run_id) / "report.md").is_file()
         metadata["artifact_count"] = len(list_artifacts(self.run_dir(run_id), run_id))
         self.write_metadata(metadata)
@@ -94,8 +98,12 @@ class JobManager:
             return []
         runs = []
         for metadata_path in self.root.glob("*/metadata.json"):
-            runs.append(json.loads(metadata_path.read_text(encoding="utf-8")))
-        runs.sort(key=lambda item: (item.get("created_at", ""), item.get("updated_at", "")), reverse=True)
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["_sort_mtime_ns"] = metadata_path.stat().st_mtime_ns
+            runs.append(metadata)
+        runs.sort(key=lambda item: (item.get("created_at", ""), item.get("updated_at", ""), item.get("_sort_mtime_ns", 0)), reverse=True)
+        for item in runs:
+            item.pop("_sort_mtime_ns", None)
         return runs[: max(1, min(limit, 200))]
 
     def get_latest_run(self) -> dict[str, Any]:

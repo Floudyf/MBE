@@ -1,0 +1,47 @@
+version: v2
+stage: v2.6
+experiment:
+  name: v2_cross_chain_protocol_sample
+  runnable: true
+  description: "Local cross-chain protocol baseline replay using ChainBackend interface."
+trace:
+  trace_file: trace/samples/v2_cross_trace_small.jsonl
+  meta_file: trace/samples/v2_multi_chain_trace_meta.json
+  data_truth_label: synthetic_replay
+chains:
+  chain_a:
+    chain_id: chain_a
+    role: source
+    backend_type: local_virtual
+    backend: mock_chain
+    block_interval_ms: 100
+    finality_depth: 3
+  chain_b:
+    chain_id: chain_b
+    role: target
+    backend_type: local_virtual
+    backend: mock_chain
+    block_interval_ms: 300
+    finality_depth: 5
+protocols:
+  - name: lock_mint_serial
+    enabled: true
+  - name: lock_mint_pipeline
+    enabled: true
+  - name: fixed_window_baseline
+    enabled: true
+    window_size: 2
+  - name: committee_bridge_basic
+    enabled: true
+    committee_delay_ms: 50
+replay:
+  mode: virtual_time
+  sleep_enabled: false
+  enforce_schema_validation: true
+  backend_interface: ChainBackend
+  protocol_interface: CrossChainProtocol
+notes:
+  - "This is local protocol baseline replay only."
+  - "This is not a production cross-chain bridge."
+  - "This does not implement MetaFlow, real committee signatures, MintCert, RefundCert, FinalityProof, or Pending Pool."
+  - "Do not start Docker, Fabric, network.sh, public-chain live nodes, or archive-node clients."
