@@ -111,6 +111,11 @@ export type V2DualChainReplayResponse = { run_id: string; status: V2Status; stag
 export type V2ProtocolInfo = { name: string; status: V2Status; maturity: string; reason: string };
 export type V2ProtocolReplayResponse = { run_id: string; status: V2Status; stage: string; output_dir: string; data_truth_label: string; protocol_truth?: string; summary: { items: Record<string, unknown>[] }; artifacts: V2Artifact[] };
 export type V2SampleConfig = { path: string; config: Record<string, unknown> };
+export type V2SweepInfo = { id: string; name: string; status: V2Status; stage: string; data_truth_label: string; backend_type: string; protocol_truth: string; description: string; parameters: Record<string, unknown>; protocols: string[]; limitations: string[] };
+export type V2SweepRunResponse = { run_id: string; status: V2Status; stage: string; output_dir: string; data_truth_label: string; backend_type: string; protocol_truth: string; summary: Record<string, unknown>; rows: Record<string, unknown>[]; artifacts: V2Artifact[] };
+export type V2CalibrationInfo = { id: string; name: string; status: V2Status; stage: string; data_truth_label: string; backend_type: string; calibration_truth: string; description: string; source_type: string; limitations: string[] };
+export type V2FabricSmokeStatus = { status: string; ready?: boolean; trace_path: string; meta_path: string; data_truth_label: string; web_starts_fabric: boolean; cli_command: string; warnings: string[]; reason?: string };
+export type V2CalibrationRunResponse = { run_id?: string; status: V2Status; stage?: string; output_dir?: string; data_truth_label?: string; backend_type?: string; calibration_truth?: string; summary?: Record<string, unknown>; artifacts?: V2Artifact[]; reason?: string; cli_command?: string; warnings?: string[] };
 
 export async function runDefaultExperiment(): Promise<unknown> {
   return request(`${experimentPath}/run`, { method: "POST" });
@@ -236,6 +241,28 @@ export async function fetchV2ProtocolSampleConfig(): Promise<V2SampleConfig> {
 
 export async function runV2ProtocolReplay(config_path = "configs/experiments/v2_cross_chain_protocol_sample.yaml"): Promise<V2ProtocolReplayResponse> {
   return request<V2ProtocolReplayResponse>("/api/v2/cross-chain/protocol-replay", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config_path }) });
+}
+
+export async function fetchV2Sweeps(): Promise<V2SweepInfo[]> {
+  const response = await request<{ items: V2SweepInfo[] }>("/api/v2/sweeps");
+  return response.items;
+}
+
+export async function runV2Sweep(sweep_id = "v2_baseline_sweep"): Promise<V2SweepRunResponse> {
+  return request<V2SweepRunResponse>("/api/v2/sweeps/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sweep_id }) });
+}
+
+export async function fetchV2CalibrationConfigs(): Promise<V2CalibrationInfo[]> {
+  const response = await request<{ items: V2CalibrationInfo[] }>("/api/v2/calibration/configs");
+  return response.items;
+}
+
+export async function fetchV2FabricSmokeStatus(): Promise<V2FabricSmokeStatus> {
+  return request<V2FabricSmokeStatus>("/api/v2/calibration/fabric-smoke/status");
+}
+
+export async function runV2Calibration(config_id = "v2_synthetic_calibration_sample"): Promise<V2CalibrationRunResponse> {
+  return request<V2CalibrationRunResponse>("/api/v2/calibration/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ config_id }) });
 }
 
 export async function fetchV2Runs(limit = 20): Promise<V2RunSummary[]> {
