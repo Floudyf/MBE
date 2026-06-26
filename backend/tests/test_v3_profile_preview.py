@@ -27,8 +27,9 @@ def test_preview_does_not_create_run_artifacts():
 def test_preview_all_profiles_lists_inventory():
     result = preview_all_profiles()
 
-    assert result["stage"] == "V3.3"
+    assert result["stage"] == "V3.3.1"
     assert "chain_x_default" in result["inventory"]["chain_profiles"]
+    assert "single_chain_research_default" in result["inventory"]["chain_profiles"]
     assert "metaflow_afs_fda" in result["inventory"]["plugin_profiles"]
     assert any(item["profile_id"] == "fabric_validation_profile_preview" for item in result["items"])
 

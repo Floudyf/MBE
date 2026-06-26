@@ -8,6 +8,12 @@ V3.3 now absorbs the earlier V3.2b / V3.2.5 Go-backed parity stage.
 - Gate B: Go-backed MetaTrack plugin combinations and fair ablation.
 - V3.3 must not implement Fabric validation, frontend integration, dual-chain runtime, MetaFlow, AFS, or FDA.
 
+## V3.3.1 Role Separation Update
+
+V3.3.1 is a platform abstraction correction stage. It separates `ConsensusDomain`, disabled/planned committee and epoch placeholders, `ExecutionShard`, `StateStorageUnit`, `StatePlacement`, `ExecutionRouting`, and `RemoteStateAccess` in the single-chain Go-backed runtime.
+
+V3.3.1 must not implement Fabric validation, frontend integration, dual-chain runtime, MetaFlow, AFS/FDA, PBFT/HotStuff, real multi-machine networking, committee lifecycle, or dynamic state migration.
+
 ## Current V3 Acceptance Scope
 
 Current V3-final acceptance covers:
@@ -17,6 +23,7 @@ Current V3-final acceptance covers:
 - V3.2 Minimal Single-chain Modular Runtime.
 - V3.2b / V3.2.5 Go-backed Minimal Runtime / Go parity, planned after V3.2.
 - V3.3 MetaTrack Plugin Evaluation.
+- V3.3.1 Research-chain Role Separation.
 - V3.4 Fabric-backed Validation for MetaTrack.
 - V3-final Frontend Integration and Acceptance.
 
@@ -74,6 +81,15 @@ V3.5 and V3.6 may remain documented as future roadmap stages, but they are not c
 - 通过条件：MetaTrack plugin combinations can run on same chain profile; baseline and full MetaTrack use identical workload and seed; mechanism metrics output。
 - 失败条件：different workload/seed/profile for proposed method; smoke result claimed as final evidence。
 - 下一阶段入口条件：MetaTrack runtime comparison stable。
+
+## V3.3.1 Research-chain Role Separation
+
+- Stage goal: single-chain research-chain role separation for long-term platform use.
+- Allowed changes: ChainProfile schema/configs, Go V3 runtime role model, backend profile preview/validator, tests, docs.
+- Required implementation: consensus domain id, execution shard id, state storage unit id, state placement, execution routing, remote state access metrics, and compatibility `shard_id` output.
+- Required artifacts: existing V3.3 artifacts plus role-separated fields in block, tx, state commit, summary, and MetaTrack mechanism metrics.
+- Required validation: Python tests, backend tests, Go tests, V0 sanity, diff checks.
+- Forbidden: no Fabric, no frontend, no MetaFlow, no dual-chain, no PBFT/HotStuff, no real multi-machine network, no committee lifecycle, no state migration.
 
 ## V3.4 Fabric-backed Validation for MetaTrack
 

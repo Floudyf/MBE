@@ -24,16 +24,26 @@ type Input struct {
 }
 
 type ChainProfile struct {
-	ProfileID       string
-	NodeIDPrefix    string
-	NodeCount       int
-	ValidatorCount  int
-	BlockIntervalMS int
-	MaxTxPerBlock   int
-	ShardCount      int
-	KeyCount        int
-	MaxPoolSize     int
-	DedupEnabled    bool
+	ProfileID             string
+	NodeIDPrefix          string
+	NodeCount             int
+	ValidatorCount        int
+	ConsensusDomainCount  int
+	BlockIntervalMS       int
+	MaxTxPerBlock         int
+	ShardCount            int
+	ExecutionShardCount   int
+	StateStorageUnitCount int
+	StatePlacementPolicy  string
+	StateBackend          string
+	RemoteFetchCostMS     int
+	RoutingPlugin         string
+	RoutingScope          string
+	NetworkPlugin         string
+	NetworkBaseDelayMS    int
+	KeyCount              int
+	MaxPoolSize           int
+	DedupEnabled          bool
 }
 
 type PluginProfile struct {
@@ -83,61 +93,80 @@ type Block struct {
 }
 
 type TxResult struct {
-	TxID             string
-	SubmitTimeMS     int
-	AdmitTimeMS      int
-	BlockHeight      int
-	ExecutionStartMS int
-	ExecutionEndMS   int
-	CommitTimeMS     int
-	LatencyMS        int
-	Status           string
-	ShardID          int
-	ReadCount        int
-	WriteCount       int
-	RemoteFetchCount int
-	Track            string
-	Deltas           map[string][3]int
+	TxID                 string
+	SubmitTimeMS         int
+	AdmitTimeMS          int
+	BlockHeight          int
+	ExecutionStartMS     int
+	ExecutionEndMS       int
+	CommitTimeMS         int
+	LatencyMS            int
+	Status               string
+	ShardID              int
+	ConsensusDomainID    string
+	ExecutionShardID     int
+	HomeStateUnitIDs     []int
+	AccessedStateUnitIDs []int
+	RemoteStateUnitCount int
+	CrossStateUnitAccess bool
+	StateLocalityHit     bool
+	ReadCount            int
+	WriteCount           int
+	RemoteFetchCount     int
+	Track                string
+	Deltas               map[string][3]int
 }
 
 type StateCommit struct {
-	BlockHeight  int
-	TxID         string
-	StateKey     string
-	OldValue     int
-	Delta        int
-	NewValue     int
-	CommitPlugin string
-	CommitTimeMS int
-	Status       string
+	BlockHeight        int
+	TxID               string
+	StateKey           string
+	OldValue           int
+	Delta              int
+	NewValue           int
+	CommitPlugin       string
+	CommitTimeMS       int
+	Status             string
+	StateStorageUnitID int
+	ExecutionShardID   int
+	IsRemoteCommit     bool
+	PlacementPolicy    string
+	RoutingPlugin      string
 }
 
 type Summary struct {
-	RunID                  string  `json:"run_id"`
-	Stage                  string  `json:"stage"`
-	BackendType            string  `json:"backend_type"`
-	TruthLabel             string  `json:"truth_label"`
-	ChainProfileID         string  `json:"chain_profile_id"`
-	PluginProfileID        string  `json:"plugin_profile_id"`
-	ExperimentProfileID    string  `json:"experiment_profile_id"`
-	TxCount                int     `json:"tx_count"`
-	SuccessCount           int     `json:"success_count"`
-	FailureCount           int     `json:"failure_count"`
-	BlockCount             int     `json:"block_count"`
-	ThroughputTPS          float64 `json:"throughput_tps"`
-	AvgLatencyMS           float64 `json:"avg_latency_ms"`
-	P95LatencyMS           float64 `json:"p95_latency_ms"`
-	P99LatencyMS           float64 `json:"p99_latency_ms"`
-	RuntimeMode            string  `json:"runtime_mode"`
-	RemoteFetchCount       int     `json:"remote_fetch_count"`
-	CrossShardRatio        float64 `json:"cross_shard_ratio"`
-	FastTrackCount         int     `json:"fast_track_count"`
-	ConservativeTrackCount int     `json:"conservative_track_count"`
-	AggregatedUpdateCount  int     `json:"aggregated_update_count"`
-	AggregationRatio       float64 `json:"aggregation_ratio"`
-	ConflictCount          int     `json:"conflict_count"`
-	QueueWaitMS            float64 `json:"queue_wait_ms"`
-	BlockCommitLatencyMS   float64 `json:"block_commit_latency_ms"`
+	RunID                     string  `json:"run_id"`
+	Stage                     string  `json:"stage"`
+	BackendType               string  `json:"backend_type"`
+	TruthLabel                string  `json:"truth_label"`
+	ChainProfileID            string  `json:"chain_profile_id"`
+	PluginProfileID           string  `json:"plugin_profile_id"`
+	ExperimentProfileID       string  `json:"experiment_profile_id"`
+	TxCount                   int     `json:"tx_count"`
+	SuccessCount              int     `json:"success_count"`
+	FailureCount              int     `json:"failure_count"`
+	BlockCount                int     `json:"block_count"`
+	ThroughputTPS             float64 `json:"throughput_tps"`
+	AvgLatencyMS              float64 `json:"avg_latency_ms"`
+	P95LatencyMS              float64 `json:"p95_latency_ms"`
+	P99LatencyMS              float64 `json:"p99_latency_ms"`
+	RuntimeMode               string  `json:"runtime_mode"`
+	RemoteFetchCount          int     `json:"remote_fetch_count"`
+	CrossShardRatio           float64 `json:"cross_shard_ratio"`
+	FastTrackCount            int     `json:"fast_track_count"`
+	ConservativeTrackCount    int     `json:"conservative_track_count"`
+	AggregatedUpdateCount     int     `json:"aggregated_update_count"`
+	AggregationRatio          float64 `json:"aggregation_ratio"`
+	ConflictCount             int     `json:"conflict_count"`
+	QueueWaitMS               float64 `json:"queue_wait_ms"`
+	BlockCommitLatencyMS      float64 `json:"block_commit_latency_ms"`
+	ExecutionShardCount       int     `json:"execution_shard_count"`
+	StateStorageUnitCount     int     `json:"state_storage_unit_count"`
+	CrossStateUnitAccessCount int     `json:"cross_state_unit_access_count"`
+	RemoteStateFetchCount     int     `json:"remote_state_fetch_count"`
+	StateLocalityRatio        float64 `json:"state_locality_ratio"`
+	ExecutionShardLoadBalance float64 `json:"execution_shard_load_balance"`
+	StateUnitLoadBalance      float64 `json:"state_unit_load_balance"`
 }
 
 type Result struct {
@@ -190,20 +219,27 @@ func Run(input Input) (Result, error) {
 		ordered := block.CutTimeMS + 1
 		finalized := ordered + 1
 		blockLog = append(blockLog, map[string]string{
-			"block_height":      strconv.Itoa(block.Height),
-			"block_id":          block.ID,
-			"proposer_node":     proposer,
-			"tx_count":          strconv.Itoa(len(block.Txs)),
-			"cut_time_ms":       strconv.Itoa(block.CutTimeMS),
-			"ordered_time_ms":   strconv.Itoa(ordered),
-			"finalized_time_ms": strconv.Itoa(finalized),
-			"consensus_plugin":  "simple_leader",
-			"status":            "finalized",
+			"block_height":             strconv.Itoa(block.Height),
+			"block_id":                 block.ID,
+			"proposer_node":            proposer,
+			"tx_count":                 strconv.Itoa(len(block.Txs)),
+			"cut_time_ms":              strconv.Itoa(block.CutTimeMS),
+			"ordered_time_ms":          strconv.Itoa(ordered),
+			"finalized_time_ms":        strconv.Itoa(finalized),
+			"consensus_plugin":         "simple_leader",
+			"status":                   "finalized",
+			"consensus_domain_id":      consensusDomainID(0),
+			"validator_count":          strconv.Itoa(chain.ValidatorCount),
+			"execution_shard_count":    strconv.Itoa(chain.ExecutionShardCount),
+			"state_storage_unit_count": strconv.Itoa(chain.StateStorageUnitCount),
 		})
 		cursor := finalized
 		routingMap := buildRoutingMap(block.Txs, chain, plugin)
 		for _, tx := range block.Txs {
-			shardID := assignTxShard(tx, routingMap, chain)
+			executionShardID := assignTxShard(tx, routingMap, chain)
+			accessedUnits := accessedStateUnits(tx, chain)
+			homeUnits := writeStateUnits(tx, chain)
+			remoteStateUnits := remoteStateUnitCount(accessedUnits, executionShardID)
 			track := classifyTrack(tx, plugin)
 			start := cursor
 			end := start + 1
@@ -215,42 +251,54 @@ func Run(input Input) (Result, error) {
 				deltas[key] = [3]int{oldValue, delta, newValue}
 			}
 			result := TxResult{
-				TxID:             tx.ID,
-				SubmitTimeMS:     tx.SubmitTimeMS,
-				AdmitTimeMS:      tx.SubmitTimeMS,
-				BlockHeight:      block.Height,
-				ExecutionStartMS: start,
-				ExecutionEndMS:   end,
-				CommitTimeMS:     commitTime,
-				LatencyMS:        commitTime - tx.SubmitTimeMS,
-				Status:           "success",
-				ShardID:          shardID,
-				ReadCount:        len(tx.ReadKeys),
-				WriteCount:       len(tx.WriteDeltas),
-				RemoteFetchCount: remoteFetchCount(tx, shardID, routingMap, chain, plugin),
-				Track:            track,
-				Deltas:           deltas,
+				TxID:                 tx.ID,
+				SubmitTimeMS:         tx.SubmitTimeMS,
+				AdmitTimeMS:          tx.SubmitTimeMS,
+				BlockHeight:          block.Height,
+				ExecutionStartMS:     start,
+				ExecutionEndMS:       end,
+				CommitTimeMS:         commitTime,
+				LatencyMS:            commitTime - tx.SubmitTimeMS,
+				Status:               "success",
+				ShardID:              executionShardID,
+				ConsensusDomainID:    consensusDomainID(0),
+				ExecutionShardID:     executionShardID,
+				HomeStateUnitIDs:     homeUnits,
+				AccessedStateUnitIDs: accessedUnits,
+				RemoteStateUnitCount: remoteStateUnits,
+				CrossStateUnitAccess: len(accessedUnits) > 1,
+				StateLocalityHit:     remoteStateUnits == 0,
+				ReadCount:            len(tx.ReadKeys),
+				WriteCount:           len(tx.WriteDeltas),
+				RemoteFetchCount:     remoteFetchCount(remoteStateUnits, plugin),
+				Track:                track,
+				Deltas:               deltas,
 			}
 			txResults = append(txResults, result)
 			for key, values := range deltas {
 				state[key] = values[2]
 				stateCommits = append(stateCommits, StateCommit{
-					BlockHeight:  block.Height,
-					TxID:         tx.ID,
-					StateKey:     key,
-					OldValue:     values[0],
-					Delta:        values[1],
-					NewValue:     values[2],
-					CommitPlugin: "normal_commit",
-					CommitTimeMS: commitTime,
-					Status:       "success",
+					BlockHeight:        block.Height,
+					TxID:               tx.ID,
+					StateKey:           key,
+					OldValue:           values[0],
+					Delta:              values[1],
+					NewValue:           values[2],
+					CommitPlugin:       "normal_commit",
+					CommitTimeMS:       commitTime,
+					Status:             "success",
+					StateStorageUnitID: stateUnit(key, chain),
+					ExecutionShardID:   executionShardID,
+					IsRemoteCommit:     stateUnit(key, chain) != executionShardID,
+					PlacementPolicy:    chain.StatePlacementPolicy,
+					RoutingPlugin:      plugin.ShardingPlugin,
 				})
 			}
 			cursor = end
 		}
 	}
-	summary := buildSummary(runID, experiment, chain.ProfileID, plugin.ProfileID, txResults, len(blocks), runtimeMode(plugin))
-	applyMechanismMetrics(&summary, txResults, plugin)
+	summary := buildSummary(runID, experiment, chain, plugin.ProfileID, txResults, len(blocks), runtimeMode(plugin))
+	applyMechanismMetrics(&summary, txResults, plugin, chain)
 	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, "V3.3 Go-backed minimal runtime parity run"); err != nil {
 		return Result{}, err
 	}
@@ -258,17 +306,29 @@ func Run(input Input) (Result, error) {
 }
 
 func parseChainProfile(text string) ChainProfile {
+	executionShardCount := sectionFieldInt(text, "execution", "shard_count", sectionFieldInt(text, "sharding", "shard_count", fieldInt(text, "shard_count", 4)))
+	stateStorageUnitCount := sectionFieldInt(text, "state", "storage_unit_count", sectionFieldInt(text, "sharding", "shard_count", executionShardCount))
 	return ChainProfile{
-		ProfileID:       fieldString(text, "profile_id", "chain_x_default"),
-		NodeIDPrefix:    fieldString(text, "node_id_prefix", "node"),
-		NodeCount:       fieldInt(text, "node_count", 4),
-		ValidatorCount:  fieldInt(text, "validator_count", 4),
-		BlockIntervalMS: fieldInt(text, "block_interval_ms", 100),
-		MaxTxPerBlock:   fieldInt(text, "max_tx_per_block", 500),
-		ShardCount:      fieldInt(text, "shard_count", 4),
-		KeyCount:        fieldInt(text, "key_count", 100000),
-		MaxPoolSize:     fieldInt(text, "max_pool_size", 100000),
-		DedupEnabled:    fieldBool(text, "dedup_enabled", true),
+		ProfileID:             fieldString(text, "profile_id", "chain_x_default"),
+		NodeIDPrefix:          fieldString(text, "node_id_prefix", "node"),
+		NodeCount:             sectionFieldInt(text, "deployment", "node_count", fieldInt(text, "node_count", 4)),
+		ValidatorCount:        sectionFieldInt(text, "consensus", "validator_count", sectionFieldInt(text, "deployment", "validator_count", fieldInt(text, "validator_count", 4))),
+		ConsensusDomainCount:  sectionFieldInt(text, "consensus", "domain_count", 1),
+		BlockIntervalMS:       fieldInt(text, "block_interval_ms", 100),
+		MaxTxPerBlock:         fieldInt(text, "max_tx_per_block", 500),
+		ShardCount:            executionShardCount,
+		ExecutionShardCount:   executionShardCount,
+		StateStorageUnitCount: stateStorageUnitCount,
+		StatePlacementPolicy:  sectionFieldString(text, "state", "placement_policy", "hash_state_storage"),
+		StateBackend:          sectionFieldString(text, "state", "backend", "memory"),
+		RemoteFetchCostMS:     sectionFieldInt(text, "state", "remote_fetch_cost_ms", 1),
+		RoutingPlugin:         sectionFieldString(text, "routing", "plugin", sectionFieldString(text, "sharding", "plugin", "hash_sharding")),
+		RoutingScope:          sectionFieldString(text, "routing", "routing_scope", "execution_shard"),
+		NetworkPlugin:         sectionFieldString(text, "network", "plugin", "fixed_delay"),
+		NetworkBaseDelayMS:    sectionFieldInt(text, "network", "base_delay_ms", sectionFieldInt(text, "network", "delay_ms", 0)),
+		KeyCount:              fieldInt(text, "key_count", 100000),
+		MaxPoolSize:           fieldInt(text, "max_pool_size", 100000),
+		DedupEnabled:          fieldBool(text, "dedup_enabled", true),
 	}
 }
 
@@ -415,7 +475,7 @@ func cutBlocks(txs []Transaction, chain ChainProfile) []Block {
 	return blocks
 }
 
-func buildSummary(runID string, exp ExperimentProfile, chainProfileID, pluginProfileID string, txs []TxResult, blockCount int, runtimeMode string) Summary {
+func buildSummary(runID string, exp ExperimentProfile, chain ChainProfile, pluginProfileID string, txs []TxResult, blockCount int, runtimeMode string) Summary {
 	latencies := []int{}
 	firstSubmit, lastCommit := 0, 0
 	for i, tx := range txs {
@@ -432,37 +492,53 @@ func buildSummary(runID string, exp ExperimentProfile, chainProfileID, pluginPro
 		duration = 0.001
 	}
 	return Summary{
-		RunID:               runID,
-		Stage:               exp.Stage,
-		BackendType:         exp.BackendType,
-		TruthLabel:          exp.TruthLabel,
-		ChainProfileID:      chainProfileID,
-		PluginProfileID:     pluginProfileID,
-		ExperimentProfileID: exp.ProfileID,
-		TxCount:             len(txs),
-		SuccessCount:        len(txs),
-		FailureCount:        0,
-		BlockCount:          blockCount,
-		ThroughputTPS:       round(float64(len(txs)) / duration),
-		AvgLatencyMS:        round(avg(latencies)),
-		P95LatencyMS:        percentileInt(latencies, 95),
-		P99LatencyMS:        percentileInt(latencies, 99),
-		RuntimeMode:         runtimeMode,
+		RunID:                 runID,
+		Stage:                 exp.Stage,
+		BackendType:           exp.BackendType,
+		TruthLabel:            exp.TruthLabel,
+		ChainProfileID:        chain.ProfileID,
+		PluginProfileID:       pluginProfileID,
+		ExperimentProfileID:   exp.ProfileID,
+		TxCount:               len(txs),
+		SuccessCount:          len(txs),
+		FailureCount:          0,
+		BlockCount:            blockCount,
+		ThroughputTPS:         round(float64(len(txs)) / duration),
+		AvgLatencyMS:          round(avg(latencies)),
+		P95LatencyMS:          percentileInt(latencies, 95),
+		P99LatencyMS:          percentileInt(latencies, 99),
+		RuntimeMode:           runtimeMode,
+		ExecutionShardCount:   chain.ExecutionShardCount,
+		StateStorageUnitCount: chain.StateStorageUnitCount,
 	}
 }
 
-func applyMechanismMetrics(summary *Summary, txs []TxResult, plugin PluginProfile) {
+func applyMechanismMetrics(summary *Summary, txs []TxResult, plugin PluginProfile, chain ChainProfile) {
 	remote := 0
 	crossShard := 0
+	crossStateUnit := 0
+	localityHits := 0
 	fast := 0
 	conservative := 0
 	conflicts := 0
 	aggregated := 0
 	hotCounts := map[string]int{}
+	executionLoads := map[int]int{}
+	stateUnitLoads := map[int]int{}
 	for _, tx := range txs {
 		remote += tx.RemoteFetchCount
 		if tx.RemoteFetchCount > 0 {
 			crossShard++
+		}
+		if tx.CrossStateUnitAccess {
+			crossStateUnit++
+		}
+		if tx.StateLocalityHit {
+			localityHits++
+		}
+		executionLoads[tx.ExecutionShardID]++
+		for _, unitID := range tx.AccessedStateUnitIDs {
+			stateUnitLoads[unitID]++
 		}
 		if tx.Track == "fast" {
 			fast++
@@ -484,9 +560,12 @@ func applyMechanismMetrics(summary *Summary, txs []TxResult, plugin PluginProfil
 		}
 	}
 	summary.RemoteFetchCount = remote
+	summary.RemoteStateFetchCount = remote
+	summary.CrossStateUnitAccessCount = crossStateUnit
 	if len(txs) > 0 {
 		summary.CrossShardRatio = round(float64(crossShard) / float64(len(txs)))
 		summary.AggregationRatio = round(float64(aggregated) / float64(len(txs)))
+		summary.StateLocalityRatio = round(float64(localityHits) / float64(len(txs)))
 	}
 	summary.FastTrackCount = fast
 	summary.ConservativeTrackCount = conservative
@@ -494,6 +573,8 @@ func applyMechanismMetrics(summary *Summary, txs []TxResult, plugin PluginProfil
 	summary.ConflictCount = conflicts
 	summary.QueueWaitMS = 0
 	summary.BlockCommitLatencyMS = summary.AvgLatencyMS
+	summary.ExecutionShardLoadBalance = loadBalance(executionLoads, chain.ExecutionShardCount)
+	summary.StateUnitLoadBalance = loadBalance(stateUnitLoads, chain.StateStorageUnitCount)
 }
 
 func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, title string) error {
@@ -525,7 +606,7 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := writeStateCommitLog(filepath.Join(out, "state_commit_log.csv"), commits); err != nil {
 		return err
 	}
-	report := "# " + title + "\n\nThis is V3.3 Go-backed minimal runtime parity, not Fabric live execution, not MetaTrack final evidence, and not final paper-scale performance evidence.\n"
+	report := "# " + title + "\n\nThis is V3.3.1 role-separated Go-backed single-chain research runtime smoke output.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, and ExecutionRouting.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nThis is not Fabric live execution, not MetaTrack final evidence, not frontend integration, and not final paper-scale performance evidence.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
@@ -539,15 +620,16 @@ func writeSummaryCSV(path string, s Summary) error {
 		strconv.Itoa(s.TxCount), strconv.Itoa(s.SuccessCount), strconv.Itoa(s.FailureCount), strconv.Itoa(s.BlockCount),
 		fmt.Sprint(s.ThroughputTPS), fmt.Sprint(s.AvgLatencyMS), fmt.Sprint(s.P95LatencyMS), fmt.Sprint(s.P99LatencyMS), s.RuntimeMode,
 		strconv.Itoa(s.RemoteFetchCount), fmt.Sprint(s.CrossShardRatio), strconv.Itoa(s.FastTrackCount), strconv.Itoa(s.ConservativeTrackCount), strconv.Itoa(s.AggregatedUpdateCount), fmt.Sprint(s.AggregationRatio), strconv.Itoa(s.ConflictCount), fmt.Sprint(s.QueueWaitMS), fmt.Sprint(s.BlockCommitLatencyMS),
+		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "block_commit_latency_ms"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "block_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {
-	fields := []string{"block_height", "block_id", "proposer_node", "tx_count", "cut_time_ms", "ordered_time_ms", "finalized_time_ms", "consensus_plugin", "status"}
+	fields := []string{"block_height", "block_id", "proposer_node", "tx_count", "cut_time_ms", "ordered_time_ms", "finalized_time_ms", "consensus_plugin", "status", "consensus_domain_id", "validator_count", "execution_shard_count", "state_storage_unit_count"}
 	out := [][]string{}
 	for _, row := range rows {
 		values := []string{}
@@ -560,19 +642,19 @@ func writeBlockLog(path string, rows []map[string]string) error {
 }
 
 func writeTxResults(path string, txs []TxResult) error {
-	fields := []string{"tx_id", "submit_time_ms", "admit_time_ms", "block_height", "execution_start_ms", "execution_end_ms", "commit_time_ms", "latency_ms", "status", "shard_id", "read_count", "write_count", "remote_fetch_count"}
+	fields := []string{"tx_id", "submit_time_ms", "admit_time_ms", "block_height", "execution_start_ms", "execution_end_ms", "commit_time_ms", "latency_ms", "status", "shard_id", "consensus_domain_id", "execution_shard_id", "home_state_unit_ids", "accessed_state_unit_ids", "remote_state_unit_count", "remote_fetch_count", "cross_state_unit_access", "state_locality_hit", "read_count", "write_count"}
 	rows := [][]string{}
 	for _, tx := range txs {
-		rows = append(rows, []string{tx.TxID, strconv.Itoa(tx.SubmitTimeMS), strconv.Itoa(tx.AdmitTimeMS), strconv.Itoa(tx.BlockHeight), strconv.Itoa(tx.ExecutionStartMS), strconv.Itoa(tx.ExecutionEndMS), strconv.Itoa(tx.CommitTimeMS), strconv.Itoa(tx.LatencyMS), tx.Status, strconv.Itoa(tx.ShardID), strconv.Itoa(tx.ReadCount), strconv.Itoa(tx.WriteCount), strconv.Itoa(tx.RemoteFetchCount)})
+		rows = append(rows, []string{tx.TxID, strconv.Itoa(tx.SubmitTimeMS), strconv.Itoa(tx.AdmitTimeMS), strconv.Itoa(tx.BlockHeight), strconv.Itoa(tx.ExecutionStartMS), strconv.Itoa(tx.ExecutionEndMS), strconv.Itoa(tx.CommitTimeMS), strconv.Itoa(tx.LatencyMS), tx.Status, strconv.Itoa(tx.ShardID), tx.ConsensusDomainID, strconv.Itoa(tx.ExecutionShardID), joinInts(tx.HomeStateUnitIDs), joinInts(tx.AccessedStateUnitIDs), strconv.Itoa(tx.RemoteStateUnitCount), strconv.Itoa(tx.RemoteFetchCount), strconv.FormatBool(tx.CrossStateUnitAccess), strconv.FormatBool(tx.StateLocalityHit), strconv.Itoa(tx.ReadCount), strconv.Itoa(tx.WriteCount)})
 	}
 	return writeCSV(path, fields, rows)
 }
 
 func writeStateCommitLog(path string, commits []StateCommit) error {
-	fields := []string{"block_height", "tx_id", "state_key", "old_value", "delta", "new_value", "commit_plugin", "commit_time_ms", "status"}
+	fields := []string{"block_height", "tx_id", "state_key", "old_value", "delta", "new_value", "commit_plugin", "commit_time_ms", "status", "state_storage_unit_id", "execution_shard_id", "is_remote_commit", "placement_policy", "routing_plugin"}
 	rows := [][]string{}
 	for _, c := range commits {
-		rows = append(rows, []string{strconv.Itoa(c.BlockHeight), c.TxID, c.StateKey, strconv.Itoa(c.OldValue), strconv.Itoa(c.Delta), strconv.Itoa(c.NewValue), c.CommitPlugin, strconv.Itoa(c.CommitTimeMS), c.Status})
+		rows = append(rows, []string{strconv.Itoa(c.BlockHeight), c.TxID, c.StateKey, strconv.Itoa(c.OldValue), strconv.Itoa(c.Delta), strconv.Itoa(c.NewValue), c.CommitPlugin, strconv.Itoa(c.CommitTimeMS), c.Status, strconv.Itoa(c.StateStorageUnitID), strconv.Itoa(c.ExecutionShardID), strconv.FormatBool(c.IsRemoteCommit), c.PlacementPolicy, c.RoutingPlugin})
 	}
 	return writeCSV(path, fields, rows)
 }
@@ -605,7 +687,7 @@ func buildRoutingMap(txs []Transaction, chain ChainProfile, plugin PluginProfile
 	result := map[string]int{}
 	if plugin.ShardingPlugin != "co_access_sharding" {
 		for _, key := range keys {
-			result[key] = shard(key, chain.ShardCount)
+			result[key] = shard(key, chain.ExecutionShardCount)
 		}
 		return result
 	}
@@ -615,7 +697,7 @@ func buildRoutingMap(txs []Transaction, chain ChainProfile, plugin PluginProfile
 			result[key] = 0
 			continue
 		}
-		result[key] = groupShard % max(1, chain.ShardCount)
+		result[key] = groupShard % max(1, chain.ExecutionShardCount)
 		groupShard++
 	}
 	return result
@@ -623,22 +705,56 @@ func buildRoutingMap(txs []Transaction, chain ChainProfile, plugin PluginProfile
 
 func assignTxShard(tx Transaction, routingMap map[string]int, chain ChainProfile) int {
 	if len(tx.ReadKeys) == 0 {
-		return shard(tx.ID, chain.ShardCount)
+		return shard(tx.ID, chain.ExecutionShardCount)
 	}
 	return routingMap[tx.ReadKeys[0]]
 }
 
-func remoteFetchCount(tx Transaction, txShard int, routingMap map[string]int, chain ChainProfile, plugin PluginProfile) int {
+func remoteFetchCount(remoteStateUnits int, plugin PluginProfile) int {
 	if plugin.StateAccessPlugin == "access_list_prefetch" {
 		return 0
 	}
-	remote := 0
-	for _, key := range tx.ReadKeys {
-		shardID, ok := routingMap[key]
-		if !ok {
-			shardID = shard(key, chain.ShardCount)
+	return remoteStateUnits
+}
+
+func accessedStateUnits(tx Transaction, chain ChainProfile) []int {
+	keys := append([]string(nil), tx.ReadKeys...)
+	for key := range tx.WriteDeltas {
+		keys = append(keys, key)
+	}
+	units := []int{}
+	seen := map[int]bool{}
+	for _, key := range keys {
+		unitID := stateUnit(key, chain)
+		if seen[unitID] {
+			continue
 		}
-		if shardID != txShard {
+		seen[unitID] = true
+		units = append(units, unitID)
+	}
+	sort.Ints(units)
+	return units
+}
+
+func writeStateUnits(tx Transaction, chain ChainProfile) []int {
+	units := []int{}
+	seen := map[int]bool{}
+	for key := range tx.WriteDeltas {
+		unitID := stateUnit(key, chain)
+		if seen[unitID] {
+			continue
+		}
+		seen[unitID] = true
+		units = append(units, unitID)
+	}
+	sort.Ints(units)
+	return units
+}
+
+func remoteStateUnitCount(units []int, executionShardID int) int {
+	remote := 0
+	for _, unitID := range units {
+		if unitID != executionShardID {
 			remote++
 		}
 	}
@@ -706,6 +822,44 @@ func fieldString(text, field, fallback string) string {
 	return strings.Trim(strings.TrimSpace(matches[1]), `"'`)
 }
 
+func sectionFieldString(text, section, field, fallback string) string {
+	return fieldString(sectionText(text, section), field, fallback)
+}
+
+func sectionFieldInt(text, section, field string, fallback int) int {
+	value, err := strconv.Atoi(sectionFieldString(text, section, field, ""))
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func sectionText(text, section string) string {
+	lines := strings.Split(text, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == section+":" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	end := len(lines)
+	for i := start; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(lines[i], " ") && !strings.HasPrefix(lines[i], "\t") {
+			end = i
+			break
+		}
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
 func fieldInt(text, field string, fallback int) int {
 	value, err := strconv.Atoi(fieldString(text, field, ""))
 	if err != nil {
@@ -734,6 +888,45 @@ func shard(key string, shards int) int {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
 	return int(h.Sum32() % uint32(max(1, shards)))
+}
+
+func stateUnit(key string, chain ChainProfile) int {
+	return shard(key, chain.StateStorageUnitCount)
+}
+
+func consensusDomainID(index int) string {
+	return fmt.Sprintf("consensus_%d", index)
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.Itoa(value))
+	}
+	return strings.Join(parts, ";")
+}
+
+func loadBalance(loads map[int]int, bucketCount int) float64 {
+	if bucketCount <= 0 {
+		return 0
+	}
+	minLoad := int(^uint(0) >> 1)
+	maxLoad := 0
+	total := 0
+	for index := 0; index < bucketCount; index++ {
+		value := loads[index]
+		if value < minLoad {
+			minLoad = value
+		}
+		if value > maxLoad {
+			maxLoad = value
+		}
+		total += value
+	}
+	if total == 0 || maxLoad == 0 {
+		return 1
+	}
+	return round(float64(minLoad) / float64(maxLoad))
 }
 
 func avg(values []int) float64 {

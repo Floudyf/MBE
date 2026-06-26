@@ -15,9 +15,11 @@ from backend.app.services.v3_profile_validator import validate_experiment_profil
 ROOT = Path(__file__).resolve().parents[3]
 EXECUTOR_ROOT = ROOT / "executor"
 CHAIN_PROFILE = V3_CONFIG_ROOT / "chains" / "chain_x_default.yaml"
+ROLE_SEPARATED_CHAIN_PROFILE = V3_CONFIG_ROOT / "chains" / "single_chain_research_default.yaml"
 MINIMAL_PLUGIN_PROFILE = V3_CONFIG_ROOT / "plugins" / "v3_2_minimal_plugin_profile.yaml"
 METATRACK_PLUGIN_PROFILE = V3_CONFIG_ROOT / "plugins" / "metatrack_plugin_profiles.yaml"
 SMOKE_PROFILE = V3_CONFIG_ROOT / "experiments" / "single_chain_runtime_smoke.yaml"
+ROLE_SEPARATION_SMOKE_PROFILE = V3_CONFIG_ROOT / "experiments" / "single_chain_role_separation_smoke.yaml"
 METATRACK_PROFILE = V3_CONFIG_ROOT / "experiments" / "metatrack_go_backed_ablation_smoke.yaml"
 
 MECHANISM_FIELDS = [
@@ -35,6 +37,13 @@ MECHANISM_FIELDS = [
     "conflict_count",
     "queue_wait_ms",
     "block_commit_latency_ms",
+    "execution_shard_count",
+    "state_storage_unit_count",
+    "cross_state_unit_access_count",
+    "remote_state_fetch_count",
+    "state_locality_ratio",
+    "execution_shard_load_balance",
+    "state_unit_load_balance",
 ]
 
 
@@ -51,6 +60,7 @@ def run_go_v3_runtime(
     experiment_profile_path: Path = SMOKE_PROFILE,
     plugin_profile_path: Path = MINIMAL_PLUGIN_PROFILE,
     plugin_profile_id: str = "v3_2_minimal_single_chain",
+    chain_profile_path: Path = CHAIN_PROFILE,
     output_dir: Path,
 ) -> GoRuntimeRun:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +71,7 @@ def run_go_v3_runtime(
         "-mode",
         "v3-runtime",
         "-chain-profile",
-        str(CHAIN_PROFILE),
+        str(chain_profile_path),
         "-plugin-profile",
         str(plugin_profile_path),
         "-plugin-profile-id",
@@ -95,6 +105,7 @@ def run_metatrack_go_backed_ablation(output_root: Path | None = None) -> dict[st
                 experiment_profile_path=METATRACK_PROFILE,
                 plugin_profile_path=METATRACK_PLUGIN_PROFILE,
                 plugin_profile_id=combination,
+                chain_profile_path=ROLE_SEPARATED_CHAIN_PROFILE,
                 output_dir=root / combination,
             )
         )
@@ -133,6 +144,8 @@ def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
                 "",
                 "This is V3.3 Go-backed MetaTrack plugin evaluation smoke/controlled run.",
                 "It uses identical workload, seed, ChainProfile, block config, and consensus config across combinations.",
+                "It uses fixed state placement plus variable execution-side routing and execution/access/commit plugins.",
+                "Co-access routing changes execution-side routing M_t; it does not migrate persistent state placement phi(key).",
                 "It is not Fabric live execution.",
                 "It is not a final paper-scale result unless a later paper-scale workload is run.",
                 "Fabric-backed validation is deferred to V3.4.",

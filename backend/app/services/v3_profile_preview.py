@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.services.v3_profile_loader import V3ProfileStore, get_profile, load_profile_store, profile_inventory
-from backend.app.services.v3_profile_validator import validate_any_profile
+from backend.app.services.v3_profile_validator import normalized_chain_role_config, validate_any_profile
 
 
 def preview_profile(profile_type: str, profile_id: str, store: V3ProfileStore | None = None) -> dict[str, Any]:
@@ -22,7 +22,7 @@ def preview_all_profiles(store: V3ProfileStore | None = None) -> dict[str, Any]:
         items.append(preview_profile("plugin_profile", profile_id, store))
     for profile_id in sorted(store.experiments):
         items.append(preview_profile("experiment_profile", profile_id, store))
-    return {"stage": "V3.3", "inventory": profile_inventory(store), "items": items}
+    return {"stage": "V3.3.1", "inventory": profile_inventory(store), "items": items}
 
 
 def _preview_payload(profile: dict[str, Any], validation: dict[str, Any], store: V3ProfileStore) -> dict[str, Any]:
@@ -30,6 +30,7 @@ def _preview_payload(profile: dict[str, Any], validation: dict[str, Any], store:
     referenced = _referenced_profiles(profile)
     plugin_summary = _plugin_summary(profile, store)
     fairness_summary = _fairness_summary(profile)
+    role_summary = _role_summary(profile, store)
     expected_outputs = profile.get("outputs", {}).get("expected", []) if isinstance(profile.get("outputs"), dict) else []
     truth_label = profile.get("chain", {}).get("truth_label") or profile.get("experiment", {}).get("truth_label") or ""
     backend_type = validation.get("backend_type") or profile.get("experiment", {}).get("backend_type") or profile.get("capability", {}).get("backend_type", "")
@@ -45,6 +46,7 @@ def _preview_payload(profile: dict[str, Any], validation: dict[str, Any], store:
         "referenced_profiles": referenced,
         "plugin_summary": plugin_summary,
         "fairness_summary": fairness_summary,
+        "role_summary": role_summary,
         "blocking_reasons": validation["blocking_reasons"],
         "warnings": validation["warnings"],
         "expected_outputs": expected_outputs,
@@ -92,4 +94,31 @@ def _fairness_summary(profile: dict[str, Any]) -> dict[str, Any]:
         "same_submit_rate": fairness.get("same_submit_rate"),
         "only_plugin_diff": fairness.get("only_plugin_diff"),
         "allowed_plugin_diff_classes": fairness.get("allowed_plugin_diff_classes", []),
+    }
+
+
+def _role_summary(profile: dict[str, Any], store: V3ProfileStore) -> dict[str, Any]:
+    chain_profile: dict[str, Any] | None = None
+    if profile.get("profile_type") == "chain_profile":
+        chain_profile = profile
+    elif profile.get("chain_profile"):
+        chain_profile = store.chains.get(str(profile["chain_profile"]))
+    if not chain_profile:
+        return {}
+    normalized = normalized_chain_role_config(chain_profile)
+    return {
+        "consensus_domain_count": normalized["consensus"]["domain_count"],
+        "consensus_domain_ids": normalized["consensus"]["domain_ids"],
+        "consensus_plugin": normalized["consensus"]["plugin"],
+        "validator_count": normalized["consensus"]["validator_count"],
+        "committee": normalized["committee"],
+        "execution_shard_count": normalized["execution"]["shard_count"],
+        "executor_count": normalized["execution"]["executor_count"],
+        "state_storage_unit_count": normalized["state"]["storage_unit_count"],
+        "state_placement_policy": normalized["state"]["placement_policy"],
+        "state_backend": normalized["state"]["backend"],
+        "routing_plugin": normalized["routing"]["plugin"],
+        "routing_scope": normalized["routing"]["routing_scope"],
+        "network_plugin": normalized["network"]["plugin"],
+        "network_base_delay_ms": normalized["network"]["base_delay_ms"],
     }

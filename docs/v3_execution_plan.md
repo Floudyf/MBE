@@ -9,6 +9,14 @@ V3.3 absorbs the earlier V3.2b / V3.2.5 Go-backed minimal runtime parity stage.
 - V3.3 smoke / controlled results are not final paper-scale performance evidence.
 - V3.3 does not implement Fabric validation, frontend integration, dual-chain runtime, MetaFlow, AFS, or FDA.
 
+## 0.2 V3.3.1 Research-chain Role Separation Update
+
+V3.3.1 is a platform abstraction correction stage after the Go-backed MetaTrack smoke path. It explicitly separates `ConsensusDomain`, committee / epoch placeholders, `ExecutionShard`, `StateStorageUnit`, `StatePlacement phi(key) -> state_storage_unit_id`, `ExecutionRouting M_t(tx/key) -> execution_shard_id`, and `RemoteStateAccess`.
+
+The implementation remains lightweight: single-process logical runtime, fixed `consensus_0`, `simple_leader`, disabled/planned committee and epoch lifecycle, logical execution shards, and logical memory-backed state storage units.
+
+V3.3.1 is not V3.4 Fabric validation, not frontend integration, not MetaFlow, not dual-chain or cross-chain runtime, not AFS/FDA, not PBFT/HotStuff, not a real multi-machine network, and not state migration. MetaTrack co-access routing changes execution-side routing only; it does not migrate persistent state placement.
+
 ## 0. Current Scope Realignment
 
 Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + Fabric-backed validation + frontend acceptance:
@@ -18,6 +26,7 @@ Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + F
 - V3.2 Minimal Single-chain Modular Runtime.
 - V3.2b / V3.2.5 Go-backed Minimal Runtime / Go parity: planned after V3.2.
 - V3.3 MetaTrack Plugin Evaluation.
+- V3.3.1 Research-chain Role Separation.
 - V3.4 Fabric-backed Validation for MetaTrack.
 - V3-final Frontend Integration and Acceptance.
 

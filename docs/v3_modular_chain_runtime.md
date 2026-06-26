@@ -4,6 +4,22 @@
 
 V3.3 absorbs the Go-backed parity step and keeps the Python runtime as the semantic reference. The Go-backed runtime is the V3.3 execution hot path for controlled MetaTrack smoke evaluation. It is not a production blockchain and does not start Fabric, Docker, frontend, dual-chain runtime, MetaFlow, AFS, or FDA.
 
+## 0.2 V3.3.1 Role-separated Research Chain Scope
+
+V3.3.1 makes the Go-backed single-chain runtime more realistic as a long-term research-chain base while keeping the implementation lightweight. It separates:
+
+- `ConsensusDomain`
+- `Committee / Epoch` placeholder
+- `ExecutionShard`
+- `StateStorageUnit`
+- `StatePlacement phi(key) -> state_storage_unit_id`
+- `ExecutionRouting M_t(tx/key) -> execution_shard_id`
+- `RemoteStateAccess`
+
+Current V3.3.1 still uses `simple_leader`, one fixed consensus domain, disabled/planned committee and epoch lifecycle, logical execution shards, logical memory-backed state storage units, and deterministic virtual timing. It does not implement Fabric validation, frontend integration, MetaFlow, dual-chain runtime, AFS/FDA, PBFT/HotStuff, real multi-machine networking, committee lifecycle, or state migration.
+
+MetaTrack co-access routing changes execution-side routing `M_t`; it does not migrate persistent state placement `phi`.
+
 ## 0. V3.2 Runtime Scope
 
 V3.2 implements only a minimal single-chain modular runtime as a Python backend reference runtime:
@@ -46,10 +62,12 @@ V3 runtime 非目标：
 Client / Workload
   -> TxPool
   -> BlockProducer
-  -> ConsensusPlugin
-  -> ShardingPlugin / Routing
-  -> ExecutionSchedulerPlugin
+  -> ConsensusDomain
+  -> Committee / Epoch placeholder
+  -> ExecutionRouting
+  -> ExecutionShard
   -> StateAccessPlugin
+  -> StateStorageUnit
   -> CommitPlugin
   -> BlockLog / StateLog / Metrics
 ```

@@ -191,3 +191,42 @@ metrics:
   trace_enabled: true
   report_enabled: true
 ```
+
+## 19. V3.3.1 Role-separated Chain Fields
+
+V3.3.1 separates consensus, execution, and state-storage roles inside a single chain. New profiles may declare:
+
+```yaml
+consensus:
+  domain_count: 1
+  plugin: simple_leader
+  validator_count: 4
+
+committee:
+  enabled: false
+  status: planned
+  epoch_enabled: false
+  lifecycle_plugin: none
+
+execution:
+  shard_count: 4
+  executor_count: 4
+
+state:
+  storage_unit_count: 4
+  placement_policy: hash_state_storage
+  backend: memory_kv
+  remote_fetch_cost_ms: 1
+
+routing:
+  plugin: hash_sharding
+  routing_scope: execution_shard
+
+network:
+  plugin: fixed_delay
+  base_delay_ms: 1
+```
+
+`StatePlacement phi(key)` maps keys to persistent `state_storage_unit_id`. `ExecutionRouting M_t(tx/key)` maps transactions or keys to `execution_shard_id`. MetaTrack co-access routing changes execution-side routing only and must not be interpreted as state migration.
+
+The legacy `shard_id` artifact field remains as a compatibility alias for `execution_shard_id`. Committee and epoch lifecycle fields are placeholders in V3.3.1 and must remain disabled / planned.

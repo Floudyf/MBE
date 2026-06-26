@@ -150,3 +150,19 @@ metaflow_basic:
 metaflow_afs_fda:
   CrossChainProtocolPlugin = metaflow_afs_fda
 ```
+
+## 14. V3.3.1 Role Separation Semantics
+
+V3.3.1 separates persistent state placement from execution routing:
+
+```text
+StatePlacement:
+  phi(key) -> state_storage_unit_id
+
+ExecutionRouting:
+  M_t(tx/key) -> execution_shard_id
+```
+
+For MetaTrack, `hash_sharding` and `co_access_sharding` are execution-side routing plugins in the V3.3.1 Go-backed runtime. They do not migrate persistent state placement. The persistent location of state keys remains controlled by the chain profile `state.placement_policy`, currently `hash_state_storage`.
+
+`shard_id` in old artifacts is retained as a compatibility alias for `execution_shard_id` and should not be used as the precise role-separated identifier.

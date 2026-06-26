@@ -5,7 +5,7 @@ from typing import Any
 
 from backend.app.services.v3_profile_loader import V3ProfileStore
 
-CURRENT_STAGE = "v3.3"
+CURRENT_STAGE = "v3.3.1"
 ALLOWED_STATUS = {"planned", "runnable", "invalid"}
 ALLOWED_TRUTH_LABELS = {
     "synthetic_replay",
@@ -85,7 +85,11 @@ LEGAL_PLUGIN_IDS = {
 }
 METATRACK_ALLOWED_CLASSES = {"ShardingPlugin", "ExecutionSchedulerPlugin", "StateAccessPlugin", "CommitPlugin"}
 METAFLOW_ALLOWED_CLASSES = {"CrossChainProtocolPlugin"}
-RUNNABLE_EXPERIMENT_PROFILE_IDS = {"single_chain_runtime_smoke", "metatrack_go_backed_ablation_smoke"}
+RUNNABLE_EXPERIMENT_PROFILE_IDS = {
+    "single_chain_runtime_smoke",
+    "metatrack_go_backed_ablation_smoke",
+    "single_chain_role_separation_smoke",
+}
 V32_RUNTIME_ALLOWED_CLASSES = {
     "TxPoolPlugin",
     "BlockProducer",
@@ -112,7 +116,7 @@ FUTURE_STAGE_REQUIREMENTS = {
     "fabric_live_planned": "requires future Fabric live backend implementation",
     "evm_live_planned": "requires future EVM live backend implementation",
 }
-STAGE_ORDER = {"v3.1": 1, "v3.2": 2, "v3.3": 3, "v3.4": 4, "v3.5": 5, "v3.6": 6}
+STAGE_ORDER = {"v3.1": 10, "v3.2": 20, "v3.3": 30, "v3.3.1": 31, "v3.4": 40, "v3.5": 50, "v3.6": 60}
 
 
 def validate_chain_profile(profile: dict[str, Any]) -> dict[str, Any]:
@@ -128,6 +132,10 @@ def validate_chain_profile(profile: dict[str, Any]) -> dict[str, Any]:
     truth_label = profile.get("chain", {}).get("truth_label")
     if truth_label not in ALLOWED_TRUTH_LABELS:
         errors.append(f"invalid chain.truth_label: {truth_label}")
+    role_config = normalized_chain_role_config(profile)
+    committee = role_config["committee"]
+    if committee["enabled"] is True and committee["status"] in {"planned", "disabled"}:
+        errors.append("planned or disabled committee must not be enabled")
     _v31_future_guard(capability, errors, warnings)
     return _result("chain_profile", profile.get("profile_id", ""), errors, warnings, capability)
 
@@ -181,7 +189,7 @@ def validate_experiment_profile(profile: dict[str, Any], store: V3ProfileStore) 
     if experiment.get("backend_type") not in ALLOWED_BACKEND_TYPES:
         errors.append(f"invalid experiment.backend_type: {experiment.get('backend_type')}")
     if experiment.get("runnable") is True and profile.get("profile_id") not in RUNNABLE_EXPERIMENT_PROFILE_IDS:
-        errors.append("only V3.2 smoke and V3.3 Go-backed MetaTrack smoke may be declared runnable")
+        errors.append("only V3.2 smoke, V3.3 Go-backed MetaTrack smoke, and V3.3.1 role separation smoke may be declared runnable")
     _validate_profile_references(profile, store, errors)
     exp_type = experiment.get("type")
     if exp_type == "metatrack_plugin_ablation":
@@ -194,6 +202,8 @@ def validate_experiment_profile(profile: dict[str, Any], store: V3ProfileStore) 
         warnings.append("Fabric validation profile is planned in V3.1 and must not start Fabric.")
     elif exp_type == "single_chain_modular_runtime_smoke":
         _validate_v32_smoke_profile(profile, store, errors, warnings)
+    elif exp_type == "single_chain_role_separation_smoke":
+        _validate_v331_role_separation_smoke(profile, store, errors, warnings)
     else:
         errors.append(f"unknown experiment type: {exp_type}")
     _v31_future_guard({**capability, "backend_type": experiment.get("backend_type")}, errors, warnings)
@@ -305,8 +315,8 @@ def _validate_metatrack_go_backed_smoke(profile: dict[str, Any], store: V3Profil
         errors.append("V3.3 Go-backed MetaTrack smoke backend_type must be modular_research_chain")
     if experiment.get("runtime_mode") != "go_backed":
         errors.append("V3.3 Go-backed MetaTrack smoke runtime_mode must be go_backed")
-    if profile.get("chain_profile") != "chain_x_default":
-        errors.append("V3.3 Go-backed MetaTrack smoke must use chain_x_default")
+    if profile.get("chain_profile") not in {"chain_x_default", "single_chain_research_default"}:
+        errors.append("V3.3 Go-backed MetaTrack smoke must use chain_x_default or single_chain_research_default")
     expected_plugins = ["baseline_hash_only", "co_access_only", "co_access_dual_track", "full_MetaTrack"]
     if _experiment_plugin_ids(profile) != expected_plugins:
         errors.append("V3.3 Go-backed MetaTrack smoke must run the four approved MetaTrack combinations")
@@ -316,6 +326,33 @@ def _validate_metatrack_go_backed_smoke(profile: dict[str, Any], store: V3Profil
     if profile.get("calibration", {}).get("enabled") is True:
         errors.append("V3.3 Go-backed MetaTrack smoke must not require Fabric calibration")
     warnings.append("V3.3 Go-backed MetaTrack smoke is controlled evaluation only; it is not Fabric validation or final paper-scale evidence.")
+
+
+def _validate_v331_role_separation_smoke(profile: dict[str, Any], store: V3ProfileStore, errors: list[str], warnings: list[str]) -> None:
+    if profile.get("profile_id") != "single_chain_role_separation_smoke":
+        errors.append("V3.3.1 role separation smoke must use profile_id single_chain_role_separation_smoke")
+    experiment = profile.get("experiment", {})
+    if experiment.get("stage") != "v3.3.1":
+        errors.append("V3.3.1 role separation smoke experiment.stage must be v3.3.1")
+    if experiment.get("truth_label") != "modular_runtime":
+        errors.append("V3.3.1 role separation smoke truth_label must be modular_runtime")
+    if experiment.get("backend_type") != "modular_research_chain":
+        errors.append("V3.3.1 role separation smoke backend_type must be modular_research_chain")
+    if experiment.get("runtime_mode") != "go_backed":
+        errors.append("V3.3.1 role separation smoke runtime_mode must be go_backed")
+    if profile.get("chain_profile") != "single_chain_research_default":
+        errors.append("V3.3.1 role separation smoke must use single_chain_research_default")
+    plugin_ids = _experiment_plugin_ids(profile)
+    if plugin_ids != ["v3_2_minimal_single_chain"]:
+        errors.append("V3.3.1 role separation smoke may only use v3_2_minimal_single_chain")
+    if profile.get("workload", {}).get("source") != "synthetic":
+        errors.append("V3.3.1 role separation smoke must use synthetic workload")
+    chain = store.chains.get(str(profile.get("chain_profile")), {})
+    role_config = normalized_chain_role_config(chain)
+    committee = role_config["committee"]
+    if committee["enabled"] is True or committee["status"] not in {"planned", "disabled"}:
+        errors.append("V3.3.1 role separation smoke requires committee disabled/planned placeholder")
+    warnings.append("V3.3.1 role separation smoke validates role-separated single-chain runtime structure only; it is not Fabric validation or frontend integration.")
 
 
 def _experiment_plugin_ids(profile: dict[str, Any]) -> list[str]:
@@ -341,7 +378,7 @@ def _v31_future_guard(capability: dict[str, Any], errors: list[str], warnings: l
     if backend_type in FUTURE_STAGE_REQUIREMENTS and capability.get("runnable") is True and _stage_after(min_stage, CURRENT_STAGE):
         errors.append(f"{backend_type} is not runnable before its implemented stage")
     if min_stage and min_stage != CURRENT_STAGE:
-        warnings.append(f"requires {min_stage}; V3.3 only supports Go-backed MetaTrack smoke execution beyond V3.2 smoke")
+        warnings.append(f"requires {min_stage}; V3.3.1 supports role-separated Go-backed smoke execution beyond V3.2/V3.3 smoke")
 
 
 def _stage_after(candidate: str, current: str) -> bool:
@@ -392,3 +429,53 @@ def _result(profile_type: str, profile_id: Any, errors: list[str], warnings: lis
 
 def clone_profile(profile: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(profile)
+
+
+def normalized_chain_role_config(profile: dict[str, Any]) -> dict[str, Any]:
+    deployment = _mapping(profile.get("deployment"))
+    consensus = _mapping(profile.get("consensus"))
+    committee = _mapping(profile.get("committee"))
+    execution = _mapping(profile.get("execution"))
+    state = _mapping(profile.get("state"))
+    sharding = _mapping(profile.get("sharding"))
+    routing = _mapping(profile.get("routing"))
+    network = _mapping(profile.get("network"))
+    validator_count = int(consensus.get("validator_count") or deployment.get("validator_count") or 1)
+    execution_shard_count = int(execution.get("shard_count") or sharding.get("shard_count") or execution.get("parallelism") or deployment.get("executor_count") or 1)
+    state_storage_unit_count = int(state.get("storage_unit_count") or sharding.get("shard_count") or execution_shard_count or 1)
+    return {
+        "consensus": {
+            "domain_count": int(consensus.get("domain_count") or 1),
+            "domain_ids": [f"consensus_{index}" for index in range(int(consensus.get("domain_count") or 1))],
+            "plugin": consensus.get("plugin", "simple_leader"),
+            "validator_count": validator_count,
+        },
+        "committee": {
+            "enabled": bool(committee.get("enabled", False)),
+            "status": committee.get("status", "planned"),
+            "epoch_enabled": bool(committee.get("epoch_enabled", False)),
+            "lifecycle_plugin": committee.get("lifecycle_plugin", "none"),
+        },
+        "execution": {
+            "shard_count": execution_shard_count,
+            "executor_count": int(execution.get("executor_count") or deployment.get("executor_count") or execution.get("parallelism") or execution_shard_count),
+        },
+        "state": {
+            "storage_unit_count": state_storage_unit_count,
+            "placement_policy": state.get("placement_policy", "hash_state_storage"),
+            "backend": state.get("backend", "memory"),
+            "remote_fetch_cost_ms": int(state.get("remote_fetch_cost_ms") or 1),
+        },
+        "routing": {
+            "plugin": routing.get("plugin") or sharding.get("plugin", "hash_sharding"),
+            "routing_scope": routing.get("routing_scope", "execution_shard"),
+        },
+        "network": {
+            "plugin": network.get("plugin", "fixed_delay"),
+            "base_delay_ms": int(network.get("base_delay_ms") or network.get("delay_ms") or 0),
+        },
+    }
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
