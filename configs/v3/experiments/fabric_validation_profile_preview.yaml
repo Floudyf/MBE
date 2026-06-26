@@ -1,0 +1,65 @@
+profile_type: experiment_profile
+profile_id: fabric_validation_profile_preview
+version: v3
+stage: v3.1
+
+experiment:
+  experiment_id: v3_fabric_validation_preview
+  stage: v3.4
+  type: fabric_backed_validation
+  truth_label: fabric_live_validation
+  backend_type: fabric_validation
+  runnable: false
+
+chain_profile: fabric_validation_planned
+
+plugin_profiles:
+  baselines: []
+  proposed: []
+
+workload:
+  source: fabric_manual_cli
+  tx_count: 1000
+  seed: 42
+  submit_rate: 100
+  arrival_sequence: fabric_validation_manual
+  hotspot_ratio: 0.1
+  skew: 1.0
+  access_list_enabled: false
+  aggregation_candidates_enabled: false
+
+calibration:
+  enabled: true
+  calibration_profile_id: fabric_validation_default
+  source: fabric_live_validation
+  required_for_all_baselines: true
+
+fairness:
+  same_workload: true
+  same_seed: true
+  same_tx_count: true
+  same_chain_profile: true
+  same_hardware_profile: true
+  same_submit_rate: true
+  same_block_config: true
+  same_consensus_config: true
+  same_network_profile: true
+  same_calibration_profile: true
+  only_plugin_diff: false
+  allowed_plugin_diff_classes: []
+
+outputs:
+  expected:
+    - fabric_validation_summary.csv
+    - fabric_validation_summary.json
+    - fabric_tx_results.csv
+    - fabric_commit_latency.csv
+    - fabric_validation_report.md
+
+capability:
+  status: planned
+  min_stage: v3.4
+  runnable: false
+  blocking_reasons:
+    - requires V3.4 Fabric-backed validation
+    - V3.1 profile preview must not start Fabric

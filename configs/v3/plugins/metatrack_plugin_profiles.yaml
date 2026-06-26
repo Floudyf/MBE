@@ -1,0 +1,59 @@
+profile_type: plugin_profile_collection
+version: v3
+stage: v3.1
+profiles:
+  - plugin_profile_id: baseline_hash_only
+    domain: metatrack
+    status: planned
+    min_stage: v3.3
+    runnable: false
+    description: Hash sharding with serial execution and normal commit.
+    plugins:
+      ShardingPlugin: hash_sharding
+      ExecutionSchedulerPlugin: serial_execution
+      StateAccessPlugin: direct_fetch
+      CommitPlugin: normal_commit
+    blocking_reasons:
+      - requires V3.3 MetaTrack plugin evaluation
+
+  - plugin_profile_id: co_access_only
+    domain: metatrack
+    status: planned
+    min_stage: v3.3
+    runnable: false
+    description: Co-access sharding with serial execution and normal commit.
+    plugins:
+      ShardingPlugin: co_access_sharding
+      ExecutionSchedulerPlugin: serial_execution
+      StateAccessPlugin: direct_fetch
+      CommitPlugin: normal_commit
+    blocking_reasons:
+      - requires V3.3 MetaTrack plugin evaluation
+
+  - plugin_profile_id: co_access_dual_track
+    domain: metatrack
+    status: planned
+    min_stage: v3.3
+    runnable: false
+    description: Co-access sharding plus dual-track execution and access-list prefetch.
+    plugins:
+      ShardingPlugin: co_access_sharding
+      ExecutionSchedulerPlugin: dual_track_execution
+      StateAccessPlugin: access_list_prefetch
+      CommitPlugin: normal_commit
+    blocking_reasons:
+      - requires V3.3 MetaTrack plugin evaluation
+
+  - plugin_profile_id: full_MetaTrack
+    domain: metatrack
+    status: planned
+    min_stage: v3.3
+    runnable: false
+    description: Full MetaTrack combination for future V3.3 evaluation.
+    plugins:
+      ShardingPlugin: co_access_sharding
+      ExecutionSchedulerPlugin: dual_track_execution
+      StateAccessPlugin: access_list_prefetch
+      CommitPlugin: hot_update_aggregation_commit
+    blocking_reasons:
+      - requires V3.3 MetaTrack plugin evaluation

@@ -1,0 +1,85 @@
+profile_type: plugin_profile_collection
+version: v3
+stage: v3.1
+profiles:
+  - plugin_profile_id: serial_baseline
+    domain: metaflow
+    status: planned
+    min_stage: v3.6
+    runnable: false
+    description: Serial lock-mint protocol baseline.
+    protocol_truth: research_baseline_model
+    plugins:
+      CrossChainProtocolPlugin: lock_mint_serial
+    control_policy: none
+    blocking_reasons:
+      - requires V3.6 MetaFlow protocol plugin and AFS/FDA
+
+  - plugin_profile_id: pipeline_baseline
+    domain: metaflow
+    status: planned
+    min_stage: v3.6
+    runnable: false
+    description: Pipeline lock-mint protocol baseline.
+    protocol_truth: research_baseline_model
+    plugins:
+      CrossChainProtocolPlugin: lock_mint_pipeline
+    control_policy: none
+    blocking_reasons:
+      - requires V3.6 MetaFlow protocol plugin and AFS/FDA
+
+  - plugin_profile_id: fixed_window_baseline
+    domain: metaflow
+    status: planned
+    min_stage: v3.6
+    runnable: false
+    description: Fixed-window cross-chain protocol baseline.
+    protocol_truth: research_baseline_model
+    plugins:
+      CrossChainProtocolPlugin: fixed_window_baseline
+    control_policy: fixed_window
+    blocking_reasons:
+      - requires V3.6 MetaFlow protocol plugin and AFS/FDA
+
+  - plugin_profile_id: committee_baseline
+    domain: metaflow
+    status: planned
+    min_stage: v3.6
+    runnable: false
+    description: Research baseline with local committee delay model; not a production bridge.
+    protocol_truth: research_baseline_model
+    plugins:
+      CrossChainProtocolPlugin: committee_bridge_basic
+    control_policy: fixed_delay
+    blocking_reasons:
+      - requires V3.6 MetaFlow protocol plugin and AFS/FDA
+
+  - plugin_profile_id: metaflow_basic
+    domain: metaflow
+    status: planned
+    min_stage: v3.6
+    runnable: false
+    description: Planned basic MetaFlow protocol plugin.
+    protocol_truth: planned_metaflow_model
+    plugins:
+      CrossChainProtocolPlugin: metaflow_basic
+    control_policy: static_bdt
+    blocking_reasons:
+      - requires V3.6 MetaFlow protocol plugin and AFS/FDA
+
+  - plugin_profile_id: metaflow_afs_fda
+    domain: metaflow
+    status: planned
+    min_stage: v3.6
+    runnable: false
+    description: Planned MetaFlow protocol with AFS/FDA control.
+    protocol_truth: planned_metaflow_model
+    plugins:
+      CrossChainProtocolPlugin: metaflow_afs_fda
+    control_policy: adaptive_afs_fda
+    bdt_adaptation:
+      B: adaptive
+      D: adaptive
+      T: static
+    blocking_reasons:
+      - requires V3.6 MetaFlow protocol plugin and AFS/FDA

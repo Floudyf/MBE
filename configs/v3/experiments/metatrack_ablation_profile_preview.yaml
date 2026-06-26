@@ -1,0 +1,76 @@
+profile_type: experiment_profile
+profile_id: metatrack_ablation_profile_preview
+version: v3
+stage: v3.1
+
+experiment:
+  experiment_id: v3_metatrack_ablation_preview
+  stage: v3.3
+  type: metatrack_plugin_ablation
+  truth_label: modular_runtime_calibrated
+  backend_type: modular_research_chain
+  runnable: false
+
+chain_profile: chain_x_default
+
+plugin_profiles:
+  baselines:
+    - baseline_hash_only
+    - co_access_only
+    - co_access_dual_track
+  proposed:
+    - full_MetaTrack
+
+workload:
+  source: synthetic_or_chain_backed
+  tx_count: 50000
+  seed: 42
+  submit_rate: 1000
+  arrival_sequence: deterministic_seed_42
+  hotspot_ratio: 0.2
+  skew: 1.2
+  access_list_enabled: true
+  aggregation_candidates_enabled: true
+
+calibration:
+  enabled: true
+  calibration_profile_id: fabric_smoke_default
+  source: fabric_chain_backed_trace_replay
+  required_for_all_baselines: true
+
+fairness:
+  same_workload: true
+  same_seed: true
+  same_tx_count: true
+  same_chain_profile: true
+  same_hardware_profile: true
+  same_submit_rate: true
+  same_block_config: true
+  same_consensus_config: true
+  same_network_profile: true
+  same_calibration_profile: true
+  only_plugin_diff: true
+  allowed_plugin_diff_classes:
+    - ShardingPlugin
+    - ExecutionSchedulerPlugin
+    - StateAccessPlugin
+    - CommitPlugin
+
+outputs:
+  expected:
+    - used_chain_profile.yaml
+    - used_plugin_profile.yaml
+    - used_experiment_profile.yaml
+    - metatrack_summary.csv
+    - metatrack_latency.csv
+    - metatrack_mechanism_metrics.csv
+    - report.md
+
+capability:
+  status: planned
+  min_stage: v3.3
+  runnable: false
+  blocking_reasons:
+    - requires V3.2 minimal single-chain modular runtime
+    - requires V3.3 MetaTrack plugin evaluation
+    - V3.1 only supports profile preview and validation

@@ -1,0 +1,118 @@
+profile_type: chain_profile
+profile_id: fabric_validation_planned
+version: v3
+stage: v3.1
+
+chain:
+  chain_id: fabric_validation
+  chain_name: Fabric Validation Network
+  role: observer
+  chain_type: fabric_validation
+  truth_label: fabric_live_validation
+
+deployment:
+  mode: manual_cli
+  node_count: 1
+  validator_count: 1
+  executor_count: 1
+  hardware_profile: local_fabric_manual
+
+node:
+  node_id_prefix: fabric_node
+  node_roles: [validator, observer]
+  clock_mode: wall_clock_observation
+  storage_root: .cache/fabric_validation
+
+block:
+  block_interval_ms: 0
+  max_tx_per_block: 0
+  block_cut_policy: fabric_orderer_observed
+  empty_block_enabled: false
+
+consensus:
+  plugin: fabric_orderer_observed
+  leader_policy: fabric_managed
+  ordering_policy: fabric_orderer
+  fault_model: fabric_black_box
+  config: {}
+
+finality:
+  finality_type: fabric_commit_observed
+  finality_depth: 1
+  finality_timeout_ms: 30000
+  commit_rule: fabric_tx_commit_event
+
+tx_pool:
+  plugin: fabric_client_submit
+  max_pool_size: 0
+  batch_selection_policy: fabric_managed
+  dedup_enabled: true
+  backpressure_policy: fabric_managed
+
+sharding:
+  enabled: false
+  shard_count: 1
+  plugin: none
+  routing_policy: none
+  cross_shard_policy: none
+
+execution:
+  plugin: fabric_chaincode_observed
+  parallelism: 1
+  access_list_enabled: false
+  dependency_check_enabled: false
+  dual_track_enabled: false
+
+state:
+  model: fabric_world_state
+  backend: fabric_managed
+  key_count: 0
+  read_set_required: false
+  write_set_required: false
+  remote_fetch_cost_ms: 0
+
+commit:
+  plugin: fabric_commit_observed
+  aggregation_enabled: false
+  commit_batch_size: 0
+  state_commit_log_enabled: true
+
+network:
+  delay_ms: 0
+  jitter_ms: 0
+  loss_rate: 0
+  bandwidth_limit: null
+
+cross_chain:
+  cross_chain_enabled: false
+  peer_chain_ids: []
+  finality_export_enabled: false
+  bridge_adapter: none
+
+application:
+  chaincode_or_contract: asset_transfer_validation
+  operation_types: [invoke, query]
+  asset_model: fabric_chaincode_state
+  hotspot_model: observed_only
+
+fault_safety:
+  fault_injection_enabled: false
+  crash_faults: []
+  byzantine_faults: []
+  safety_assertions_enabled: true
+
+metrics:
+  trace_enabled: true
+  report_enabled: true
+  mechanism_metrics_enabled: false
+  block_log_enabled: true
+  tx_results_enabled: true
+
+capability:
+  status: planned
+  min_stage: v3.4
+  backend_type: fabric_validation
+  runnable: false
+  blocking_reasons:
+    - requires V3.4 Fabric-backed validation
+    - V3.1 profile preview must not start Fabric

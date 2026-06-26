@@ -1,0 +1,90 @@
+profile_type: experiment_profile
+profile_id: metaflow_dual_chain_profile_preview
+version: v3
+stage: v3.1
+
+experiment:
+  experiment_id: v3_metaflow_dual_chain_preview
+  stage: v3.6
+  type: metaflow_protocol_comparison
+  truth_label: modular_runtime_calibrated
+  backend_type: modular_research_chain
+  runnable: false
+
+chain_profiles:
+  source_chain_profile: chain_x_fast
+  target_chain_profile: chain_y_slow
+
+plugin_profiles:
+  baselines:
+    - serial_baseline
+    - pipeline_baseline
+    - fixed_window_baseline
+    - committee_baseline
+  proposed:
+    - metaflow_basic
+    - metaflow_afs_fda
+
+workload:
+  source: synthetic_or_chain_backed
+  tx_count: 50000
+  seed: 42
+  submit_rate: 800
+  arrival_sequence: deterministic_cross_chain_seed_42
+  hotspot_ratio: 0.2
+  skew: 1.1
+  access_list_enabled: true
+  aggregation_candidates_enabled: false
+
+metaflow:
+  B:
+    initial: 100
+    min: 20
+    max: 500
+  D:
+    initial: 4
+    min: 1
+    max: 16
+  T:
+    static_timeout_ms: 30000
+  afs_enabled: true
+  fda_enabled: true
+
+fairness:
+  same_workload: true
+  same_seed: true
+  same_tx_count: true
+  same_chain_profile: true
+  same_hardware_profile: true
+  same_submit_rate: true
+  same_block_config: true
+  same_consensus_config: true
+  same_network_profile: true
+  same_calibration_profile: true
+  only_plugin_diff: true
+  allowed_plugin_diff_classes:
+    - CrossChainProtocolPlugin
+    - control_policy
+    - BDT_adaptation_logic
+  timeout_baseline_ms: 30000
+  finality_profile: shared_source_target_profiles
+
+outputs:
+  expected:
+    - used_chain_profile.yaml
+    - used_plugin_profile.yaml
+    - used_experiment_profile.yaml
+    - metaflow_summary.csv
+    - metaflow_events.csv
+    - protocol_results.csv
+    - control_decisions.csv
+    - metaflow_vs_baselines_report.md
+
+capability:
+  status: planned
+  min_stage: v3.6
+  runnable: false
+  blocking_reasons:
+    - requires V3.5 minimal dual-chain runtime
+    - requires V3.6 MetaFlow protocol plugin and AFS/FDA
+    - V3.1 only supports profile preview and validation

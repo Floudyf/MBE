@@ -1,0 +1,117 @@
+profile_type: chain_profile
+profile_id: chain_x_fast
+version: v3
+stage: v3.1
+
+chain:
+  chain_id: chain_x
+  chain_name: MetaChain-X-Fast
+  role: source
+  chain_type: modular_research_chain
+  truth_label: modular_runtime
+
+deployment:
+  mode: local_process
+  node_count: 4
+  validator_count: 4
+  executor_count: 4
+  hardware_profile: local_dev_default
+
+node:
+  node_id_prefix: node_x_fast
+  node_roles: [validator, executor, observer]
+  clock_mode: logical
+  storage_root: .cache/v3_runtime/chain_x_fast
+
+block:
+  block_interval_ms: 100
+  max_tx_per_block: 500
+  block_cut_policy: time_or_count
+  empty_block_enabled: false
+
+consensus:
+  plugin: simple_leader
+  leader_policy: round_robin
+  ordering_policy: by_arrival
+  fault_model: none
+  config: {}
+
+finality:
+  finality_type: deterministic
+  finality_depth: 2
+  finality_timeout_ms: 2000
+  commit_rule: ordered_block_commit
+
+tx_pool:
+  plugin: fifo_pool
+  max_pool_size: 100000
+  batch_selection_policy: by_arrival
+  dedup_enabled: true
+  backpressure_policy: reject
+
+sharding:
+  enabled: true
+  shard_count: 4
+  plugin: hash_sharding
+  routing_policy: hash
+  cross_shard_policy: local_only
+
+execution:
+  plugin: serial_execution
+  parallelism: 4
+  access_list_enabled: true
+  dependency_check_enabled: true
+  dual_track_enabled: false
+
+state:
+  model: key_value
+  backend: memory
+  key_count: 100000
+  read_set_required: true
+  write_set_required: true
+  remote_fetch_cost_ms: 1
+
+commit:
+  plugin: normal_commit
+  aggregation_enabled: false
+  commit_batch_size: 500
+  state_commit_log_enabled: true
+
+network:
+  delay_ms: 5
+  jitter_ms: 0
+  loss_rate: 0
+  bandwidth_limit: null
+
+cross_chain:
+  cross_chain_enabled: true
+  peer_chain_ids: [chain_y]
+  finality_export_enabled: true
+  bridge_adapter: planned_cross_chain_protocol
+
+application:
+  chaincode_or_contract: metaflow_asset_source
+  operation_types: [source_lock, source_complete, source_refund]
+  asset_model: lock_mint_asset
+  hotspot_model: configurable_hotspot
+
+fault_safety:
+  fault_injection_enabled: false
+  crash_faults: []
+  byzantine_faults: []
+  safety_assertions_enabled: true
+
+metrics:
+  trace_enabled: true
+  report_enabled: true
+  mechanism_metrics_enabled: true
+  block_log_enabled: true
+  tx_results_enabled: true
+
+capability:
+  status: planned
+  min_stage: v3.5
+  backend_type: modular_research_chain
+  runnable: false
+  blocking_reasons:
+    - requires V3.5 minimal dual-chain runtime
