@@ -162,3 +162,42 @@ ExperimentProfile validator must check:
 - planned configs are not runnable。
 
 These checks begin in V3.1 profile layer and become mandatory for V3.3 and V3.6 experiments.
+
+## 11. V3.3.2 ExperimentTemplate and Composer Fields
+
+V3.3.2 ExperimentProfiles may include:
+
+```yaml
+experiment_template: metatrack_ablation
+
+composer:
+  enabled: true
+  view: single_chain
+  module_graph_id: single_chain_default
+
+variable_modules:
+  - Routing
+  - Execution
+  - StateAccess
+  - Commit
+
+fixed_modules:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Consensus
+  - StateStorage
+
+planned_modules:
+  - CommitteeEpoch
+```
+
+These fields are metadata for ComposerPreview and fairness checking. They do not start a frontend, Fabric, MetaFlow, or Go runtime by themselves.
+
+The single-chain composer order is:
+
+```text
+Workload -> TxPool -> BlockProducer -> Consensus -> CommitteeEpoch -> Routing -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
+```
+
+Module status is limited to `fixed`, `variable`, `disabled`, `planned`, and `output`.

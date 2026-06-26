@@ -20,6 +20,26 @@ Current V3.3.1 still uses `simple_leader`, one fixed consensus domain, disabled/
 
 MetaTrack co-access routing changes execution-side routing `M_t`; it does not migrate persistent state placement `phi`.
 
+## 0.3 V3.3.2 Composer Profile Scope
+
+V3.3.2 adds a metadata-only composer layer above the runtime. It does not change the Go runtime execution path. It describes the single-chain module graph:
+
+```text
+Workload
+  -> TxPool
+  -> BlockProducer
+  -> Consensus
+  -> CommitteeEpoch
+  -> Routing
+  -> Execution
+  -> StateAccess
+  -> StateStorage
+  -> Commit
+  -> MetricsReport
+```
+
+Each module is marked `fixed`, `variable`, `disabled`, `planned`, or `output`. ComposerPreview and PluginMatrix make it clear which modules belong to baseline/proposed methods and which modules are held fixed for fairness.
+
 ## 0. V3.2 Runtime Scope
 
 V3.2 implements only a minimal single-chain modular runtime as a Python backend reference runtime:

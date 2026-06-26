@@ -1,0 +1,51 @@
+template_id: execution_scheduler_only
+stage: V3.3.2
+chain_mode: single_chain
+runnable: true
+preview_only: false
+description: Single-chain execution scheduler comparison template.
+
+module_order:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Consensus
+  - CommitteeEpoch
+  - Routing
+  - Execution
+  - StateAccess
+  - StateStorage
+  - Commit
+  - MetricsReport
+
+variable_modules:
+  - Execution
+
+fixed_modules:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Consensus
+  - Routing
+  - StateAccess
+  - StateStorage
+  - Commit
+
+disabled_modules: []
+
+planned_modules:
+  - CommitteeEpoch
+
+output_modules:
+  - MetricsReport
+
+allowed_plugins:
+  Execution:
+    - serial_execution
+    - dual_track_execution
+    - block_stm_like_planned
+
+fairness:
+  only_variable_modules_may_differ: true
+  fixed_modules_must_match: true
+  planned_modules_not_runnable: true

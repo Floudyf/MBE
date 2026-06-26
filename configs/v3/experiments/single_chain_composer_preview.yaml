@@ -1,19 +1,18 @@
 profile_type: experiment_profile
-profile_id: single_chain_role_separation_smoke
+profile_id: single_chain_composer_preview
 version: v3
-stage: v3.3.1
+stage: v3.3.2
 
 experiment:
-  experiment_id: v3_3_1_single_chain_role_separation_smoke
-  stage: v3.3.1
-  type: single_chain_role_separation_smoke
+  experiment_id: v3_3_2_single_chain_composer_preview
+  stage: v3.3.2
+  type: single_chain_composer_preview
   truth_label: modular_runtime
   backend_type: modular_research_chain
-  runtime_mode: go_backed
-  runnable: true
+  runtime_mode: preview_only
+  runnable: false
 
 chain_profile: single_chain_research_default
-
 experiment_template: metatrack_ablation
 
 composer:
@@ -38,15 +37,18 @@ planned_modules:
   - CommitteeEpoch
 
 plugin_profiles:
-  baselines: []
+  baselines:
+    - baseline_hash_only
+    - co_access_only
+    - co_access_dual_track
   proposed:
-    - v3_2_minimal_single_chain
+    - full_MetaTrack
 
 workload:
   source: synthetic
-  tx_count: 32
+  tx_count: 100
   seed: 42
-  submit_rate: 160
+  submit_rate: 200
   arrival_sequence: deterministic_seed_42
   key_count: 32
   hot_key_count: 4
@@ -72,25 +74,21 @@ fairness:
   same_consensus_config: true
   same_network_profile: true
   same_calibration_profile: true
-  only_plugin_diff: false
-  allowed_plugin_diff_classes: []
+  only_plugin_diff: true
+  allowed_plugin_diff_classes:
+    - ShardingPlugin
+    - ExecutionSchedulerPlugin
+    - StateAccessPlugin
+    - CommitPlugin
 
 outputs:
   expected:
-    - used_chain_profile.yaml
-    - used_plugin_profile.yaml
-    - used_experiment_profile.yaml
-    - runtime.log
-    - summary.csv
-    - summary.json
-    - report.md
-    - block_log.csv
-    - tx_results.csv
-    - state_commit_log.csv
+    - composer_preview.json
 
 capability:
-  status: runnable
-  min_stage: v3.3.1
+  status: planned
+  min_stage: v3.3.2
   backend_type: modular_research_chain
-  runnable: true
-  blocking_reasons: []
+  runnable: false
+  blocking_reasons:
+    - preview-only composer profile; no runtime execution path

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.app.services.v3_composer_preview import build_composer_preview
 from backend.app.services.v3_profile_loader import V3ProfileStore, get_profile, load_profile_store, profile_inventory
 from backend.app.services.v3_profile_validator import normalized_chain_role_config, validate_any_profile
 
@@ -22,7 +23,7 @@ def preview_all_profiles(store: V3ProfileStore | None = None) -> dict[str, Any]:
         items.append(preview_profile("plugin_profile", profile_id, store))
     for profile_id in sorted(store.experiments):
         items.append(preview_profile("experiment_profile", profile_id, store))
-    return {"stage": "V3.3.1", "inventory": profile_inventory(store), "items": items}
+    return {"stage": "V3.3.2", "inventory": profile_inventory(store), "items": items}
 
 
 def _preview_payload(profile: dict[str, Any], validation: dict[str, Any], store: V3ProfileStore) -> dict[str, Any]:
@@ -31,6 +32,7 @@ def _preview_payload(profile: dict[str, Any], validation: dict[str, Any], store:
     plugin_summary = _plugin_summary(profile, store)
     fairness_summary = _fairness_summary(profile)
     role_summary = _role_summary(profile, store)
+    composer_preview = _composer_preview(profile, store)
     expected_outputs = profile.get("outputs", {}).get("expected", []) if isinstance(profile.get("outputs"), dict) else []
     truth_label = profile.get("chain", {}).get("truth_label") or profile.get("experiment", {}).get("truth_label") or ""
     backend_type = validation.get("backend_type") or profile.get("experiment", {}).get("backend_type") or profile.get("capability", {}).get("backend_type", "")
@@ -47,6 +49,11 @@ def _preview_payload(profile: dict[str, Any], validation: dict[str, Any], store:
         "plugin_summary": plugin_summary,
         "fairness_summary": fairness_summary,
         "role_summary": role_summary,
+        "composer_preview": composer_preview,
+        "experiment_template": composer_preview.get("template_id", ""),
+        "module_graph": {"modules": composer_preview.get("modules", []), "edges": composer_preview.get("edges", [])},
+        "plugin_matrix": composer_preview.get("plugin_matrix", []),
+        "fairness_scope": composer_preview.get("fairness_scope", {}),
         "blocking_reasons": validation["blocking_reasons"],
         "warnings": validation["warnings"],
         "expected_outputs": expected_outputs,
@@ -122,3 +129,12 @@ def _role_summary(profile: dict[str, Any], store: V3ProfileStore) -> dict[str, A
         "network_plugin": normalized["network"]["plugin"],
         "network_base_delay_ms": normalized["network"]["base_delay_ms"],
     }
+
+
+def _composer_preview(profile: dict[str, Any], store: V3ProfileStore) -> dict[str, Any]:
+    if profile.get("profile_type") != "experiment_profile":
+        return {}
+    try:
+        return build_composer_preview(profile, store)
+    except Exception as exc:
+        return {"error": str(exc), "runnable": False}

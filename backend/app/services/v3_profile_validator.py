@@ -3,9 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from backend.app.services.v3_experiment_templates import get_template
 from backend.app.services.v3_profile_loader import V3ProfileStore
 
-CURRENT_STAGE = "v3.3.1"
+CURRENT_STAGE = "v3.3.2"
 ALLOWED_STATUS = {"planned", "runnable", "invalid"}
 ALLOWED_TRUTH_LABELS = {
     "synthetic_replay",
@@ -116,7 +117,7 @@ FUTURE_STAGE_REQUIREMENTS = {
     "fabric_live_planned": "requires future Fabric live backend implementation",
     "evm_live_planned": "requires future EVM live backend implementation",
 }
-STAGE_ORDER = {"v3.1": 10, "v3.2": 20, "v3.3": 30, "v3.3.1": 31, "v3.4": 40, "v3.5": 50, "v3.6": 60}
+STAGE_ORDER = {"v3.1": 10, "v3.2": 20, "v3.3": 30, "v3.3.1": 31, "v3.3.2": 32, "v3.4": 40, "v3.5": 50, "v3.6": 60}
 
 
 def validate_chain_profile(profile: dict[str, Any]) -> dict[str, Any]:
@@ -204,8 +205,12 @@ def validate_experiment_profile(profile: dict[str, Any], store: V3ProfileStore) 
         _validate_v32_smoke_profile(profile, store, errors, warnings)
     elif exp_type == "single_chain_role_separation_smoke":
         _validate_v331_role_separation_smoke(profile, store, errors, warnings)
+    elif exp_type == "single_chain_composer_preview":
+        _validate_v332_composer_preview(profile, store, errors, warnings)
     else:
         errors.append(f"unknown experiment type: {exp_type}")
+    if profile.get("experiment_template") or profile.get("composer"):
+        _validate_template_fairness(profile, store, errors, warnings)
     _v31_future_guard({**capability, "backend_type": experiment.get("backend_type")}, errors, warnings)
     return _result("experiment_profile", profile.get("profile_id", ""), errors, warnings, capability)
 
@@ -355,6 +360,101 @@ def _validate_v331_role_separation_smoke(profile: dict[str, Any], store: V3Profi
     warnings.append("V3.3.1 role separation smoke validates role-separated single-chain runtime structure only; it is not Fabric validation or frontend integration.")
 
 
+def _validate_v332_composer_preview(profile: dict[str, Any], store: V3ProfileStore, errors: list[str], warnings: list[str]) -> None:
+    if profile.get("profile_id") != "single_chain_composer_preview":
+        errors.append("V3.3.2 composer preview must use profile_id single_chain_composer_preview")
+    experiment = profile.get("experiment", {})
+    if experiment.get("stage") != "v3.3.2":
+        errors.append("V3.3.2 composer preview experiment.stage must be v3.3.2")
+    if experiment.get("runtime_mode") != "preview_only":
+        errors.append("V3.3.2 composer preview runtime_mode must be preview_only")
+    if experiment.get("runnable") is True:
+        errors.append("V3.3.2 composer preview must not be runnable")
+    if profile.get("experiment_template") != "metatrack_ablation":
+        errors.append("V3.3.2 composer preview must use metatrack_ablation template")
+    if profile.get("composer", {}).get("view") != "single_chain":
+        errors.append("V3.3.2 composer preview must use single_chain composer view")
+    warnings.append("V3.3.2 composer preview is profile/template metadata only; it does not start Go runtime, Fabric, or frontend.")
+
+
+def _validate_template_fairness(profile: dict[str, Any], store: V3ProfileStore, errors: list[str], warnings: list[str]) -> None:
+    template_id = str(profile.get("experiment_template") or "metatrack_ablation")
+    try:
+        template = get_template(template_id)
+    except ValueError as exc:
+        errors.append(str(exc))
+        return
+    _validate_scope_matches_template(profile, template, errors)
+    if template.get("preview_only") is True and profile.get("experiment", {}).get("runnable") is True:
+        errors.append(f"{template_id} is preview_only and cannot be runnable")
+    module_runnable = profile.get("module_runnable", {})
+    if isinstance(module_runnable, dict):
+        for module in template.get("planned_modules", []):
+            if module_runnable.get(module) is True:
+                errors.append(f"{module} is planned in current stage and cannot be runnable.")
+    rows = _method_module_plugins(profile, store)
+    variable_modules = set(template.get("variable_modules", []))
+    fixed_modules = set(template.get("fixed_modules", []))
+    disabled_modules = set(template.get("disabled_modules", []))
+    planned_modules = set(template.get("planned_modules", []))
+    output_modules = set(template.get("output_modules", []))
+    module_values: dict[str, set[str]] = {}
+    for row in rows:
+        for module, plugin_id in row.items():
+            module_values.setdefault(module, set()).add(str(plugin_id))
+            if module in disabled_modules:
+                errors.append(f"{module} is disabled by template {template_id} and cannot be enabled.")
+            if module in planned_modules and str(plugin_id) not in {"", "none"}:
+                errors.append(f"{module} is planned in current stage and cannot be runnable.")
+            if module not in variable_modules and module not in fixed_modules and module not in disabled_modules and module not in planned_modules and module not in output_modules:
+                errors.append(f"{module} is not declared by template {template_id}")
+    for module in fixed_modules:
+        if len(module_values.get(module, set())) > 1:
+            errors.append(f"{module} is fixed by template {template_id} and cannot differ across methods.")
+    if template.get("fairness", {}).get("only_variable_modules_may_differ") is True:
+        for module, values in module_values.items():
+            if len(values) > 1 and module in output_modules:
+                errors.append(f"{module} is an output module in template {template_id} and cannot be an experiment variable.")
+            if len(values) > 1 and module not in variable_modules:
+                errors.append(f"{module} is not variable in template {template_id} and cannot differ across methods.")
+    fairness = profile.get("fairness", {})
+    for flag in ("same_workload", "same_seed", "same_tx_count", "same_chain_profile", "same_submit_rate", "same_block_config", "same_consensus_config", "same_network_profile", "same_calibration_profile"):
+        if fairness.get(flag) is not True:
+            errors.append(f"Template fairness requires {flag}=true")
+    if profile.get("calibration", {}).get("enabled") and profile.get("calibration", {}).get("required_for_all_baselines") is not True:
+        errors.append("calibration profile must be shared by all methods when enabled")
+    warnings.append(f"Template fairness checked with {template_id}; only variable_modules may differ.")
+
+
+def _validate_scope_matches_template(profile: dict[str, Any], template: dict[str, Any], errors: list[str]) -> None:
+    for field in ("variable_modules", "fixed_modules", "disabled_modules", "planned_modules"):
+        if field in profile and set(profile.get(field, [])) != set(template.get(field, [])):
+            errors.append(f"{field} must match template {template.get('template_id')}")
+
+
+def _method_module_plugins(profile: dict[str, Any], store: V3ProfileStore) -> list[dict[str, str]]:
+    rows = []
+    for plugin_id in _experiment_plugin_ids(profile):
+        plugin = store.plugins.get(plugin_id, {})
+        module_plugins = plugin.get("module_plugins") or _module_plugins_from_plugin_classes(plugin.get("plugins", {}))
+        rows.append({str(module): str(plugin_value) for module, plugin_value in module_plugins.items()})
+    return rows
+
+
+def _module_plugins_from_plugin_classes(plugins: dict[str, Any]) -> dict[str, str]:
+    mapping = {
+        "ShardingPlugin": "Routing",
+        "ExecutionSchedulerPlugin": "Execution",
+        "StateAccessPlugin": "StateAccess",
+        "CommitPlugin": "Commit",
+        "ConsensusPlugin": "Consensus",
+        "TxPoolPlugin": "TxPool",
+        "BlockProducer": "BlockProducer",
+        "MetricsPlugin": "MetricsReport",
+    }
+    return {module: str(plugins[plugin_class]) for plugin_class, module in mapping.items() if plugin_class in plugins}
+
+
 def _experiment_plugin_ids(profile: dict[str, Any]) -> list[str]:
     plugins = profile.get("plugin_profiles", {})
     return list(plugins.get("baselines", [])) + list(plugins.get("proposed", []))
@@ -378,7 +478,7 @@ def _v31_future_guard(capability: dict[str, Any], errors: list[str], warnings: l
     if backend_type in FUTURE_STAGE_REQUIREMENTS and capability.get("runnable") is True and _stage_after(min_stage, CURRENT_STAGE):
         errors.append(f"{backend_type} is not runnable before its implemented stage")
     if min_stage and min_stage != CURRENT_STAGE:
-        warnings.append(f"requires {min_stage}; V3.3.1 supports role-separated Go-backed smoke execution beyond V3.2/V3.3 smoke")
+        warnings.append(f"requires {min_stage}; V3.3.2 supports single-chain composer preview plus V3.2/V3.3/V3.3.1 smoke paths")
 
 
 def _stage_after(candidate: str, current: str) -> bool:

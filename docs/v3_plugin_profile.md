@@ -166,3 +166,23 @@ ExecutionRouting:
 For MetaTrack, `hash_sharding` and `co_access_sharding` are execution-side routing plugins in the V3.3.1 Go-backed runtime. They do not migrate persistent state placement. The persistent location of state keys remains controlled by the chain profile `state.placement_policy`, currently `hash_state_storage`.
 
 `shard_id` in old artifacts is retained as a compatibility alias for `execution_shard_id` and should not be used as the precise role-separated identifier.
+
+## 15. V3.3.2 Plugin Matrix
+
+V3.3.2 maps plugin profiles onto composer modules so the frontend can later show which blocks differ across methods:
+
+```yaml
+method_id: baseline_hash_only
+label: Baseline Hash Only
+module_plugins:
+  Routing: hash_sharding
+  Execution: serial_execution
+  StateAccess: direct_fetch
+  Commit: normal_commit
+tags:
+  - baseline
+```
+
+The current MetaTrack plugin profiles store this information as `module_plugins`, `label`, and `tags` on each method profile. This is a preview/fairness metadata layer. It does not add new runtime mechanisms.
+
+Template-driven fairness allows differences only in modules listed by `variable_modules`.

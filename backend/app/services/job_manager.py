@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-import time
+from itertools import count
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +12,7 @@ from backend.app.services.run_id import new_run_id
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_JOBS_ROOT = ROOT / ".cache/v2_jobs"
 VALID_STATUSES = {"created", "running", "completed", "failed", "cancelled"}
+CREATED_SEQUENCE = count(1)
 
 
 class JobNotFound(FileNotFoundError):
@@ -42,7 +43,7 @@ class JobManager:
         metadata = {
             "run_id": run_id,
             "created_at": now,
-            "created_sequence": time.time_ns(),
+            "created_sequence": next(CREATED_SEQUENCE),
             "updated_at": now,
             "stage": stage,
             "source": source,

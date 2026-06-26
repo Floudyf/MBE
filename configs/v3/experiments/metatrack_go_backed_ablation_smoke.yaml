@@ -14,6 +14,29 @@ experiment:
 
 chain_profile: single_chain_research_default
 
+experiment_template: metatrack_ablation
+
+composer:
+  enabled: true
+  view: single_chain
+  module_graph_id: single_chain_default
+
+variable_modules:
+  - Routing
+  - Execution
+  - StateAccess
+  - Commit
+
+fixed_modules:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Consensus
+  - StateStorage
+
+planned_modules:
+  - CommitteeEpoch
+
 plugin_profiles:
   baselines:
     - baseline_hash_only

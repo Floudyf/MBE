@@ -17,6 +17,18 @@ The implementation remains lightweight: single-process logical runtime, fixed `c
 
 V3.3.1 is not V3.4 Fabric validation, not frontend integration, not MetaFlow, not dual-chain or cross-chain runtime, not AFS/FDA, not PBFT/HotStuff, not a real multi-machine network, and not state migration. MetaTrack co-access routing changes execution-side routing only; it does not migrate persistent state placement.
 
+## 0.3 V3.3.2 Single-chain Modular Composer Update
+
+V3.3.2 adds the single-chain ExperimentTemplate and ComposerPreview metadata layer. It introduces `ExperimentTemplate`, `ModuleGraph`, `ModuleStatus`, `PluginMatrix`, `VariableModuleScope`, `ComposerPreview`, and `FairnessScope`.
+
+The single-chain module graph is:
+
+```text
+Workload -> TxPool -> BlockProducer -> Consensus -> CommitteeEpoch -> Routing -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
+```
+
+Module status is limited to `fixed`, `variable`, `disabled`, `planned`, and `output`. V3.3.2 does not implement frontend UI, Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, runnable dynamic resharding, or runnable state migration.
+
 ## 0. Current Scope Realignment
 
 Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + Fabric-backed validation + frontend acceptance:
@@ -27,6 +39,7 @@ Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + F
 - V3.2b / V3.2.5 Go-backed Minimal Runtime / Go parity: planned after V3.2.
 - V3.3 MetaTrack Plugin Evaluation.
 - V3.3.1 Research-chain Role Separation.
+- V3.3.2 Single-chain Modular Composer Profile / Experiment Templates.
 - V3.4 Fabric-backed Validation for MetaTrack.
 - V3-final Frontend Integration and Acceptance.
 

@@ -3,6 +3,7 @@ version: v3
 stage: v3.1
 profiles:
   - plugin_profile_id: baseline_hash_only
+    label: Baseline Hash Only
     domain: metatrack
     status: planned
     min_stage: v3.3
@@ -13,10 +14,18 @@ profiles:
       ExecutionSchedulerPlugin: serial_execution
       StateAccessPlugin: direct_fetch
       CommitPlugin: normal_commit
+    module_plugins:
+      Routing: hash_sharding
+      Execution: serial_execution
+      StateAccess: direct_fetch
+      Commit: normal_commit
+    tags:
+      - baseline
     blocking_reasons:
       - requires V3.3 MetaTrack plugin evaluation
 
   - plugin_profile_id: co_access_only
+    label: Co-access Only
     domain: metatrack
     status: planned
     min_stage: v3.3
@@ -27,10 +36,19 @@ profiles:
       ExecutionSchedulerPlugin: serial_execution
       StateAccessPlugin: direct_fetch
       CommitPlugin: normal_commit
+    module_plugins:
+      Routing: co_access_sharding
+      Execution: serial_execution
+      StateAccess: direct_fetch
+      Commit: normal_commit
+    tags:
+      - baseline
+      - MetaTrack
     blocking_reasons:
       - requires V3.3 MetaTrack plugin evaluation
 
   - plugin_profile_id: co_access_dual_track
+    label: Co-access Dual Track
     domain: metatrack
     status: planned
     min_stage: v3.3
@@ -41,10 +59,19 @@ profiles:
       ExecutionSchedulerPlugin: dual_track_execution
       StateAccessPlugin: access_list_prefetch
       CommitPlugin: normal_commit
+    module_plugins:
+      Routing: co_access_sharding
+      Execution: dual_track_execution
+      StateAccess: access_list_prefetch
+      Commit: normal_commit
+    tags:
+      - baseline
+      - MetaTrack
     blocking_reasons:
       - requires V3.3 MetaTrack plugin evaluation
 
   - plugin_profile_id: full_MetaTrack
+    label: Full MetaTrack
     domain: metatrack
     status: planned
     min_stage: v3.3
@@ -55,5 +82,13 @@ profiles:
       ExecutionSchedulerPlugin: dual_track_execution
       StateAccessPlugin: access_list_prefetch
       CommitPlugin: hot_update_aggregation_commit
+    module_plugins:
+      Routing: co_access_sharding
+      Execution: dual_track_execution
+      StateAccess: access_list_prefetch
+      Commit: hot_update_aggregation_commit
+    tags:
+      - proposed
+      - MetaTrack
     blocking_reasons:
       - requires V3.3 MetaTrack plugin evaluation

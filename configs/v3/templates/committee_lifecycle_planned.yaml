@@ -1,0 +1,54 @@
+template_id: committee_lifecycle_planned
+stage: V3.3.2
+chain_mode: single_chain
+runnable: false
+preview_only: true
+description: Preview-only committee and epoch lifecycle template. Committee lifecycle, shard reconfiguration, and state migration are not runnable.
+
+module_order:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Consensus
+  - CommitteeEpoch
+  - Routing
+  - Execution
+  - StateAccess
+  - StateStorage
+  - Commit
+  - MetricsReport
+
+variable_modules:
+  - Consensus
+
+fixed_modules:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Routing
+  - Execution
+  - StateAccess
+  - StateStorage
+  - Commit
+
+disabled_modules: []
+
+planned_modules:
+  - CommitteeEpoch
+  - ShardReconfiguration
+  - StateMigration
+
+output_modules:
+  - MetricsReport
+
+allowed_plugins:
+  CommitteeEpoch:
+    - none
+    - fixed_epoch_planned
+  Consensus:
+    - simple_leader
+
+fairness:
+  only_variable_modules_may_differ: true
+  fixed_modules_must_match: true
+  planned_modules_not_runnable: true

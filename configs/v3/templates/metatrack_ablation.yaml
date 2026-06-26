@@ -1,0 +1,59 @@
+template_id: metatrack_ablation
+stage: V3.3.2
+chain_mode: single_chain
+runnable: true
+preview_only: false
+description: Runnable MetaTrack single-chain ablation template with only routing, execution, state access, and commit modules variable.
+
+module_order:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Consensus
+  - CommitteeEpoch
+  - Routing
+  - Execution
+  - StateAccess
+  - StateStorage
+  - Commit
+  - MetricsReport
+
+variable_modules:
+  - Routing
+  - Execution
+  - StateAccess
+  - Commit
+
+fixed_modules:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Consensus
+  - StateStorage
+
+disabled_modules: []
+
+planned_modules:
+  - CommitteeEpoch
+
+output_modules:
+  - MetricsReport
+
+allowed_plugins:
+  Routing:
+    - hash_sharding
+    - co_access_sharding
+  Execution:
+    - serial_execution
+    - dual_track_execution
+  StateAccess:
+    - direct_fetch
+    - access_list_prefetch
+  Commit:
+    - normal_commit
+    - hot_update_aggregation_commit
+
+fairness:
+  only_variable_modules_may_differ: true
+  fixed_modules_must_match: true
+  planned_modules_not_runnable: true

@@ -130,3 +130,24 @@ MetaTrack 必须额外保存 plugin mechanism metrics。MetaFlow 必须额外保
 - "Local virtual replay is real-chain execution."
 - "Tiny smoke traces prove final performance."
 - "Committee baseline is a real threshold-signature bridge."
+
+## 9. V3.3.2 Template-driven Fairness Scope
+
+V3.3.2 extends fairness checks from plugin-class rules to template module rules:
+
+- Only `variable_modules` may differ across methods.
+- `fixed_modules` must match across all methods.
+- `disabled_modules` must not be enabled.
+- `planned_modules` must not be runnable.
+- `output_modules` must not become experiment variables.
+- Workload, seed, tx count, ChainProfile, submit rate, block config, consensus config, network profile, and calibration profile must remain shared.
+
+Example error semantics:
+
+```text
+Consensus is fixed by template metatrack_ablation and cannot differ across methods.
+CommitteeEpoch is planned in current stage and cannot be runnable.
+Routing is disabled by template consensus_only and cannot be enabled.
+```
+
+These checks are for experiment organization and reproducibility. They do not implement frontend UI, Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, committee lifecycle, dynamic resharding, or state migration.

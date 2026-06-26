@@ -1,0 +1,51 @@
+template_id: consensus_only
+stage: V3.3.2
+chain_mode: single_chain
+runnable: false
+preview_only: true
+description: Preview-only template for future consensus comparisons. PBFT and HotStuff are not implemented.
+
+module_order:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Consensus
+  - CommitteeEpoch
+  - Routing
+  - Execution
+  - StateAccess
+  - StateStorage
+  - Commit
+  - MetricsReport
+
+variable_modules:
+  - Consensus
+
+fixed_modules:
+  - Workload
+  - TxPool
+  - BlockProducer
+  - Execution
+  - StateAccess
+  - StateStorage
+  - Commit
+
+disabled_modules:
+  - Routing
+
+planned_modules:
+  - CommitteeEpoch
+
+output_modules:
+  - MetricsReport
+
+allowed_plugins:
+  Consensus:
+    - simple_leader
+    - pbft_planned
+    - hotstuff_planned
+
+fairness:
+  only_variable_modules_may_differ: true
+  fixed_modules_must_match: true
+  planned_modules_not_runnable: true

@@ -10,6 +10,7 @@ As of V3.2, current V3 acceptance is realigned to:
 - `V3.2b` / `V3.2.5`: Go-backed minimal runtime / Go parity, planned after V3.2.
 - `V3.3 MetaTrack Plugin Evaluation`.
 - `V3.3.1 Research-chain Role Separation`: platform abstraction correction for the Go-backed single-chain research runtime.
+- `V3.3.2 Single-chain Modular Composer Profile / Experiment Templates`: metadata-only experiment organization layer.
 - `V3.4 Fabric-backed Validation for MetaTrack`.
 - `V3-final Frontend Integration and Acceptance`.
 
@@ -58,6 +59,8 @@ Current V3.3 note: V3.3 absorbs the earlier V3.2b / V3.2.5 Go-backed parity stag
 
 Current V3.3.1 note: V3.3.1 is a platform abstraction correction stage. It separates `ConsensusDomain`, committee/epoch placeholders, `ExecutionShard`, `StateStorageUnit`, `StatePlacement phi(key)`, `ExecutionRouting M_t`, and `RemoteStateAccess` inside the single-chain Go-backed runtime. It must keep committee/epoch planned or disabled, must not implement Fabric, frontend, dual-chain, MetaFlow, AFS/FDA, PBFT/HotStuff, real multi-machine networking, or state migration. MetaTrack co-access routing changes execution-side routing only and does not migrate persistent state placement.
 
+Current V3.3.2 note: V3.3.2 adds ExperimentTemplate, ModuleGraph, ModuleStatus, PluginMatrix, VariableModuleScope, ComposerPreview, and FairnessScope for the single-chain modular research platform. It is metadata/profile/preview work only. Do not implement frontend UI, Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, committee lifecycle runnable behavior, dynamic resharding runnable behavior, or state migration runnable behavior in V3.3.2.
+
 V3 stages:
 
 - `V3.0 Planning Scaffold`: docs and skill only. Defines stage roadmap, boundaries, profiles, fair baseline policy, and acceptance checklist. No code.
@@ -65,6 +68,7 @@ V3 stages:
 - `V3.2 Minimal Single-chain Modular Runtime`: only minimal single-chain modular research chain runtime: `NodeRuntime`, `TxPool`, `BlockProducer`, `ConsensusPlugin`, `ExecutionSchedulerPlugin`, `StateAccessPlugin`, `CommitPlugin`, `MetricsCollector`.
 - `V3.3 MetaTrack Plugin Evaluation`: only MetaTrack plugin combinations and fair single-chain evaluation on the V3.2 runtime.
 - `V3.3.1 Research-chain Role Separation`: only role-separated single-chain runtime abstractions and artifacts for consensus domain, execution shard, state storage unit, placement, routing, and remote state access.
+- `V3.3.2 Single-chain Modular Composer Profile / Experiment Templates`: only template/profile/composer preview/fairness scope metadata for single-chain experiments.
 - `V3.4 Fabric-backed Validation for MetaTrack`: only Fabric-backed observation, calibration, and small-scale black-box validation. Do not patch Fabric peer internals.
 - `V3.2b` / `V3.2.5 Go-backed Minimal Runtime / Go parity`: planned migration stage after V3.2; do not implement during V3.2.
 - `V3.5 Minimal Dual-chain Runtime`: deferred / future roadmap, not current V3-final acceptance.
@@ -79,6 +83,7 @@ V3.1 only profile layer.
 V3.2 only minimal single-chain runtime.
 V3.3 only MetaTrack plugins/evaluation.
 V3.3.1 only single-chain research-chain role separation.
+V3.3.2 only single-chain template/composer/fairness-scope metadata.
 V3.4 only Fabric-backed validation.
 V3.2b/V3.2.5 only Go-backed parity after the Python reference runtime is stable.
 V3.5 and V3.6 are deferred/future scope in the current roadmap.

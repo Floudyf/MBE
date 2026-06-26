@@ -14,6 +14,10 @@ V3.3.1 is a platform abstraction correction stage. It separates `ConsensusDomain
 
 V3.3.1 must not implement Fabric validation, frontend integration, dual-chain runtime, MetaFlow, AFS/FDA, PBFT/HotStuff, real multi-machine networking, committee lifecycle, or dynamic state migration.
 
+## V3.3.2 Composer Template Update
+
+V3.3.2 is the single-chain modular Composer Profile / ExperimentTemplate stage. It adds templates, module graph metadata, plugin matrix, composer preview, and template-driven fairness scope. It must not implement frontend UI, Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, runnable dynamic resharding, or runnable state migration.
+
 ## Current V3 Acceptance Scope
 
 Current V3-final acceptance covers:
@@ -24,6 +28,7 @@ Current V3-final acceptance covers:
 - V3.2b / V3.2.5 Go-backed Minimal Runtime / Go parity, planned after V3.2.
 - V3.3 MetaTrack Plugin Evaluation.
 - V3.3.1 Research-chain Role Separation.
+- V3.3.2 Single-chain Modular Composer Profile / Experiment Templates.
 - V3.4 Fabric-backed Validation for MetaTrack.
 - V3-final Frontend Integration and Acceptance.
 
@@ -90,6 +95,14 @@ V3.5 and V3.6 may remain documented as future roadmap stages, but they are not c
 - Required artifacts: existing V3.3 artifacts plus role-separated fields in block, tx, state commit, summary, and MetaTrack mechanism metrics.
 - Required validation: Python tests, backend tests, Go tests, V0 sanity, diff checks.
 - Forbidden: no Fabric, no frontend, no MetaFlow, no dual-chain, no PBFT/HotStuff, no real multi-machine network, no committee lifecycle, no state migration.
+
+## V3.3.2 Single-chain Modular Composer Profile / Experiment Templates
+
+- Stage goal: describe, compose, preview, reproduce, and fairly validate single-chain modular experiments.
+- Allowed changes: docs, templates, profile metadata, backend template loader, composer preview service, fairness guard, tests.
+- Required implementation: ExperimentTemplate, ModuleGraph, ModuleStatus, PluginMatrix, VariableModuleScope, ComposerPreview, FairnessScope.
+- Required validation: Python tests, backend tests, V0 sanity, Go tests for regression, diff checks.
+- Forbidden: no frontend UI, no Fabric, no MetaFlow, no dual-chain, no PBFT/HotStuff, no committee lifecycle runnable, no dynamic resharding runnable, no state migration runnable.
 
 ## V3.4 Fabric-backed Validation for MetaTrack
 
