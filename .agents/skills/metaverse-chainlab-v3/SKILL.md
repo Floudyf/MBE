@@ -1,16 +1,35 @@
 # metaverse-chainlab-v3
 
+## 0. Current V3 Scope Realignment
+
+As of V3.2, current V3 acceptance is realigned to:
+
+- `V3.0 Planning Scaffold`: complete.
+- `V3.1 Profile Layer`: complete.
+- `V3.2 Minimal Single-chain Modular Runtime`: Python backend reference runtime first.
+- `V3.2b` / `V3.2.5`: Go-backed minimal runtime / Go parity, planned after V3.2.
+- `V3.3 MetaTrack Plugin Evaluation`.
+- `V3.4 Fabric-backed Validation for MetaTrack`.
+- `V3-final Frontend Integration and Acceptance`.
+
+Deferred / future scope:
+
+- `V3.5 Minimal Dual-chain Runtime`.
+- `V3.6 MetaFlow Protocol Plugin and AFS/FDA`.
+
+Current V3-final no longer requires V3.5 or V3.6. Existing MetaFlow profiles remain planned preview profiles and must not become runnable. Dual-chain runtime, MetaFlow, AFS, and FDA are deferred to future work or V4 scope unless a later user request explicitly reopens them.
+
 ## 1. Scope
 
 This skill governs V3 work for MBE.
 
-V3 builds a modular plugin chain runtime with Fabric-backed validation. V3 supports MetaTrack single-chain plugin evaluation and MetaFlow dual-chain protocol evaluation. V3 reuses V2 experiment management, artifacts, sweeps, reports, calibration, and frontend shell.
+V3 builds a MetaTrack-oriented modular plugin chain runtime with Fabric-backed validation and frontend acceptance. V3 reuses V2 experiment management, artifacts, sweeps, reports, calibration, and frontend shell. MetaFlow dual-chain protocol evaluation is retained only as planned preview / future roadmap material in the current V3 scope.
 
 V3 positioning:
 
 ```text
 V3 = Modular Plugin Chain Runtime with Fabric-backed Validation
-V3 = 面向 MetaTrack + MetaFlow 的模块化插件链实验平台，并带 Fabric 链支持验证。
+V3 = 面向 MetaTrack 的模块化插件链实验平台，并带 Fabric 链支持验证；MetaFlow 保留为 planned preview / future roadmap。
 ```
 
 V3 keeps V2 as the experiment organization, replay, sweep, report, calibration, and frontend foundation. V3 adds the modular plugin chain runtime layer that V2 intentionally did not implement.
@@ -41,9 +60,10 @@ V3 stages:
 - `V3.2 Minimal Single-chain Modular Runtime`: only minimal single-chain modular research chain runtime: `NodeRuntime`, `TxPool`, `BlockProducer`, `ConsensusPlugin`, `ExecutionSchedulerPlugin`, `StateAccessPlugin`, `CommitPlugin`, `MetricsCollector`.
 - `V3.3 MetaTrack Plugin Evaluation`: only MetaTrack plugin combinations and fair single-chain evaluation on the V3.2 runtime.
 - `V3.4 Fabric-backed Validation for MetaTrack`: only Fabric-backed observation, calibration, and small-scale black-box validation. Do not patch Fabric peer internals.
-- `V3.5 Minimal Dual-chain Runtime`: only two-chain runtime representation for source lock, target mint, finality wait, pending count, complete/refund paths.
-- `V3.6 MetaFlow Protocol Plugin and AFS/FDA`: only MetaFlow protocol plugins, AFS/FDA control, B/D/T parameters, and comparison against baselines.
-- `V3-final Frontend Integration and Acceptance`: only frontend integration, acceptance report, artifact browsing, and boundary presentation.
+- `V3.2b` / `V3.2.5 Go-backed Minimal Runtime / Go parity`: planned migration stage after V3.2; do not implement during V3.2.
+- `V3.5 Minimal Dual-chain Runtime`: deferred / future roadmap, not current V3-final acceptance.
+- `V3.6 MetaFlow Protocol Plugin and AFS/FDA`: deferred / future roadmap, not current V3-final acceptance.
+- `V3-final Frontend Integration and Acceptance`: only current-scope frontend integration, acceptance report, artifact browsing, and boundary presentation.
 
 Stage constraints:
 
@@ -53,9 +73,9 @@ V3.1 only profile layer.
 V3.2 only minimal single-chain runtime.
 V3.3 only MetaTrack plugins/evaluation.
 V3.4 only Fabric-backed validation.
-V3.5 only minimal dual-chain runtime.
-V3.6 only MetaFlow protocol and AFS/FDA.
-V3-final only frontend integration and acceptance report.
+V3.2b/V3.2.5 only Go-backed parity after the Python reference runtime is stable.
+V3.5 and V3.6 are deferred/future scope in the current roadmap.
+V3-final only frontend integration and acceptance report for current V3 scope.
 ```
 
 ## 4. Mandatory Start Check

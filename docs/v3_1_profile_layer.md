@@ -1,5 +1,11 @@
 # V3.1 Profile Layer
 
+## 0. Post-V3.1 Scope Note
+
+V3.1 is complete. V3.2 may allow only the `single_chain_runtime_smoke` experiment profile to become runnable for the minimal Python backend reference runtime. V3.3 MetaTrack ablation previews, V3.4 Fabric validation previews, MetaFlow dual-chain previews, Fabric live planned profiles, EVM live planned profiles, and public-chain live capabilities remain planned / not runnable.
+
+Current V3-final no longer requires V3.5 minimal dual-chain runtime or V3.6 MetaFlow AFS/FDA. Existing MetaFlow profiles remain planned preview inputs for future work or V4 scope.
+
 ## 1. Goal
 
 V3.1 adds the profile layer for the future modular plugin chain work. It defines how V3 chain, plugin, and experiment profiles are declared, loaded, validated, and previewed.

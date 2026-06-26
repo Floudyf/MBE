@@ -1,5 +1,24 @@
 # V3 Stage Acceptance Checklist
 
+## Current V3 Acceptance Scope
+
+Current V3-final acceptance covers:
+
+- V3.0 Planning Scaffold.
+- V3.1 Profile Layer.
+- V3.2 Minimal Single-chain Modular Runtime.
+- V3.2b / V3.2.5 Go-backed Minimal Runtime / Go parity, planned after V3.2.
+- V3.3 MetaTrack Plugin Evaluation.
+- V3.4 Fabric-backed Validation for MetaTrack.
+- V3-final Frontend Integration and Acceptance.
+
+Deferred / future roadmap:
+
+- V3.5 Minimal Dual-chain Runtime.
+- V3.6 MetaFlow Protocol Plugin and AFS/FDA.
+
+V3.5 and V3.6 may remain documented as future roadmap stages, but they are not current V3-final acceptance gates. MetaFlow preview profiles and MetaFlow plugin profiles remain planned / not runnable.
+
 ## V3.0 Planning Scaffold
 
 - 阶段目标：建立 V3 skill、docs、边界、阶段路线、profile 定义、公平 baseline 政策。
@@ -88,10 +107,10 @@
 
 - 阶段目标：frontend integration and acceptance report。
 - 允许修改文件类型：frontend, docs, acceptance tests, minimal backend contract if needed。
-- 必须实现内容：MetaTrack and MetaFlow pages, Fabric validation page, run history/artifacts, boundaries, developer mode。
+- 必须实现内容：MetaTrack-oriented runtime pages, Fabric validation page, run history/artifacts, boundaries, developer mode. MetaFlow remains planned / deferred and must not be presented as runnable in current V3-final。
 - 必须输出 artifacts：V3 acceptance report and downloadable run artifacts。
 - 必须运行测试：frontend build, backend/API contract tests, V0 sanity, diff checks。
 - 禁止事项：no new runtime mechanisms; no new protocols。
-- 通过条件：Frontend pages expose MetaTrack and MetaFlow V3 experiments; Artifacts downloadable; System boundary page clearly explains truth labels and non-goals; V3 acceptance report exists。
+- 通过条件：Frontend pages expose current-scope MetaTrack/Fabric V3 experiments; MetaFlow preview is clearly planned / deferred; Artifacts downloadable; System boundary page clearly explains truth labels and non-goals; V3 acceptance report exists。
 - 失败条件：UI claims production bridge/live public-chain; planned capabilities runnable。
 - 下一阶段入口条件：manual acceptance complete。

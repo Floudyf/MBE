@@ -1,0 +1,72 @@
+profile_type: experiment_profile
+profile_id: single_chain_runtime_smoke
+version: v3
+stage: v3.2
+
+experiment:
+  experiment_id: v3_2_single_chain_runtime_smoke
+  stage: v3.2
+  type: single_chain_modular_runtime_smoke
+  truth_label: modular_runtime
+  backend_type: modular_research_chain
+  runnable: true
+
+chain_profile: chain_x_default
+
+plugin_profiles:
+  baselines: []
+  proposed:
+    - v3_2_minimal_single_chain
+
+workload:
+  source: synthetic
+  tx_count: 24
+  seed: 42
+  submit_rate: 120
+  arrival_sequence: deterministic_seed_42
+  key_count: 32
+  hot_key_count: 4
+  hotspot_ratio: 0.25
+  skew: 1.0
+  access_list_enabled: true
+  aggregation_candidates_enabled: false
+
+calibration:
+  enabled: false
+  calibration_profile_id: none
+  source: none
+  required_for_all_baselines: false
+
+fairness:
+  same_workload: true
+  same_seed: true
+  same_tx_count: true
+  same_chain_profile: true
+  same_hardware_profile: true
+  same_submit_rate: true
+  same_block_config: true
+  same_consensus_config: true
+  same_network_profile: true
+  same_calibration_profile: true
+  only_plugin_diff: false
+  allowed_plugin_diff_classes: []
+
+outputs:
+  expected:
+    - used_chain_profile.yaml
+    - used_plugin_profile.yaml
+    - used_experiment_profile.yaml
+    - runtime.log
+    - summary.csv
+    - summary.json
+    - report.md
+    - block_log.csv
+    - tx_results.csv
+    - state_commit_log.csv
+
+capability:
+  status: runnable
+  min_stage: v3.2
+  backend_type: modular_research_chain
+  runnable: true
+  blocking_reasons: []

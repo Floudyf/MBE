@@ -1,5 +1,23 @@
 # V3 Modular Chain Runtime
 
+## 0. V3.2 Runtime Scope
+
+V3.2 implements only a minimal single-chain modular runtime as a Python backend reference runtime:
+
+```text
+synthetic workload
+-> TxPool
+-> BlockProducer
+-> simple_leader Consensus
+-> hash_sharding
+-> serial_execution
+-> direct_fetch
+-> normal_commit
+-> basic_metrics / artifacts
+```
+
+V3.2 uses single-process logical multi-node execution. It does not start real node processes, RPC, p2p, Docker, Fabric, network.sh, or the Go executor. Go-backed parity is planned for V3.2b / V3.2.5. MetaTrack full evaluation starts in V3.3. Fabric-backed validation starts in V3.4. Dual-chain runtime and MetaFlow AFS/FDA are deferred / future scope and are not current V3-final acceptance requirements.
+
 ## 1. Runtime 目标
 
 V3 modular chain runtime 的目标是在同一条自研模块化研究链上公平替换插件，支撑 MetaTrack 单链机制评估和 MetaFlow 双链协议评估。

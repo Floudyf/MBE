@@ -1,0 +1,19 @@
+profile_type: plugin_profile
+plugin_profile_id: v3_2_minimal_single_chain
+version: v3
+stage: v3.2
+domain: v3_runtime
+status: runnable
+min_stage: v3.2
+runnable: true
+description: V3.2 minimal single-chain Python reference runtime plugin set.
+plugins:
+  TxPoolPlugin: fifo_pool
+  BlockProducer: time_or_count_block_producer
+  ConsensusPlugin: simple_leader
+  ShardingPlugin: hash_sharding
+  ExecutionSchedulerPlugin: serial_execution
+  StateAccessPlugin: direct_fetch
+  CommitPlugin: normal_commit
+  MetricsPlugin: basic_metrics
+blocking_reasons: []

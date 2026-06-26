@@ -1,5 +1,9 @@
 # V3 MetaFlow Dual-chain Evaluation
 
+## 0. Deferred Scope Notice
+
+MetaFlow dual-chain evaluation is deferred from the current V3-final acceptance scope. This document remains a future roadmap / preview reference. Existing MetaFlow experiment and plugin profiles must remain planned / not runnable in current V3. V3.5 minimal dual-chain runtime and V3.6 MetaFlow Protocol Plugin with AFS/FDA are future work or V4 scope unless explicitly reopened later.
+
 ## 1. MetaFlow 在 V3 中的位置
 
 MetaFlow 是 V3.6 的双链协议实验主线。它建立在 V3.5 minimal dual-chain runtime 上，并使用 `CrossChainProtocolPlugin` 与 baselines 公平比较。

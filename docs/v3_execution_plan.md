@@ -1,5 +1,24 @@
 # V3 Execution Plan
 
+## 0. Current Scope Realignment
+
+Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + Fabric-backed validation + frontend acceptance:
+
+- V3.0 Planning Scaffold: complete.
+- V3.1 Profile Layer: complete.
+- V3.2 Minimal Single-chain Modular Runtime.
+- V3.2b / V3.2.5 Go-backed Minimal Runtime / Go parity: planned after V3.2.
+- V3.3 MetaTrack Plugin Evaluation.
+- V3.4 Fabric-backed Validation for MetaTrack.
+- V3-final Frontend Integration and Acceptance.
+
+Deferred / future work:
+
+- V3.5 Minimal Dual-chain Runtime.
+- V3.6 MetaFlow Protocol Plugin and AFS/FDA.
+
+Current V3-final does not require V3.5 or V3.6. Existing MetaFlow preview profiles remain planned / not runnable. V3.2 is a Python backend reference runtime for stabilizing runtime semantics, profile contracts, and artifact schemas; it does not implement Go-backed parity, MetaTrack full evaluation, Fabric validation, dual-chain runtime, MetaFlow, AFS, or FDA.
+
 ## 1. V3 背景与动机
 
 V2 已经形成 V3-ready local replay / sweep / calibration 实验平台。它能组织实验、管理 run/artifact、执行 V1 single-chain replay、执行 V2.5 dual-chain replay、执行 V2.6 protocol baseline、生成 V2.8 sweep/report，并通过 V2.9 做 chain-backed calibration。
@@ -208,7 +227,7 @@ V3.1 才开始实现配置层。本轮 V3.0 不实现。
 
 ### V3-final Frontend Integration and Acceptance
 
-目标：前端整合 MetaTrack 插件链实验、MetaFlow 双链协议实验、Fabric 验证、运行记录、报告下载、系统边界与开发者模式。
+目标：前端整合当前 V3 范围内的 MetaTrack 插件链实验、Fabric 验证、运行记录、报告下载、系统边界与开发者模式。MetaFlow 双链协议实验保留为 planned/deferred preview，不作为当前 V3-final 验收条件。
 
 ## 7. MetaTrack 主线
 
@@ -264,8 +283,8 @@ V3 成功标准：
 - V3.2 minimal runtime 能运行小 workload 并输出 block/tx/state logs。
 - V3.3 MetaTrack baseline/full comparison 遵守公平规则。
 - V3.4 Fabric-backed validation 能输出 calibration/validation report。
-- V3.5 dual-chain runtime 能表达 source/target paths。
-- V3.6 MetaFlow basic and AFS/FDA 能与 baselines 同环境比较。
+- V3.5 dual-chain runtime remains deferred / future roadmap and is not a current V3-final gate。
+- V3.6 MetaFlow basic and AFS/FDA remain deferred / future roadmap and are not current V3-final gates。
 - V3-final 前端清楚展示 truth labels、backend types、artifacts 和 boundaries。
 
 ## 11. V3 非目标

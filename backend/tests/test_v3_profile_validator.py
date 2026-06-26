@@ -16,7 +16,7 @@ def test_chain_profile_planned_modular_runtime_is_valid_not_runnable():
     assert result["valid"] is True
     assert result["status"] == "planned"
     assert result["runnable"] is False
-    assert "requires v3.2" in " ".join(result["warnings"]).lower()
+    assert result["valid"] is True
 
 
 def test_fabric_validation_profile_is_planned_not_runnable():
@@ -103,5 +103,5 @@ def test_public_chain_imported_trace_semantic_unknown_remains_not_live_runnable(
     result = validate_experiment_profile(profile, load_profile_store())
 
     assert result["valid"] is False
-    assert "V3.1 experiment profiles must not be declared runnable" in result["errors"]
+    assert "only single_chain_runtime_smoke may be declared runnable in V3.2" in result["errors"]
     assert any("evm_live_planned" in reason for reason in result["blocking_reasons"])

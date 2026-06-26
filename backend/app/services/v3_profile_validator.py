@@ -5,7 +5,7 @@ from typing import Any
 
 from backend.app.services.v3_profile_loader import V3ProfileStore
 
-CURRENT_STAGE = "v3.1"
+CURRENT_STAGE = "v3.2"
 ALLOWED_STATUS = {"planned", "runnable", "invalid"}
 ALLOWED_TRUTH_LABELS = {
     "synthetic_replay",
@@ -73,14 +73,38 @@ CHAIN_REQUIRED_FIELDS = {
     "capability": {"status", "min_stage", "backend_type", "runnable", "blocking_reasons"},
 }
 LEGAL_PLUGIN_IDS = {
+    "TxPoolPlugin": {"fifo_pool"},
+    "BlockProducer": {"time_or_count_block_producer"},
+    "ConsensusPlugin": {"simple_leader"},
     "ShardingPlugin": {"hash_sharding", "co_access_sharding"},
     "ExecutionSchedulerPlugin": {"serial_execution", "dual_track_execution"},
     "StateAccessPlugin": {"direct_fetch", "access_list_prefetch"},
     "CommitPlugin": {"normal_commit", "hot_update_aggregation_commit"},
+    "MetricsPlugin": {"basic_metrics"},
     "CrossChainProtocolPlugin": {"lock_mint_serial", "lock_mint_pipeline", "fixed_window_baseline", "committee_bridge_basic", "metaflow_basic", "metaflow_afs_fda"},
 }
 METATRACK_ALLOWED_CLASSES = {"ShardingPlugin", "ExecutionSchedulerPlugin", "StateAccessPlugin", "CommitPlugin"}
 METAFLOW_ALLOWED_CLASSES = {"CrossChainProtocolPlugin"}
+V32_RUNTIME_ALLOWED_CLASSES = {
+    "TxPoolPlugin",
+    "BlockProducer",
+    "ConsensusPlugin",
+    "ShardingPlugin",
+    "ExecutionSchedulerPlugin",
+    "StateAccessPlugin",
+    "CommitPlugin",
+    "MetricsPlugin",
+}
+V32_MINIMAL_PLUGIN_IDS = {
+    "TxPoolPlugin": "fifo_pool",
+    "BlockProducer": "time_or_count_block_producer",
+    "ConsensusPlugin": "simple_leader",
+    "ShardingPlugin": "hash_sharding",
+    "ExecutionSchedulerPlugin": "serial_execution",
+    "StateAccessPlugin": "direct_fetch",
+    "CommitPlugin": "normal_commit",
+    "MetricsPlugin": "basic_metrics",
+}
 FUTURE_STAGE_REQUIREMENTS = {
     "modular_research_chain": "requires V3.2 minimal single-chain modular runtime",
     "fabric_validation": "requires V3.4 Fabric-backed validation",
@@ -114,7 +138,14 @@ def validate_plugin_profile(profile: dict[str, Any]) -> dict[str, Any]:
     plugins = profile.get("plugins", {})
     if not isinstance(plugins, dict) or not plugins:
         errors.append("plugins must be a non-empty mapping")
-    allowed_classes = METATRACK_ALLOWED_CLASSES if domain == "metatrack" else METAFLOW_ALLOWED_CLASSES if domain == "metaflow" else set()
+    if domain == "metatrack":
+        allowed_classes = METATRACK_ALLOWED_CLASSES
+    elif domain == "metaflow":
+        allowed_classes = METAFLOW_ALLOWED_CLASSES
+    elif domain == "v3_runtime":
+        allowed_classes = V32_RUNTIME_ALLOWED_CLASSES
+    else:
+        allowed_classes = set()
     if not allowed_classes:
         errors.append(f"invalid plugin profile domain: {domain}")
     for plugin_class, plugin_id in plugins.items():
@@ -122,6 +153,10 @@ def validate_plugin_profile(profile: dict[str, Any]) -> dict[str, Any]:
             errors.append(f"{domain} plugin profile cannot use {plugin_class}")
         if plugin_id not in LEGAL_PLUGIN_IDS.get(plugin_class, set()):
             errors.append(f"unknown plugin id {plugin_class}:{plugin_id}")
+    if domain == "v3_runtime" and profile.get("plugin_profile_id") != "v3_2_minimal_single_chain":
+        errors.append("only v3_2_minimal_single_chain is allowed as a V3.2 runtime plugin profile")
+    if domain == "v3_runtime" and plugins != V32_MINIMAL_PLUGIN_IDS:
+        errors.append("V3.2 runtime plugin profile must use only the minimal supported plugin set")
     description = str(profile.get("description", "")).lower()
     if plugins.get("CrossChainProtocolPlugin") == "committee_bridge_basic" and "production bridge" in description and "not a production bridge" not in description:
         errors.append("committee_bridge_basic must not be described as a production bridge")
@@ -143,8 +178,8 @@ def validate_experiment_profile(profile: dict[str, Any], store: V3ProfileStore) 
         errors.append(f"invalid experiment.truth_label: {experiment.get('truth_label')}")
     if experiment.get("backend_type") not in ALLOWED_BACKEND_TYPES:
         errors.append(f"invalid experiment.backend_type: {experiment.get('backend_type')}")
-    if experiment.get("runnable") is True:
-        errors.append("V3.1 experiment profiles must not be declared runnable")
+    if experiment.get("runnable") is True and profile.get("profile_id") != "single_chain_runtime_smoke":
+        errors.append("only single_chain_runtime_smoke may be declared runnable in V3.2")
     _validate_profile_references(profile, store, errors)
     exp_type = experiment.get("type")
     if exp_type == "metatrack_plugin_ablation":
@@ -153,6 +188,8 @@ def validate_experiment_profile(profile: dict[str, Any], store: V3ProfileStore) 
         _validate_metaflow_fairness(profile, store, errors, warnings)
     elif exp_type == "fabric_backed_validation":
         warnings.append("Fabric validation profile is planned in V3.1 and must not start Fabric.")
+    elif exp_type == "single_chain_modular_runtime_smoke":
+        _validate_v32_smoke_profile(profile, store, errors, warnings)
     else:
         errors.append(f"unknown experiment type: {exp_type}")
     _v31_future_guard({**capability, "backend_type": experiment.get("backend_type")}, errors, warnings)
@@ -229,6 +266,29 @@ def _validate_metaflow_fairness(profile: dict[str, Any], store: V3ProfileStore, 
     warnings.append("MetaFlow profile is preview-only in V3.1; requires V3.6 for execution.")
 
 
+def _validate_v32_smoke_profile(profile: dict[str, Any], store: V3ProfileStore, errors: list[str], warnings: list[str]) -> None:
+    if profile.get("profile_id") != "single_chain_runtime_smoke":
+        errors.append("V3.2 runtime smoke must use profile_id single_chain_runtime_smoke")
+    experiment = profile.get("experiment", {})
+    if experiment.get("stage") != "v3.2":
+        errors.append("V3.2 smoke experiment.stage must be v3.2")
+    if experiment.get("truth_label") != "modular_runtime":
+        errors.append("V3.2 smoke truth_label must be modular_runtime")
+    if experiment.get("backend_type") != "modular_research_chain":
+        errors.append("V3.2 smoke backend_type must be modular_research_chain")
+    if profile.get("chain_profile") != "chain_x_default":
+        errors.append("V3.2 smoke must use chain_x_default")
+    plugin_ids = _experiment_plugin_ids(profile)
+    if plugin_ids != ["v3_2_minimal_single_chain"]:
+        errors.append("V3.2 smoke may only use v3_2_minimal_single_chain")
+    plugin = store.plugins.get("v3_2_minimal_single_chain")
+    if plugin and plugin.get("plugins") != V32_MINIMAL_PLUGIN_IDS:
+        errors.append("V3.2 smoke plugin set is not the minimal supported plugin set")
+    if profile.get("workload", {}).get("source") != "synthetic":
+        errors.append("V3.2 smoke must use synthetic workload")
+    warnings.append("V3.2 smoke validates the minimal runtime pipeline only; it is not MetaTrack full evaluation or Fabric validation.")
+
+
 def _experiment_plugin_ids(profile: dict[str, Any]) -> list[str]:
     plugins = profile.get("plugin_profiles", {})
     return list(plugins.get("baselines", [])) + list(plugins.get("proposed", []))
@@ -249,10 +309,10 @@ def _validate_capability(capability: dict[str, Any], errors: list[str]) -> None:
 def _v31_future_guard(capability: dict[str, Any], errors: list[str], warnings: list[str]) -> None:
     backend_type = capability.get("backend_type")
     min_stage = str(capability.get("min_stage", ""))
-    if backend_type in FUTURE_STAGE_REQUIREMENTS and capability.get("runnable") is True:
-        errors.append(f"{backend_type} is not runnable in V3.1")
+    if backend_type in FUTURE_STAGE_REQUIREMENTS and capability.get("runnable") is True and min_stage != CURRENT_STAGE:
+        errors.append(f"{backend_type} is not runnable before its implemented stage")
     if min_stage and min_stage != CURRENT_STAGE:
-        warnings.append(f"requires {min_stage}; V3.1 only supports profile preview and validation")
+        warnings.append(f"requires {min_stage}; V3.2 only supports minimal single-chain runtime execution")
 
 
 def _require_sections(profile: dict[str, Any], sections: set[str], errors: list[str]) -> None:
