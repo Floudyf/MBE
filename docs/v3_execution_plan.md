@@ -1,5 +1,14 @@
 # V3 Execution Plan
 
+## 0.1 V3.3 Go-backed MetaTrack Update
+
+V3.3 absorbs the earlier V3.2b / V3.2.5 Go-backed minimal runtime parity stage.
+
+- Gate A: Go-backed minimal runtime parity with the V3.2 Python reference runtime.
+- Gate B: Go-backed MetaTrack plugin combinations and fair ablation.
+- V3.3 smoke / controlled results are not final paper-scale performance evidence.
+- V3.3 does not implement Fabric validation, frontend integration, dual-chain runtime, MetaFlow, AFS, or FDA.
+
 ## 0. Current Scope Realignment
 
 Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + Fabric-backed validation + frontend acceptance:

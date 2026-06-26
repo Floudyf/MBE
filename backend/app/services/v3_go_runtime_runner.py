@@ -1,0 +1,156 @@
+from __future__ import annotations
+
+import csv
+import json
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from backend.app.services.run_id import new_run_id
+from backend.app.services.v3_profile_loader import V3_CONFIG_ROOT, load_profile_store
+from backend.app.services.v3_profile_validator import validate_experiment_profile
+
+ROOT = Path(__file__).resolve().parents[3]
+EXECUTOR_ROOT = ROOT / "executor"
+CHAIN_PROFILE = V3_CONFIG_ROOT / "chains" / "chain_x_default.yaml"
+MINIMAL_PLUGIN_PROFILE = V3_CONFIG_ROOT / "plugins" / "v3_2_minimal_plugin_profile.yaml"
+METATRACK_PLUGIN_PROFILE = V3_CONFIG_ROOT / "plugins" / "metatrack_plugin_profiles.yaml"
+SMOKE_PROFILE = V3_CONFIG_ROOT / "experiments" / "single_chain_runtime_smoke.yaml"
+METATRACK_PROFILE = V3_CONFIG_ROOT / "experiments" / "metatrack_go_backed_ablation_smoke.yaml"
+
+MECHANISM_FIELDS = [
+    "plugin_combination",
+    "throughput_tps",
+    "avg_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+    "remote_fetch_count",
+    "cross_shard_ratio",
+    "fast_track_count",
+    "conservative_track_count",
+    "aggregated_update_count",
+    "aggregation_ratio",
+    "conflict_count",
+    "queue_wait_ms",
+    "block_commit_latency_ms",
+]
+
+
+@dataclass(frozen=True)
+class GoRuntimeRun:
+    output_dir: Path
+    summary: dict[str, Any]
+    stdout: str
+    stderr: str
+
+
+def run_go_v3_runtime(
+    *,
+    experiment_profile_path: Path = SMOKE_PROFILE,
+    plugin_profile_path: Path = MINIMAL_PLUGIN_PROFILE,
+    plugin_profile_id: str = "v3_2_minimal_single_chain",
+    output_dir: Path,
+) -> GoRuntimeRun:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        "go",
+        "run",
+        "./cmd/replay",
+        "-mode",
+        "v3-runtime",
+        "-chain-profile",
+        str(CHAIN_PROFILE),
+        "-plugin-profile",
+        str(plugin_profile_path),
+        "-plugin-profile-id",
+        plugin_profile_id,
+        "-experiment-profile",
+        str(experiment_profile_path),
+        "-output",
+        str(output_dir),
+    ]
+    completed = subprocess.run(command, cwd=EXECUTOR_ROOT, text=True, capture_output=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"Go V3 runtime failed: {completed.stderr or completed.stdout}")
+    summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    return GoRuntimeRun(output_dir=output_dir, summary=summary, stdout=completed.stdout, stderr=completed.stderr)
+
+
+def run_metatrack_go_backed_ablation(output_root: Path | None = None) -> dict[str, Any]:
+    store = load_profile_store()
+    profile = store.experiments["metatrack_go_backed_ablation_smoke"]
+    validation = validate_experiment_profile(profile, store)
+    if not validation["valid"] or not validation["runnable"]:
+        raise ValueError("metatrack_go_backed_ablation_smoke is not runnable")
+    run_id = new_run_id().replace("v2run", "v3mt", 1)
+    root = (output_root or Path(".cache/v3_metatrack_runs")) / run_id
+    root.mkdir(parents=True, exist_ok=True)
+    combinations = ["baseline_hash_only", "co_access_only", "co_access_dual_track", "full_MetaTrack"]
+    runs: list[GoRuntimeRun] = []
+    for combination in combinations:
+        runs.append(
+            run_go_v3_runtime(
+                experiment_profile_path=METATRACK_PROFILE,
+                plugin_profile_path=METATRACK_PLUGIN_PROFILE,
+                plugin_profile_id=combination,
+                output_dir=root / combination,
+            )
+        )
+    _write_metatrack_artifacts(root, runs)
+    return {"run_id": run_id, "output_dir": root, "runs": runs}
+
+
+def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
+    summary_rows = []
+    mechanism_rows = []
+    latency_rows = []
+    for run in runs:
+        summary = run.summary
+        combo = summary["plugin_profile_id"]
+        summary_rows.append(summary)
+        mechanism_rows.append({field: summary.get(field, "") for field in MECHANISM_FIELDS} | {"plugin_combination": combo})
+        latency_file = run.output_dir / "tx_results.csv"
+        with latency_file.open(newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                latency_rows.append(
+                    {
+                        "plugin_combination": combo,
+                        "tx_id": row["tx_id"],
+                        "latency_ms": row["latency_ms"],
+                        "status": row["status"],
+                    }
+                )
+    _write_csv(root / "metatrack_summary.csv", list(summary_rows[0]), summary_rows)
+    (root / "metatrack_summary.json").write_text(json.dumps(summary_rows, indent=2, sort_keys=True), encoding="utf-8")
+    _write_csv(root / "metatrack_mechanism_metrics.csv", MECHANISM_FIELDS, mechanism_rows)
+    _write_csv(root / "metatrack_latency.csv", ["plugin_combination", "tx_id", "latency_ms", "status"], latency_rows)
+    (root / "metatrack_ablation_report.md").write_text(
+        "\n".join(
+            [
+                "# V3.3 Go-backed MetaTrack Evaluation Smoke Report",
+                "",
+                "This is V3.3 Go-backed MetaTrack plugin evaluation smoke/controlled run.",
+                "It uses identical workload, seed, ChainProfile, block config, and consensus config across combinations.",
+                "It is not Fabric live execution.",
+                "It is not a final paper-scale result unless a later paper-scale workload is run.",
+                "Fabric-backed validation is deferred to V3.4.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for forbidden in ("fabric_validation_summary.csv", "fabric_tx_results.csv", "fabric_commit_latency.csv", "fabric_block_log.csv", "metaflow_events.csv", "control_decisions.csv"):
+        target = root / forbidden
+        if target.exists():
+            target.unlink()
+    shutil.copyfile(METATRACK_PROFILE, root / "used_experiment_profile.yaml")
+
+
+def _write_csv(path: Path, fields: list[str], rows: list[dict[str, Any]]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fields})

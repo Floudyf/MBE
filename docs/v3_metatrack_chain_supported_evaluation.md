@@ -1,5 +1,9 @@
 # V3 MetaTrack Chain-supported Evaluation
 
+## 0. V3.3 Go-backed Evaluation Note
+
+V3.3 uses the Go-backed runtime as the execution path while preserving the V3.2 Python reference runtime as a semantic oracle. The first V3.3 profile is a smoke / controlled evaluation profile, not final paper-scale evidence.
+
 ## 1. MetaTrack 在 V3 中的位置
 
 MetaTrack 是 V3.3 的单链插件评估主线。它在 V3.2 modular research chain runtime 上评估 co-access sharding、dual-track execution、access-list prefetch、hot-update aggregation commit 等机制。

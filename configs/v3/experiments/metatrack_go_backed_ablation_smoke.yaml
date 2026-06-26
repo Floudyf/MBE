@@ -1,0 +1,75 @@
+profile_type: experiment_profile
+profile_id: metatrack_go_backed_ablation_smoke
+version: v3
+stage: v3.3
+
+experiment:
+  experiment_id: v3_3_metatrack_go_backed_ablation_smoke
+  stage: v3.3
+  type: metatrack_go_backed_ablation_smoke
+  truth_label: modular_runtime
+  backend_type: modular_research_chain
+  runtime_mode: go_backed
+  runnable: true
+
+chain_profile: chain_x_default
+
+plugin_profiles:
+  baselines:
+    - baseline_hash_only
+    - co_access_only
+    - co_access_dual_track
+  proposed:
+    - full_MetaTrack
+
+workload:
+  source: synthetic
+  tx_count: 100
+  seed: 42
+  submit_rate: 200
+  arrival_sequence: deterministic_seed_42
+  key_count: 32
+  hot_key_count: 4
+  hotspot_ratio: 0.25
+  skew: 1.0
+  access_list_enabled: true
+  aggregation_candidates_enabled: true
+
+calibration:
+  enabled: false
+  calibration_profile_id: none
+  source: none
+  required_for_all_baselines: false
+
+fairness:
+  same_workload: true
+  same_seed: true
+  same_tx_count: true
+  same_chain_profile: true
+  same_hardware_profile: true
+  same_submit_rate: true
+  same_block_config: true
+  same_consensus_config: true
+  same_network_profile: true
+  same_calibration_profile: true
+  only_plugin_diff: true
+  allowed_plugin_diff_classes:
+    - ShardingPlugin
+    - ExecutionSchedulerPlugin
+    - StateAccessPlugin
+    - CommitPlugin
+
+outputs:
+  expected:
+    - metatrack_summary.csv
+    - metatrack_summary.json
+    - metatrack_latency.csv
+    - metatrack_mechanism_metrics.csv
+    - metatrack_ablation_report.md
+
+capability:
+  status: runnable
+  min_stage: v3.3
+  backend_type: modular_research_chain
+  runnable: true
+  blocking_reasons: []

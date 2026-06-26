@@ -30,6 +30,18 @@ def test_future_v3_profiles_remain_planned_not_runnable():
         assert result["runnable"] is False
 
 
+def test_v33_go_backed_metatrack_smoke_validates_runnable():
+    store = load_profile_store()
+    profile = store.experiments["metatrack_go_backed_ablation_smoke"]
+
+    result = validate_experiment_profile(profile, store)
+
+    assert profile["experiment"]["stage"] == "v3.3"
+    assert profile["experiment"]["runtime_mode"] == "go_backed"
+    assert result["valid"] is True
+    assert result["runnable"] is True
+
+
 def test_metaflow_preview_remains_planned():
     preview = preview_profile("experiment_profile", "metaflow_dual_chain_profile_preview")
 

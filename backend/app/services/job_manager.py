@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ class JobManager:
         metadata = {
             "run_id": run_id,
             "created_at": now,
+            "created_sequence": time.time_ns(),
             "updated_at": now,
             "stage": stage,
             "source": source,
@@ -103,7 +105,7 @@ class JobManager:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             metadata["_sort_mtime_ns"] = metadata_path.stat().st_mtime_ns
             runs.append(metadata)
-        runs.sort(key=lambda item: (item.get("created_at", ""), item.get("updated_at", ""), item.get("_sort_mtime_ns", 0)), reverse=True)
+        runs.sort(key=lambda item: (item.get("created_sequence", 0), item.get("created_at", ""), item.get("updated_at", ""), item.get("_sort_mtime_ns", 0)), reverse=True)
         for item in runs:
             item.pop("_sort_mtime_ns", None)
         return runs[: max(1, min(limit, 200))]

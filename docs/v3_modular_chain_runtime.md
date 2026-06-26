@@ -1,5 +1,9 @@
 # V3 Modular Chain Runtime
 
+## 0.1 V3.3 Go-backed Runtime Scope
+
+V3.3 absorbs the Go-backed parity step and keeps the Python runtime as the semantic reference. The Go-backed runtime is the V3.3 execution hot path for controlled MetaTrack smoke evaluation. It is not a production blockchain and does not start Fabric, Docker, frontend, dual-chain runtime, MetaFlow, AFS, or FDA.
+
 ## 0. V3.2 Runtime Scope
 
 V3.2 implements only a minimal single-chain modular runtime as a Python backend reference runtime:

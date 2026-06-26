@@ -53,6 +53,8 @@ V3 must not claim production security, production availability, public-chain dep
 
 Only one V3 stage may be implemented per round. Do not jump stages. Do not implement future planned components early.
 
+Current V3.3 note: V3.3 absorbs the earlier V3.2b / V3.2.5 Go-backed parity stage. Gate A is Go-backed minimal runtime parity. Gate B is Go-backed MetaTrack plugin combinations and fair ablation. Do not implement Fabric validation, frontend integration, dual-chain runtime, MetaFlow, AFS, or FDA in V3.3.
+
 V3 stages:
 
 - `V3.0 Planning Scaffold`: docs and skill only. Defines stage roadmap, boundaries, profiles, fair baseline policy, and acceptance checklist. No code.

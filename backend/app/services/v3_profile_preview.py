@@ -22,7 +22,7 @@ def preview_all_profiles(store: V3ProfileStore | None = None) -> dict[str, Any]:
         items.append(preview_profile("plugin_profile", profile_id, store))
     for profile_id in sorted(store.experiments):
         items.append(preview_profile("experiment_profile", profile_id, store))
-    return {"stage": "V3.2", "inventory": profile_inventory(store), "items": items}
+    return {"stage": "V3.3", "inventory": profile_inventory(store), "items": items}
 
 
 def _preview_payload(profile: dict[str, Any], validation: dict[str, Any], store: V3ProfileStore) -> dict[str, Any]:

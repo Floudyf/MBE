@@ -1,5 +1,13 @@
 # V3 Stage Acceptance Checklist
 
+## V3.3 Gate Update
+
+V3.3 now absorbs the earlier V3.2b / V3.2.5 Go-backed parity stage.
+
+- Gate A: Go-backed minimal runtime parity.
+- Gate B: Go-backed MetaTrack plugin combinations and fair ablation.
+- V3.3 must not implement Fabric validation, frontend integration, dual-chain runtime, MetaFlow, AFS, or FDA.
+
 ## Current V3 Acceptance Scope
 
 Current V3-final acceptance covers:

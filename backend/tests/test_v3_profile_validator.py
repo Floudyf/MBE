@@ -103,5 +103,5 @@ def test_public_chain_imported_trace_semantic_unknown_remains_not_live_runnable(
     result = validate_experiment_profile(profile, load_profile_store())
 
     assert result["valid"] is False
-    assert "only single_chain_runtime_smoke may be declared runnable in V3.2" in result["errors"]
+    assert "only V3.2 smoke and V3.3 Go-backed MetaTrack smoke may be declared runnable" in result["errors"]
     assert any("evm_live_planned" in reason for reason in result["blocking_reasons"])

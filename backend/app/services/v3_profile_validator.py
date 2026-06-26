@@ -5,7 +5,7 @@ from typing import Any
 
 from backend.app.services.v3_profile_loader import V3ProfileStore
 
-CURRENT_STAGE = "v3.2"
+CURRENT_STAGE = "v3.3"
 ALLOWED_STATUS = {"planned", "runnable", "invalid"}
 ALLOWED_TRUTH_LABELS = {
     "synthetic_replay",
@@ -85,6 +85,7 @@ LEGAL_PLUGIN_IDS = {
 }
 METATRACK_ALLOWED_CLASSES = {"ShardingPlugin", "ExecutionSchedulerPlugin", "StateAccessPlugin", "CommitPlugin"}
 METAFLOW_ALLOWED_CLASSES = {"CrossChainProtocolPlugin"}
+RUNNABLE_EXPERIMENT_PROFILE_IDS = {"single_chain_runtime_smoke", "metatrack_go_backed_ablation_smoke"}
 V32_RUNTIME_ALLOWED_CLASSES = {
     "TxPoolPlugin",
     "BlockProducer",
@@ -111,6 +112,7 @@ FUTURE_STAGE_REQUIREMENTS = {
     "fabric_live_planned": "requires future Fabric live backend implementation",
     "evm_live_planned": "requires future EVM live backend implementation",
 }
+STAGE_ORDER = {"v3.1": 1, "v3.2": 2, "v3.3": 3, "v3.4": 4, "v3.5": 5, "v3.6": 6}
 
 
 def validate_chain_profile(profile: dict[str, Any]) -> dict[str, Any]:
@@ -178,12 +180,14 @@ def validate_experiment_profile(profile: dict[str, Any], store: V3ProfileStore) 
         errors.append(f"invalid experiment.truth_label: {experiment.get('truth_label')}")
     if experiment.get("backend_type") not in ALLOWED_BACKEND_TYPES:
         errors.append(f"invalid experiment.backend_type: {experiment.get('backend_type')}")
-    if experiment.get("runnable") is True and profile.get("profile_id") != "single_chain_runtime_smoke":
-        errors.append("only single_chain_runtime_smoke may be declared runnable in V3.2")
+    if experiment.get("runnable") is True and profile.get("profile_id") not in RUNNABLE_EXPERIMENT_PROFILE_IDS:
+        errors.append("only V3.2 smoke and V3.3 Go-backed MetaTrack smoke may be declared runnable")
     _validate_profile_references(profile, store, errors)
     exp_type = experiment.get("type")
     if exp_type == "metatrack_plugin_ablation":
         _validate_metatrack_fairness(profile, store, errors, warnings)
+    elif exp_type == "metatrack_go_backed_ablation_smoke":
+        _validate_metatrack_go_backed_smoke(profile, store, errors, warnings)
     elif exp_type == "metaflow_protocol_comparison":
         _validate_metaflow_fairness(profile, store, errors, warnings)
     elif exp_type == "fabric_backed_validation":
@@ -289,6 +293,31 @@ def _validate_v32_smoke_profile(profile: dict[str, Any], store: V3ProfileStore, 
     warnings.append("V3.2 smoke validates the minimal runtime pipeline only; it is not MetaTrack full evaluation or Fabric validation.")
 
 
+def _validate_metatrack_go_backed_smoke(profile: dict[str, Any], store: V3ProfileStore, errors: list[str], warnings: list[str]) -> None:
+    if profile.get("profile_id") != "metatrack_go_backed_ablation_smoke":
+        errors.append("V3.3 Go-backed MetaTrack smoke must use profile_id metatrack_go_backed_ablation_smoke")
+    experiment = profile.get("experiment", {})
+    if experiment.get("stage") != "v3.3":
+        errors.append("V3.3 Go-backed MetaTrack smoke experiment.stage must be v3.3")
+    if experiment.get("truth_label") != "modular_runtime":
+        errors.append("V3.3 Go-backed MetaTrack smoke truth_label must be modular_runtime")
+    if experiment.get("backend_type") != "modular_research_chain":
+        errors.append("V3.3 Go-backed MetaTrack smoke backend_type must be modular_research_chain")
+    if experiment.get("runtime_mode") != "go_backed":
+        errors.append("V3.3 Go-backed MetaTrack smoke runtime_mode must be go_backed")
+    if profile.get("chain_profile") != "chain_x_default":
+        errors.append("V3.3 Go-backed MetaTrack smoke must use chain_x_default")
+    expected_plugins = ["baseline_hash_only", "co_access_only", "co_access_dual_track", "full_MetaTrack"]
+    if _experiment_plugin_ids(profile) != expected_plugins:
+        errors.append("V3.3 Go-backed MetaTrack smoke must run the four approved MetaTrack combinations")
+    _validate_metatrack_fairness(profile, store, errors, warnings)
+    if profile.get("workload", {}).get("source") != "synthetic":
+        errors.append("V3.3 Go-backed MetaTrack smoke must use synthetic workload")
+    if profile.get("calibration", {}).get("enabled") is True:
+        errors.append("V3.3 Go-backed MetaTrack smoke must not require Fabric calibration")
+    warnings.append("V3.3 Go-backed MetaTrack smoke is controlled evaluation only; it is not Fabric validation or final paper-scale evidence.")
+
+
 def _experiment_plugin_ids(profile: dict[str, Any]) -> list[str]:
     plugins = profile.get("plugin_profiles", {})
     return list(plugins.get("baselines", [])) + list(plugins.get("proposed", []))
@@ -309,10 +338,14 @@ def _validate_capability(capability: dict[str, Any], errors: list[str]) -> None:
 def _v31_future_guard(capability: dict[str, Any], errors: list[str], warnings: list[str]) -> None:
     backend_type = capability.get("backend_type")
     min_stage = str(capability.get("min_stage", ""))
-    if backend_type in FUTURE_STAGE_REQUIREMENTS and capability.get("runnable") is True and min_stage != CURRENT_STAGE:
+    if backend_type in FUTURE_STAGE_REQUIREMENTS and capability.get("runnable") is True and _stage_after(min_stage, CURRENT_STAGE):
         errors.append(f"{backend_type} is not runnable before its implemented stage")
     if min_stage and min_stage != CURRENT_STAGE:
-        warnings.append(f"requires {min_stage}; V3.2 only supports minimal single-chain runtime execution")
+        warnings.append(f"requires {min_stage}; V3.3 only supports Go-backed MetaTrack smoke execution beyond V3.2 smoke")
+
+
+def _stage_after(candidate: str, current: str) -> bool:
+    return STAGE_ORDER.get(candidate, 999) > STAGE_ORDER.get(current, 0)
 
 
 def _require_sections(profile: dict[str, Any], sections: set[str], errors: list[str]) -> None:
