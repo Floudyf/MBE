@@ -347,3 +347,8 @@ V3 非目标：
 - V3.4 Fabric validation 只做小规模黑盒验证。
 - V3.5 先表达 minimal two-chain path。
 - V3.6 先实现 structured research artifacts，real threshold signatures 可作为未来工作。
+## V3.3.3 Single-chain Modular Composer Frontend MVP
+
+V3.3.3 renders the V3.3.2 `composer_preview`, `module_graph`, `plugin_matrix`, and `fairness_scope` in the frontend as a read-only Single-chain Modular Composer MVP. It adds a narrow V3 composer preview API, template listing, smoke-run alignment, module detail view, Plugin Matrix, Fairness Scope, run level, and artifact grouping.
+
+V3.3.3 does not implement Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, dynamic resharding, state migration, or a drag-and-drop freeform composer editor.

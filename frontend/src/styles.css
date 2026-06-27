@@ -19,6 +19,226 @@
   --shadow: 0 14px 32px rgba(25, 45, 80, 0.09);
 }
 
+.v3-composer-page {
+  align-items: start;
+}
+
+.v3-composer-header {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.v3-boundary-badges,
+.v3-tag-row,
+.v3-run-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.v3-boundary-badges span,
+.v3-tag,
+.v3-status-badge {
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.32rem 0.48rem;
+}
+
+.v3-composer-layout {
+  display: grid;
+  gap: 0.9rem;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.v3-chain-band,
+.v3-detail-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 1rem;
+}
+
+.v3-chain-scroll {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 0.35rem;
+}
+
+.v3-chain-node {
+  align-items: center;
+  display: flex;
+  gap: 0.45rem;
+}
+
+.v3-module-card {
+  align-content: start;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: none;
+  color: var(--ink);
+  display: grid;
+  gap: 0.42rem;
+  min-height: 148px;
+  min-width: 180px;
+  padding: 0.8rem;
+  text-align: left;
+}
+
+.v3-module-card:hover:not(:disabled),
+.v3-module-card.selected {
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.1);
+  transform: translateY(-1px);
+}
+
+.v3-module-position {
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.v3-module-card small,
+.v3-detail-panel p,
+.v3-detail-list dd,
+.v3-scope-list dd {
+  color: var(--muted);
+}
+
+.v3-edge {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.v3-module-fixed { border-color: #cbd5e1; }
+.v3-module-variable { border-color: #2563eb; box-shadow: inset 4px 0 0 #2563eb; }
+.v3-module-disabled { opacity: 0.58; }
+.v3-module-planned { border-style: dashed; }
+.v3-module-output { border-color: #16a34a; box-shadow: inset 4px 0 0 #16a34a; }
+
+.status-fixed { background: #f1f5f9; color: #475569; }
+.status-variable { background: #dbeafe; border-color: #bfdbfe; color: #1d4ed8; }
+.status-disabled { background: #f8fafc; color: #94a3b8; }
+.status-planned { background: #fff7ed; border-color: #fed7aa; color: #c2410c; }
+.status-output { background: #dcfce7; border-color: #bbf7d0; color: #15803d; }
+
+.v3-detail-list,
+.v3-scope-list,
+.v3-identity-grid {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+}
+
+.v3-detail-list div,
+.v3-scope-row,
+.v3-identity-grid div {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem;
+}
+
+.v3-detail-list dt,
+.v3-scope-list dt,
+.v3-identity-grid dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.v3-detail-list dd,
+.v3-scope-list dd,
+.v3-identity-grid dd {
+  margin: 0.2rem 0 0;
+}
+
+.v3-section-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.v3-plugin-table td small {
+  color: var(--muted);
+  display: block;
+  margin-top: 0.2rem;
+}
+
+.v3-plugin-changed {
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.v3-check-list {
+  color: var(--muted);
+  margin: 0.75rem 0 0;
+  padding-left: 1rem;
+}
+
+.v3-template-list,
+.v3-artifact-groups {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+}
+
+.v3-template-row {
+  align-items: center;
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: space-between;
+  padding: 0.55rem;
+}
+
+.v3-artifact-groups {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.v3-artifact-group {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.v3-artifact-group ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1rem;
+}
+
+.v3-artifact-group li {
+  color: var(--muted);
+  margin-top: 0.25rem;
+}
+
+.v3-artifact-group li.missing {
+  opacity: 0.55;
+}
+
+@media (max-width: 980px) {
+  .v3-composer-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .v3-composer-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 * { box-sizing: border-box; }
 
 body { margin: 0; }

@@ -151,3 +151,14 @@ V3.5 and V3.6 may remain documented as future roadmap stages, but they are not c
 - 通过条件：Frontend pages expose current-scope MetaTrack/Fabric V3 experiments; MetaFlow preview is clearly planned / deferred; Artifacts downloadable; System boundary page clearly explains truth labels and non-goals; V3 acceptance report exists。
 - 失败条件：UI claims production bridge/live public-chain; planned capabilities runnable。
 - 下一阶段入口条件：manual acceptance complete。
+## V3.3.3 Single-chain Composer Frontend MVP Acceptance
+
+- [x] Frontend can load V3 Composer preview data from the backend.
+- [x] Frontend renders the single-chain module order from Workload to Metrics / Report.
+- [x] Module cards show fixed, variable, disabled, planned, and output status badges.
+- [x] Module details expose plugin, role, tags, allowed plugins, metrics, and artifacts.
+- [x] Plugin Matrix shows MetaTrack baseline/proposed combinations without hard-coding runtime behavior.
+- [x] Fairness Scope shows variable, fixed, disabled, planned, and output modules.
+- [x] Run panel exposes only the existing smoke run level; debug, formal, and stress remain planned.
+- [x] Artifact panel groups downloadable V3 smoke artifacts through the existing run/artifact system.
+- [x] V3.3.3 does not implement Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, dynamic resharding, state migration, or a drag-and-drop freeform editor.

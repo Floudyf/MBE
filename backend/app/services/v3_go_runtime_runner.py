@@ -88,13 +88,13 @@ def run_go_v3_runtime(
     return GoRuntimeRun(output_dir=output_dir, summary=summary, stdout=completed.stdout, stderr=completed.stderr)
 
 
-def run_metatrack_go_backed_ablation(output_root: Path | None = None) -> dict[str, Any]:
+def run_metatrack_go_backed_ablation(output_root: Path | None = None, run_id: str | None = None) -> dict[str, Any]:
     store = load_profile_store()
     profile = store.experiments["metatrack_go_backed_ablation_smoke"]
     validation = validate_experiment_profile(profile, store)
     if not validation["valid"] or not validation["runnable"]:
         raise ValueError("metatrack_go_backed_ablation_smoke is not runnable")
-    run_id = new_run_id().replace("v2run", "v3mt", 1)
+    run_id = run_id or new_run_id().replace("v2run", "v3mt", 1)
     root = (output_root or Path(".cache/v3_metatrack_runs")) / run_id
     root.mkdir(parents=True, exist_ok=True)
     combinations = ["baseline_hash_only", "co_access_only", "co_access_dual_track", "full_MetaTrack"]
@@ -158,6 +158,12 @@ def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
         target = root / forbidden
         if target.exists():
             target.unlink()
+    representative = next((run for run in runs if run.summary.get("plugin_profile_id") == "full_MetaTrack"), runs[0])
+    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
+        source = representative.output_dir / filename
+        if source.is_file():
+            shutil.copyfile(source, root / filename)
+    shutil.copyfile(METATRACK_PLUGIN_PROFILE, root / "used_plugin_profile.yaml")
     shutil.copyfile(METATRACK_PROFILE, root / "used_experiment_profile.yaml")
 
 

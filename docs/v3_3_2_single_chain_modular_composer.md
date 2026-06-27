@@ -112,3 +112,8 @@ Template-driven fairness requires:
 - Workload, seed, tx count, ChainProfile, submit rate, block config, consensus config, network profile, and calibration profile must remain shared.
 
 Smoke or preview outputs are not final paper-scale evidence.
+## V3.3.3 Frontend Consumer
+
+V3.3.3 is the first frontend consumer of this Composer Profile layer. The frontend treats V3.3.2 `composer_preview`, `module_graph`, `plugin_matrix`, and `fairness_scope` as read-only backend contracts and renders them as a Single-chain Modular Composer MVP.
+
+The V3.3.3 frontend does not change ExperimentTemplate semantics, does not make planned templates runnable, and does not add a drag-and-drop freeform composer editor. Fabric validation remains V3.4, and MetaFlow / dual-chain / AFS / FDA remain deferred.

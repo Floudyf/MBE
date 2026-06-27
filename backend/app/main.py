@@ -26,6 +26,9 @@ from backend.app.services.plugin_registry import PluginRegistryError, load_regis
 from backend.app.services.sweep_runner_v2 import SWEEP_CONFIGS, SweepError, get_sweep_config, list_sweeps, run_sweep_job, summarize_sweep_config
 from backend.app.services.trace_source_service import TraceSourceError, TraceSourceNotFound, describe_capabilities, infer_data_truth_label, list_trace_sources, load_trace_sources
 from backend.app.services.trace_source_validator import validate_trace_source
+from backend.app.services.v3_experiment_templates import list_templates
+from backend.app.services.v3_go_runtime_runner import run_metatrack_go_backed_ablation
+from backend.app.services.v3_profile_preview import preview_profile
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
@@ -721,6 +724,84 @@ def v2_calibration_config_detail(config_id: str) -> dict:
         "summary": summarize_calibration_config(config),
         "config": config,
     }
+
+
+@app.get("/api/v3/composer/templates")
+def v3_composer_templates() -> dict:
+    templates = list_templates()
+    items = [
+        {
+            "template_id": item["template_id"],
+            "stage": item.get("stage", ""),
+            "chain_mode": item.get("chain_mode", ""),
+            "runnable": bool(item.get("runnable")),
+            "preview_only": bool(item.get("preview_only")),
+            "description": item.get("description", ""),
+            "variable_modules": item.get("variable_modules", []),
+            "fixed_modules": item.get("fixed_modules", []),
+            "disabled_modules": item.get("disabled_modules", []),
+            "planned_modules": item.get("planned_modules", []),
+            "output_modules": item.get("output_modules", []),
+        }
+        for item in templates
+    ]
+    return {"stage": "V3.3.3", "items": items}
+
+
+@app.get("/api/v3/composer/preview")
+def v3_composer_preview(experiment_profile_id: str = "metatrack_go_backed_ablation_smoke") -> dict:
+    try:
+        preview = preview_profile("experiment_profile", experiment_profile_id)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return {
+        "experiment_profile_id": experiment_profile_id,
+        "stage": "V3.3.3",
+        "profile_preview": preview,
+        "composer_preview": preview.get("composer_preview", {}),
+        "experiment_template": preview.get("experiment_template", ""),
+        "module_graph": preview.get("module_graph", {}),
+        "plugin_matrix": preview.get("plugin_matrix", []),
+        "fairness_scope": preview.get("fairness_scope", {}),
+        "runnable": preview.get("runnable", False),
+    }
+
+
+@app.post("/api/v3/composer/run-smoke")
+def v3_composer_run_smoke() -> dict:
+    manager = job_manager()
+    metadata = manager.create_run(
+        source="v3_composer_frontend",
+        experiment_name="metatrack_go_backed_ablation_smoke",
+        data_truth_label="modular_runtime",
+        stage="V3.3.3",
+        extra_metadata={
+            "backend_type": "modular_research_chain",
+            "runtime_mode": "go_backed",
+            "experiment_profile_id": "metatrack_go_backed_ablation_smoke",
+        },
+    )
+    run_id = metadata["run_id"]
+    manager.mark_running(run_id)
+    try:
+        result = run_metatrack_go_backed_ablation(output_root=V2_JOBS_ROOT, run_id=run_id)
+        completed = manager.mark_completed(run_id, data_truth_label="modular_runtime")
+        artifacts = list_artifacts(Path(result["output_dir"]), run_id)
+        return {
+            "run_id": run_id,
+            "status": "completed",
+            "stage": "V3.3.3",
+            "output_dir": str(result["output_dir"]),
+            "data_truth_label": "modular_runtime",
+            "backend_type": "modular_research_chain",
+            "runtime_mode": "go_backed",
+            "summary": {"plugin_combinations": ["baseline_hash_only", "co_access_only", "co_access_dual_track", "full_MetaTrack"]},
+            "artifacts": artifacts,
+            "run": completed,
+        }
+    except Exception as exc:
+        manager.mark_failed(run_id, str(exc))
+        raise HTTPException(500, str(exc)) from exc
 
 
 @app.post("/api/v0/experiments")

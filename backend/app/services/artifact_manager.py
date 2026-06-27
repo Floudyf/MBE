@@ -27,6 +27,21 @@ ARTIFACT_ALLOWLIST = frozenset({
     "calibration_summary.json",
     "replay_vs_observed.csv",
     "calibration_report.md",
+    "summary.json",
+    "block_log.csv",
+    "tx_results.csv",
+    "state_commit_log.csv",
+    "used_chain_profile.yaml",
+    "used_chain_profile.json",
+    "used_plugin_profile.yaml",
+    "used_plugin_profile.json",
+    "used_experiment_profile.yaml",
+    "used_experiment_profile.json",
+    "metatrack_summary.csv",
+    "metatrack_summary.json",
+    "metatrack_latency.csv",
+    "metatrack_mechanism_metrics.csv",
+    "metatrack_ablation_report.md",
 })
 
 

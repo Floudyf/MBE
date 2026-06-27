@@ -116,6 +116,69 @@ export type V2SweepRunResponse = { run_id: string; status: V2Status; stage: stri
 export type V2CalibrationInfo = { id: string; name: string; status: V2Status; stage: string; data_truth_label: string; backend_type: string; calibration_truth: string; description: string; source_type: string; limitations: string[] };
 export type V2FabricSmokeStatus = { status: string; ready?: boolean; trace_path: string; meta_path: string; data_truth_label: string; web_starts_fabric: boolean; cli_command: string; warnings: string[]; reason?: string };
 export type V2CalibrationRunResponse = { run_id?: string; status: V2Status; stage?: string; output_dir?: string; data_truth_label?: string; backend_type?: string; calibration_truth?: string; summary?: Record<string, unknown>; artifacts?: V2Artifact[]; reason?: string; cli_command?: string; warnings?: string[] };
+export type V3ModuleStatus = "fixed" | "variable" | "disabled" | "planned" | "output" | string;
+export type V3ComposerModule = {
+  module_id: string;
+  display_name: string;
+  plugin?: string;
+  status: V3ModuleStatus;
+  role?: string;
+  tags?: string[];
+  position: number;
+  allowed_plugins?: string[];
+  metrics?: string[];
+  artifacts?: string[];
+};
+export type V3ComposerEdge = { source: string; target: string };
+export type V3PluginMatrixRow = { method_id: string; label?: string; role?: string; module_plugins: Record<string, string>; tags?: string[] };
+export type V3FairnessScope = {
+  template_id?: string;
+  variable_modules?: string[];
+  fixed_modules?: string[];
+  disabled_modules?: string[];
+  planned_modules?: string[];
+  output_modules?: string[];
+  only_variable_modules_may_differ?: boolean;
+  fixed_modules_must_match?: boolean;
+  planned_modules_not_runnable?: boolean;
+  [key: string]: unknown;
+};
+export type V3ComposerPreview = {
+  view: string;
+  template_id: string;
+  chain_mode: string;
+  modules: V3ComposerModule[];
+  edges: V3ComposerEdge[];
+  plugin_matrix: V3PluginMatrixRow[];
+  fairness_scope: V3FairnessScope;
+  truth_labels?: Record<string, string>;
+  runnable: boolean;
+};
+export type V3ComposerPreviewResponse = {
+  experiment_profile_id: string;
+  stage: string;
+  profile_preview: Record<string, unknown>;
+  composer_preview: V3ComposerPreview;
+  experiment_template: string;
+  module_graph: { modules: V3ComposerModule[]; edges: V3ComposerEdge[] };
+  plugin_matrix: V3PluginMatrixRow[];
+  fairness_scope: V3FairnessScope;
+  runnable: boolean;
+};
+export type V3TemplateSummary = {
+  template_id: string;
+  stage: string;
+  chain_mode: string;
+  runnable: boolean;
+  preview_only: boolean;
+  description: string;
+  variable_modules: string[];
+  fixed_modules: string[];
+  disabled_modules: string[];
+  planned_modules: string[];
+  output_modules: string[];
+};
+export type V3SmokeRunResponse = V2SweepRunResponse & { runtime_mode?: string };
 
 export async function runDefaultExperiment(): Promise<unknown> {
   return request(`${experimentPath}/run`, { method: "POST" });
@@ -276,6 +339,19 @@ export async function fetchV2RunArtifacts(runId: string): Promise<V2ArtifactsRes
 
 export function v2ArtifactDownloadURL(downloadURL: string): string {
   return `${requestBaseURL}${downloadURL}`;
+}
+
+export async function fetchV3ComposerTemplates(): Promise<V3TemplateSummary[]> {
+  const response = await request<{ items: V3TemplateSummary[] }>("/api/v3/composer/templates");
+  return response.items;
+}
+
+export async function fetchV3ComposerPreview(experimentProfileId = "metatrack_go_backed_ablation_smoke"): Promise<V3ComposerPreviewResponse> {
+  return request<V3ComposerPreviewResponse>(`/api/v3/composer/preview?experiment_profile_id=${encodeURIComponent(experimentProfileId)}`);
+}
+
+export async function runV3ComposerSmoke(): Promise<V3SmokeRunResponse> {
+  return request<V3SmokeRunResponse>("/api/v3/composer/run-smoke", { method: "POST" });
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {

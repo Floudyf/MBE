@@ -48,6 +48,7 @@ import {
   type V2TraceSource,
 } from "./api";
 import V2Dashboard from "./components/V2Dashboard";
+import V3ComposerPage from "./pages/V3ComposerPage";
 
 type PageId =
   | "overview"
@@ -57,6 +58,7 @@ type PageId =
   | "protocol"
   | "sweep"
   | "calibration"
+  | "v3composer"
   | "runs"
   | "boundaries"
   | "developer";
@@ -81,6 +83,7 @@ const defaultCustomForm: V1CustomRunRequest = {
 };
 
 const navGroups: { title: string; items: { id: PageId; label: string }[] }[] = [
+  { title: "V3", items: [{ id: "v3composer", label: "V3 Composer" }] },
   { title: "平台", items: [{ id: "overview", label: "平台总览" }] },
   {
     title: "实验中心",
@@ -317,6 +320,7 @@ function App() {
       {activePage === "protocol" && <ProtocolPage protocols={protocols} result={v2Result} artifacts={v2Artifacts} runProtocolReplay={runProtocolReplay} />}
       {activePage === "sweep" && <SweepPage sweeps={sweeps} sweepId={sweepId} setSweepId={setSweepId} result={v2Result as V2SweepRunResponse | null} artifacts={v2Artifacts} runSweepExperiment={runSweepExperiment} />}
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
+      {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} />}
       {activePage === "runs" && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
       {activePage === "boundaries" && <BoundariesPage />}
       {activePage === "developer" && <DeveloperPage traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
