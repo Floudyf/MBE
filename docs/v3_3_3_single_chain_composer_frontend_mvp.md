@@ -46,3 +46,13 @@ The run endpoint invokes the existing local Go-backed MetaTrack smoke path and r
 V3.3.3 does not implement Fabric-backed validation, MetaFlow, dual-chain runtime, AFS/FDA, PBFT/HotStuff, committee lifecycle runnable behavior, dynamic resharding runnable behavior, state migration, or a drag-and-drop freeform composer editor. Smoke output remains controlled platform evidence, not final paper-scale performance evidence.
 
 The V3 skill file is intentionally not updated in this commit because the previous attempt was blocked by a tool-layer usage limit. That skill update is deferred to a later docs/skill-only commit.
+
+## V3.3.4 Localization and Layout Polish
+
+V3.3.4 polishes the V3.3.3 frontend without changing backend runtime semantics or the `composer_preview` schema. It turns the developer-facing Composer page into a Chinese single-chain modular experiment platform page for research-group users.
+
+The frontend now localizes module names, module status badges, tags, template names, experiment identity labels, Plugin Matrix, Fairness Scope, Run Level, and Artifact groups. English `module_id`, `plugin_id`, `method_id`, and artifact filenames remain visible as secondary reproducibility identifiers.
+
+The Composer chain view no longer uses a horizontal scrollbar. It uses a responsive wrapped grid: large screens show a four-column snake-like path, medium screens reduce the column count, and mobile screens fall back to one or two columns while preserving module order and click-to-inspect behavior.
+
+V3.3.4 does not implement Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, dynamic resharding, state migration, or a drag-and-drop freeform composer editor.

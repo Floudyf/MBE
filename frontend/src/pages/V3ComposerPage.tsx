@@ -14,10 +14,11 @@ import FairnessScopePanel from "../components/v3/FairnessScopePanel";
 import PluginMatrixTable from "../components/v3/PluginMatrixTable";
 import RunLevelPanel from "../components/v3/RunLevelPanel";
 import SingleChainComposer from "../components/v3/SingleChainComposer";
+import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
 
 const fallbackTemplates: V3TemplateSummary[] = [
-  { template_id: "metatrack_ablation", stage: "V3.3.2", chain_mode: "single_chain", runnable: true, preview_only: false, description: "MetaTrack ablation", variable_modules: ["Routing", "Execution", "StateAccess", "Commit"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "StateStorage"], disabled_modules: [], planned_modules: ["CommitteeEpoch"], output_modules: ["MetricsReport"] },
-  { template_id: "committee_lifecycle_planned", stage: "V3.3.2", chain_mode: "single_chain", runnable: false, preview_only: true, description: "Committee lifecycle preview", variable_modules: ["CommitteeEpoch", "Consensus"], fixed_modules: [], disabled_modules: [], planned_modules: ["CommitteeEpoch"], output_modules: ["MetricsReport"] },
+  { template_id: "metatrack_ablation", stage: "V3.3.2", chain_mode: "single_chain", runnable: true, preview_only: false, description: "MetaTrack 消融实验", variable_modules: ["Routing", "Execution", "StateAccess", "Commit"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "StateStorage"], disabled_modules: [], planned_modules: ["CommitteeEpoch"], output_modules: ["MetricsReport"] },
+  { template_id: "committee_lifecycle_planned", stage: "V3.3.2", chain_mode: "single_chain", runnable: false, preview_only: true, description: "委员会生命周期预览", variable_modules: ["CommitteeEpoch", "Consensus"], fixed_modules: [], disabled_modules: [], planned_modules: ["CommitteeEpoch"], output_modules: ["MetricsReport"] },
 ];
 
 type Props = {
@@ -77,34 +78,35 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     <section className="page-grid v3-composer-page">
       <header className="final-card wide v3-composer-header">
         <div>
-          <p className="eyebrow">V3.3.3 Single-chain Modular Composer MVP</p>
-          <h2>Single-chain modular research chain</h2>
-          <p>Read-only Composer View backed by V3.3.2 profile preview data.</p>
+          <p className="eyebrow">V3.3.4 Composer 中文化与布局精修</p>
+          <h2>V3 单链模块化实验台</h2>
+          <p>基于 V3.3.2 profile preview 数据渲染的只读 Composer 视图。</p>
         </div>
         <div className="v3-boundary-badges">
-          <span>Single-chain</span>
-          <span>Go-backed Runtime</span>
-          <span>Smoke</span>
-          <span>Not Fabric</span>
-          <span>Not MetaFlow</span>
+          <span>单链</span>
+          <span>Go Runtime</span>
+          <span>Smoke 实验</span>
+          <span>非 Fabric</span>
+          <span>非 MetaFlow</span>
         </div>
       </header>
 
       <ExperimentTemplateSelector templates={templates} selectedProfile={profileId} onProfileChange={setProfileId} />
       <section className="final-card">
-        <p className="eyebrow">Experiment Identity</p>
-        <h3>{preview?.experiment_profile_id || profileId}</h3>
+        <p className="eyebrow">实验身份</p>
+        <h3>{labelFor(profileLabels, preview?.experiment_profile_id || profileId)}</h3>
+        <p className="v3-sub-id">{preview?.experiment_profile_id || profileId}</p>
         <dl className="v3-identity-grid">
-          <div><dt>Template</dt><dd>{composer?.template_id || preview?.experiment_template || "-"}</dd></div>
-          <div><dt>Stage</dt><dd>{preview?.stage || "-"}</dd></div>
-          <div><dt>Backend Type</dt><dd>{composer?.truth_labels?.backend_type || String(profilePreview.backend_type || "-")}</dd></div>
-          <div><dt>Truth Label</dt><dd>{composer?.truth_labels?.truth_label || String(profilePreview.truth_label || "-")}</dd></div>
-          <div><dt>Runnable</dt><dd>{String(Boolean(preview?.runnable && composer?.runnable))}</dd></div>
-          <div><dt>Chain Mode</dt><dd>{composer?.chain_mode || "-"}</dd></div>
+          <div><dt>实验模板</dt><dd>{labelFor(templateLabels, composer?.template_id || preview?.experiment_template || "-")}</dd></div>
+          <div><dt>阶段</dt><dd>{preview?.stage || "-"}</dd></div>
+          <div><dt>后端类型</dt><dd>{composer?.truth_labels?.backend_type || String(profilePreview.backend_type || "-")}</dd></div>
+          <div><dt>真实性标签</dt><dd>{composer?.truth_labels?.truth_label || String(profilePreview.truth_label || "-")}</dd></div>
+          <div><dt>是否可运行</dt><dd>{yesNo(preview?.runnable && composer?.runnable)}</dd></div>
+          <div><dt>链模式</dt><dd>{composer?.chain_mode === "single_chain" ? "单链" : composer?.chain_mode || "-"}</dd></div>
         </dl>
       </section>
 
-      {loading && <p className="notice">Loading V3 composer preview...</p>}
+      {loading && <p className="notice">正在加载 V3 Composer 预览...</p>}
       {error && <p className="file-error">{error}</p>}
       {composer && <SingleChainComposer preview={composer} />}
       {composer && <PluginMatrixTable rows={composer.plugin_matrix || preview?.plugin_matrix || []} />}

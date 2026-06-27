@@ -352,3 +352,9 @@ V3 非目标：
 V3.3.3 renders the V3.3.2 `composer_preview`, `module_graph`, `plugin_matrix`, and `fairness_scope` in the frontend as a read-only Single-chain Modular Composer MVP. It adds a narrow V3 composer preview API, template listing, smoke-run alignment, module detail view, Plugin Matrix, Fairness Scope, run level, and artifact grouping.
 
 V3.3.3 does not implement Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, dynamic resharding, state migration, or a drag-and-drop freeform composer editor.
+
+## V3.3.4 Frontend Chinese Localization and Composer Layout Polish
+
+V3.3.4 refines the V3.3.3 frontend only. It localizes the Composer page into Chinese, keeps English IDs as secondary reproducibility labels, and replaces the horizontal module-chain scrollbar with a responsive wrapped / snake-like Composer layout.
+
+V3.3.4 does not change backend runtime semantics, does not change the `composer_preview` schema, and does not implement Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, dynamic resharding, state migration, or a drag-and-drop freeform editor.

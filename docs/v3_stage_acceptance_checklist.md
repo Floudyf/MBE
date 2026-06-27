@@ -162,3 +162,13 @@ V3.5 and V3.6 may remain documented as future roadmap stages, but they are not c
 - [x] Run panel exposes only the existing smoke run level; debug, formal, and stress remain planned.
 - [x] Artifact panel groups downloadable V3 smoke artifacts through the existing run/artifact system.
 - [x] V3.3.3 does not implement Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, dynamic resharding, state migration, or a drag-and-drop freeform editor.
+
+## V3.3.4 Chinese Localization and Layout Polish Acceptance
+
+- [x] Composer page title, experiment identity, template selector, module details, Plugin Matrix, Fairness Scope, Run Level, and Artifact groups are localized into Chinese.
+- [x] English `module_id`, `plugin_id`, `method_id`, and artifact filenames remain visible as secondary reproducibility identifiers.
+- [x] Module status and tag badges show Chinese labels while preserving backend status semantics.
+- [x] The single-chain module graph no longer requires a horizontal scrollbar.
+- [x] The module graph wraps responsively and uses a snake-like path on large screens.
+- [x] V3.3.4 does not change backend runtime semantics or `composer_preview` schema.
+- [x] V3.3.4 does not implement Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, dynamic resharding, state migration, or drag-and-drop freeform editing.

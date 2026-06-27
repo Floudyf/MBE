@@ -1,4 +1,5 @@
 import type { V3ComposerModule } from "../../api";
+import { labelFor, moduleNames, statusLabels, tagLabels } from "./localization";
 
 type Props = {
   module: V3ComposerModule;
@@ -7,6 +8,8 @@ type Props = {
 };
 
 export default function ModuleCard({ module, selected, onSelect }: Props) {
+  const plugin = module.plugin && module.plugin !== "none" ? module.plugin : "无";
+
   return (
     <button
       type="button"
@@ -14,12 +17,13 @@ export default function ModuleCard({ module, selected, onSelect }: Props) {
       onClick={() => onSelect(module)}
     >
       <span className="v3-module-position">{module.position}</span>
-      <strong>{module.display_name}</strong>
-      <small>{module.plugin || "none"}</small>
-      <span className={`v3-status-badge status-${module.status}`}>{module.status}</span>
+      <strong>{labelFor(moduleNames, module.module_id, module.display_name)}</strong>
+      <small>{module.module_id}</small>
+      <span className="v3-plugin-id">插件：{plugin}</span>
+      <span className={`v3-status-badge status-${module.status}`}>{labelFor(statusLabels, module.status)}</span>
       <span className="v3-tag-row">
         {(module.tags || []).map((tag) => (
-          <span key={tag} className="v3-tag">{tag}</span>
+          <span key={tag} className="v3-tag" title={tag}>{labelFor(tagLabels, tag)}</span>
         ))}
       </span>
     </button>

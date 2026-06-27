@@ -83,7 +83,7 @@ const defaultCustomForm: V1CustomRunRequest = {
 };
 
 const navGroups: { title: string; items: { id: PageId; label: string }[] }[] = [
-  { title: "V3", items: [{ id: "v3composer", label: "V3 Composer" }] },
+  { title: "V3", items: [{ id: "v3composer", label: "V3 单链 Composer" }] },
   { title: "平台", items: [{ id: "overview", label: "平台总览" }] },
   {
     title: "实验中心",
