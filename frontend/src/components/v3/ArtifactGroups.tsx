@@ -2,25 +2,36 @@ import { v2ArtifactDownloadURL, type V2Artifact } from "../../api";
 
 type Props = {
   artifacts: V2Artifact[];
+  title?: string;
+  emptyMessage?: string;
+  defaultOpen?: boolean;
+  embedded?: boolean;
 };
 
 const groups = [
-  { title: "实验汇总", files: ["summary.csv", "summary.json", "report.md", "metatrack_summary.csv", "metatrack_summary.json", "metatrack_ablation_report.md"] },
-  { title: "链运行日志", files: ["block_log.csv", "tx_results.csv", "state_commit_log.csv"] },
-  { title: "MetaTrack 指标", files: ["metatrack_latency.csv", "metatrack_mechanism_metrics.csv"] },
-  { title: "使用的配置", files: ["used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "used_chain_profile.json", "used_plugin_profile.json", "used_experiment_profile.json"] },
+  { title: "Draft config", files: ["composer_draft.json", "normalized_draft.json", "draft_validation.json", "generated_experiment_profile.json", "generated_experiment_profile.yaml", "generated_plugin_profile.json", "generated_plugin_profile.yaml"] },
+  { title: "Run summary", files: ["summary.csv", "summary.json", "report.md", "latency.csv", "metatrack_summary.csv", "metatrack_summary.json", "metatrack_ablation_report.md"] },
+  { title: "Chain runtime logs", files: ["runtime.log", "block_log.csv", "tx_results.csv", "state_commit_log.csv"] },
+  { title: "MetaTrack metrics", files: ["metatrack_latency.csv", "metatrack_mechanism_metrics.csv"] },
+  { title: "Used profiles", files: ["used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "used_chain_profile.json", "used_plugin_profile.json", "used_experiment_profile.json"] },
 ];
 
-export default function ArtifactGroups({ artifacts }: Props) {
+export default function ArtifactGroups({
+  artifacts,
+  title = "Artifacts and downloads",
+  emptyMessage = "Run Smoke to show summaries, logs, metrics, and generated profiles here.",
+  defaultOpen = false,
+  embedded = false,
+}: Props) {
   const byName = new Map(artifacts.map((artifact) => [artifact.name, artifact]));
 
   return (
-    <details className="final-card wide v3-foldout">
+    <details className={embedded ? "v3-foldout" : "final-card wide v3-foldout"} open={defaultOpen}>
       <summary className="v3-foldout-summary">
-        <span>实验产物与下载</span>
-        <small>{artifacts.length ? `已发现 ${artifacts.length} 个产物` : "运行 Smoke 后将在此显示 summary、日志、指标和使用的配置。"}</small>
+        <span>{title}</span>
+        <small>{artifacts.length ? `${artifacts.length} artifacts found` : emptyMessage}</small>
       </summary>
-      {artifacts.length === 0 && <p className="muted">运行 Smoke 后将在此显示 summary、日志、指标和使用的配置。</p>}
+      {artifacts.length === 0 && <p className="muted">{emptyMessage}</p>}
       {artifacts.length > 0 && (
         <div className="v3-artifact-groups">
           {groups.map((group) => (

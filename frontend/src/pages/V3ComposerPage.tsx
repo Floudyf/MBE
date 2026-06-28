@@ -8,10 +8,13 @@ import {
   validateV3ComposerDraft,
   type V2Artifact,
   type V3ComposerPreviewResponse,
+  type V3DraftSmokeRunResponse,
   type V3DraftValidationResponse,
   type V3TemplateSummary,
 } from "../api";
 import ArtifactGroups from "../components/v3/ArtifactGroups";
+import DraftRunHistoryPanel from "../components/v3/DraftRunHistoryPanel";
+import DraftRunResultPanel from "../components/v3/DraftRunResultPanel";
 import FairnessScopePanel from "../components/v3/FairnessScopePanel";
 import PluginMatrixTable from "../components/v3/PluginMatrixTable";
 import RunLevelPanel from "../components/v3/RunLevelPanel";
@@ -39,6 +42,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [preview, setPreview] = useState<V3ComposerPreviewResponse | null>(null);
   const [templates, setTemplates] = useState<V3TemplateSummary[]>(fallbackTemplates);
   const [artifacts, setArtifacts] = useState<V2Artifact[]>([]);
+  const [draftRunResult, setDraftRunResult] = useState<V3DraftSmokeRunResponse | null>(null);
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
   const [backendValidation, setBackendValidation] = useState<V3DraftValidationResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -75,6 +79,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       setRunning(true);
       const result = await runV3ComposerSmoke();
       setArtifacts(result.artifacts || []);
+      setDraftRunResult(null);
       if (result.run_id) onRunCompleted?.(result.run_id);
       setError("");
     } catch (caught) {
@@ -119,6 +124,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       const result = await runV3ComposerDraftSmoke(toComposerDraftRequest(draft));
       setBackendValidation(result.validation);
       setArtifacts(result.artifacts || []);
+      setDraftRunResult(result);
       if (result.run_id) onRunCompleted?.(result.run_id);
       setDraftError("");
       setError("");
@@ -206,6 +212,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           onRunDraftSmoke={runDraftSmoke}
         />
       </div>
+      <DraftRunResultPanel result={draftRunResult} />
+      <DraftRunHistoryPanel />
 
       {composer && (
         <section className="v3-supporting-sections">
@@ -227,7 +235,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           </details>
         </section>
       )}
-      <ArtifactGroups artifacts={artifacts} />
+      <ArtifactGroups artifacts={artifacts} title="Current run artifacts and downloads" />
     </section>
   );
 }

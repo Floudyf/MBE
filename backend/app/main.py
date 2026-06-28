@@ -30,6 +30,7 @@ from backend.app.services.trace_source_validator import validate_trace_source
 from backend.app.services.v3_experiment_templates import list_templates
 from backend.app.services.v3_composer_draft_runner import DraftSmokeNotRunnable, get_draft_artifact_path, run_v3_composer_draft_smoke
 from backend.app.services.v3_composer_draft_validator import model_dump, validate_v3_composer_draft
+from backend.app.services.v3_draft_run_history import DraftRunHistoryError, DraftRunNotFound, get_v3_draft_run_detail, list_v3_draft_runs
 from backend.app.services.v3_go_runtime_runner import run_metatrack_go_backed_ablation
 from backend.app.services.v3_profile_preview import preview_profile
 
@@ -786,6 +787,21 @@ def v3_composer_run_draft_smoke(request: V3ComposerDraftRequest) -> dict:
         raise HTTPException(500, str(exc)) from exc
 
 
+@app.get("/api/v3/composer/draft-runs")
+def v3_composer_draft_runs(limit: int = 20) -> dict:
+    return list_v3_draft_runs(limit=limit)
+
+
+@app.get("/api/v3/composer/draft-runs/{run_id}")
+def v3_composer_draft_run_detail(run_id: str) -> dict:
+    try:
+        return get_v3_draft_run_detail(run_id)
+    except DraftRunNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except DraftRunHistoryError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/v3/composer/draft-runs/{run_id}/artifacts/{filename}")
 def v3_composer_draft_artifact(run_id: str, filename: str) -> FileResponse:
     try:
@@ -794,7 +810,7 @@ def v3_composer_draft_artifact(run_id: str, filename: str) -> FileResponse:
         raise HTTPException(404, str(exc)) from exc
     except ArtifactForbidden as exc:
         raise HTTPException(403, str(exc)) from exc
-    except (ArtifactError, JobNotFound) as exc:
+    except (ArtifactError, JobNotFound, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return FileResponse(path)
 

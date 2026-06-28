@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -185,6 +186,8 @@ def list_draft_artifacts(run_dir: Path, run_id: str) -> list[dict[str, object]]:
 
 
 def get_draft_artifact_path(run_id: str, filename: str, root: Path = V3_DRAFT_RUNS_ROOT) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,120}", run_id) or run_id in {".", "..", "latest"}:
+        raise ValueError("invalid draft run id")
     return get_artifact_path(draft_job_manager(root).run_dir(run_id), filename)
 
 

@@ -208,6 +208,36 @@ export type V3DraftSmokeRunResponse = V3SmokeRunResponse & {
   run_mode?: string;
   validation: V3DraftValidationResponse;
 };
+export type V3DraftRunSummary = {
+  run_id: string;
+  created_at: string;
+  template_id: string;
+  run_mode: string;
+  is_valid: boolean;
+  is_runnable: boolean;
+  selected_plugins: Record<string, string>;
+  variable_modules: string[];
+  fixed_modules: string[];
+  disabled_modules: string[];
+  output_modules: string[];
+  artifact_count: number;
+  artifact_groups?: { title: string; files: V2Artifact[] }[];
+  summary_preview?: Record<string, unknown>;
+  missing_files?: string[];
+};
+export type V3DraftRunDetail = {
+  run_id: string;
+  created_at: string;
+  composer_draft: Record<string, unknown>;
+  normalized_draft: Record<string, unknown>;
+  validation: V3DraftValidationResponse;
+  generated_experiment_profile: Record<string, unknown>;
+  generated_plugin_profile: Record<string, unknown>;
+  artifact_groups: { title: string; files: V2Artifact[] }[];
+  artifacts: V2Artifact[];
+  summary_preview: Record<string, unknown>;
+  missing_files: string[];
+};
 
 export async function runDefaultExperiment(): Promise<unknown> {
   return request(`${experimentPath}/run`, { method: "POST" });
@@ -389,6 +419,15 @@ export async function validateV3ComposerDraft(draft: V3ComposerDraftRequest): Pr
 
 export async function runV3ComposerDraftSmoke(draft: V3ComposerDraftRequest): Promise<V3DraftSmokeRunResponse> {
   return request<V3DraftSmokeRunResponse>("/api/v3/composer/run-draft-smoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+}
+
+export async function fetchV3DraftRuns(limit = 20): Promise<V3DraftRunSummary[]> {
+  const response = await request<{ runs: V3DraftRunSummary[] }>(`/api/v3/composer/draft-runs?limit=${encodeURIComponent(String(limit))}`);
+  return response.runs;
+}
+
+export async function fetchV3DraftRunDetail(runId: string): Promise<V3DraftRunDetail> {
+  return request<V3DraftRunDetail>(`/api/v3/composer/draft-runs/${encodeURIComponent(runId)}`);
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {
