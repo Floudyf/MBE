@@ -15,11 +15,12 @@ export default function ModuleCard({ module, selected, onSelect }: Props) {
       type="button"
       className={`v3-module-card v3-module-${module.status}${selected ? " selected" : ""}`}
       onClick={() => onSelect(module)}
+      title={`${module.display_name || module.module_id} / ${module.module_id} / ${plugin}`}
     >
       <span className="v3-module-position">{module.position}</span>
       <strong>{labelFor(moduleNames, module.module_id, module.display_name)}</strong>
-      <small>{module.module_id}</small>
-      <span className="v3-plugin-id">插件：{plugin}</span>
+      <small title={module.module_id}>{module.module_id}</small>
+      <span className="v3-plugin-id" title={plugin}>插件：{plugin}</span>
       <span className={`v3-status-badge status-${module.status}`}>{labelFor(statusLabels, module.status)}</span>
       <span className="v3-tag-row">
         {(module.tags || []).map((tag) => (

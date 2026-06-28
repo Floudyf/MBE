@@ -63,13 +63,15 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   box-shadow: var(--shadow);
+  min-width: 0;
   padding: 1rem;
 }
 
 .v3-flow-grid {
   display: grid;
-  gap: 0.85rem;
+  gap: 1.35rem 1.1rem;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow-x: hidden;
 }
 
 .v3-chain-node {
@@ -80,11 +82,6 @@
   position: relative;
 }
 
-.v3-chain-node:nth-child(8n + 5) { grid-column: 4; }
-.v3-chain-node:nth-child(8n + 6) { grid-column: 3; }
-.v3-chain-node:nth-child(8n + 7) { grid-column: 2; }
-.v3-chain-node:nth-child(8n + 8) { grid-column: 1; }
-
 .v3-module-card {
   align-content: start;
   background: #ffffff;
@@ -94,6 +91,7 @@
   color: var(--ink);
   display: grid;
   gap: 0.42rem;
+  height: 100%;
   min-height: 148px;
   min-width: 0;
   padding: 0.8rem;
@@ -111,6 +109,23 @@
   color: var(--muted);
   font-size: 0.75rem;
   font-weight: 700;
+}
+
+.v3-module-card strong,
+.v3-module-card small,
+.v3-plugin-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.v3-module-card strong {
+  white-space: normal;
+}
+
+.v3-module-card small,
+.v3-plugin-id {
+  white-space: nowrap;
 }
 
 .v3-module-card small,
@@ -152,6 +167,43 @@
 
 .v3-edge b {
   color: var(--muted);
+}
+
+.v3-edge {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--blue);
+  display: grid;
+  font-size: 1rem;
+  font-weight: 900;
+  height: 1.45rem;
+  line-height: 1;
+  place-items: center;
+  position: absolute;
+  width: 1.45rem;
+  z-index: 1;
+}
+
+.v3-edge::before,
+.v3-edge span {
+  content: none;
+  display: none;
+}
+
+.v3-edge-right {
+  right: -1.28rem;
+  top: calc(50% - 0.72rem);
+}
+
+.v3-edge-left {
+  left: -1.28rem;
+  top: calc(50% - 0.72rem);
+}
+
+.v3-edge-down {
+  bottom: -1.42rem;
+  left: calc(50% - 0.72rem);
 }
 
 .v3-module-fixed { border-color: #cbd5e1; }
@@ -279,11 +331,7 @@
   }
 
   .v3-flow-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .v3-chain-node {
-    grid-column: auto !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .v3-composer-header {
@@ -294,13 +342,25 @@
 
 @media (max-width: 720px) {
   .v3-flow-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 520px) {
-  .v3-flow-grid {
     grid-template-columns: 1fr;
+  }
+
+  .v3-chain-node {
+    grid-column: 1 !important;
+    grid-row: auto !important;
+  }
+
+  .v3-edge {
+    bottom: -1.42rem;
+    font-size: 0;
+    left: calc(50% - 0.72rem);
+    right: auto;
+    top: auto;
+  }
+
+  .v3-edge::after {
+    content: "↓";
+    font-size: 1rem;
   }
 }
 
