@@ -10,13 +10,11 @@ export default function PluginMatrixTable({ rows }: Props) {
   const baseline = rows[0]?.module_plugins || {};
 
   return (
-    <section className="final-card wide">
-      <div className="v3-section-head">
-        <div>
-          <p className="eyebrow">插件对比矩阵</p>
-          <h3>MetaTrack 四组方法组合</h3>
-        </div>
-      </div>
+    <details className="final-card wide v3-foldout">
+      <summary className="v3-foldout-summary">
+        <span>MetaTrack 插件矩阵</span>
+        <small>展示四组消融方法在分片/路由、交易执行、状态访问、状态提交上的插件差异。</small>
+      </summary>
       <div className="table-scroll">
         <table className="v3-plugin-table">
           <thead>
@@ -45,6 +43,6 @@ export default function PluginMatrixTable({ rows }: Props) {
           </tbody>
         </table>
       </div>
-    </section>
+    </details>
   );
 }

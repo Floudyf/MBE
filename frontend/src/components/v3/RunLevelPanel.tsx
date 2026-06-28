@@ -1,24 +1,34 @@
+import type { ComposerDraft } from "./composerDraft";
+
 type Props = {
   runnable: boolean;
   running: boolean;
   onRunSmoke: () => void;
+  draft?: ComposerDraft | null;
 };
 
-export default function RunLevelPanel({ runnable, running, onRunSmoke }: Props) {
+export default function RunLevelPanel({ runnable, running, onRunSmoke, draft }: Props) {
   return (
-    <section className="final-card">
-      <p className="eyebrow">运行级别</p>
-      <h3>当前可运行层级</h3>
-      <div className="v3-run-levels">
-        <span className="v3-status-badge status-variable">Smoke 实验：可运行</span>
-        <span className="v3-status-badge status-planned">Debug 实验：规划中</span>
-        <span className="v3-status-badge status-planned">正式实验：规划中</span>
-        <span className="v3-status-badge status-planned">压力实验：规划中</span>
+    <section className="final-card v3-run-compact">
+      <p className="eyebrow">运行入口</p>
+      <h3>当前支持</h3>
+      <ul className="v3-run-list">
+        <li><span className="status-dot ok" />运行已有 Smoke 实验</li>
+        <li><span className="status-dot planned" />运行当前 Composer Draft，后续支持</li>
+      </ul>
+      <div className="v3-run-buttons">
+        <button type="button" disabled={!runnable || running} onClick={onRunSmoke}>
+          {running ? "Smoke 运行中..." : "运行当前 Smoke 实验"}
+        </button>
+        <button type="button" disabled className="v3-secondary-button">
+          运行当前 Draft，后续支持
+        </button>
       </div>
-      <button type="button" disabled={!runnable || running} onClick={onRunSmoke}>
-        {running ? "Smoke 实验运行中..." : "运行当前 Smoke 实验"}
-      </button>
-      <p className="muted">当前 Smoke 实验复用 Go-backed MetaTrack 控制实验，不启动 Fabric，不运行跨链协议。</p>
+      {draft && (
+        <p className={draft.hasValidationErrors ? "file-error" : "muted"}>
+          {draft.hasValidationErrors ? "Draft 仍有校验问题；不会进入运行。" : "Draft 可预览；本轮不运行自定义 Draft。"}
+        </p>
+      )}
     </section>
   );
 }

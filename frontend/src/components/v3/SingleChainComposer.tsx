@@ -3,9 +3,12 @@ import { type CSSProperties, useMemo, useState } from "react";
 import type { V3ComposerModule, V3ComposerPreview } from "../../api";
 import ModuleCard from "./ModuleCard";
 import ModuleDetailPanel from "./ModuleDetailPanel";
+import { type ComposerDraft, moduleView, updateDraftModule } from "./composerDraft";
 
 type Props = {
   preview: V3ComposerPreview;
+  draft: ComposerDraft;
+  onDraftChange: (draft: ComposerDraft) => void;
 };
 
 type SnakeSlot = {
@@ -29,7 +32,7 @@ const snakeSlots: SnakeSlot[] = [
   { moduleId: "MetricsReport", row: 3, column: 3 },
 ];
 
-export default function SingleChainComposer({ preview }: Props) {
+export default function SingleChainComposer({ preview, draft, onDraftChange }: Props) {
   const modules = preview.modules || [];
   const [selectedId, setSelectedId] = useState(modules[0]?.module_id || "");
   const modulesById = useMemo(
@@ -51,8 +54,12 @@ export default function SingleChainComposer({ preview }: Props) {
     setSelectedId(module.module_id);
   }
 
+  function updateSelected(moduleId: string, patch: Parameters<typeof updateDraftModule>[2]) {
+    onDraftChange(updateDraftModule(draft, moduleId, patch));
+  }
+
   return (
-    <section className="v3-composer-layout">
+    <section className="v3-composer-layout v3-workbench">
       <div className="v3-chain-band">
         <div className="v3-flow-grid" aria-label="单链模块化流程图">
           {snakeModules.map(({ module, slot }) => (
@@ -61,7 +68,7 @@ export default function SingleChainComposer({ preview }: Props) {
               className="v3-chain-node"
               style={{ gridColumn: slot.column, gridRow: slot.row } as CSSProperties}
             >
-              <ModuleCard module={module} selected={selected?.module_id === module.module_id} onSelect={selectModule} />
+              <ModuleCard module={moduleView(module, draft)} selected={selected?.module_id === module.module_id} onSelect={selectModule} />
               {slot.edge && (
                 <span className={`v3-edge v3-edge-${slot.edge}`} aria-hidden="true">
                   {slot.edge === "left" ? "←" : slot.edge === "down" ? "↓" : "→"}
@@ -71,7 +78,7 @@ export default function SingleChainComposer({ preview }: Props) {
           ))}
         </div>
       </div>
-      <ModuleDetailPanel module={selected} />
+      <ModuleDetailPanel module={selected} draft={draft} onDraftModuleChange={updateSelected} />
     </section>
   );
 }

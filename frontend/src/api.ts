@@ -116,7 +116,7 @@ export type V2SweepRunResponse = { run_id: string; status: V2Status; stage: stri
 export type V2CalibrationInfo = { id: string; name: string; status: V2Status; stage: string; data_truth_label: string; backend_type: string; calibration_truth: string; description: string; source_type: string; limitations: string[] };
 export type V2FabricSmokeStatus = { status: string; ready?: boolean; trace_path: string; meta_path: string; data_truth_label: string; web_starts_fabric: boolean; cli_command: string; warnings: string[]; reason?: string };
 export type V2CalibrationRunResponse = { run_id?: string; status: V2Status; stage?: string; output_dir?: string; data_truth_label?: string; backend_type?: string; calibration_truth?: string; summary?: Record<string, unknown>; artifacts?: V2Artifact[]; reason?: string; cli_command?: string; warnings?: string[] };
-export type V3ModuleStatus = "fixed" | "variable" | "disabled" | "planned" | "output" | string;
+export type V3ModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output" | string;
 export type V3ComposerModule = {
   module_id: string;
   display_name: string;

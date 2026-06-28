@@ -15,26 +15,31 @@ export default function ArtifactGroups({ artifacts }: Props) {
   const byName = new Map(artifacts.map((artifact) => [artifact.name, artifact]));
 
   return (
-    <section className="final-card wide">
-      <p className="eyebrow">实验产物</p>
-      <h3>运行输出与下载</h3>
-      <div className="v3-artifact-groups">
-        {groups.map((group) => (
-          <div key={group.title} className="v3-artifact-group">
-            <strong>{group.title}</strong>
-            <ul>
-              {group.files.map((name) => {
-                const artifact = byName.get(name);
-                return (
-                  <li key={name} className={artifact ? "" : "missing"}>
-                    {artifact ? <a href={v2ArtifactDownloadURL(artifact.download_url)}>{name}</a> : <span>{name}</span>}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
-      </div>
-    </section>
+    <details className="final-card wide v3-foldout">
+      <summary className="v3-foldout-summary">
+        <span>实验产物与下载</span>
+        <small>{artifacts.length ? `已发现 ${artifacts.length} 个产物` : "运行 Smoke 后将在此显示 summary、日志、指标和使用的配置。"}</small>
+      </summary>
+      {artifacts.length === 0 && <p className="muted">运行 Smoke 后将在此显示 summary、日志、指标和使用的配置。</p>}
+      {artifacts.length > 0 && (
+        <div className="v3-artifact-groups">
+          {groups.map((group) => (
+            <div key={group.title} className="v3-artifact-group">
+              <strong>{group.title}</strong>
+              <ul>
+                {group.files.map((name) => {
+                  const artifact = byName.get(name);
+                  return (
+                    <li key={name} className={artifact ? "" : "missing"}>
+                      {artifact ? <a href={v2ArtifactDownloadURL(artifact.download_url)}>{name}</a> : <span>{name}</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </details>
   );
 }
