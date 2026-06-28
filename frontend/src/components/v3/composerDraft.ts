@@ -1,4 +1,4 @@
-import type { V3ComposerModule, V3ComposerPreview } from "../../api";
+import type { V3ComposerDraftRequest, V3ComposerModule, V3ComposerPreview } from "../../api";
 import {
   type DraftModuleStatus,
   type DraftPluginOption,
@@ -103,6 +103,20 @@ export function updateDraftModule(
     },
   };
   return summarizeDraft({ templateId: draft.templateId, modules: nextModules });
+}
+
+export function toComposerDraftRequest(draft: ComposerDraft): V3ComposerDraftRequest {
+  return {
+    template_id: draft.templateId,
+    modules: Object.fromEntries(
+      Object.values(draft.modules).map((module) => [module.moduleId, {
+        module_id: module.moduleId,
+        status: module.status,
+        plugin: module.plugin,
+        params: module.params,
+      }]),
+    ),
+  };
 }
 
 export function moduleView(module: V3ComposerModule, draft?: ComposerDraft): DraftModuleView {

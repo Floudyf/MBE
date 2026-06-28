@@ -503,6 +503,18 @@
   padding: 0.52rem 0.75rem;
 }
 
+.v3-backend-validation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.6rem;
+}
+
+.v3-inline-ok {
+  color: var(--green);
+  font-weight: 700;
+}
+
 .v3-section-head {
   align-items: center;
   display: flex;

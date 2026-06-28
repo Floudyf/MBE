@@ -11,6 +11,7 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
+from backend.app.models.v3_composer_draft import V3ComposerDraftRequest
 from backend.app.services.config_validator_v2 import validate_planned_topology_file
 from backend.app.services.calibration_runner_v2 import CALIBRATION_CONFIGS, CalibrationBlocked, CalibrationError, get_calibration_config, list_calibration_configs, run_calibration_job, summarize_calibration_config
 from backend.app.services.chain_backend import list_backend_capabilities
@@ -27,6 +28,8 @@ from backend.app.services.sweep_runner_v2 import SWEEP_CONFIGS, SweepError, get_
 from backend.app.services.trace_source_service import TraceSourceError, TraceSourceNotFound, describe_capabilities, infer_data_truth_label, list_trace_sources, load_trace_sources
 from backend.app.services.trace_source_validator import validate_trace_source
 from backend.app.services.v3_experiment_templates import list_templates
+from backend.app.services.v3_composer_draft_runner import DraftSmokeNotRunnable, get_draft_artifact_path, run_v3_composer_draft_smoke
+from backend.app.services.v3_composer_draft_validator import model_dump, validate_v3_composer_draft
 from backend.app.services.v3_go_runtime_runner import run_metatrack_go_backed_ablation
 from backend.app.services.v3_profile_preview import preview_profile
 
@@ -765,6 +768,35 @@ def v3_composer_preview(experiment_profile_id: str = "metatrack_go_backed_ablati
         "fairness_scope": preview.get("fairness_scope", {}),
         "runnable": preview.get("runnable", False),
     }
+
+
+@app.post("/api/v3/composer/validate-draft")
+def v3_composer_validate_draft(request: V3ComposerDraftRequest) -> dict:
+    validation = validate_v3_composer_draft(request)
+    return model_dump(validation)
+
+
+@app.post("/api/v3/composer/run-draft-smoke")
+def v3_composer_run_draft_smoke(request: V3ComposerDraftRequest) -> dict:
+    try:
+        return run_v3_composer_draft_smoke(request)
+    except DraftSmokeNotRunnable as exc:
+        raise HTTPException(400, detail={"message": "Composer Draft is not runnable", "validation": model_dump(exc.validation)}) from exc
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.get("/api/v3/composer/draft-runs/{run_id}/artifacts/{filename}")
+def v3_composer_draft_artifact(run_id: str, filename: str) -> FileResponse:
+    try:
+        path = get_draft_artifact_path(run_id, filename)
+    except ArtifactMissing as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ArtifactForbidden as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except (ArtifactError, JobNotFound) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return FileResponse(path)
 
 
 @app.post("/api/v3/composer/run-smoke")

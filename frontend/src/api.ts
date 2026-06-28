@@ -179,6 +179,35 @@ export type V3TemplateSummary = {
   output_modules: string[];
 };
 export type V3SmokeRunResponse = V2SweepRunResponse & { runtime_mode?: string };
+export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
+export type V3ComposerDraftModuleRequest = {
+  module_id: string;
+  status: V3DraftModuleStatus;
+  plugin: string;
+  params?: Record<string, string | number | boolean>;
+};
+export type V3ComposerDraftRequest = {
+  template_id: string;
+  modules: Record<string, V3ComposerDraftModuleRequest>;
+};
+export type V3DraftValidationResponse = {
+  is_valid: boolean;
+  is_runnable: boolean;
+  run_mode: string;
+  normalized_draft?: Record<string, unknown> | null;
+  variable_modules: string[];
+  fixed_modules: string[];
+  disabled_modules: string[];
+  planned_modules: string[];
+  output_modules: string[];
+  errors: string[];
+  warnings: string[];
+};
+export type V3DraftSmokeRunResponse = V3SmokeRunResponse & {
+  job_id?: string;
+  run_mode?: string;
+  validation: V3DraftValidationResponse;
+};
 
 export async function runDefaultExperiment(): Promise<unknown> {
   return request(`${experimentPath}/run`, { method: "POST" });
@@ -352,6 +381,14 @@ export async function fetchV3ComposerPreview(experimentProfileId = "metatrack_go
 
 export async function runV3ComposerSmoke(): Promise<V3SmokeRunResponse> {
   return request<V3SmokeRunResponse>("/api/v3/composer/run-smoke", { method: "POST" });
+}
+
+export async function validateV3ComposerDraft(draft: V3ComposerDraftRequest): Promise<V3DraftValidationResponse> {
+  return request<V3DraftValidationResponse>("/api/v3/composer/validate-draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+}
+
+export async function runV3ComposerDraftSmoke(draft: V3ComposerDraftRequest): Promise<V3DraftSmokeRunResponse> {
+  return request<V3DraftSmokeRunResponse>("/api/v3/composer/run-draft-smoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {

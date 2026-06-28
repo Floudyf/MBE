@@ -3,9 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchV3ComposerPreview,
   fetchV3ComposerTemplates,
+  runV3ComposerDraftSmoke,
   runV3ComposerSmoke,
+  validateV3ComposerDraft,
   type V2Artifact,
   type V3ComposerPreviewResponse,
+  type V3DraftValidationResponse,
   type V3TemplateSummary,
 } from "../api";
 import ArtifactGroups from "../components/v3/ArtifactGroups";
@@ -13,7 +16,7 @@ import FairnessScopePanel from "../components/v3/FairnessScopePanel";
 import PluginMatrixTable from "../components/v3/PluginMatrixTable";
 import RunLevelPanel from "../components/v3/RunLevelPanel";
 import SingleChainComposer from "../components/v3/SingleChainComposer";
-import { createComposerDraft, type ComposerDraft } from "../components/v3/composerDraft";
+import { createComposerDraft, toComposerDraftRequest, type ComposerDraft } from "../components/v3/composerDraft";
 import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
 
 const fallbackTemplates: V3TemplateSummary[] = [
@@ -37,9 +40,13 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [templates, setTemplates] = useState<V3TemplateSummary[]>(fallbackTemplates);
   const [artifacts, setArtifacts] = useState<V2Artifact[]>([]);
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
+  const [backendValidation, setBackendValidation] = useState<V3DraftValidationResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
+  const [validatingDraft, setValidatingDraft] = useState(false);
+  const [runningDraft, setRunningDraft] = useState(false);
   const [error, setError] = useState("");
+  const [draftError, setDraftError] = useState("");
 
   useEffect(() => { void loadPreview(profileId); }, [profileId]);
 
@@ -52,6 +59,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       ]);
       setPreview(nextPreview);
       setDraft(nextPreview.composer_preview ? createComposerDraft(nextPreview.composer_preview) : null);
+      setBackendValidation(null);
+      setDraftError("");
       setTemplates(nextTemplates);
       setError("");
     } catch (caught) {
@@ -72,6 +81,51 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setRunning(false);
+    }
+  }
+
+  function updateDraft(nextDraft: ComposerDraft) {
+    setDraft(nextDraft);
+    setBackendValidation(null);
+    setDraftError("");
+  }
+
+  async function validateDraftOnServer(): Promise<V3DraftValidationResponse | null> {
+    if (!draft) return null;
+    try {
+      setValidatingDraft(true);
+      const result = await validateV3ComposerDraft(toComposerDraftRequest(draft));
+      setBackendValidation(result);
+      setDraftError("");
+      return result;
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setDraftError(message);
+      return null;
+    } finally {
+      setValidatingDraft(false);
+    }
+  }
+
+  async function runDraftSmoke() {
+    if (!draft) return;
+    try {
+      setRunningDraft(true);
+      const validation = backendValidation?.is_runnable ? backendValidation : await validateDraftOnServer();
+      if (!validation?.is_runnable) {
+        setDraftError("后端 Draft 校验未通过，不能运行当前 Draft Smoke。");
+        return;
+      }
+      const result = await runV3ComposerDraftSmoke(toComposerDraftRequest(draft));
+      setBackendValidation(result.validation);
+      setArtifacts(result.artifacts || []);
+      if (result.run_id) onRunCompleted?.(result.run_id);
+      setDraftError("");
+      setError("");
+    } catch (caught) {
+      setDraftError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRunningDraft(false);
     }
   }
 
@@ -135,11 +189,22 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
 
       {loading && <p className="notice">正在加载 V3 Composer 预览...</p>}
       {error && <p className="file-error">{error}</p>}
-      {composer && draft && <SingleChainComposer preview={composer} draft={draft} onDraftChange={setDraft} />}
+      {composer && draft && <SingleChainComposer preview={composer} draft={draft} onDraftChange={updateDraft} />}
 
       <div className="final-card-grid v3-post-workbench">
         <FairnessScopePanel scope={composer?.fairness_scope || preview?.fairness_scope || {}} valid={Boolean(profilePreview.valid ?? preview?.runnable)} warnings={warnings} draft={draft} />
-        <RunLevelPanel runnable={Boolean(preview?.runnable && composer?.runnable)} running={running} onRunSmoke={runSmoke} draft={draft} />
+        <RunLevelPanel
+          runnable={Boolean(preview?.runnable && composer?.runnable)}
+          running={running}
+          onRunSmoke={runSmoke}
+          draft={draft}
+          backendValidation={backendValidation}
+          validatingDraft={validatingDraft}
+          runningDraft={runningDraft}
+          draftError={draftError}
+          onValidateDraft={validateDraftOnServer}
+          onRunDraftSmoke={runDraftSmoke}
+        />
       </div>
 
       {composer && (
