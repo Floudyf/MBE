@@ -42,6 +42,8 @@ type ChainProfile struct {
 	RemoteFetchCostMS      int
 	RoutingPlugin          string
 	RoutingScope           string
+	HotspotThreshold       int
+	CoaccessWindow         int
 	NetworkPlugin          string
 	NetworkBaseDelayMS     int
 	KeyCount               int
@@ -172,6 +174,39 @@ type ConsensusEngine struct {
 	BaseLatencyMS  int
 }
 
+type RoutingRecord struct {
+	TxID                      string
+	BlockHeight               int
+	TxIndex                   int
+	RoutingPlugin             string
+	AccessKeyCount            int
+	ReadKeyCount              int
+	WriteKeyCount             int
+	PrimaryShard              int
+	TouchedShards             []int
+	TouchedShardCount         int
+	CrossShard                bool
+	RemoteStateAccessEstimate int
+	HotspotKeyCount           int
+	CoaccessGroupID           string
+	RoutingOverheadMS         int
+	Reason                    string
+}
+
+type RoutingEngine struct {
+	PluginID                  string
+	ShardCount                int
+	HotspotThreshold          int
+	CoaccessWindow            int
+	DecisionCount             int
+	CrossShardDecisionCount   int
+	LocalDecisionCount        int
+	RemoteStateAccessEstimate int
+	HotspotKeyCount           int
+	CoaccessGroupCount        int
+	Overheads                 []int
+}
+
 type txPoolEntry struct {
 	tx          Transaction
 	admitTimeMS int
@@ -282,6 +317,16 @@ type Summary struct {
 	ViewChangeCount           int     `json:"view_change_count"`
 	FinalizedBlockCount       int     `json:"finalized_block_count"`
 	FailedBlockCount          int     `json:"failed_block_count"`
+	RoutingDecisionCount      int     `json:"routing_decision_count"`
+	CrossShardTxCount         int     `json:"cross_shard_tx_count"`
+	LocalTxCount              int     `json:"local_tx_count"`
+	RemoteStateAccessCount    int     `json:"remote_state_access_count"`
+	AvgTouchedShards          float64 `json:"avg_touched_shards"`
+	MaxTouchedShards          int     `json:"max_touched_shards"`
+	HotspotKeyCount           int     `json:"hotspot_key_count"`
+	CoaccessGroupCount        int     `json:"coaccess_group_count"`
+	AvgRoutingOverheadMS      float64 `json:"avg_routing_overhead_ms"`
+	RoutingPlugin             string  `json:"routing_plugin"`
 	ExecutionShardCount       int     `json:"execution_shard_count"`
 	StateStorageUnitCount     int     `json:"state_storage_unit_count"`
 	CrossStateUnitAccessCount int     `json:"cross_state_unit_access_count"`
@@ -299,6 +344,7 @@ type Result struct {
 	StateCommitLog []StateCommit
 	TxPoolLog      []TxPoolEvent
 	ConsensusLog   []ConsensusRecord
+	RoutingLog     []RoutingRecord
 	FinalState     map[string]int
 }
 
@@ -335,12 +381,14 @@ func Run(input Input) (Result, error) {
 	txPool := newTxPool(chain)
 	blockProducer := newBlockProducer(chain, plugin)
 	consensusEngine := newConsensusEngine(chain, plugin)
+	routingEngine := newRoutingEngine(chain, plugin)
 	blocks := produceBlocksFromTxPool(txs, chain, txPool, blockProducer)
 	state := map[string]int{}
 	blockLog := []map[string]string{}
 	txResults := []TxResult{}
 	stateCommits := []StateCommit{}
 	consensusLog := []ConsensusRecord{}
+	routingLog := []RoutingRecord{}
 	for _, block := range blocks {
 		consensusRecord := consensusEngine.FinalizeBlock(block)
 		consensusLog = append(consensusLog, consensusRecord)
@@ -367,10 +415,20 @@ func Run(input Input) (Result, error) {
 			"state_storage_unit_count": strconv.Itoa(chain.StateStorageUnitCount),
 		})
 		cursor := consensusRecord.ConsensusFinalizedTimeMS
-		routingMap := buildRoutingMap(block.Txs, chain, plugin)
-		for _, pooledTx := range block.Txs {
+		blockRoutingRecords := routingEngine.RouteBlock(block)
+		routingByTx := map[string]RoutingRecord{}
+		for _, record := range blockRoutingRecords {
+			routingLog = append(routingLog, record)
+			routingByTx[record.TxID] = record
+		}
+		for txIndex, pooledTx := range block.Txs {
 			tx := pooledTx.Tx
-			executionShardID := assignTxShard(tx, routingMap, chain)
+			routingRecord := routingByTx[tx.ID]
+			if routingRecord.TxID == "" {
+				routingRecord = routingEngine.RouteTransaction(tx, block.Height, txIndex, nil, nil)
+				routingLog = append(routingLog, routingRecord)
+			}
+			executionShardID := routingRecord.PrimaryShard
 			accessedUnits := accessedStateUnits(tx, chain)
 			homeUnits := writeStateUnits(tx, chain)
 			remoteStateUnits := remoteStateUnitCount(accessedUnits, executionShardID)
@@ -436,10 +494,11 @@ func Run(input Input) (Result, error) {
 	applyTxPoolMetrics(&summary, txPool)
 	applyBlockProducerMetrics(&summary, blockProducer)
 	applyConsensusMetrics(&summary, consensusLog)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, "V3.4.3 Go-backed Consensus-light runtime hardening run"); err != nil {
+	applyRoutingMetrics(&summary, routingEngine, routingLog)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, "V3.4.5 Go-backed Routing runtime hardening run"); err != nil {
 		return Result{}, err
 	}
-	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, FinalState: state}, nil
+	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, FinalState: state}, nil
 }
 
 func parseChainProfile(text string) ChainProfile {
@@ -463,6 +522,8 @@ func parseChainProfile(text string) ChainProfile {
 		RemoteFetchCostMS:      sectionFieldInt(text, "state", "remote_fetch_cost_ms", 1),
 		RoutingPlugin:          sectionFieldString(text, "routing", "plugin", sectionFieldString(text, "sharding", "plugin", "hash_sharding")),
 		RoutingScope:           sectionFieldString(text, "routing", "routing_scope", "execution_shard"),
+		HotspotThreshold:       sectionFieldInt(text, "routing", "hotspot_threshold", 2),
+		CoaccessWindow:         sectionFieldInt(text, "routing", "coaccess_window", 1),
 		NetworkPlugin:          sectionFieldString(text, "network", "plugin", "fixed_delay"),
 		NetworkBaseDelayMS:     sectionFieldInt(text, "network", "base_delay_ms", sectionFieldInt(text, "network", "delay_ms", 0)),
 		KeyCount:               fieldInt(text, "key_count", 100000),
@@ -581,6 +642,211 @@ func (engine *ConsensusEngine) FinalizeBlock(block Block) ConsensusRecord {
 	return record
 }
 
+func newRoutingEngine(chain ChainProfile, plugin PluginProfile) *RoutingEngine {
+	pluginID := normalizeRoutingPlugin(firstNonEmpty(plugin.ShardingPlugin, chain.RoutingPlugin, "hash_sharding"))
+	threshold := chain.HotspotThreshold
+	if threshold <= 0 {
+		threshold = 2
+	}
+	return &RoutingEngine{
+		PluginID:         pluginID,
+		ShardCount:       max(1, chain.ExecutionShardCount),
+		HotspotThreshold: threshold,
+		CoaccessWindow:   max(1, chain.CoaccessWindow),
+	}
+}
+
+func (engine *RoutingEngine) RouteBlock(block Block) []RoutingRecord {
+	keyFrequency := map[string]int{}
+	coaccessGroups := map[string]string{}
+	groupShard := map[string]int{}
+	if engine.PluginID == "hotspot_aware_routing" || engine.PluginID == "metatrack_coaccess_routing" {
+		for _, pooledTx := range block.Txs {
+			for _, key := range transactionAccessKeys(pooledTx.Tx) {
+				keyFrequency[key]++
+			}
+		}
+	}
+	if engine.PluginID == "metatrack_coaccess_routing" {
+		nextGroup := 0
+		for _, pooledTx := range block.Txs {
+			keys := transactionAccessKeys(pooledTx.Tx)
+			if len(keys) < 2 {
+				continue
+			}
+			sort.Strings(keys)
+			groupID := "coaccess_" + strconv.Itoa(nextGroup)
+			nextGroup++
+			shardID := shard(strings.Join(keys, "|"), engine.ShardCount)
+			groupShard[groupID] = shardID
+			for _, key := range keys {
+				if coaccessGroups[key] == "" {
+					coaccessGroups[key] = groupID
+				}
+			}
+		}
+		engine.CoaccessGroupCount += len(groupShard)
+	}
+	records := []RoutingRecord{}
+	metadata := map[string]any{"coaccess_groups": coaccessGroups, "group_shard": groupShard}
+	for index, pooledTx := range block.Txs {
+		records = append(records, engine.RouteTransaction(pooledTx.Tx, block.Height, index, keyFrequency, metadata))
+	}
+	return records
+}
+
+func (engine *RoutingEngine) RouteTransaction(tx Transaction, blockHeight, txIndex int, keyFrequency map[string]int, metadata map[string]any) RoutingRecord {
+	keys := transactionAccessKeys(tx)
+	touched := []int{}
+	seenShard := map[int]bool{}
+	hotspotCount := 0
+	coaccessGroupID := ""
+	for _, key := range keys {
+		shardID := engine.routeKey(key, keyFrequency, metadata)
+		if engine.PluginID == "hotspot_aware_routing" && keyFrequency != nil && keyFrequency[key] >= engine.HotspotThreshold {
+			hotspotCount++
+		}
+		if engine.PluginID == "metatrack_coaccess_routing" && metadata != nil {
+			if groups, ok := metadata["coaccess_groups"].(map[string]string); ok && groups[key] != "" && coaccessGroupID == "" {
+				coaccessGroupID = groups[key]
+			}
+		}
+		if !seenShard[shardID] {
+			seenShard[shardID] = true
+			touched = append(touched, shardID)
+		}
+	}
+	if len(touched) == 0 {
+		touched = []int{shard(tx.ID, engine.ShardCount)}
+	}
+	sort.Ints(touched)
+	primaryShard := touched[0]
+	if len(keys) > 0 {
+		primaryShard = engine.routeKey(primaryRoutingKey(tx), keyFrequency, metadata)
+	}
+	remoteEstimate := max(0, len(touched)-1)
+	overhead := routingOverhead(engine.PluginID, len(keys), hotspotCount, coaccessGroupID)
+	record := RoutingRecord{
+		TxID:                      tx.ID,
+		BlockHeight:               blockHeight,
+		TxIndex:                   txIndex,
+		RoutingPlugin:             engine.PluginID,
+		AccessKeyCount:            len(keys),
+		ReadKeyCount:              len(tx.ReadKeys),
+		WriteKeyCount:             len(tx.WriteDeltas),
+		PrimaryShard:              primaryShard,
+		TouchedShards:             touched,
+		TouchedShardCount:         len(touched),
+		CrossShard:                len(touched) > 1,
+		RemoteStateAccessEstimate: remoteEstimate,
+		HotspotKeyCount:           hotspotCount,
+		CoaccessGroupID:           coaccessGroupID,
+		RoutingOverheadMS:         overhead,
+		Reason:                    routingReason(engine.PluginID, coaccessGroupID, hotspotCount),
+	}
+	engine.DecisionCount++
+	if record.CrossShard {
+		engine.CrossShardDecisionCount++
+	} else {
+		engine.LocalDecisionCount++
+	}
+	engine.RemoteStateAccessEstimate += remoteEstimate
+	engine.HotspotKeyCount += hotspotCount
+	engine.Overheads = append(engine.Overheads, overhead)
+	return record
+}
+
+func (engine *RoutingEngine) routeKey(key string, keyFrequency map[string]int, metadata map[string]any) int {
+	if key == "" {
+		return 0
+	}
+	switch engine.PluginID {
+	case "metatrack_coaccess_routing":
+		if metadata != nil {
+			if groups, ok := metadata["coaccess_groups"].(map[string]string); ok {
+				groupID := groups[key]
+				if groupID != "" {
+					if shards, ok := metadata["group_shard"].(map[string]int); ok {
+						return shards[groupID]
+					}
+				}
+			}
+		}
+	case "hotspot_aware_routing":
+		if keyFrequency != nil && keyFrequency[key] >= engine.HotspotThreshold {
+			return shard("hotspot:"+key, engine.ShardCount)
+		}
+	}
+	return shard(key, engine.ShardCount)
+}
+
+func normalizeRoutingPlugin(pluginID string) string {
+	switch pluginID {
+	case "", "hash_sharding":
+		return "hash_sharding"
+	case "co_access_sharding", "metatrack_coaccess_routing":
+		return "metatrack_coaccess_routing"
+	case "hotspot_aware_routing":
+		return "hotspot_aware_routing"
+	default:
+		return pluginID
+	}
+}
+
+func transactionAccessKeys(tx Transaction) []string {
+	keys := append([]string(nil), tx.ReadKeys...)
+	for key := range tx.WriteDeltas {
+		keys = append(keys, key)
+	}
+	return unique(keys)
+}
+
+func primaryRoutingKey(tx Transaction) string {
+	writeKeys := make([]string, 0, len(tx.WriteDeltas))
+	for key := range tx.WriteDeltas {
+		writeKeys = append(writeKeys, key)
+	}
+	sort.Strings(writeKeys)
+	if len(writeKeys) > 0 {
+		return writeKeys[0]
+	}
+	if len(tx.ReadKeys) > 0 {
+		return tx.ReadKeys[0]
+	}
+	return tx.ID
+}
+
+func routingOverhead(pluginID string, keyCount, hotspotCount int, coaccessGroupID string) int {
+	switch pluginID {
+	case "metatrack_coaccess_routing":
+		if coaccessGroupID != "" {
+			return 1
+		}
+		return max(0, keyCount-1)
+	case "hotspot_aware_routing":
+		return hotspotCount
+	default:
+		return 0
+	}
+}
+
+func routingReason(pluginID, coaccessGroupID string, hotspotCount int) string {
+	switch pluginID {
+	case "metatrack_coaccess_routing":
+		if coaccessGroupID != "" {
+			return "coaccess_group_routing"
+		}
+		return "hash_fallback"
+	case "hotspot_aware_routing":
+		if hotspotCount > 0 {
+			return "hotspot_key_routing"
+		}
+		return "hash_fallback"
+	default:
+		return "hash_sharding"
+	}
+}
+
 func requireSupportedPlugins(plugin PluginProfile) error {
 	baseExpected := map[string]string{
 		"TxPoolPlugin":  "fifo_pool",
@@ -603,7 +869,7 @@ func requireSupportedPlugins(plugin PluginProfile) error {
 		}
 	}
 	allowed := map[string]map[string]bool{
-		"ShardingPlugin":           {"hash_sharding": true, "co_access_sharding": true},
+		"ShardingPlugin":           {"hash_sharding": true, "co_access_sharding": true, "metatrack_coaccess_routing": true, "hotspot_aware_routing": true},
 		"ExecutionSchedulerPlugin": {"serial_execution": true, "dual_track_execution": true},
 		"StateAccessPlugin":        {"direct_fetch": true, "access_list_prefetch": true},
 		"CommitPlugin":             {"normal_commit": true, "hot_update_aggregation_commit": true},
@@ -1062,7 +1328,31 @@ func applyConsensusMetrics(summary *Summary, records []ConsensusRecord) {
 	summary.FailedBlockCount = failed
 }
 
-func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, title string) error {
+func applyRoutingMetrics(summary *Summary, engine *RoutingEngine, records []RoutingRecord) {
+	touchedCounts := []int{}
+	maxTouched := 0
+	for _, record := range records {
+		touchedCounts = append(touchedCounts, record.TouchedShardCount)
+		if record.TouchedShardCount > maxTouched {
+			maxTouched = record.TouchedShardCount
+		}
+	}
+	summary.RoutingPlugin = engine.PluginID
+	summary.RoutingDecisionCount = engine.DecisionCount
+	summary.CrossShardTxCount = engine.CrossShardDecisionCount
+	summary.LocalTxCount = engine.LocalDecisionCount
+	if engine.DecisionCount > 0 {
+		summary.CrossShardRatio = round(float64(engine.CrossShardDecisionCount) / float64(engine.DecisionCount))
+	}
+	summary.RemoteStateAccessCount = engine.RemoteStateAccessEstimate
+	summary.AvgTouchedShards = round(avg(touchedCounts))
+	summary.MaxTouchedShards = maxTouched
+	summary.HotspotKeyCount = engine.HotspotKeyCount
+	summary.CoaccessGroupCount = engine.CoaccessGroupCount
+	summary.AvgRoutingOverheadMS = round(avg(engine.Overheads))
+}
+
+func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
@@ -1097,11 +1387,14 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := writeConsensusLog(filepath.Join(out, "consensus_log.csv"), consensusLog); err != nil {
 		return err
 	}
-	report := "# " + title + "\n\nThis is V3.4.3 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool, BlockProducer, and Consensus-light hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, local FIFO TxPool admission/selection behavior, local logical BlockProducer cut behavior, and local virtual-time Consensus-light finality metrics.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nConsensus-light models local stage, quorum, virtual message count, and finality observability. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
+	if err := writeRoutingLog(filepath.Join(out, "routing_log.csv"), routingLog); err != nil {
+		return err
+	}
+	report := "# " + title + "\n\nThis is V3.4.5 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool, BlockProducer, Consensus-light, and Routing/Sharding hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, local FIFO TxPool admission/selection behavior, local logical BlockProducer cut behavior, local virtual-time Consensus-light finality metrics, and local Routing/Sharding decision records.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement. Routing light models estimate touched shards, cross-shard ratio, co-access groups, and hotspot keys; they do not implement relay, broker, 2PC, CLPA, ShardCutter, state migration, or real shard-to-shard messages.\n\nConsensus-light models local stage, quorum, virtual message count, and finality observability. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
-	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nfabric_live=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
+	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nrouting_plugin=" + summary.RoutingPlugin + "\nfabric_live=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nreal_cross_shard_protocol=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
 	return os.WriteFile(filepath.Join(out, "runtime.log"), []byte(log), 0o644)
 }
 
@@ -1112,12 +1405,13 @@ func writeSummaryCSV(path string, s Summary) error {
 		fmt.Sprint(s.ThroughputTPS), fmt.Sprint(s.AvgLatencyMS), fmt.Sprint(s.P95LatencyMS), fmt.Sprint(s.P99LatencyMS), s.RuntimeMode,
 		strconv.Itoa(s.RemoteFetchCount), fmt.Sprint(s.CrossShardRatio), strconv.Itoa(s.FastTrackCount), strconv.Itoa(s.ConservativeTrackCount), strconv.Itoa(s.AggregatedUpdateCount), fmt.Sprint(s.AggregationRatio), strconv.Itoa(s.ConflictCount), fmt.Sprint(s.QueueWaitMS), strconv.Itoa(s.TxPoolAdmittedCount), strconv.Itoa(s.TxPoolRejectedCount), strconv.Itoa(s.TxPoolPeakSize), fmt.Sprint(s.TxPoolAvgWaitMS), fmt.Sprint(s.TxPoolP95WaitMS), strconv.Itoa(s.EmptyBlockCount), fmt.Sprint(s.AvgBlockSize), strconv.Itoa(s.MaxBlockSize), strconv.Itoa(s.BlockIntervalMS), fmt.Sprint(s.AvgBlockIntervalMS), strconv.Itoa(s.BlockProducerCountCut), strconv.Itoa(s.BlockProducerTimeCut), strconv.Itoa(s.BlockProducerDrainCut), strconv.Itoa(s.BlockProducerEmptyCut), fmt.Sprint(s.BlockCommitLatencyMS),
 		fmt.Sprint(s.ConsensusLatencyMS), fmt.Sprint(s.AvgConsensusLatencyMS), fmt.Sprint(s.P95ConsensusLatencyMS), strconv.Itoa(s.ConsensusMessageCount), fmt.Sprint(s.AvgConsensusMessageCount), strconv.Itoa(s.ConsensusRoundCount), strconv.Itoa(s.ViewChangeCount), strconv.Itoa(s.FinalizedBlockCount), strconv.Itoa(s.FailedBlockCount),
+		strconv.Itoa(s.RoutingDecisionCount), strconv.Itoa(s.CrossShardTxCount), strconv.Itoa(s.LocalTxCount), strconv.Itoa(s.RemoteStateAccessCount), fmt.Sprint(s.AvgTouchedShards), strconv.Itoa(s.MaxTouchedShards), strconv.Itoa(s.HotspotKeyCount), strconv.Itoa(s.CoaccessGroupCount), fmt.Sprint(s.AvgRoutingOverheadMS), s.RoutingPlugin,
 		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {
@@ -1198,6 +1492,32 @@ func writeConsensusLog(path string, records []ConsensusRecord) error {
 			strconv.Itoa(record.ConsensusLatencyMS),
 			strconv.FormatBool(record.Finalized),
 			strconv.Itoa(record.ViewChangeCount),
+			record.Reason,
+		})
+	}
+	return writeCSV(path, fields, rows)
+}
+
+func writeRoutingLog(path string, records []RoutingRecord) error {
+	fields := []string{"tx_id", "block_height", "tx_index", "routing_plugin", "access_key_count", "read_key_count", "write_key_count", "primary_shard", "touched_shards", "touched_shard_count", "cross_shard", "remote_state_access_estimate", "hotspot_key_count", "coaccess_group_id", "routing_overhead_ms", "reason"}
+	rows := [][]string{}
+	for _, record := range records {
+		rows = append(rows, []string{
+			record.TxID,
+			strconv.Itoa(record.BlockHeight),
+			strconv.Itoa(record.TxIndex),
+			record.RoutingPlugin,
+			strconv.Itoa(record.AccessKeyCount),
+			strconv.Itoa(record.ReadKeyCount),
+			strconv.Itoa(record.WriteKeyCount),
+			strconv.Itoa(record.PrimaryShard),
+			joinInts(record.TouchedShards),
+			strconv.Itoa(record.TouchedShardCount),
+			strconv.FormatBool(record.CrossShard),
+			strconv.Itoa(record.RemoteStateAccessEstimate),
+			strconv.Itoa(record.HotspotKeyCount),
+			record.CoaccessGroupID,
+			strconv.Itoa(record.RoutingOverheadMS),
 			record.Reason,
 		})
 	}

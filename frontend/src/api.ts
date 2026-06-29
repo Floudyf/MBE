@@ -222,6 +222,16 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   view_change_count?: number | string;
   finalized_block_count?: number | string;
   failed_block_count?: number | string;
+  routing_plugin?: string;
+  routing_decision_count?: number | string;
+  cross_shard_tx_count?: number | string;
+  local_tx_count?: number | string;
+  remote_state_access_count?: number | string;
+  avg_touched_shards?: number | string;
+  max_touched_shards?: number | string;
+  hotspot_key_count?: number | string;
+  coaccess_group_count?: number | string;
+  avg_routing_overhead_ms?: number | string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";

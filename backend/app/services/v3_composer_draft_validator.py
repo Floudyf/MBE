@@ -274,7 +274,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     }
 
     is_valid = not errors
-    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus"} and not has_preview_only)
+    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus", "single_module_routing"} and not has_preview_only)
     return V3DraftValidationResponse(
         is_valid=is_valid,
         is_runnable=is_runnable,

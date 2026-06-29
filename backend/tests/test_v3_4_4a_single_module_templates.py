@@ -37,11 +37,18 @@ def test_catalog_returns_single_module_templates() -> None:
     assert "single_module_txpool" in templates
     assert "single_module_blockproducer" in templates
     assert "single_module_consensus" in templates
+    assert "single_module_routing" in templates
     assert templates["single_module_consensus"]["variable_module"] == "Consensus"
     assert templates["single_module_consensus"]["allowed_variable_plugins"] == [
         "simple_leader",
         "poa_light",
         "pbft_light_model",
+    ]
+    assert templates["single_module_routing"]["variable_module"] == "Routing"
+    assert templates["single_module_routing"]["allowed_variable_plugins"] == [
+        "hash_sharding",
+        "metatrack_coaccess_routing",
+        "hotspot_aware_routing",
     ]
 
 
@@ -51,6 +58,7 @@ def test_single_module_templates_have_default_presets() -> None:
         "single_module_txpool": "txpool_fifo_smoke",
         "single_module_blockproducer": "blockproducer_time_or_count_smoke",
         "single_module_consensus": "consensus_light_smoke",
+        "single_module_routing": "routing_coaccess_smoke",
     }
 
     for template_id, preset_id in expected.items():
@@ -74,6 +82,7 @@ def test_single_module_templates_auto_fill_default_presets() -> None:
             {"BlockProducer": ("variable", "time_or_count_block_producer")},
         ),
         "single_module_consensus": ("Consensus", "consensus_light_smoke", {"Consensus": ("variable", "simple_leader")}),
+        "single_module_routing": ("Routing", "routing_coaccess_smoke", {"Routing": ("variable", "metatrack_coaccess_routing")}),
     }
 
     for template_id, (variable_module, preset_id, overrides) in cases.items():
@@ -98,6 +107,29 @@ def test_single_module_template_rejects_mismatched_preset() -> None:
 
     assert result.is_valid is False
     assert any("Invalid preset" in error and "single_module_txpool" in error for error in result.errors)
+
+
+def test_single_module_routing_allows_runtime_routing_plugins() -> None:
+    for plugin_id in ("hash_sharding", "metatrack_coaccess_routing", "hotspot_aware_routing"):
+        result = validate_v3_composer_draft(
+            draft("single_module_routing", Routing=("variable", plugin_id))
+        )
+
+        assert result.is_valid is True
+        assert result.is_runnable is True
+        assert result.normalized_draft is not None
+        assert result.normalized_draft["variable_module"] == "Routing"
+        assert result.normalized_draft["preset_id"] == "routing_coaccess_smoke"
+
+
+def test_single_module_routing_rejects_planned_cross_shard_protocols() -> None:
+    for plugin_id in ("clpa_like_partitioning", "shardcutter_like_partitioning", "relay_cross_shard", "broker_cross_shard", "two_phase_commit"):
+        result = validate_v3_composer_draft(
+            draft("single_module_routing", Routing=("variable", plugin_id))
+        )
+
+        assert result.is_valid is False
+        assert result.is_runnable is False
 
 
 def test_single_module_consensus_allows_consensus_light_plugins() -> None:
@@ -207,3 +239,24 @@ def test_runner_summary_and_experiment_profile_include_preset_metadata() -> None
         assert "avg_consensus_latency_ms" in payload["primary_metrics"]
         assert "consensus_log.csv" in payload["expected_artifacts"]
         assert "PBFT" in payload["truthfulness_note"]
+
+
+def test_routing_runner_summary_and_experiment_profile_include_preset_metadata() -> None:
+    validation = validate_v3_composer_draft(
+        draft("single_module_routing", Routing=("variable", "hotspot_aware_routing"))
+    )
+    assert validation.normalized_draft is not None
+    normalized = validation.normalized_draft
+
+    profile = build_experiment_profile(normalized)
+    summary = merge_run_metadata({"tx_count": 24}, normalized)
+
+    for payload in (profile, summary):
+        assert payload["experiment_template"] == "single_module_routing"
+        assert payload["preset_id"] == "routing_coaccess_smoke"
+        assert payload["preset_name"] == "Routing co-access smoke"
+        assert payload["variable_module"] == "Routing"
+        assert payload["fairness_validated"] is True
+        assert "cross_shard_ratio" in payload["primary_metrics"]
+        assert "routing_log.csv" in payload["expected_artifacts"]
+        assert "real cross-shard" in payload["truthfulness_note"]

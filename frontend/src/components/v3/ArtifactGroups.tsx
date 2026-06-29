@@ -14,6 +14,7 @@ const groups = [
   { title: "Run summary", files: ["summary.csv", "summary.json", "report.md", "latency.csv", "metatrack_summary.csv", "metatrack_summary.json", "metatrack_ablation_report.md"] },
   { title: "Runtime queue logs", files: ["txpool_log.csv"] },
   { title: "Runtime consensus logs", files: ["consensus_log.csv"] },
+  { title: "Runtime routing logs", files: ["routing_log.csv"] },
   { title: "Chain runtime logs", files: ["runtime.log", "block_log.csv", "tx_results.csv", "state_commit_log.csv"] },
   { title: "MetaTrack metrics", files: ["metatrack_latency.csv", "metatrack_mechanism_metrics.csv"] },
   { title: "Used profiles", files: ["used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "used_chain_profile.json", "used_plugin_profile.json", "used_experiment_profile.json"] },

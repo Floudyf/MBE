@@ -50,6 +50,12 @@ function moduleSupportHint(moduleId: string, status: string, plugin: string): st
     if (plugin === "pbft_light_model") return "runtime-supported PBFT-light model, not real PBFT";
     return "planned or unsupported consensus";
   }
+  if (moduleId === "Routing") {
+    if (plugin === "hash_sharding") return "runtime-supported hash routing";
+    if (plugin === "metatrack_coaccess_routing" || plugin === "co_access_sharding") return "runtime-supported co-access light routing";
+    if (plugin === "hotspot_aware_routing") return "runtime-supported hotspot-aware light routing";
+    return "planned/future routing strategy";
+  }
   if (status === "variable" || status === "fixed" || status === "default") return "configured runnable; runtime support depends on backend validation";
   return String(status);
 }

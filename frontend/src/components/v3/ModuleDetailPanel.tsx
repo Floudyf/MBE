@@ -93,6 +93,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
         {selectedModule.module_id === "Consensus" && (
           <p className="muted">V3.4.3 realizes simple_leader, poa_light, and pbft_light_model as local virtual-time consensus-light models. pbft_light_model models PBFT stages and quorum accounting; it is not production PBFT or real network PBFT.</p>
         )}
+        {selectedModule.module_id === "Routing" && (
+          <p className="muted">V3.4.5 realizes Routing/Sharding decision records for hash_sharding, metatrack_coaccess_routing, and hotspot_aware_routing. Routing estimates shard assignment, touched shards, hotspots, and co-access groups; it does not implement relay, broker, 2PC, CLPA, ShardCutter, state migration, or real cross-shard protocols.</p>
+        )}
       </section>
 
       <section className="v3-config-section">
@@ -139,6 +142,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
                 )}
                 {selectedModule.module_id === "Consensus" && (
                   <small>{consensusPluginHint(plugin.id)}</small>
+                )}
+                {selectedModule.module_id === "Routing" && (
+                  <small>{routingPluginHint(plugin.id)}</small>
                 )}
               </span>
               <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
@@ -187,6 +193,13 @@ function consensusPluginHint(pluginId: string): string {
   if (pluginId === "poa_light") return "runtime-supported PoA-light model";
   if (pluginId === "pbft_light_model") return "PBFT-style light model only";
   return "planned or unsupported";
+}
+
+function routingPluginHint(pluginId: string): string {
+  if (pluginId === "hash_sharding") return "runtime-supported hash routing";
+  if (pluginId === "metatrack_coaccess_routing" || pluginId === "co_access_sharding") return "runtime-supported co-access light routing";
+  if (pluginId === "hotspot_aware_routing") return "runtime-supported hotspot-aware light routing";
+  return "planned/future strategy, not a real cross-shard protocol";
 }
 
 function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {
