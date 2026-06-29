@@ -81,6 +81,8 @@ def summarize_draft_run(run_dir: Path, root: Path | None = None) -> dict[str, An
         "created_at": _mtime(run_dir),
         "template_id": normalized.get("template_id") or composer.get("template_id", ""),
         "experiment_template": normalized.get("experiment_template") or normalized.get("template_id") or composer.get("template_id", ""),
+        "preset_id": normalized.get("preset_id") or composer.get("preset_id", "") or "legacy/default smoke",
+        "preset_name": normalized.get("preset_name", ""),
         "variable_module": normalized.get("variable_module", ""),
         "locked_modules": normalized.get("locked_modules", {}),
         "fairness_validated": bool(normalized.get("fairness_validated", False)),
@@ -215,9 +217,15 @@ def _pick_summary_fields(summary: dict[str, Any]) -> dict[str, Any]:
         "finalized_block_count",
         "failed_block_count",
         "experiment_template",
+        "preset_id",
+        "preset_name",
         "variable_module",
         "locked_modules",
         "fairness_validated",
+        "primary_metrics",
+        "expected_artifacts",
+        "result_guide",
+        "truthfulness_note",
     )
     return {key: summary[key] for key in keys if key in summary}
 

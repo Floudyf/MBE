@@ -100,6 +100,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     const template = templates.find((item) => item.template_id === templateId);
     if (!template) return;
     const variableModule = template.variable_module || "";
+    const presetId = template.default_preset_id || template.presets?.[0]?.preset_id || "";
     const allowedPlugins = template.allowed_variable_plugins || [];
     const lockedModules = template.locked_modules || {};
     const nextModules = Object.fromEntries(
@@ -115,7 +116,12 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         return [moduleId, module];
       }),
     );
-    updateDraft(summarizeDraft({ templateId, modules: nextModules }));
+    updateDraft(summarizeDraft({ templateId, presetId, modules: nextModules }));
+  }
+
+  function selectPreset(presetId: string) {
+    if (!draft) return;
+    updateDraft(summarizeDraft({ templateId: draft.templateId, presetId, modules: draft.modules }));
   }
 
   async function validateDraftOnServer(): Promise<V3DraftValidationResponse | null> {
@@ -167,6 +173,10 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.template_id === (draft?.templateId || composer?.template_id || preview?.experiment_template)),
     [composer?.template_id, draft?.templateId, preview?.experiment_template, templates],
+  );
+  const selectedPreset = useMemo(
+    () => selectedTemplate?.presets?.find((preset) => preset.preset_id === (draft?.presetId || selectedTemplate.default_preset_id)) || selectedTemplate?.presets?.[0],
+    [draft?.presetId, selectedTemplate],
   );
   const identitySummary = [
     labelFor(profileLabels, preview?.experiment_profile_id || profileId),
@@ -238,11 +248,34 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           {selectedTemplate && (
             <div className="v3-template-lock-summary">
               <p className="muted">{selectedTemplate.description}</p>
+              {selectedTemplate.presets && selectedTemplate.presets.length > 0 && (
+                <label>
+                  <span>Smoke preset</span>
+                  <select value={selectedPreset?.preset_id || ""} onChange={(event) => selectPreset(event.target.value)}>
+                    {selectedTemplate.presets.map((preset) => (
+                      <option key={preset.preset_id} value={preset.preset_id}>
+                        {preset.preset_name || preset.preset_id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <dl className="v3-identity-grid">
                 <div><dt>variable module</dt><dd>{selectedTemplate.variable_module || selectedTemplate.variable_modules?.join(", ") || "-"}</dd></div>
                 <div><dt>allowed plugins</dt><dd>{(selectedTemplate.allowed_variable_plugins || []).join(", ") || "-"}</dd></div>
+                <div><dt>preset</dt><dd>{selectedPreset?.preset_id || selectedTemplate.default_preset_id || "legacy/default smoke"}</dd></div>
                 <div><dt>fairness rule</dt><dd>{selectedTemplate.fairness_rule || "Only configured variable modules may differ."}</dd></div>
               </dl>
+              {selectedPreset && (
+                <details className="v3-foldout">
+                  <summary className="v3-foldout-summary">Preset result guide</summary>
+                  <p className="muted">{selectedPreset.result_guide || selectedPreset.description}</p>
+                  <dl className="v3-identity-grid">
+                    <div><dt>primary metrics</dt><dd>{(selectedPreset.primary_metrics || []).join(", ") || "-"}</dd></div>
+                    <div><dt>expected artifacts</dt><dd>{(selectedPreset.expected_artifacts || []).join(", ") || "-"}</dd></div>
+                  </dl>
+                </details>
+              )}
               {selectedTemplate.locked_modules && Object.keys(selectedTemplate.locked_modules).length > 0 && (
                 <details className="v3-foldout">
                   <summary className="v3-foldout-summary">Locked modules</summary>
@@ -309,7 +342,11 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           </details>
         </section>
       )}
-      <ArtifactGroups artifacts={artifacts} title="Current run artifacts and downloads" />
+      <ArtifactGroups
+        artifacts={artifacts}
+        title="Current run artifacts and downloads"
+        expectedArtifacts={selectedPreset?.expected_artifacts}
+      />
     </section>
   );
 }

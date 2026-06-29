@@ -54,7 +54,7 @@ def load_templates(root: Path = TEMPLATE_ROOT) -> dict[str, dict[str, Any]]:
         normalized = normalize_template(document)
         if template_id in templates:
             raise V3ExperimentTemplateError(f"duplicate template_id: {template_id}")
-        templates[template_id] = {**normalized, "source_path": "builtin:v3.4.4a"}
+        templates[template_id] = {**normalized, "source_path": "builtin:v3.4.4b"}
     return templates
 
 

@@ -6,6 +6,7 @@ type Props = {
   emptyMessage?: string;
   defaultOpen?: boolean;
   embedded?: boolean;
+  expectedArtifacts?: string[];
 };
 
 const groups = [
@@ -24,6 +25,7 @@ export default function ArtifactGroups({
   emptyMessage = "Run Smoke to show summaries, logs, metrics, and generated profiles here.",
   defaultOpen = false,
   embedded = false,
+  expectedArtifacts = [],
 }: Props) {
   const byName = new Map(artifacts.map((artifact) => [artifact.name, artifact]));
 
@@ -36,6 +38,21 @@ export default function ArtifactGroups({
       {artifacts.length === 0 && <p className="muted">{emptyMessage}</p>}
       {artifacts.length > 0 && (
         <div className="v3-artifact-groups">
+          {expectedArtifacts.length > 0 && (
+            <div className="v3-artifact-group">
+              <strong>Preset expected artifacts</strong>
+              <ul>
+                {expectedArtifacts.map((name) => {
+                  const artifact = byName.get(name);
+                  return (
+                    <li key={name} className={artifact ? "" : "missing"}>
+                      {artifact ? <a href={v2ArtifactDownloadURL(artifact.download_url)}>{name}</a> : <span>{name} (legacy missing)</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
           {groups.map((group) => (
             <div key={group.title} className="v3-artifact-group">
               <strong>{group.title}</strong>

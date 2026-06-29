@@ -179,18 +179,40 @@ export type V3TemplateSummary = {
   locked_modules?: Record<string, string>;
   fairness_rule?: string;
   truthfulness_note?: string;
+  default_preset_id?: string;
+  presets?: V3TemplatePreset[];
   variable_modules: string[];
   fixed_modules: string[];
   disabled_modules: string[];
   planned_modules: string[];
   output_modules: string[];
 };
+export type V3TemplatePreset = {
+  preset_id: string;
+  preset_name?: string;
+  description?: string;
+  default_chain_profile?: string;
+  default_plugin_selection?: Record<string, string>;
+  variable_module?: string;
+  locked_modules?: Record<string, string>;
+  primary_metrics?: string[];
+  secondary_metrics?: string[];
+  expected_artifacts?: string[];
+  result_guide?: string;
+  truthfulness_note?: string;
+};
 export type V3RuntimeSummary = Record<string, unknown> & {
   experiment_template?: string;
+  preset_id?: string;
+  preset_name?: string;
   variable_module?: string;
   locked_modules?: Record<string, string> | string;
   fairness_scope?: Record<string, unknown>;
   fairness_validated?: boolean | string;
+  primary_metrics?: string[] | string;
+  expected_artifacts?: string[] | string;
+  result_guide?: string;
+  truthfulness_note?: string;
   consensus_latency_ms?: number | string;
   avg_consensus_latency_ms?: number | string;
   p95_consensus_latency_ms?: number | string;
@@ -211,6 +233,7 @@ export type V3ComposerDraftModuleRequest = {
 };
 export type V3ComposerDraftRequest = {
   template_id: string;
+  preset_id?: string;
   modules: Record<string, V3ComposerDraftModuleRequest>;
 };
 export type V3DraftValidationResponse = {
@@ -236,6 +259,8 @@ export type V3DraftRunSummary = {
   created_at: string;
   template_id: string;
   experiment_template?: string;
+  preset_id?: string;
+  preset_name?: string;
   variable_module?: string;
   locked_modules?: Record<string, string>;
   fairness_validated?: boolean;

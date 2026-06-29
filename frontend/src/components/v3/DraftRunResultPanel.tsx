@@ -16,6 +16,10 @@ export default function DraftRunResultPanel({ result }: Props) {
   const summary = result.summary || {};
   const artifactNames = new Set((result.artifacts || []).map((artifact) => artifact.name));
   const lockedModules = readStringMap(summary.locked_modules || normalized.locked_modules);
+  const primaryMetrics = readStringArray(summary.primary_metrics || normalized.primary_metrics);
+  const expectedArtifacts = readStringArray(summary.expected_artifacts || normalized.expected_artifacts);
+  const resultGuide = String(summary.result_guide || normalized.result_guide || "");
+  const truthfulnessNote = String(summary.truthfulness_note || normalized.truthfulness_note || "");
 
   return (
     <section className="final-card wide v3-draft-run-result">
@@ -32,10 +36,31 @@ export default function DraftRunResultPanel({ result }: Props) {
         <div><dt>run_id</dt><dd>{result.run_id}</dd></div>
         <div><dt>run_mode</dt><dd>{result.run_mode || "draft_smoke"}</dd></div>
         <div><dt>template</dt><dd>{String(summary.experiment_template || normalized.experiment_template || normalized.template_id || "-")}</dd></div>
+        <div><dt>preset_id</dt><dd>{String(summary.preset_id || normalized.preset_id || "legacy/default smoke")}</dd></div>
+        <div><dt>preset_name</dt><dd>{String(summary.preset_name || normalized.preset_name || "-")}</dd></div>
         <div><dt>variable_module</dt><dd>{String(summary.variable_module || normalized.variable_module || "-")}</dd></div>
         <div><dt>fairness_validated</dt><dd>{String(summary.fairness_validated ?? normalized.fairness_validated ?? "false")}</dd></div>
         <div><dt>validation</dt><dd>{result.validation?.is_valid ? "valid" : "invalid"}</dd></div>
       </dl>
+      {(resultGuide || primaryMetrics.length > 0 || expectedArtifacts.length > 0 || truthfulnessNote) && (
+        <div className="v3-plugin-summary">
+          <strong>Template Result Guide</strong>
+          {resultGuide && <p className="muted">{resultGuide}</p>}
+          {primaryMetrics.length > 0 && (
+            <ul>
+              {primaryMetrics.map((metric) => <li key={metric}><span>metric</span><code>{metric}</code></li>)}
+            </ul>
+          )}
+          {expectedArtifacts.length > 0 && (
+            <ul>
+              {expectedArtifacts.map((artifact) => (
+                <li key={artifact}><span>{artifactNames.has(artifact) ? "available" : "legacy missing"}</span><code>{artifact}</code></li>
+              ))}
+            </ul>
+          )}
+          {truthfulnessNote && <p className="muted">{truthfulnessNote}</p>}
+        </div>
+      )}
       {Object.keys(lockedModules).length > 0 && (
         <div className="v3-plugin-summary">
           <strong>Locked modules</strong>
@@ -92,4 +117,10 @@ function readPluginSelection(normalized: Record<string, unknown>): Record<string
 function readStringMap(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, String(item)]));
+}
+
+function readStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string" && value.trim()) return value.split(",").map((item) => item.trim()).filter(Boolean);
+  return [];
 }

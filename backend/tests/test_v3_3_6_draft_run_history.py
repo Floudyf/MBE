@@ -34,6 +34,7 @@ def test_draft_run_history_lists_complete_run(monkeypatch, tmp_path: Path) -> No
     assert runs[0]["template_id"] == "metatrack_ablation"
     assert runs[0]["selected_plugins"]["Routing"] == "co_access_sharding"
     assert runs[0]["artifact_count"] > 0
+    assert runs[0]["preset_id"] == "legacy/default smoke"
 
 
 def test_draft_run_detail_returns_artifacts_and_profiles(monkeypatch, tmp_path: Path) -> None:
@@ -50,6 +51,41 @@ def test_draft_run_detail_returns_artifacts_and_profiles(monkeypatch, tmp_path: 
     assert payload["generated_experiment_profile"]["type"] == "draft_smoke"
     assert payload["artifact_groups"]
     assert payload["summary_preview"]["tx_count"] == "24"
+
+
+def test_draft_run_history_reads_preset_metadata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(history, "V3_DRAFT_RUNS_ROOT", tmp_path)
+    run_dir = tmp_path / "v2run_20260628_000004_abcd"
+    write_run(run_dir)
+    normalized = json.loads((run_dir / "normalized_draft.json").read_text(encoding="utf-8"))
+    normalized.update({
+        "template_id": "single_module_txpool",
+        "experiment_template": "single_module_txpool",
+        "preset_id": "txpool_fifo_smoke",
+        "preset_name": "FIFO TxPool smoke",
+        "variable_module": "TxPool",
+        "fairness_validated": True,
+        "expected_artifacts": ["txpool_log.csv", "summary.json"],
+    })
+    write_json(run_dir / "normalized_draft.json", normalized)
+    write_json(run_dir / "summary.json", {
+        "tx_count": 24,
+        "experiment_template": "single_module_txpool",
+        "preset_id": "txpool_fifo_smoke",
+        "preset_name": "FIFO TxPool smoke",
+        "variable_module": "TxPool",
+        "fairness_validated": True,
+        "expected_artifacts": ["txpool_log.csv", "summary.json"],
+    })
+
+    response = client.get("/api/v3/composer/draft-runs")
+
+    assert response.status_code == 200
+    run = response.json()["runs"][0]
+    assert run["template_id"] == "single_module_txpool"
+    assert run["preset_id"] == "txpool_fifo_smoke"
+    assert run["variable_module"] == "TxPool"
+    assert run["summary_preview"]["preset_id"] == "txpool_fifo_smoke"
 
 
 def test_draft_run_detail_missing_files_does_not_crash(monkeypatch, tmp_path: Path) -> None:

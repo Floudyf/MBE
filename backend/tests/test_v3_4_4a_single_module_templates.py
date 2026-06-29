@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest
+from backend.app.services.v3_composer_draft_runner import build_experiment_profile, merge_run_metadata
 from backend.app.services.v3_composer_draft_validator import validate_v3_composer_draft
 from backend.app.services.v3_experiment_templates import load_templates
 
 
-def draft(template_id: str, **overrides: tuple[str, str]) -> V3ComposerDraftRequest:
+def draft(template_id: str, preset_id: str | None = None, **overrides: tuple[str, str]) -> V3ComposerDraftRequest:
     plugins = {
         "Workload": ("fixed", "synthetic_hotspot"),
         "TxPool": ("fixed", "fifo_pool"),
@@ -22,6 +23,7 @@ def draft(template_id: str, **overrides: tuple[str, str]) -> V3ComposerDraftRequ
     plugins.update(overrides)
     return V3ComposerDraftRequest(
         template_id=template_id,
+        preset_id=preset_id,
         modules={
             module_id: V3ComposerDraftModule(module_id=module_id, status=status, plugin=plugin)
             for module_id, (status, plugin) in plugins.items()
@@ -41,6 +43,61 @@ def test_catalog_returns_single_module_templates() -> None:
         "poa_light",
         "pbft_light_model",
     ]
+
+
+def test_single_module_templates_have_default_presets() -> None:
+    templates = load_templates()
+    expected = {
+        "single_module_txpool": "txpool_fifo_smoke",
+        "single_module_blockproducer": "blockproducer_time_or_count_smoke",
+        "single_module_consensus": "consensus_light_smoke",
+    }
+
+    for template_id, preset_id in expected.items():
+        template = templates[template_id]
+        presets = {preset["preset_id"]: preset for preset in template["presets"]}
+        preset = presets[preset_id]
+
+        assert template["default_preset_id"] == preset_id
+        assert preset["primary_metrics"]
+        assert preset["expected_artifacts"]
+        assert preset["truthfulness_note"]
+        assert preset["result_guide"]
+
+
+def test_single_module_templates_auto_fill_default_presets() -> None:
+    cases = {
+        "single_module_txpool": ("TxPool", "txpool_fifo_smoke", {"TxPool": ("variable", "fifo_pool")}),
+        "single_module_blockproducer": (
+            "BlockProducer",
+            "blockproducer_time_or_count_smoke",
+            {"BlockProducer": ("variable", "time_or_count_block_producer")},
+        ),
+        "single_module_consensus": ("Consensus", "consensus_light_smoke", {"Consensus": ("variable", "simple_leader")}),
+    }
+
+    for template_id, (variable_module, preset_id, overrides) in cases.items():
+        result = validate_v3_composer_draft(draft(template_id, **overrides))
+
+        assert result.is_valid is True
+        assert result.normalized_draft is not None
+        assert result.normalized_draft["preset_id"] == preset_id
+        assert result.normalized_draft["variable_module"] == variable_module
+        assert result.normalized_draft["primary_metrics"]
+        assert result.normalized_draft["expected_artifacts"]
+
+
+def test_single_module_template_rejects_mismatched_preset() -> None:
+    result = validate_v3_composer_draft(
+        draft(
+            "single_module_txpool",
+            preset_id="consensus_light_smoke",
+            TxPool=("variable", "fifo_pool"),
+        )
+    )
+
+    assert result.is_valid is False
+    assert any("Invalid preset" in error and "single_module_txpool" in error for error in result.errors)
 
 
 def test_single_module_consensus_allows_consensus_light_plugins() -> None:
@@ -129,3 +186,24 @@ def test_legacy_metatrack_draft_remains_compatible() -> None:
     assert result.is_runnable is True
     assert result.normalized_draft is not None
     assert result.normalized_draft["fairness_validated"] is False
+
+
+def test_runner_summary_and_experiment_profile_include_preset_metadata() -> None:
+    validation = validate_v3_composer_draft(
+        draft("single_module_consensus", Consensus=("variable", "pbft_light_model"))
+    )
+    assert validation.normalized_draft is not None
+    normalized = validation.normalized_draft
+
+    profile = build_experiment_profile(normalized)
+    summary = merge_run_metadata({"tx_count": 24}, normalized)
+
+    for payload in (profile, summary):
+        assert payload["experiment_template"] == "single_module_consensus"
+        assert payload["preset_id"] == "consensus_light_smoke"
+        assert payload["preset_name"] == "Consensus-light smoke"
+        assert payload["variable_module"] == "Consensus"
+        assert payload["fairness_validated"] is True
+        assert "avg_consensus_latency_ms" in payload["primary_metrics"]
+        assert "consensus_log.csv" in payload["expected_artifacts"]
+        assert "PBFT" in payload["truthfulness_note"]

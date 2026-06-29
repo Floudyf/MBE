@@ -748,6 +748,8 @@ def v3_composer_templates() -> dict:
             "fairness_rule": item.get("fairness_rule", item.get("fairness", {}).get("fairness_rule", "")),
             "status": item.get("status", "runnable" if item.get("runnable") else "preview_only"),
             "truthfulness_note": item.get("truthfulness_note", ""),
+            "default_preset_id": item.get("default_preset_id", ""),
+            "presets": item.get("presets", []),
             "variable_modules": item.get("variable_modules", []),
             "fixed_modules": item.get("fixed_modules", []),
             "disabled_modules": item.get("disabled_modules", []),

@@ -21,6 +21,7 @@ export type ComposerDraftModule = {
 
 export type ComposerDraft = {
   templateId: string;
+  presetId?: string;
   modules: Record<string, ComposerDraftModule>;
   variableModules: string[];
   fixedModules: string[];
@@ -63,12 +64,13 @@ export function createComposerDraft(preview: V3ComposerPreview): ComposerDraft {
   return summarizeDraft({ templateId: preview.template_id, modules });
 }
 
-export function summarizeDraft(input: Pick<ComposerDraft, "templateId" | "modules">): ComposerDraft {
+export function summarizeDraft(input: Pick<ComposerDraft, "templateId" | "modules"> & { presetId?: string }): ComposerDraft {
   const modules = input.modules;
   const values = Object.values(modules);
   const validation = validateDraft(modules);
   return {
     templateId: input.templateId,
+    presetId: input.presetId,
     modules,
     variableModules: values.filter((module) => module.status === "variable").map((module) => module.moduleId),
     fixedModules: values.filter((module) => module.status === "fixed" || module.status === "default").map((module) => module.moduleId),
@@ -102,12 +104,13 @@ export function updateDraftModule(
       params: patch.params ?? current.params,
     },
   };
-  return summarizeDraft({ templateId: draft.templateId, modules: nextModules });
+  return summarizeDraft({ templateId: draft.templateId, presetId: draft.presetId, modules: nextModules });
 }
 
 export function toComposerDraftRequest(draft: ComposerDraft): V3ComposerDraftRequest {
   return {
     template_id: draft.templateId,
+    preset_id: draft.presetId,
     modules: Object.fromEntries(
       Object.values(draft.modules).map((module) => [module.moduleId, {
         module_id: module.moduleId,

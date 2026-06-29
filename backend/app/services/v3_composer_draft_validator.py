@@ -46,6 +46,20 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         str(key): str(value)
         for key, value in (template.get("locked_modules") or template.get("fairness", {}).get("locked_modules") or {}).items()
     }
+    presets = [preset for preset in template.get("presets", []) if isinstance(preset, dict)]
+    presets_by_id = {str(preset.get("preset_id", "")): preset for preset in presets if preset.get("preset_id")}
+    default_preset_id = str(template.get("default_preset_id") or (presets[0].get("preset_id") if presets else "") or "")
+    requested_preset_id = (request.preset_id or "").strip()
+    preset_id = requested_preset_id or default_preset_id
+    preset = presets_by_id.get(preset_id, {}) if preset_id else {}
+    if requested_preset_id and requested_preset_id not in presets_by_id:
+        errors.append(
+            f"Invalid preset: {requested_preset_id} does not belong to {template_id}."
+        )
+    if preset and str(preset.get("variable_module", "")) and str(preset.get("variable_module", "")) != template_variable_module:
+        errors.append(
+            f"Invalid preset: {preset_id} belongs to {preset.get('variable_module')}, but template {template_id} uses {template_variable_module}."
+        )
     is_single_module_template = template_id.startswith("single_module_") and bool(template_variable_module)
 
     if not request.modules:
@@ -188,6 +202,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         allowed_variable_plugins=sorted(template_allowed_plugins),
         locked_modules=template_locked_modules,
         fairness_rule=str(template.get("fairness_rule") or template.get("fairness", {}).get("fairness_rule", "")),
+        preset=preset,
     )
     fairness_validated = False
     if is_single_module_template:
@@ -249,6 +264,13 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         "variable_module": fairness_scope.get("variable_module", ""),
         "locked_modules": fairness_scope.get("locked_modules", {}),
         "fairness_validated": bool(fairness_validated and not errors) if is_single_module_template else False,
+        "preset_id": preset_id,
+        "preset_name": str(preset.get("preset_name", "")),
+        "primary_metrics": list(preset.get("primary_metrics", [])) if preset else [],
+        "secondary_metrics": list(preset.get("secondary_metrics", [])) if preset else [],
+        "expected_artifacts": list(preset.get("expected_artifacts", [])) if preset else [],
+        "result_guide": str(preset.get("result_guide", "")),
+        "truthfulness_note": str(preset.get("truthfulness_note") or template.get("truthfulness_note", "")),
     }
 
     is_valid = not errors
@@ -297,11 +319,19 @@ def build_fairness_scope(
     allowed_variable_plugins: list[str],
     locked_modules: dict[str, str],
     fairness_rule: str,
+    preset: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    preset = preset or {}
     return {
         "experiment_template": template_id,
+        "preset_id": str(preset.get("preset_id", "")),
+        "preset_name": str(preset.get("preset_name", "")),
         "variable_module": variable_module,
         "allowed_variable_plugins": allowed_variable_plugins,
         "locked_modules": locked_modules,
         "fairness_rule": fairness_rule,
+        "primary_metrics": list(preset.get("primary_metrics", [])),
+        "expected_artifacts": list(preset.get("expected_artifacts", [])),
+        "result_guide": str(preset.get("result_guide", "")),
+        "truthfulness_note": str(preset.get("truthfulness_note", "")),
     }

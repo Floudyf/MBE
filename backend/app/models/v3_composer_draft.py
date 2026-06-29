@@ -17,6 +17,7 @@ class V3ComposerDraftModule(BaseModel):
 
 class V3ComposerDraftRequest(BaseModel):
     template_id: str
+    preset_id: str | None = None
     modules: dict[str, V3ComposerDraftModule]
 
 
