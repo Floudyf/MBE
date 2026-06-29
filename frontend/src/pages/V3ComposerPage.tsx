@@ -167,6 +167,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           <span>Go Runtime</span>
           <span>Smoke 实验</span>
           <span>FIFO TxPool</span>
+          <span>Time/Count Producer</span>
           <span>非 Fabric</span>
           <span>非 MetaFlow</span>
           <span>非 PBFT/HotStuff/Raft</span>

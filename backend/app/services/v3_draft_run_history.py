@@ -191,6 +191,15 @@ def _pick_summary_fields(summary: dict[str, Any]) -> dict[str, Any]:
         "txpool_peak_size",
         "txpool_avg_wait_ms",
         "txpool_p95_wait_ms",
+        "empty_block_count",
+        "avg_block_size",
+        "max_block_size",
+        "block_interval_ms",
+        "avg_block_interval_ms",
+        "blockproducer_count_cut_count",
+        "blockproducer_time_cut_count",
+        "blockproducer_drain_cut_count",
+        "blockproducer_empty_cut_count",
     )
     return {key: summary[key] for key in keys if key in summary}
 

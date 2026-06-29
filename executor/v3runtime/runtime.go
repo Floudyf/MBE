@@ -1,6 +1,7 @@
 package v3runtime
 
 import (
+	"crypto/sha256"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -31,6 +32,7 @@ type ChainProfile struct {
 	ConsensusDomainCount  int
 	BlockIntervalMS       int
 	MaxTxPerBlock         int
+	EmptyBlockEnabled     bool
 	ShardCount            int
 	ExecutionShardCount   int
 	StateStorageUnitCount int
@@ -87,10 +89,34 @@ type Transaction struct {
 }
 
 type Block struct {
-	Height    int
-	ID        string
-	Txs       []PooledTransaction
-	CutTimeMS int
+	Height            int
+	ID                string
+	ParentHash        string
+	Hash              string
+	ProducerPlugin    string
+	CutReason         string
+	PoolSizeBeforeCut int
+	PoolSizeAfterCut  int
+	Txs               []PooledTransaction
+	CutTimeMS         int
+}
+
+type BlockProducer struct {
+	PluginID           string
+	BlockIntervalMS    int
+	MaxTxPerBlock      int
+	EmptyBlockEnabled  bool
+	ParentHash         string
+	NextHeight         int
+	LastCutTimeMS      int
+	ProducedBlockCount int
+	EmptyBlockCount    int
+	CountCutCount      int
+	TimeCutCount       int
+	DrainCutCount      int
+	EmptyCutCount      int
+	BlockSizes         []int
+	CutIntervals       []int
 }
 
 type PooledTransaction struct {
@@ -204,6 +230,15 @@ type Summary struct {
 	TxPoolPeakSize            int     `json:"txpool_peak_size"`
 	TxPoolAvgWaitMS           float64 `json:"txpool_avg_wait_ms"`
 	TxPoolP95WaitMS           float64 `json:"txpool_p95_wait_ms"`
+	EmptyBlockCount           int     `json:"empty_block_count"`
+	AvgBlockSize              float64 `json:"avg_block_size"`
+	MaxBlockSize              int     `json:"max_block_size"`
+	BlockIntervalMS           int     `json:"block_interval_ms"`
+	AvgBlockIntervalMS        float64 `json:"avg_block_interval_ms"`
+	BlockProducerCountCut     int     `json:"blockproducer_count_cut_count"`
+	BlockProducerTimeCut      int     `json:"blockproducer_time_cut_count"`
+	BlockProducerDrainCut     int     `json:"blockproducer_drain_cut_count"`
+	BlockProducerEmptyCut     int     `json:"blockproducer_empty_cut_count"`
 	BlockCommitLatencyMS      float64 `json:"block_commit_latency_ms"`
 	ExecutionShardCount       int     `json:"execution_shard_count"`
 	StateStorageUnitCount     int     `json:"state_storage_unit_count"`
@@ -255,7 +290,8 @@ func Run(input Input) (Result, error) {
 	}
 	txs := generateWorkload(experiment, chain)
 	txPool := newTxPool(chain)
-	blocks := produceBlocksFromTxPool(txs, chain, txPool)
+	blockProducer := newBlockProducer(chain, plugin)
+	blocks := produceBlocksFromTxPool(txs, chain, txPool, blockProducer)
 	state := map[string]int{}
 	blockLog := []map[string]string{}
 	txResults := []TxResult{}
@@ -268,8 +304,15 @@ func Run(input Input) (Result, error) {
 		blockLog = append(blockLog, map[string]string{
 			"block_height":             strconv.Itoa(block.Height),
 			"block_id":                 block.ID,
+			"parent_hash":              block.ParentHash,
+			"block_hash":               block.Hash,
+			"proposer":                 proposer,
 			"proposer_node":            proposer,
 			"tx_count":                 strconv.Itoa(len(block.Txs)),
+			"cut_reason":               block.CutReason,
+			"pool_size_before_cut":     strconv.Itoa(block.PoolSizeBeforeCut),
+			"pool_size_after_cut":      strconv.Itoa(block.PoolSizeAfterCut),
+			"block_producer_plugin":    block.ProducerPlugin,
 			"cut_time_ms":              strconv.Itoa(block.CutTimeMS),
 			"ordered_time_ms":          strconv.Itoa(ordered),
 			"finalized_time_ms":        strconv.Itoa(finalized),
@@ -348,7 +391,8 @@ func Run(input Input) (Result, error) {
 	summary := buildSummary(runID, experiment, chain, plugin.ProfileID, txResults, len(blocks), runtimeMode(plugin))
 	applyMechanismMetrics(&summary, txResults, plugin, chain)
 	applyTxPoolMetrics(&summary, txPool)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, "V3.4.1 Go-backed FIFO TxPool runtime hardening run"); err != nil {
+	applyBlockProducerMetrics(&summary, blockProducer)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, "V3.4.2 Go-backed BlockProducer runtime hardening run"); err != nil {
 		return Result{}, err
 	}
 	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, FinalState: state}, nil
@@ -365,6 +409,7 @@ func parseChainProfile(text string) ChainProfile {
 		ConsensusDomainCount:  sectionFieldInt(text, "consensus", "domain_count", 1),
 		BlockIntervalMS:       fieldInt(text, "block_interval_ms", 100),
 		MaxTxPerBlock:         fieldInt(text, "max_tx_per_block", 500),
+		EmptyBlockEnabled:     sectionFieldBool(text, "block", "empty_block_enabled", fieldBool(text, "empty_block_enabled", false)),
 		ShardCount:            executionShardCount,
 		ExecutionShardCount:   executionShardCount,
 		StateStorageUnitCount: stateStorageUnitCount,
@@ -612,35 +657,140 @@ func (pool *TxPool) Len() int {
 	return len(pool.queue)
 }
 
-func produceBlocksFromTxPool(txs []Transaction, chain ChainProfile, pool *TxPool) []Block {
+func newBlockProducer(chain ChainProfile, plugin PluginProfile) *BlockProducer {
+	pluginID := plugin.BlockProducer
+	if pluginID == "" {
+		pluginID = "time_or_count_block_producer"
+	}
+	return &BlockProducer{
+		PluginID:          pluginID,
+		BlockIntervalMS:   max(1, chain.BlockIntervalMS),
+		MaxTxPerBlock:     max(1, chain.MaxTxPerBlock),
+		EmptyBlockEnabled: chain.EmptyBlockEnabled,
+		ParentHash:        genesisParentHash(chain.ProfileID),
+		NextHeight:        1,
+	}
+}
+
+func (producer *BlockProducer) ShouldCut(nowMS, poolSize int, workloadDone bool) (bool, string) {
+	if poolSize >= producer.MaxTxPerBlock {
+		return true, "count"
+	}
+	if poolSize > 0 && workloadDone {
+		return true, "drain"
+	}
+	if poolSize > 0 && nowMS-producer.LastCutTimeMS >= producer.BlockIntervalMS {
+		return true, "time"
+	}
+	if poolSize == 0 && producer.EmptyBlockEnabled && nowMS-producer.LastCutTimeMS >= producer.BlockIntervalMS {
+		return true, "empty"
+	}
+	return false, ""
+}
+
+func (producer *BlockProducer) ProduceBlock(nowMS int, pool *TxPool, cutReason string) Block {
+	height := producer.NextHeight
+	before := pool.Len()
+	selected := []PooledTransaction{}
+	if before > 0 {
+		selected = pool.SelectForBlock(producer.MaxTxPerBlock, nowMS, height)
+	}
+	after := pool.Len()
+	block := Block{
+		Height:            height,
+		ID:                fmt.Sprintf("block_%06d", height),
+		ParentHash:        producer.ParentHash,
+		ProducerPlugin:    producer.PluginID,
+		CutReason:         cutReason,
+		PoolSizeBeforeCut: before,
+		PoolSizeAfterCut:  after,
+		Txs:               selected,
+		CutTimeMS:         nowMS,
+	}
+	block.Hash = producer.makeBlockHash(block)
+	producer.ParentHash = block.Hash
+	producer.NextHeight++
+	producer.ProducedBlockCount++
+	if len(selected) == 0 {
+		producer.EmptyBlockCount++
+	}
+	switch cutReason {
+	case "count":
+		producer.CountCutCount++
+	case "time":
+		producer.TimeCutCount++
+	case "drain":
+		producer.DrainCutCount++
+	case "empty":
+		producer.EmptyCutCount++
+	}
+	if producer.LastCutTimeMS > 0 {
+		producer.CutIntervals = append(producer.CutIntervals, nowMS-producer.LastCutTimeMS)
+	}
+	producer.LastCutTimeMS = nowMS
+	producer.BlockSizes = append(producer.BlockSizes, len(selected))
+	return block
+}
+
+func (producer *BlockProducer) makeBlockHash(block Block) string {
+	parts := []string{strconv.Itoa(block.Height), block.ParentHash, strconv.Itoa(block.CutTimeMS), producer.PluginID, block.CutReason}
+	for _, pooledTx := range block.Txs {
+		parts = append(parts, pooledTx.Tx.ID)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func genesisParentHash(chainID string) string {
+	sum := sha256.Sum256([]byte("genesis|" + chainID))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func produceBlocksFromTxPool(txs []Transaction, chain ChainProfile, pool *TxPool, producer *BlockProducer) []Block {
 	blocks := []Block{}
-	maxTx := max(1, chain.MaxTxPerBlock)
-	blockInterval := max(1, chain.BlockIntervalMS)
 	nextTx := 0
 	for nextTx < len(txs) || pool.Len() > 0 {
-		lastAdmitTime := 0
+		nowMS := producer.LastCutTimeMS + producer.BlockIntervalMS
+		lastAdmitTime := -1
+		idleTimeCut := false
 		for nextTx < len(txs) {
 			tx := txs[nextTx]
-			if pool.Len() >= maxTx {
+			if pool.Len() >= producer.MaxTxPerBlock {
+				break
+			}
+			if pool.Len() > 0 && lastAdmitTime >= 0 && tx.SubmitTimeMS-lastAdmitTime >= producer.BlockIntervalMS {
+				nowMS = max(producer.LastCutTimeMS+producer.BlockIntervalMS, lastAdmitTime)
+				idleTimeCut = true
 				break
 			}
 			pool.Admit(tx, tx.SubmitTimeMS)
 			lastAdmitTime = tx.SubmitTimeMS
 			nextTx++
-			if pool.Len() >= maxTx {
+			if pool.Len() >= producer.MaxTxPerBlock {
+				nowMS = max(producer.LastCutTimeMS+producer.BlockIntervalMS, tx.SubmitTimeMS)
 				break
 			}
 		}
-		if pool.Len() == 0 {
+		workloadDone := nextTx >= len(txs)
+		if workloadDone && lastAdmitTime >= 0 {
+			nowMS = max(producer.LastCutTimeMS+producer.BlockIntervalMS, lastAdmitTime)
+		}
+		if pool.Len() == 0 && !producer.EmptyBlockEnabled {
 			continue
 		}
-		height := len(blocks) + 1
-		cutTime := max(height*blockInterval, lastAdmitTime)
-		selected := pool.SelectForBlock(maxTx, cutTime, height)
-		if len(selected) == 0 {
+		shouldCut, cutReason := producer.ShouldCut(nowMS, pool.Len(), workloadDone)
+		if idleTimeCut && pool.Len() > 0 && pool.Len() < producer.MaxTxPerBlock {
+			shouldCut = true
+			cutReason = "time"
+		}
+		if !shouldCut {
 			continue
 		}
-		blocks = append(blocks, Block{Height: height, ID: fmt.Sprintf("block_%06d", height), Txs: selected, CutTimeMS: cutTime})
+		block := producer.ProduceBlock(nowMS, pool, cutReason)
+		if len(block.Txs) == 0 && !producer.EmptyBlockEnabled {
+			continue
+		}
+		blocks = append(blocks, block)
 	}
 	return blocks
 }
@@ -755,6 +905,18 @@ func applyTxPoolMetrics(summary *Summary, pool *TxPool) {
 	summary.QueueWaitMS = summary.TxPoolAvgWaitMS
 }
 
+func applyBlockProducerMetrics(summary *Summary, producer *BlockProducer) {
+	summary.EmptyBlockCount = producer.EmptyBlockCount
+	summary.AvgBlockSize = round(avg(producer.BlockSizes))
+	summary.MaxBlockSize = maxInt(producer.BlockSizes)
+	summary.BlockIntervalMS = producer.BlockIntervalMS
+	summary.AvgBlockIntervalMS = round(avg(producer.CutIntervals))
+	summary.BlockProducerCountCut = producer.CountCutCount
+	summary.BlockProducerTimeCut = producer.TimeCutCount
+	summary.BlockProducerDrainCut = producer.DrainCutCount
+	summary.BlockProducerEmptyCut = producer.EmptyCutCount
+}
+
 func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
@@ -787,11 +949,11 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := writeTxPoolLog(filepath.Join(out, "txpool_log.csv"), txPoolLog); err != nil {
 		return err
 	}
-	report := "# " + title + "\n\nThis is V3.4.1 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, and local FIFO TxPool admission/selection behavior.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nThis is not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
+	report := "# " + title + "\n\nThis is V3.4.2 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool and BlockProducer hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, local FIFO TxPool admission/selection behavior, and local logical BlockProducer cut behavior.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nThis is not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
-	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nfabric_live=false\nmetaflow=false\npbft=false\nhotstuff=false\nraft=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
+	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nfabric_live=false\nmetaflow=false\npbft=false\nhotstuff=false\nraft=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
 	return os.WriteFile(filepath.Join(out, "runtime.log"), []byte(log), 0o644)
 }
 
@@ -800,17 +962,17 @@ func writeSummaryCSV(path string, s Summary) error {
 		s.RunID, s.Stage, s.BackendType, s.TruthLabel, s.ChainProfileID, s.PluginProfileID, s.ExperimentProfileID,
 		strconv.Itoa(s.TxCount), strconv.Itoa(s.SuccessCount), strconv.Itoa(s.FailureCount), strconv.Itoa(s.BlockCount),
 		fmt.Sprint(s.ThroughputTPS), fmt.Sprint(s.AvgLatencyMS), fmt.Sprint(s.P95LatencyMS), fmt.Sprint(s.P99LatencyMS), s.RuntimeMode,
-		strconv.Itoa(s.RemoteFetchCount), fmt.Sprint(s.CrossShardRatio), strconv.Itoa(s.FastTrackCount), strconv.Itoa(s.ConservativeTrackCount), strconv.Itoa(s.AggregatedUpdateCount), fmt.Sprint(s.AggregationRatio), strconv.Itoa(s.ConflictCount), fmt.Sprint(s.QueueWaitMS), strconv.Itoa(s.TxPoolAdmittedCount), strconv.Itoa(s.TxPoolRejectedCount), strconv.Itoa(s.TxPoolPeakSize), fmt.Sprint(s.TxPoolAvgWaitMS), fmt.Sprint(s.TxPoolP95WaitMS), fmt.Sprint(s.BlockCommitLatencyMS),
+		strconv.Itoa(s.RemoteFetchCount), fmt.Sprint(s.CrossShardRatio), strconv.Itoa(s.FastTrackCount), strconv.Itoa(s.ConservativeTrackCount), strconv.Itoa(s.AggregatedUpdateCount), fmt.Sprint(s.AggregationRatio), strconv.Itoa(s.ConflictCount), fmt.Sprint(s.QueueWaitMS), strconv.Itoa(s.TxPoolAdmittedCount), strconv.Itoa(s.TxPoolRejectedCount), strconv.Itoa(s.TxPoolPeakSize), fmt.Sprint(s.TxPoolAvgWaitMS), fmt.Sprint(s.TxPoolP95WaitMS), strconv.Itoa(s.EmptyBlockCount), fmt.Sprint(s.AvgBlockSize), strconv.Itoa(s.MaxBlockSize), strconv.Itoa(s.BlockIntervalMS), fmt.Sprint(s.AvgBlockIntervalMS), strconv.Itoa(s.BlockProducerCountCut), strconv.Itoa(s.BlockProducerTimeCut), strconv.Itoa(s.BlockProducerDrainCut), strconv.Itoa(s.BlockProducerEmptyCut), fmt.Sprint(s.BlockCommitLatencyMS),
 		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "block_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {
-	fields := []string{"block_height", "block_id", "proposer_node", "tx_count", "cut_time_ms", "ordered_time_ms", "finalized_time_ms", "consensus_plugin", "status", "consensus_domain_id", "validator_count", "execution_shard_count", "state_storage_unit_count"}
+	fields := []string{"block_height", "block_id", "parent_hash", "block_hash", "proposer", "proposer_node", "tx_count", "cut_reason", "pool_size_before_cut", "pool_size_after_cut", "block_producer_plugin", "cut_time_ms", "ordered_time_ms", "finalized_time_ms", "consensus_plugin", "status", "consensus_domain_id", "validator_count", "execution_shard_count", "state_storage_unit_count"}
 	out := [][]string{}
 	for _, row := range rows {
 		values := []string{}
@@ -1036,6 +1198,14 @@ func sectionFieldInt(text, section, field string, fallback int) int {
 	return value
 }
 
+func sectionFieldBool(text, section, field string, fallback bool) bool {
+	value := sectionFieldString(text, section, field, "")
+	if value == "" {
+		return fallback
+	}
+	return value == "true"
+}
+
 func sectionText(text, section string) string {
 	lines := strings.Split(text, "\n")
 	start := -1
@@ -1167,6 +1337,16 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func maxInt(values []int) int {
+	result := 0
+	for _, value := range values {
+		if value > result {
+			result = value
+		}
+	}
+	return result
 }
 
 func firstNonEmpty(values ...string) string {
