@@ -166,8 +166,11 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           <span>单链</span>
           <span>Go Runtime</span>
           <span>Smoke 实验</span>
+          <span>FIFO TxPool</span>
           <span>非 Fabric</span>
           <span>非 MetaFlow</span>
+          <span>非 PBFT/HotStuff/Raft</span>
+          <span>非多节点网络</span>
         </div>
       </header>
 

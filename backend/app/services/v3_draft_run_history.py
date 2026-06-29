@@ -99,6 +99,7 @@ def artifact_groups(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups = [
         ("Draft config", {"composer_draft.json", "normalized_draft.json", "draft_validation.json", "generated_experiment_profile.json", "generated_experiment_profile.yaml", "generated_plugin_profile.json", "generated_plugin_profile.yaml"}),
         ("Run summary", {"summary.csv", "summary.json", "report.md", "latency.csv"}),
+        ("Runtime queue logs", {"txpool_log.csv"}),
         ("Chain runtime logs", {"runtime.log", "block_log.csv", "tx_results.csv", "state_commit_log.csv"}),
         ("MetaTrack metrics", {"metatrack_summary.csv", "metatrack_summary.json", "metatrack_latency.csv", "metatrack_mechanism_metrics.csv", "metatrack_ablation_report.md"}),
         ("Used profiles", {"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "used_chain_profile.json", "used_plugin_profile.json", "used_experiment_profile.json"}),
@@ -176,7 +177,21 @@ def _summary_preview(run_dir: Path) -> dict[str, Any]:
 
 
 def _pick_summary_fields(summary: dict[str, Any]) -> dict[str, Any]:
-    keys = ("tx_count", "success_count", "failure_count", "failed_count", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms")
+    keys = (
+        "tx_count",
+        "success_count",
+        "failure_count",
+        "failed_count",
+        "avg_latency_ms",
+        "p95_latency_ms",
+        "p99_latency_ms",
+        "queue_wait_ms",
+        "txpool_admitted_count",
+        "txpool_rejected_count",
+        "txpool_peak_size",
+        "txpool_avg_wait_ms",
+        "txpool_p95_wait_ms",
+    )
     return {key: summary[key] for key in keys if key in summary}
 
 

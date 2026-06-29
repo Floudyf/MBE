@@ -44,6 +44,7 @@ type ChainProfile struct {
 	KeyCount              int
 	MaxPoolSize           int
 	DedupEnabled          bool
+	BackpressurePolicy    string
 }
 
 type PluginProfile struct {
@@ -88,8 +89,47 @@ type Transaction struct {
 type Block struct {
 	Height    int
 	ID        string
-	Txs       []Transaction
+	Txs       []PooledTransaction
 	CutTimeMS int
+}
+
+type PooledTransaction struct {
+	Tx          Transaction
+	AdmitTimeMS int
+	QueueWaitMS int
+}
+
+type TxPoolEvent struct {
+	EventTimeMS    int
+	EventType      string
+	TxID           string
+	BlockHeight    int
+	PoolSizeBefore int
+	PoolSizeAfter  int
+	AdmittedCount  int
+	SelectedCount  int
+	RejectedCount  int
+	QueueWaitMS    int
+	Reason         string
+}
+
+type txPoolEntry struct {
+	tx          Transaction
+	admitTimeMS int
+}
+
+type TxPool struct {
+	maxPoolSize   int
+	dedupEnabled  bool
+	backpressure  string
+	queue         []txPoolEntry
+	seen          map[string]bool
+	events        []TxPoolEvent
+	admittedCount int
+	selectedCount int
+	rejectedCount int
+	peakSize      int
+	queueWaits    []int
 }
 
 type TxResult struct {
@@ -159,6 +199,11 @@ type Summary struct {
 	AggregationRatio          float64 `json:"aggregation_ratio"`
 	ConflictCount             int     `json:"conflict_count"`
 	QueueWaitMS               float64 `json:"queue_wait_ms"`
+	TxPoolAdmittedCount       int     `json:"txpool_admitted_count"`
+	TxPoolRejectedCount       int     `json:"txpool_rejected_count"`
+	TxPoolPeakSize            int     `json:"txpool_peak_size"`
+	TxPoolAvgWaitMS           float64 `json:"txpool_avg_wait_ms"`
+	TxPoolP95WaitMS           float64 `json:"txpool_p95_wait_ms"`
 	BlockCommitLatencyMS      float64 `json:"block_commit_latency_ms"`
 	ExecutionShardCount       int     `json:"execution_shard_count"`
 	StateStorageUnitCount     int     `json:"state_storage_unit_count"`
@@ -175,6 +220,7 @@ type Result struct {
 	BlockLog       []map[string]string
 	TxResults      []TxResult
 	StateCommitLog []StateCommit
+	TxPoolLog      []TxPoolEvent
 	FinalState     map[string]int
 }
 
@@ -208,7 +254,8 @@ func Run(input Input) (Result, error) {
 		runID = "v3go_run"
 	}
 	txs := generateWorkload(experiment, chain)
-	blocks := cutBlocks(txs, chain)
+	txPool := newTxPool(chain)
+	blocks := produceBlocksFromTxPool(txs, chain, txPool)
 	state := map[string]int{}
 	blockLog := []map[string]string{}
 	txResults := []TxResult{}
@@ -235,7 +282,8 @@ func Run(input Input) (Result, error) {
 		})
 		cursor := finalized
 		routingMap := buildRoutingMap(block.Txs, chain, plugin)
-		for _, tx := range block.Txs {
+		for _, pooledTx := range block.Txs {
+			tx := pooledTx.Tx
 			executionShardID := assignTxShard(tx, routingMap, chain)
 			accessedUnits := accessedStateUnits(tx, chain)
 			homeUnits := writeStateUnits(tx, chain)
@@ -253,7 +301,7 @@ func Run(input Input) (Result, error) {
 			result := TxResult{
 				TxID:                 tx.ID,
 				SubmitTimeMS:         tx.SubmitTimeMS,
-				AdmitTimeMS:          tx.SubmitTimeMS,
+				AdmitTimeMS:          pooledTx.AdmitTimeMS,
 				BlockHeight:          block.Height,
 				ExecutionStartMS:     start,
 				ExecutionEndMS:       end,
@@ -299,10 +347,11 @@ func Run(input Input) (Result, error) {
 	}
 	summary := buildSummary(runID, experiment, chain, plugin.ProfileID, txResults, len(blocks), runtimeMode(plugin))
 	applyMechanismMetrics(&summary, txResults, plugin, chain)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, "V3.3 Go-backed minimal runtime parity run"); err != nil {
+	applyTxPoolMetrics(&summary, txPool)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, "V3.4.1 Go-backed FIFO TxPool runtime hardening run"); err != nil {
 		return Result{}, err
 	}
-	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, FinalState: state}, nil
+	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, FinalState: state}, nil
 }
 
 func parseChainProfile(text string) ChainProfile {
@@ -329,6 +378,7 @@ func parseChainProfile(text string) ChainProfile {
 		KeyCount:              fieldInt(text, "key_count", 100000),
 		MaxPoolSize:           fieldInt(text, "max_pool_size", 100000),
 		DedupEnabled:          fieldBool(text, "dedup_enabled", true),
+		BackpressurePolicy:    fieldString(text, "backpressure_policy", "reject"),
 	}
 }
 
@@ -458,19 +508,139 @@ func deterministicKey(index, seed, keyCount int) int {
 	return value % max(1, keyCount)
 }
 
-func cutBlocks(txs []Transaction, chain ChainProfile) []Block {
+func newTxPool(chain ChainProfile) *TxPool {
+	maxPoolSize := chain.MaxPoolSize
+	if maxPoolSize <= 0 {
+		maxPoolSize = 100000
+	}
+	backpressure := chain.BackpressurePolicy
+	if backpressure == "" {
+		backpressure = "reject"
+	}
+	return &TxPool{
+		maxPoolSize:  maxPoolSize,
+		dedupEnabled: chain.DedupEnabled,
+		backpressure: backpressure,
+		seen:         map[string]bool{},
+	}
+}
+
+func (pool *TxPool) Admit(tx Transaction, nowMS int) bool {
+	before := len(pool.queue)
+	if pool.dedupEnabled && pool.seen[tx.ID] {
+		pool.rejectedCount++
+		pool.events = append(pool.events, TxPoolEvent{
+			EventTimeMS:    nowMS,
+			EventType:      "reject",
+			TxID:           tx.ID,
+			PoolSizeBefore: before,
+			PoolSizeAfter:  before,
+			RejectedCount:  1,
+			Reason:         "duplicate_tx",
+		})
+		return false
+	}
+	if before >= pool.maxPoolSize {
+		pool.rejectedCount++
+		pool.events = append(pool.events, TxPoolEvent{
+			EventTimeMS:    nowMS,
+			EventType:      "reject",
+			TxID:           tx.ID,
+			PoolSizeBefore: before,
+			PoolSizeAfter:  before,
+			RejectedCount:  1,
+			Reason:         "pool_full_" + pool.backpressure,
+		})
+		if pool.dedupEnabled {
+			pool.seen[tx.ID] = true
+		}
+		return false
+	}
+	pool.queue = append(pool.queue, txPoolEntry{tx: tx, admitTimeMS: nowMS})
+	if pool.dedupEnabled {
+		pool.seen[tx.ID] = true
+	}
+	pool.admittedCount++
+	if len(pool.queue) > pool.peakSize {
+		pool.peakSize = len(pool.queue)
+	}
+	pool.events = append(pool.events, TxPoolEvent{
+		EventTimeMS:    nowMS,
+		EventType:      "admit",
+		TxID:           tx.ID,
+		PoolSizeBefore: before,
+		PoolSizeAfter:  len(pool.queue),
+		AdmittedCount:  1,
+		Reason:         "admitted",
+	})
+	return true
+}
+
+func (pool *TxPool) SelectForBlock(maxTx, cutTimeMS, blockHeight int) []PooledTransaction {
+	limit := max(1, maxTx)
+	if limit > len(pool.queue) {
+		limit = len(pool.queue)
+	}
+	selected := make([]PooledTransaction, 0, limit)
+	for i := 0; i < limit; i++ {
+		before := len(pool.queue)
+		entry := pool.queue[0]
+		pool.queue = pool.queue[1:]
+		wait := cutTimeMS - entry.admitTimeMS
+		if wait < 0 {
+			wait = 0
+		}
+		pool.queueWaits = append(pool.queueWaits, wait)
+		pool.selectedCount++
+		selected = append(selected, PooledTransaction{Tx: entry.tx, AdmitTimeMS: entry.admitTimeMS, QueueWaitMS: wait})
+		pool.events = append(pool.events, TxPoolEvent{
+			EventTimeMS:    cutTimeMS,
+			EventType:      "select",
+			TxID:           entry.tx.ID,
+			BlockHeight:    blockHeight,
+			PoolSizeBefore: before,
+			PoolSizeAfter:  len(pool.queue),
+			SelectedCount:  1,
+			QueueWaitMS:    wait,
+			Reason:         "selected_for_block",
+		})
+	}
+	return selected
+}
+
+func (pool *TxPool) Len() int {
+	return len(pool.queue)
+}
+
+func produceBlocksFromTxPool(txs []Transaction, chain ChainProfile, pool *TxPool) []Block {
 	blocks := []Block{}
 	maxTx := max(1, chain.MaxTxPerBlock)
-	for offset := 0; offset < len(txs); offset += maxTx {
-		end := offset + maxTx
-		if end > len(txs) {
-			end = len(txs)
+	blockInterval := max(1, chain.BlockIntervalMS)
+	nextTx := 0
+	for nextTx < len(txs) || pool.Len() > 0 {
+		lastAdmitTime := 0
+		for nextTx < len(txs) {
+			tx := txs[nextTx]
+			if pool.Len() >= maxTx {
+				break
+			}
+			pool.Admit(tx, tx.SubmitTimeMS)
+			lastAdmitTime = tx.SubmitTimeMS
+			nextTx++
+			if pool.Len() >= maxTx {
+				break
+			}
+		}
+		if pool.Len() == 0 {
+			continue
 		}
 		height := len(blocks) + 1
-		batch := append([]Transaction(nil), txs[offset:end]...)
-		lastSubmit := batch[len(batch)-1].SubmitTimeMS
-		cutTime := max(height*chain.BlockIntervalMS, lastSubmit)
-		blocks = append(blocks, Block{Height: height, ID: fmt.Sprintf("block_%06d", height), Txs: batch, CutTimeMS: cutTime})
+		cutTime := max(height*blockInterval, lastAdmitTime)
+		selected := pool.SelectForBlock(maxTx, cutTime, height)
+		if len(selected) == 0 {
+			continue
+		}
+		blocks = append(blocks, Block{Height: height, ID: fmt.Sprintf("block_%06d", height), Txs: selected, CutTimeMS: cutTime})
 	}
 	return blocks
 }
@@ -571,13 +741,21 @@ func applyMechanismMetrics(summary *Summary, txs []TxResult, plugin PluginProfil
 	summary.ConservativeTrackCount = conservative
 	summary.AggregatedUpdateCount = aggregated
 	summary.ConflictCount = conflicts
-	summary.QueueWaitMS = 0
 	summary.BlockCommitLatencyMS = summary.AvgLatencyMS
 	summary.ExecutionShardLoadBalance = loadBalance(executionLoads, chain.ExecutionShardCount)
 	summary.StateUnitLoadBalance = loadBalance(stateUnitLoads, chain.StateStorageUnitCount)
 }
 
-func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, title string) error {
+func applyTxPoolMetrics(summary *Summary, pool *TxPool) {
+	summary.TxPoolAdmittedCount = pool.admittedCount
+	summary.TxPoolRejectedCount = pool.rejectedCount
+	summary.TxPoolPeakSize = pool.peakSize
+	summary.TxPoolAvgWaitMS = round(avg(pool.queueWaits))
+	summary.TxPoolP95WaitMS = percentileInt(pool.queueWaits, 95)
+	summary.QueueWaitMS = summary.TxPoolAvgWaitMS
+}
+
+func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
@@ -606,11 +784,14 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := writeStateCommitLog(filepath.Join(out, "state_commit_log.csv"), commits); err != nil {
 		return err
 	}
-	report := "# " + title + "\n\nThis is V3.3.1 role-separated Go-backed single-chain research runtime smoke output.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, and ExecutionRouting.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nThis is not Fabric live execution, not MetaTrack final evidence, not frontend integration, and not final paper-scale performance evidence.\n"
+	if err := writeTxPoolLog(filepath.Join(out, "txpool_log.csv"), txPoolLog); err != nil {
+		return err
+	}
+	report := "# " + title + "\n\nThis is V3.4.1 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, and local FIFO TxPool admission/selection behavior.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nThis is not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
-	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\nfabric_live=false\nmetaflow=false\nv3 go-backed runtime done\n"
+	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nfabric_live=false\nmetaflow=false\npbft=false\nhotstuff=false\nraft=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
 	return os.WriteFile(filepath.Join(out, "runtime.log"), []byte(log), 0o644)
 }
 
@@ -619,13 +800,13 @@ func writeSummaryCSV(path string, s Summary) error {
 		s.RunID, s.Stage, s.BackendType, s.TruthLabel, s.ChainProfileID, s.PluginProfileID, s.ExperimentProfileID,
 		strconv.Itoa(s.TxCount), strconv.Itoa(s.SuccessCount), strconv.Itoa(s.FailureCount), strconv.Itoa(s.BlockCount),
 		fmt.Sprint(s.ThroughputTPS), fmt.Sprint(s.AvgLatencyMS), fmt.Sprint(s.P95LatencyMS), fmt.Sprint(s.P99LatencyMS), s.RuntimeMode,
-		strconv.Itoa(s.RemoteFetchCount), fmt.Sprint(s.CrossShardRatio), strconv.Itoa(s.FastTrackCount), strconv.Itoa(s.ConservativeTrackCount), strconv.Itoa(s.AggregatedUpdateCount), fmt.Sprint(s.AggregationRatio), strconv.Itoa(s.ConflictCount), fmt.Sprint(s.QueueWaitMS), fmt.Sprint(s.BlockCommitLatencyMS),
+		strconv.Itoa(s.RemoteFetchCount), fmt.Sprint(s.CrossShardRatio), strconv.Itoa(s.FastTrackCount), strconv.Itoa(s.ConservativeTrackCount), strconv.Itoa(s.AggregatedUpdateCount), fmt.Sprint(s.AggregationRatio), strconv.Itoa(s.ConflictCount), fmt.Sprint(s.QueueWaitMS), strconv.Itoa(s.TxPoolAdmittedCount), strconv.Itoa(s.TxPoolRejectedCount), strconv.Itoa(s.TxPoolPeakSize), fmt.Sprint(s.TxPoolAvgWaitMS), fmt.Sprint(s.TxPoolP95WaitMS), fmt.Sprint(s.BlockCommitLatencyMS),
 		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "block_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "block_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {
@@ -659,6 +840,27 @@ func writeStateCommitLog(path string, commits []StateCommit) error {
 	return writeCSV(path, fields, rows)
 }
 
+func writeTxPoolLog(path string, events []TxPoolEvent) error {
+	fields := []string{"event_time_ms", "event_type", "tx_id", "block_height", "pool_size_before", "pool_size_after", "admitted_count", "selected_count", "rejected_count", "queue_wait_ms", "reason"}
+	rows := [][]string{}
+	for _, event := range events {
+		rows = append(rows, []string{
+			strconv.Itoa(event.EventTimeMS),
+			event.EventType,
+			event.TxID,
+			strconv.Itoa(event.BlockHeight),
+			strconv.Itoa(event.PoolSizeBefore),
+			strconv.Itoa(event.PoolSizeAfter),
+			strconv.Itoa(event.AdmittedCount),
+			strconv.Itoa(event.SelectedCount),
+			strconv.Itoa(event.RejectedCount),
+			strconv.Itoa(event.QueueWaitMS),
+			event.Reason,
+		})
+	}
+	return writeCSV(path, fields, rows)
+}
+
 func writeCSV(path string, fields []string, rows [][]string) error {
 	file, err := os.Create(path)
 	if err != nil {
@@ -678,10 +880,10 @@ func writeCSV(path string, fields []string, rows [][]string) error {
 	return writer.Error()
 }
 
-func buildRoutingMap(txs []Transaction, chain ChainProfile, plugin PluginProfile) map[string]int {
+func buildRoutingMap(txs []PooledTransaction, chain ChainProfile, plugin PluginProfile) map[string]int {
 	keys := []string{}
-	for _, tx := range txs {
-		keys = append(keys, tx.ReadKeys...)
+	for _, pooledTx := range txs {
+		keys = append(keys, pooledTx.Tx.ReadKeys...)
 	}
 	keys = unique(keys)
 	result := map[string]int{}

@@ -74,6 +74,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
         <h4>模块说明</h4>
         <p>{catalog.description}</p>
         {catalog.notes?.slice(0, 1).map((note) => <p key={note} className="muted">{note}</p>)}
+        {selectedModule.module_id === "TxPool" && (
+          <p className="muted">V3.4.1 realizes FIFO pool runtime behavior for Draft Smoke. Priority, hotspot-aware, and fee-based pools remain planned and are not real runtime implementations.</p>
+        )}
       </section>
 
       <section className="v3-config-section">
@@ -112,6 +115,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
               <span>
                 <strong>{plugin.label}</strong>
                 <small title={plugin.id}>{plugin.id}</small>
+                {selectedModule.module_id === "TxPool" && (
+                  <small>{plugin.id === "fifo_pool" ? "runtime-supported FIFO hardening" : "planned only"}</small>
+                )}
               </span>
               <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
             </label>

@@ -5,12 +5,14 @@ type Props = {
 };
 
 const summaryKeys = ["tx_count", "success_count", "failure_count", "failed_count", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms"];
+const txPoolSummaryKeys = ["queue_wait_ms", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "txpool_peak_size", "txpool_admitted_count", "txpool_rejected_count"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
   const normalized = result.validation?.normalized_draft || {};
   const selectedPlugins = readPluginSelection(normalized);
   const summary = result.summary || {};
+  const artifactNames = new Set((result.artifacts || []).map((artifact) => artifact.name));
 
   return (
     <section className="final-card wide v3-draft-run-result">
@@ -41,6 +43,12 @@ export default function DraftRunResultPanel({ result }: Props) {
         {summaryKeys.filter((key) => key in summary).map((key) => (
           <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
         ))}
+      </div>
+      <div className="v3-summary-preview">
+        {txPoolSummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>txpool_log.csv</dt><dd>{artifactNames.has("txpool_log.csv") ? "available" : "missing"}</dd></div>
       </div>
       <p className="muted">Draft Smoke history is a local debugging, demo, and configuration tracing record. It is not a formal paper experiment result.</p>
     </section>
