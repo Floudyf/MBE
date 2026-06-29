@@ -9,6 +9,8 @@ type Props = {
   preview: V3ComposerPreview;
   draft: ComposerDraft;
   onDraftChange: (draft: ComposerDraft) => void;
+  variableModule?: string;
+  lockedModules?: Record<string, string>;
 };
 
 type SnakeSlot = {
@@ -32,7 +34,7 @@ const snakeSlots: SnakeSlot[] = [
   { moduleId: "MetricsReport", row: 3, column: 3 },
 ];
 
-export default function SingleChainComposer({ preview, draft, onDraftChange }: Props) {
+export default function SingleChainComposer({ preview, draft, onDraftChange, variableModule = "", lockedModules = {} }: Props) {
   const modules = preview.modules || [];
   const [selectedId, setSelectedId] = useState(modules[0]?.module_id || "");
   const modulesById = useMemo(
@@ -68,7 +70,12 @@ export default function SingleChainComposer({ preview, draft, onDraftChange }: P
               className="v3-chain-node"
               style={{ gridColumn: slot.column, gridRow: slot.row } as CSSProperties}
             >
-              <ModuleCard module={moduleView(module, draft)} selected={selected?.module_id === module.module_id} onSelect={selectModule} />
+              <ModuleCard
+                module={moduleView(module, draft)}
+                selected={selected?.module_id === module.module_id}
+                onSelect={selectModule}
+                templateRole={module.module_id === variableModule ? "variable" : lockedModules[module.module_id] ? "locked" : undefined}
+              />
               {slot.edge && (
                 <span className={`v3-edge v3-edge-${slot.edge}`} aria-hidden="true">
                   {slot.edge === "left" ? "←" : slot.edge === "down" ? "↓" : "→"}
@@ -78,7 +85,13 @@ export default function SingleChainComposer({ preview, draft, onDraftChange }: P
           ))}
         </div>
       </div>
-      <ModuleDetailPanel module={selected} draft={draft} onDraftModuleChange={updateSelected} />
+      <ModuleDetailPanel
+        module={selected}
+        draft={draft}
+        onDraftModuleChange={updateSelected}
+        variableModule={variableModule}
+        lockedModules={lockedModules}
+      />
     </section>
   );
 }

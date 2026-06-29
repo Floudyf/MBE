@@ -36,6 +36,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
     validation = validate_v3_composer_draft(request)
     if not validation.is_runnable or validation.normalized_draft is None:
         raise DraftSmokeNotRunnable(validation)
+    normalized = validation.normalized_draft or {}
 
     manager = draft_job_manager(root)
     metadata = manager.create_run(
@@ -47,7 +48,12 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
             "run_mode": "draft_smoke",
-            "template_id": request.template_id,
+            "template_id": normalized.get("template_id", request.template_id),
+            "experiment_template": normalized.get("experiment_template", normalized.get("template_id", request.template_id)),
+            "variable_module": normalized.get("variable_module", ""),
+            "locked_modules": normalized.get("locked_modules", {}),
+            "fairness_scope": normalized.get("fairness_scope", {}),
+            "fairness_validated": normalized.get("fairness_validated", False),
         },
     )
     run_id = metadata["run_id"]
@@ -65,6 +71,11 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             chain_profile_path=ROLE_SEPARATED_CHAIN_PROFILE,
             output_dir=run_dir,
         )
+        summary = merge_run_metadata(
+            model_dump(result.summary) if hasattr(result.summary, "__dict__") else dict(result.summary),
+            normalized,
+        )
+        write_json(run_dir / "summary.json", summary)
         _mirror_latest(run_dir, root / "latest")
         completed = manager.mark_completed(run_id, data_truth_label="modular_runtime")
         return {
@@ -78,7 +89,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "runtime_mode": "go_backed",
             "run_mode": "draft_smoke",
             "validation": model_dump(validation),
-            "summary": model_dump(result.summary) if hasattr(result.summary, "__dict__") else result.summary,
+            "summary": summary,
             "artifacts": list_draft_artifacts(run_dir, run_id),
             "run": completed,
         }
@@ -122,6 +133,10 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
         "backend_type": "modular_research_chain",
         "runtime_mode": "go_backed",
         "experiment_template": normalized.get("template_id", "metatrack_ablation"),
+        "variable_module": normalized.get("variable_module", ""),
+        "locked_modules": normalized.get("locked_modules", {}),
+        "fairness_scope": normalized.get("fairness_scope", {}),
+        "fairness_validated": bool(normalized.get("fairness_validated", False)),
         "chain_profile": "single_chain_research_default",
         "run_level": "smoke",
         "tx_count": tx_count,
@@ -140,6 +155,17 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
             "remote_fetch_cost_ms": bounded_int(storage_params.get("remote_fetch_cost_ms"), 1, 0, 10_000),
         },
         "plugin_selection": normalized.get("plugin_selection", {}),
+    }
+
+
+def merge_run_metadata(summary: dict[str, Any], normalized: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **summary,
+        "experiment_template": normalized.get("experiment_template", normalized.get("template_id", "template_unset")),
+        "variable_module": normalized.get("variable_module", ""),
+        "locked_modules": normalized.get("locked_modules", {}),
+        "fairness_scope": normalized.get("fairness_scope", {}),
+        "fairness_validated": bool(normalized.get("fairness_validated", False)),
     }
 
 

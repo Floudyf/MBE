@@ -167,11 +167,18 @@ export type V3ComposerPreviewResponse = {
 };
 export type V3TemplateSummary = {
   template_id: string;
+  template_name?: string;
   stage: string;
   chain_mode: string;
   runnable: boolean;
   preview_only: boolean;
+  status?: string;
   description: string;
+  variable_module?: string;
+  allowed_variable_plugins?: string[];
+  locked_modules?: Record<string, string>;
+  fairness_rule?: string;
+  truthfulness_note?: string;
   variable_modules: string[];
   fixed_modules: string[];
   disabled_modules: string[];
@@ -179,6 +186,11 @@ export type V3TemplateSummary = {
   output_modules: string[];
 };
 export type V3RuntimeSummary = Record<string, unknown> & {
+  experiment_template?: string;
+  variable_module?: string;
+  locked_modules?: Record<string, string> | string;
+  fairness_scope?: Record<string, unknown>;
+  fairness_validated?: boolean | string;
   consensus_latency_ms?: number | string;
   avg_consensus_latency_ms?: number | string;
   p95_consensus_latency_ms?: number | string;
@@ -223,6 +235,10 @@ export type V3DraftRunSummary = {
   run_id: string;
   created_at: string;
   template_id: string;
+  experiment_template?: string;
+  variable_module?: string;
+  locked_modules?: Record<string, string>;
+  fairness_validated?: boolean;
   run_mode: string;
   is_valid: boolean;
   is_runnable: boolean;

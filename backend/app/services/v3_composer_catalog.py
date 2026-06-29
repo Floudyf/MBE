@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -232,6 +233,72 @@ GO_RUNTIME_PLUGIN_CLASSES = {
     "Commit": "CommitPlugin",
     "MetricsReport": "MetricsPlugin",
 }
+
+SINGLE_MODULE_LOCKED_PLUGIN_VALUES = {
+    "Workload": "synthetic_hotspot",
+    "TxPool": "fifo_pool",
+    "BlockProducer": "time_or_count_block_producer",
+    "Consensus": "simple_leader",
+    "CommitteeEpoch": "disabled",
+    "Routing": "co_access_sharding",
+    "Execution": "dual_track_execution",
+    "StateAccess": "access_list_prefetch",
+    "StateStorage": "hash_state_storage",
+    "Commit": "hot_update_aggregation_commit",
+    "MetricsReport": "basic_metrics",
+}
+
+SINGLE_MODULE_TEMPLATE_CATALOG: dict[str, dict[str, Any]] = {
+    "single_module_txpool": {
+        "template_id": "single_module_txpool",
+        "template_name": "Single-module TxPool",
+        "stage": "V3.4.4a",
+        "chain_mode": "single_chain",
+        "status": "runnable",
+        "runnable": True,
+        "preview_only": False,
+        "description": "Fair single-module template for TxPool hardening checks. Only TxPool may vary.",
+        "variable_module": "TxPool",
+        "allowed_variable_plugins": ["fifo_pool"],
+        "locked_plugin_values": {key: value for key, value in SINGLE_MODULE_LOCKED_PLUGIN_VALUES.items() if key != "TxPool"},
+        "fairness_rule": "Only TxPoolPlugin may vary; all other modules, workload, seed, submit rate, block config, and network profile stay fixed.",
+        "truthfulness_note": "fifo_pool is runtime-realized. priority_pool, hotspot_aware_pool, and fee_based_pool remain planned.",
+    },
+    "single_module_blockproducer": {
+        "template_id": "single_module_blockproducer",
+        "template_name": "Single-module BlockProducer",
+        "stage": "V3.4.4a",
+        "chain_mode": "single_chain",
+        "status": "runnable",
+        "runnable": True,
+        "preview_only": False,
+        "description": "Fair single-module template for BlockProducer hardening checks. Only BlockProducer may vary.",
+        "variable_module": "BlockProducer",
+        "allowed_variable_plugins": ["time_or_count_block_producer"],
+        "locked_plugin_values": {key: value for key, value in SINGLE_MODULE_LOCKED_PLUGIN_VALUES.items() if key != "BlockProducer"},
+        "fairness_rule": "Only BlockProducer may vary; all other modules, workload, seed, submit rate, consensus config, and network profile stay fixed.",
+        "truthfulness_note": "time_or_count_block_producer is runtime-realized. fixed_size_block and adaptive_block_cut remain planned.",
+    },
+    "single_module_consensus": {
+        "template_id": "single_module_consensus",
+        "template_name": "Single-module Consensus-light",
+        "stage": "V3.4.4a",
+        "chain_mode": "single_chain",
+        "status": "runnable",
+        "runnable": True,
+        "preview_only": False,
+        "description": "Fair single-module template for Consensus-light checks. Only Consensus may vary.",
+        "variable_module": "Consensus",
+        "allowed_variable_plugins": ["simple_leader", "poa_light", "pbft_light_model"],
+        "locked_plugin_values": {key: value for key, value in SINGLE_MODULE_LOCKED_PLUGIN_VALUES.items() if key != "Consensus"},
+        "fairness_rule": "Only ConsensusPlugin may vary; all other modules, workload, seed, submit rate, block config, and network profile stay fixed.",
+        "truthfulness_note": "pbft_light_model is PBFT-style stage/quorum/message-count model only. It is not real PBFT.",
+    },
+}
+
+
+def experiment_template_catalog() -> dict[str, dict[str, Any]]:
+    return {template_id: dict(template) for template_id, template in SINGLE_MODULE_TEMPLATE_CATALOG.items()}
 
 
 def plugin_owner(plugin_id: str) -> str | None:

@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from backend.app.services.v3_composer_catalog import experiment_template_catalog
 from backend.app.services.v3_profile_loader import V3_CONFIG_ROOT
 
 TEMPLATE_ROOT = V3_CONFIG_ROOT / "templates"
@@ -48,6 +49,12 @@ def load_templates(root: Path = TEMPLATE_ROOT) -> dict[str, dict[str, Any]]:
         if template_id in templates:
             raise V3ExperimentTemplateError(f"duplicate template_id: {template_id}")
         templates[template_id] = {**normalized, "source_path": str(path)}
+    for template_id, template in experiment_template_catalog().items():
+        document = _template_document(template)
+        normalized = normalize_template(document)
+        if template_id in templates:
+            raise V3ExperimentTemplateError(f"duplicate template_id: {template_id}")
+        templates[template_id] = {**normalized, "source_path": "builtin:v3.4.4a"}
     return templates
 
 
@@ -133,3 +140,28 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise V3ExperimentTemplateError(f"template file must be a mapping: {path}")
     return document
+
+
+def _template_document(template: dict[str, Any]) -> dict[str, Any]:
+    variable_module = str(template["variable_module"])
+    locked_plugin_values = dict(template.get("locked_plugin_values", {}))
+    fixed_modules = [module for module in STANDARD_MODULE_ORDER if module in locked_plugin_values and module not in {"CommitteeEpoch", "MetricsReport"}]
+    return {
+        **template,
+        "module_order": STANDARD_MODULE_ORDER,
+        "variable_modules": [variable_module],
+        "fixed_modules": fixed_modules,
+        "disabled_modules": ["CommitteeEpoch"],
+        "planned_modules": [],
+        "output_modules": ["MetricsReport"],
+        "allowed_plugins": {variable_module: template.get("allowed_variable_plugins", [])},
+        "locked_modules": locked_plugin_values,
+        "fairness": {
+            "only_variable_modules_may_differ": True,
+            "variable_module": variable_module,
+            "allowed_variable_plugins": template.get("allowed_variable_plugins", []),
+            "locked_modules": locked_plugin_values,
+            "fairness_rule": template.get("fairness_rule", ""),
+            "planned_modules_not_runnable": True,
+        },
+    }

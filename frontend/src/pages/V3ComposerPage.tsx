@@ -19,7 +19,7 @@ import FairnessScopePanel from "../components/v3/FairnessScopePanel";
 import PluginMatrixTable from "../components/v3/PluginMatrixTable";
 import RunLevelPanel from "../components/v3/RunLevelPanel";
 import SingleChainComposer from "../components/v3/SingleChainComposer";
-import { createComposerDraft, toComposerDraftRequest, type ComposerDraft } from "../components/v3/composerDraft";
+import { createComposerDraft, summarizeDraft, toComposerDraftRequest, type ComposerDraft } from "../components/v3/composerDraft";
 import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
 
 const fallbackTemplates: V3TemplateSummary[] = [
@@ -95,6 +95,29 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     setDraftError("");
   }
 
+  function selectExperimentTemplate(templateId: string) {
+    if (!draft) return;
+    const template = templates.find((item) => item.template_id === templateId);
+    if (!template) return;
+    const variableModule = template.variable_module || "";
+    const allowedPlugins = template.allowed_variable_plugins || [];
+    const lockedModules = template.locked_modules || {};
+    const nextModules = Object.fromEntries(
+      Object.entries(draft.modules).map(([moduleId, module]) => {
+        if (moduleId === variableModule) {
+          const nextPlugin = allowedPlugins.includes(module.plugin) ? module.plugin : (allowedPlugins[0] || module.plugin);
+          return [moduleId, { ...module, status: "variable" as const, plugin: nextPlugin, runnable: true }];
+        }
+        if (lockedModules[moduleId]) {
+          const nextStatus = moduleId === "MetricsReport" ? "output" : moduleId === "CommitteeEpoch" ? "disabled" : "fixed";
+          return [moduleId, { ...module, status: nextStatus as typeof module.status, plugin: lockedModules[moduleId], runnable: true }];
+        }
+        return [moduleId, module];
+      }),
+    );
+    updateDraft(summarizeDraft({ templateId, modules: nextModules }));
+  }
+
   async function validateDraftOnServer(): Promise<V3DraftValidationResponse | null> {
     if (!draft) return null;
     try {
@@ -142,8 +165,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     return Array.isArray(value) ? value.map(String) : [];
   }, [profilePreview]);
   const selectedTemplate = useMemo(
-    () => templates.find((template) => template.template_id === (composer?.template_id || preview?.experiment_template)),
-    [composer?.template_id, preview?.experiment_template, templates],
+    () => templates.find((template) => template.template_id === (draft?.templateId || composer?.template_id || preview?.experiment_template)),
+    [composer?.template_id, draft?.templateId, preview?.experiment_template, templates],
   );
   const identitySummary = [
     labelFor(profileLabels, preview?.experiment_profile_id || profileId),
@@ -200,9 +223,53 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         </details>
       </section>
 
+      {draft && (
+        <section className="final-card wide v3-template-bar">
+          <label>
+            <span>Single-module template</span>
+            <select value={draft.templateId} onChange={(event) => selectExperimentTemplate(event.target.value)}>
+              {templates.filter((template) => template.runnable).map((template) => (
+                <option key={template.template_id} value={template.template_id}>
+                  {template.template_name || labelFor(templateLabels, template.template_id)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedTemplate && (
+            <div className="v3-template-lock-summary">
+              <p className="muted">{selectedTemplate.description}</p>
+              <dl className="v3-identity-grid">
+                <div><dt>variable module</dt><dd>{selectedTemplate.variable_module || selectedTemplate.variable_modules?.join(", ") || "-"}</dd></div>
+                <div><dt>allowed plugins</dt><dd>{(selectedTemplate.allowed_variable_plugins || []).join(", ") || "-"}</dd></div>
+                <div><dt>fairness rule</dt><dd>{selectedTemplate.fairness_rule || "Only configured variable modules may differ."}</dd></div>
+              </dl>
+              {selectedTemplate.locked_modules && Object.keys(selectedTemplate.locked_modules).length > 0 && (
+                <details className="v3-foldout">
+                  <summary className="v3-foldout-summary">Locked modules</summary>
+                  <ul className="v3-check-list compact">
+                    {Object.entries(selectedTemplate.locked_modules).map(([moduleId, plugin]) => (
+                      <li key={moduleId}><span>{moduleId}</span> <code>{plugin}</code></li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              {selectedTemplate.truthfulness_note && <p className="muted">{selectedTemplate.truthfulness_note}</p>}
+            </div>
+          )}
+        </section>
+      )}
+
       {loading && <p className="notice">正在加载 V3 Composer 预览...</p>}
       {error && <p className="file-error">{error}</p>}
-      {composer && draft && <SingleChainComposer preview={composer} draft={draft} onDraftChange={updateDraft} />}
+      {composer && draft && (
+        <SingleChainComposer
+          preview={composer}
+          draft={draft}
+          onDraftChange={updateDraft}
+          variableModule={selectedTemplate?.variable_module}
+          lockedModules={selectedTemplate?.locked_modules}
+        />
+      )}
 
       <div className="final-card-grid v3-post-workbench">
         <FairnessScopePanel scope={composer?.fairness_scope || preview?.fairness_scope || {}} valid={Boolean(profilePreview.valid ?? preview?.runnable)} warnings={warnings} draft={draft} />

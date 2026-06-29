@@ -15,6 +15,7 @@ export default function DraftRunResultPanel({ result }: Props) {
   const selectedPlugins = readPluginSelection(normalized);
   const summary = result.summary || {};
   const artifactNames = new Set((result.artifacts || []).map((artifact) => artifact.name));
+  const lockedModules = readStringMap(summary.locked_modules || normalized.locked_modules);
 
   return (
     <section className="final-card wide v3-draft-run-result">
@@ -30,9 +31,21 @@ export default function DraftRunResultPanel({ result }: Props) {
       <dl className="v3-result-grid">
         <div><dt>run_id</dt><dd>{result.run_id}</dd></div>
         <div><dt>run_mode</dt><dd>{result.run_mode || "draft_smoke"}</dd></div>
-        <div><dt>template</dt><dd>{String(normalized.template_id || "-")}</dd></div>
+        <div><dt>template</dt><dd>{String(summary.experiment_template || normalized.experiment_template || normalized.template_id || "-")}</dd></div>
+        <div><dt>variable_module</dt><dd>{String(summary.variable_module || normalized.variable_module || "-")}</dd></div>
+        <div><dt>fairness_validated</dt><dd>{String(summary.fairness_validated ?? normalized.fairness_validated ?? "false")}</dd></div>
         <div><dt>validation</dt><dd>{result.validation?.is_valid ? "valid" : "invalid"}</dd></div>
       </dl>
+      {Object.keys(lockedModules).length > 0 && (
+        <div className="v3-plugin-summary">
+          <strong>Locked modules</strong>
+          <ul>
+            {Object.entries(lockedModules).map(([moduleId, plugin]) => (
+              <li key={moduleId}><span>{moduleId}</span><code>{plugin}</code></li>
+            ))}
+          </ul>
+        </div>
+      )}
       <div className="v3-plugin-summary">
         <strong>Actual plugin selection</strong>
         <ul>
@@ -74,4 +87,9 @@ function readPluginSelection(normalized: Record<string, unknown>): Record<string
   const selection = normalized.plugin_selection;
   if (!selection || typeof selection !== "object" || Array.isArray(selection)) return {};
   return Object.fromEntries(Object.entries(selection).map(([key, value]) => [key, String(value)]));
+}
+
+function readStringMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, String(item)]));
 }

@@ -16,11 +16,13 @@ type Props = {
   module?: V3ComposerModule | null;
   draft: ComposerDraft;
   onDraftModuleChange: (moduleId: string, patch: Partial<Pick<ComposerDraftModule, "status" | "plugin" | "params">>) => void;
+  variableModule?: string;
+  lockedModules?: Record<string, string>;
 };
 
 const statusChoices: DraftModuleStatus[] = ["default", "fixed", "variable", "disabled"];
 
-export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }: Props) {
+export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, variableModule = "", lockedModules = {} }: Props) {
   if (!module) {
     return (
       <aside className="v3-detail-panel">
@@ -40,6 +42,8 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
   const moduleStatusChoices: DraftModuleStatus[] = selectedModule.module_id === "MetricsReport" ? ["output"] : statusChoices;
   const selectedPlugin = pluginOptions.find((plugin) => plugin.id === currentPlugin);
   const isRequired = requiredModuleIds.has(selectedModule.module_id);
+  const lockedPlugin = lockedModules[selectedModule.module_id];
+  const templateRole = selectedModule.module_id === variableModule ? "variable" : lockedPlugin ? "locked" : "";
   const moduleMessages = draft.validationMessages.filter((message) => message.includes(catalog.label) || message.includes(selectedModule.module_id));
   const visibleMessages = (moduleMessages.length ? moduleMessages : draft.validationMessages).slice(0, 3);
 
@@ -68,6 +72,12 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
 
       <dl className="v3-detail-list compact">
         <div><dt>当前插件</dt><dd title={currentPlugin}>{selectedPlugin?.label || currentPlugin}<small>{currentPlugin}</small></dd></div>
+        {templateRole && (
+          <div>
+            <dt>template role</dt>
+            <dd>{templateRole === "variable" ? "variable module" : `locked by template (${lockedPlugin})`}</dd>
+          </div>
+        )}
       </dl>
 
       <section className="v3-config-section">
@@ -89,13 +99,13 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
         <h4>模块状态</h4>
         <div className="v3-radio-list">
           {moduleStatusChoices.map((status) => {
-            const disabled = statusDisabled(selectedModule.module_id, status);
+            const disabled = templateRole === "locked" || statusDisabled(selectedModule.module_id, status);
             return (
               <label key={status} className={disabled ? "disabled" : ""}>
                 <input
                   type="radio"
                   checked={currentStatus === status}
-                  disabled={disabled}
+                disabled={disabled}
                   onChange={() => changeStatus(status)}
                 />
                 <span>{statusLabels[status]}</span>
@@ -115,7 +125,7 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
               <input
                 type="radio"
                 checked={currentPlugin === plugin.id}
-                disabled={plugin.status === "planned"}
+                disabled={templateRole === "locked" || plugin.status === "planned"}
                 onChange={() => changePlugin(plugin.id)}
               />
               <span>

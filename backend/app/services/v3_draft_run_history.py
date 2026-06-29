@@ -80,6 +80,10 @@ def summarize_draft_run(run_dir: Path, root: Path | None = None) -> dict[str, An
         "run_id": run_id,
         "created_at": _mtime(run_dir),
         "template_id": normalized.get("template_id") or composer.get("template_id", ""),
+        "experiment_template": normalized.get("experiment_template") or normalized.get("template_id") or composer.get("template_id", ""),
+        "variable_module": normalized.get("variable_module", ""),
+        "locked_modules": normalized.get("locked_modules", {}),
+        "fairness_validated": bool(normalized.get("fairness_validated", False)),
         "run_mode": normalized.get("run_mode") or validation.get("run_mode", "draft_smoke"),
         "is_valid": bool(validation.get("is_valid", False)),
         "is_runnable": bool(validation.get("is_runnable", False)),
@@ -210,6 +214,10 @@ def _pick_summary_fields(summary: dict[str, Any]) -> dict[str, Any]:
         "view_change_count",
         "finalized_block_count",
         "failed_block_count",
+        "experiment_template",
+        "variable_module",
+        "locked_modules",
+        "fairness_validated",
     )
     return {key: summary[key] for key in keys if key in summary}
 

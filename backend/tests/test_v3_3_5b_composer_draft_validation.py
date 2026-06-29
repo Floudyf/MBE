@@ -4,7 +4,7 @@ from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3Compos
 from backend.app.services.v3_composer_draft_validator import validate_v3_composer_draft
 
 
-def valid_draft(**overrides: tuple[str, str]) -> V3ComposerDraftRequest:
+def valid_draft(template_id: str = "metatrack_ablation", **overrides: tuple[str, str]) -> V3ComposerDraftRequest:
     plugins = {
         "Workload": ("fixed", "synthetic_hotspot"),
         "TxPool": ("fixed", "fifo_pool"),
@@ -20,7 +20,7 @@ def valid_draft(**overrides: tuple[str, str]) -> V3ComposerDraftRequest:
     }
     plugins.update(overrides)
     return V3ComposerDraftRequest(
-        template_id="metatrack_ablation",
+        template_id=template_id,
         modules={
             module_id: V3ComposerDraftModule(module_id=module_id, status=status, plugin=plugin)
             for module_id, (status, plugin) in plugins.items()

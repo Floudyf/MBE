@@ -6,9 +6,10 @@ type Props = {
   module: V3ComposerModule;
   selected: boolean;
   onSelect: (module: V3ComposerModule) => void;
+  templateRole?: "variable" | "locked";
 };
 
-export default function ModuleCard({ module, selected, onSelect }: Props) {
+export default function ModuleCard({ module, selected, onSelect, templateRole }: Props) {
   const plugin = module.plugin && module.plugin !== "none" ? module.plugin : "无";
 
   const status = (module.status in statusLabels ? module.status : "fixed") as keyof typeof statusLabels;
@@ -26,6 +27,11 @@ export default function ModuleCard({ module, selected, onSelect }: Props) {
       <small title={module.module_id}>{module.module_id}</small>
       <span className="v3-plugin-id" title={plugin}>插件：{plugin}</span>
       <span className={`v3-status-badge status-${status}`}>{statusLabels[status]}</span>
+      {templateRole && (
+        <span className={`v3-status-badge status-${templateRole === "variable" ? "variable" : "fixed"}`}>
+          {templateRole === "variable" ? "variable module" : "locked by template"}
+        </span>
+      )}
       <small title={supportHint}>{supportHint}</small>
       <span className="v3-tag-row">
         {(module.tags || []).map((tag) => (

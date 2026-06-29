@@ -5,6 +5,7 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3ComposerDraftRequest, V3DraftValidationResponse
 from backend.app.services.v3_composer_catalog import (
     CATALOG,
+    GO_RUNTIME_PLUGIN_CLASSES,
     METATRACK_FIXED_MODULES,
     METATRACK_VARIABLE_MODULES,
     OUTPUT_MODULES,
@@ -32,11 +33,20 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     normalized_modules: dict[str, dict[str, Any]] = {}
     plugin_selection: dict[str, str] = {}
     has_preview_only = False
+    template: dict[str, Any] = {}
 
     try:
-        get_template(request.template_id)
+        template = get_template(request.template_id)
     except (KeyError, ValueError):
         errors.append(f"未知模板 {request.template_id}，后端无法校验 Draft。")
+    template_id = str(template.get("template_id") or request.template_id or "template_unset")
+    template_variable_module = str(template.get("variable_module") or "")
+    template_allowed_plugins = set(str(item) for item in template.get("allowed_variable_plugins", []))
+    template_locked_modules = {
+        str(key): str(value)
+        for key, value in (template.get("locked_modules") or template.get("fairness", {}).get("locked_modules") or {}).items()
+    }
+    is_single_module_template = template_id.startswith("single_module_") and bool(template_variable_module)
 
     if not request.modules:
         errors.append("Draft modules 不能为空。")
@@ -80,7 +90,18 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
             if status == "variable":
                 errors.append(f"{catalog_module.label}是输出模块，不能作为实验变量。")
             status = "output"
-        if status == "variable" and not catalog_module.allow_variable:
+        if status == "variable" and is_single_module_template and module_id != template_variable_module:
+            errors.append(
+                fairness_error(
+                    template_id,
+                    template_variable_module,
+                    module_id,
+                    plugin_selection_key(module_id),
+                    "fixed",
+                    plugin,
+                )
+            )
+        if status == "variable" and not catalog_module.allow_variable and not (is_single_module_template and module_id == template_variable_module):
             if module_id == "CommitteeEpoch":
                 errors.append("委员会 / Epoch 当前不能作为可运行实验变量。")
             elif module_id in METATRACK_FIXED_MODULES:
@@ -144,7 +165,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         for module_id in OUTPUT_MODULES:
             if module_id in variable_modules:
                 errors.append(f"{module_label(module_id)}是输出模块，不能作为实验变量。")
-    elif not errors:
+    elif not errors and not is_single_module_template:
         warnings.append("当前模板暂不支持 run-draft-smoke。")
 
     # Go runtime fixed capability boundary.
@@ -161,9 +182,61 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     consensus_plugin = plugin_selection.get("Consensus")
     if consensus_plugin and consensus_plugin not in allowed_consensus_plugins:
         errors.append("当前 Go-backed Draft Smoke 仅支持 Consensus 使用 simple_leader、poa_light 或 pbft_light_model；PBFT / HotStuff / Raft 仍为 planned / unsupported。")
+    fairness_scope = build_fairness_scope(
+        template_id=template_id,
+        variable_module=template_variable_module,
+        allowed_variable_plugins=sorted(template_allowed_plugins),
+        locked_modules=template_locked_modules,
+        fairness_rule=str(template.get("fairness_rule") or template.get("fairness", {}).get("fairness_rule", "")),
+    )
+    fairness_validated = False
+    if is_single_module_template:
+        fairness_validated = True
+        for module_id in variable_modules:
+            if module_id != template_variable_module:
+                fairness_validated = False
+                errors.append(
+                    fairness_error(
+                        template_id,
+                        template_variable_module,
+                        module_id,
+                        plugin_selection_key(module_id),
+                        "fixed",
+                        plugin_selection.get(module_id, ""),
+                    )
+                )
+        selected_variable_plugin = plugin_selection.get(template_variable_module, "")
+        if selected_variable_plugin not in template_allowed_plugins:
+            fairness_validated = False
+            errors.append(
+                f"Fairness violation: template {template_id} only allows {template_variable_module} plugins {sorted(template_allowed_plugins)}, but selected {selected_variable_plugin}."
+            )
+        for module_id, expected in template_locked_modules.items():
+            actual = plugin_selection.get(module_id)
+            if actual is not None and actual != expected:
+                fairness_validated = False
+                errors.append(
+                    fairness_error(
+                        template_id,
+                        template_variable_module,
+                        module_id,
+                        plugin_selection_key(module_id),
+                        expected,
+                        actual,
+                    )
+                )
+    elif template_id in {"", "template_unset"}:
+        fairness_scope = build_fairness_scope(
+            template_id="template_unset",
+            variable_module="",
+            allowed_variable_plugins=[],
+            locked_modules={},
+            fairness_rule="No single-module template selected; legacy Draft Smoke validation applies.",
+        )
 
     normalized_draft = {
-        "template_id": request.template_id,
+        "template_id": template_id,
+        "experiment_template": template_id,
         "run_mode": "draft_smoke",
         "modules": normalized_modules,
         "plugin_selection": plugin_selection,
@@ -172,10 +245,14 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         "disabled_modules": sorted(set(disabled_modules)),
         "planned_modules": sorted(set(planned_modules)),
         "output_modules": sorted(set(output_modules)),
+        "fairness_scope": fairness_scope,
+        "variable_module": fairness_scope.get("variable_module", ""),
+        "locked_modules": fairness_scope.get("locked_modules", {}),
+        "fairness_validated": bool(fairness_validated and not errors) if is_single_module_template else False,
     }
 
     is_valid = not errors
-    is_runnable = bool(is_valid and request.template_id == "metatrack_ablation" and not has_preview_only)
+    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus"} and not has_preview_only)
     return V3DraftValidationResponse(
         is_valid=is_valid,
         is_runnable=is_runnable,
@@ -200,3 +277,31 @@ def dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def plugin_selection_key(module_id: str) -> str:
+    return GO_RUNTIME_PLUGIN_CLASSES.get(module_id, module_id)
+
+
+def fairness_error(template_id: str, variable_module: str, module_id: str, plugin_class: str, expected: str, actual: str) -> str:
+    return (
+        f"Fairness violation: template {template_id} only allows {variable_module} to vary, "
+        f"but {plugin_class} changed from {expected} to {actual}."
+    )
+
+
+def build_fairness_scope(
+    *,
+    template_id: str,
+    variable_module: str,
+    allowed_variable_plugins: list[str],
+    locked_modules: dict[str, str],
+    fairness_rule: str,
+) -> dict[str, Any]:
+    return {
+        "experiment_template": template_id,
+        "variable_module": variable_module,
+        "allowed_variable_plugins": allowed_variable_plugins,
+        "locked_modules": locked_modules,
+        "fairness_rule": fairness_rule,
+    }

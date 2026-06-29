@@ -3,7 +3,7 @@ import { useState } from "react";
 import { fetchV3DraftRunDetail, fetchV3DraftRuns, type V3DraftRunDetail, type V3DraftRunSummary } from "../../api";
 import ArtifactGroups from "./ArtifactGroups";
 
-const summaryKeys = ["tx_count", "success_count", "failure_count", "failed_count", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "queue_wait_ms", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "txpool_peak_size", "txpool_admitted_count", "txpool_rejected_count", "block_count", "avg_block_size", "empty_block_count", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "finalized_block_count", "failed_block_count", "view_change_count"];
+const summaryKeys = ["tx_count", "success_count", "failure_count", "failed_count", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "queue_wait_ms", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "txpool_peak_size", "txpool_admitted_count", "txpool_rejected_count", "block_count", "avg_block_size", "empty_block_count", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "finalized_block_count", "failed_block_count", "view_change_count", "experiment_template", "variable_module", "fairness_validated"];
 
 export default function DraftRunHistoryPanel() {
   const [runs, setRuns] = useState<V3DraftRunSummary[]>([]);
@@ -60,6 +60,7 @@ export default function DraftRunHistoryPanel() {
                 <small>{run.created_at}</small>
               </span>
               <span>{run.template_id}</span>
+              <span>{run.variable_module || String(run.summary_preview?.variable_module || "template legacy")}</span>
               <span>{pluginSummary(run.selected_plugins)}</span>
               <b>{run.artifact_count} artifacts</b>
             </button>
