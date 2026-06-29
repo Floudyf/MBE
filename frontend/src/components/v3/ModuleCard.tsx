@@ -12,7 +12,7 @@ export default function ModuleCard({ module, selected, onSelect }: Props) {
   const plugin = module.plugin && module.plugin !== "none" ? module.plugin : "无";
 
   const status = (module.status in statusLabels ? module.status : "fixed") as keyof typeof statusLabels;
-  const supportHint = module.status === "planned" ? "planned" : module.status === "variable" || module.status === "fixed" || module.status === "default" ? "configured runnable; runtime support depends on backend validation" : String(module.status);
+  const supportHint = moduleSupportHint(module.module_id, module.status, plugin);
 
   return (
     <button
@@ -34,4 +34,16 @@ export default function ModuleCard({ module, selected, onSelect }: Props) {
       </span>
     </button>
   );
+}
+
+function moduleSupportHint(moduleId: string, status: string, plugin: string): string {
+  if (status === "planned") return "planned";
+  if (moduleId === "Consensus") {
+    if (plugin === "simple_leader") return "runtime-supported simple leader";
+    if (plugin === "poa_light") return "runtime-supported PoA-light";
+    if (plugin === "pbft_light_model") return "runtime-supported PBFT-light model, not real PBFT";
+    return "planned or unsupported consensus";
+  }
+  if (status === "variable" || status === "fixed" || status === "default") return "configured runnable; runtime support depends on backend validation";
+  return String(status);
 }

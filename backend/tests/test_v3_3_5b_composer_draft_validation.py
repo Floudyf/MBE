@@ -52,6 +52,16 @@ def test_valid_baseline_draft_is_runnable() -> None:
     assert result.is_runnable is True
 
 
+def test_consensus_light_plugins_are_runnable_when_fixed() -> None:
+    for plugin_id in ("simple_leader", "poa_light", "pbft_light_model"):
+        result = validate_v3_composer_draft(valid_draft(Consensus=("fixed", plugin_id)))
+
+        assert result.is_valid is True
+        assert result.is_runnable is True
+        assert result.normalized_draft is not None
+        assert result.normalized_draft["plugin_selection"]["Consensus"] == plugin_id
+
+
 def test_required_module_disabled_fails() -> None:
     result = validate_v3_composer_draft(valid_draft(Consensus=("disabled", "simple_leader")))
 
@@ -79,6 +89,14 @@ def test_planned_plugin_is_not_valid_or_runnable() -> None:
     assert result.is_valid is False
     assert result.is_runnable is False
     assert any("规划中插件" in error for error in result.errors)
+
+
+def test_real_pbft_hotstuff_and_raft_remain_unsupported() -> None:
+    for plugin_id in ("pbft", "real_pbft", "hotstuff", "raft"):
+        result = validate_v3_composer_draft(valid_draft(Consensus=("fixed", plugin_id)))
+
+        assert result.is_valid is False
+        assert result.is_runnable is False
 
 
 def test_preview_only_plugin_is_valid_but_not_runnable() -> None:

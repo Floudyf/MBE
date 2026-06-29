@@ -51,6 +51,15 @@ MECHANISM_FIELDS = [
     "blockproducer_drain_cut_count",
     "blockproducer_empty_cut_count",
     "block_commit_latency_ms",
+    "consensus_latency_ms",
+    "avg_consensus_latency_ms",
+    "p95_consensus_latency_ms",
+    "consensus_message_count",
+    "avg_consensus_message_count",
+    "consensus_round_count",
+    "view_change_count",
+    "finalized_block_count",
+    "failed_block_count",
     "execution_shard_count",
     "state_storage_unit_count",
     "cross_state_unit_access_count",
@@ -162,7 +171,7 @@ def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
                 "Co-access routing changes execution-side routing M_t; it does not migrate persistent state placement phi(key).",
                 "It is not Fabric live execution.",
                 "It is not a final paper-scale result unless a later paper-scale workload is run.",
-                "Fabric-backed validation is deferred to V3.4.",
+                "Fabric-backed validation is deferred to V3.5 after V3.4 runtime hardening.",
                 "",
             ]
         ),
@@ -173,7 +182,7 @@ def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
         if target.exists():
             target.unlink()
     representative = next((run for run in runs if run.summary.get("plugin_profile_id") == "full_MetaTrack"), runs[0])
-    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
+    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
         source = representative.output_dir / filename
         if source.is_file():
             shutil.copyfile(source, root / filename)

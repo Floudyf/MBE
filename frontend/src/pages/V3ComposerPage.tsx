@@ -168,9 +168,12 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           <span>Smoke 实验</span>
           <span>FIFO TxPool</span>
           <span>Time/Count Producer</span>
+          <span>Consensus-light</span>
+          <span>PoA/PBFT-light</span>
           <span>非 Fabric</span>
           <span>非 MetaFlow</span>
-          <span>非 PBFT/HotStuff/Raft</span>
+          <span>非 real PBFT</span>
+          <span>非 HotStuff/Raft</span>
           <span>非多节点网络</span>
         </div>
       </header>

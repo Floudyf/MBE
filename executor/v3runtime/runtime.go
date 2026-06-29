@@ -25,28 +25,29 @@ type Input struct {
 }
 
 type ChainProfile struct {
-	ProfileID             string
-	NodeIDPrefix          string
-	NodeCount             int
-	ValidatorCount        int
-	ConsensusDomainCount  int
-	BlockIntervalMS       int
-	MaxTxPerBlock         int
-	EmptyBlockEnabled     bool
-	ShardCount            int
-	ExecutionShardCount   int
-	StateStorageUnitCount int
-	StatePlacementPolicy  string
-	StateBackend          string
-	RemoteFetchCostMS     int
-	RoutingPlugin         string
-	RoutingScope          string
-	NetworkPlugin         string
-	NetworkBaseDelayMS    int
-	KeyCount              int
-	MaxPoolSize           int
-	DedupEnabled          bool
-	BackpressurePolicy    string
+	ProfileID              string
+	NodeIDPrefix           string
+	NodeCount              int
+	ValidatorCount         int
+	ConsensusDomainCount   int
+	ConsensusBaseLatencyMS int
+	BlockIntervalMS        int
+	MaxTxPerBlock          int
+	EmptyBlockEnabled      bool
+	ShardCount             int
+	ExecutionShardCount    int
+	StateStorageUnitCount  int
+	StatePlacementPolicy   string
+	StateBackend           string
+	RemoteFetchCostMS      int
+	RoutingPlugin          string
+	RoutingScope           string
+	NetworkPlugin          string
+	NetworkBaseDelayMS     int
+	KeyCount               int
+	MaxPoolSize            int
+	DedupEnabled           bool
+	BackpressurePolicy     string
 }
 
 type PluginProfile struct {
@@ -137,6 +138,38 @@ type TxPoolEvent struct {
 	RejectedCount  int
 	QueueWaitMS    int
 	Reason         string
+}
+
+type ConsensusRecord struct {
+	BlockHeight              int
+	BlockHash                string
+	PluginID                 string
+	RoundID                  int
+	ViewID                   int
+	SequenceID               int
+	LeaderID                 string
+	ValidatorCount           int
+	FaultToleranceF          int
+	PrepareQuorum            int
+	CommitQuorum             int
+	PrePrepareMsgCount       int
+	PrepareMsgCount          int
+	CommitMsgCount           int
+	TotalMessageCount        int
+	ConsensusStartTimeMS     int
+	ConsensusOrderedTimeMS   int
+	ConsensusFinalizedTimeMS int
+	ConsensusLatencyMS       int
+	Finalized                bool
+	ViewChangeCount          int
+	Reason                   string
+}
+
+type ConsensusEngine struct {
+	PluginID       string
+	ValidatorCount int
+	NodeIDPrefix   string
+	BaseLatencyMS  int
 }
 
 type txPoolEntry struct {
@@ -240,6 +273,15 @@ type Summary struct {
 	BlockProducerDrainCut     int     `json:"blockproducer_drain_cut_count"`
 	BlockProducerEmptyCut     int     `json:"blockproducer_empty_cut_count"`
 	BlockCommitLatencyMS      float64 `json:"block_commit_latency_ms"`
+	ConsensusLatencyMS        float64 `json:"consensus_latency_ms"`
+	AvgConsensusLatencyMS     float64 `json:"avg_consensus_latency_ms"`
+	P95ConsensusLatencyMS     float64 `json:"p95_consensus_latency_ms"`
+	ConsensusMessageCount     int     `json:"consensus_message_count"`
+	AvgConsensusMessageCount  float64 `json:"avg_consensus_message_count"`
+	ConsensusRoundCount       int     `json:"consensus_round_count"`
+	ViewChangeCount           int     `json:"view_change_count"`
+	FinalizedBlockCount       int     `json:"finalized_block_count"`
+	FailedBlockCount          int     `json:"failed_block_count"`
 	ExecutionShardCount       int     `json:"execution_shard_count"`
 	StateStorageUnitCount     int     `json:"state_storage_unit_count"`
 	CrossStateUnitAccessCount int     `json:"cross_state_unit_access_count"`
@@ -256,6 +298,7 @@ type Result struct {
 	TxResults      []TxResult
 	StateCommitLog []StateCommit
 	TxPoolLog      []TxPoolEvent
+	ConsensusLog   []ConsensusRecord
 	FinalState     map[string]int
 }
 
@@ -291,39 +334,39 @@ func Run(input Input) (Result, error) {
 	txs := generateWorkload(experiment, chain)
 	txPool := newTxPool(chain)
 	blockProducer := newBlockProducer(chain, plugin)
+	consensusEngine := newConsensusEngine(chain, plugin)
 	blocks := produceBlocksFromTxPool(txs, chain, txPool, blockProducer)
 	state := map[string]int{}
 	blockLog := []map[string]string{}
 	txResults := []TxResult{}
 	stateCommits := []StateCommit{}
+	consensusLog := []ConsensusRecord{}
 	for _, block := range blocks {
-		proposer := fmt.Sprintf("%s_%d", chain.NodeIDPrefix, (block.Height-1)/max(1, chain.ValidatorCount))
-		proposer = fmt.Sprintf("%s_%d", chain.NodeIDPrefix, (block.Height-1)%max(1, chain.ValidatorCount))
-		ordered := block.CutTimeMS + 1
-		finalized := ordered + 1
+		consensusRecord := consensusEngine.FinalizeBlock(block)
+		consensusLog = append(consensusLog, consensusRecord)
 		blockLog = append(blockLog, map[string]string{
 			"block_height":             strconv.Itoa(block.Height),
 			"block_id":                 block.ID,
 			"parent_hash":              block.ParentHash,
 			"block_hash":               block.Hash,
-			"proposer":                 proposer,
-			"proposer_node":            proposer,
+			"proposer":                 consensusRecord.LeaderID,
+			"proposer_node":            consensusRecord.LeaderID,
 			"tx_count":                 strconv.Itoa(len(block.Txs)),
 			"cut_reason":               block.CutReason,
 			"pool_size_before_cut":     strconv.Itoa(block.PoolSizeBeforeCut),
 			"pool_size_after_cut":      strconv.Itoa(block.PoolSizeAfterCut),
 			"block_producer_plugin":    block.ProducerPlugin,
 			"cut_time_ms":              strconv.Itoa(block.CutTimeMS),
-			"ordered_time_ms":          strconv.Itoa(ordered),
-			"finalized_time_ms":        strconv.Itoa(finalized),
-			"consensus_plugin":         "simple_leader",
+			"ordered_time_ms":          strconv.Itoa(consensusRecord.ConsensusOrderedTimeMS),
+			"finalized_time_ms":        strconv.Itoa(consensusRecord.ConsensusFinalizedTimeMS),
+			"consensus_plugin":         consensusRecord.PluginID,
 			"status":                   "finalized",
 			"consensus_domain_id":      consensusDomainID(0),
-			"validator_count":          strconv.Itoa(chain.ValidatorCount),
+			"validator_count":          strconv.Itoa(consensusRecord.ValidatorCount),
 			"execution_shard_count":    strconv.Itoa(chain.ExecutionShardCount),
 			"state_storage_unit_count": strconv.Itoa(chain.StateStorageUnitCount),
 		})
-		cursor := finalized
+		cursor := consensusRecord.ConsensusFinalizedTimeMS
 		routingMap := buildRoutingMap(block.Txs, chain, plugin)
 		for _, pooledTx := range block.Txs {
 			tx := pooledTx.Tx
@@ -392,38 +435,40 @@ func Run(input Input) (Result, error) {
 	applyMechanismMetrics(&summary, txResults, plugin, chain)
 	applyTxPoolMetrics(&summary, txPool)
 	applyBlockProducerMetrics(&summary, blockProducer)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, "V3.4.2 Go-backed BlockProducer runtime hardening run"); err != nil {
+	applyConsensusMetrics(&summary, consensusLog)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, "V3.4.3 Go-backed Consensus-light runtime hardening run"); err != nil {
 		return Result{}, err
 	}
-	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, FinalState: state}, nil
+	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, FinalState: state}, nil
 }
 
 func parseChainProfile(text string) ChainProfile {
 	executionShardCount := sectionFieldInt(text, "execution", "shard_count", sectionFieldInt(text, "sharding", "shard_count", fieldInt(text, "shard_count", 4)))
 	stateStorageUnitCount := sectionFieldInt(text, "state", "storage_unit_count", sectionFieldInt(text, "sharding", "shard_count", executionShardCount))
 	return ChainProfile{
-		ProfileID:             fieldString(text, "profile_id", "chain_x_default"),
-		NodeIDPrefix:          fieldString(text, "node_id_prefix", "node"),
-		NodeCount:             sectionFieldInt(text, "deployment", "node_count", fieldInt(text, "node_count", 4)),
-		ValidatorCount:        sectionFieldInt(text, "consensus", "validator_count", sectionFieldInt(text, "deployment", "validator_count", fieldInt(text, "validator_count", 4))),
-		ConsensusDomainCount:  sectionFieldInt(text, "consensus", "domain_count", 1),
-		BlockIntervalMS:       fieldInt(text, "block_interval_ms", 100),
-		MaxTxPerBlock:         fieldInt(text, "max_tx_per_block", 500),
-		EmptyBlockEnabled:     sectionFieldBool(text, "block", "empty_block_enabled", fieldBool(text, "empty_block_enabled", false)),
-		ShardCount:            executionShardCount,
-		ExecutionShardCount:   executionShardCount,
-		StateStorageUnitCount: stateStorageUnitCount,
-		StatePlacementPolicy:  sectionFieldString(text, "state", "placement_policy", "hash_state_storage"),
-		StateBackend:          sectionFieldString(text, "state", "backend", "memory"),
-		RemoteFetchCostMS:     sectionFieldInt(text, "state", "remote_fetch_cost_ms", 1),
-		RoutingPlugin:         sectionFieldString(text, "routing", "plugin", sectionFieldString(text, "sharding", "plugin", "hash_sharding")),
-		RoutingScope:          sectionFieldString(text, "routing", "routing_scope", "execution_shard"),
-		NetworkPlugin:         sectionFieldString(text, "network", "plugin", "fixed_delay"),
-		NetworkBaseDelayMS:    sectionFieldInt(text, "network", "base_delay_ms", sectionFieldInt(text, "network", "delay_ms", 0)),
-		KeyCount:              fieldInt(text, "key_count", 100000),
-		MaxPoolSize:           fieldInt(text, "max_pool_size", 100000),
-		DedupEnabled:          fieldBool(text, "dedup_enabled", true),
-		BackpressurePolicy:    fieldString(text, "backpressure_policy", "reject"),
+		ProfileID:              fieldString(text, "profile_id", "chain_x_default"),
+		NodeIDPrefix:           fieldString(text, "node_id_prefix", "node"),
+		NodeCount:              sectionFieldInt(text, "deployment", "node_count", fieldInt(text, "node_count", 4)),
+		ValidatorCount:         sectionFieldInt(text, "consensus", "validator_count", sectionFieldInt(text, "deployment", "validator_count", fieldInt(text, "validator_count", 4))),
+		ConsensusDomainCount:   sectionFieldInt(text, "consensus", "domain_count", 1),
+		ConsensusBaseLatencyMS: sectionFieldInt(text, "consensus", "base_latency_ms", 1),
+		BlockIntervalMS:        fieldInt(text, "block_interval_ms", 100),
+		MaxTxPerBlock:          fieldInt(text, "max_tx_per_block", 500),
+		EmptyBlockEnabled:      sectionFieldBool(text, "block", "empty_block_enabled", fieldBool(text, "empty_block_enabled", false)),
+		ShardCount:             executionShardCount,
+		ExecutionShardCount:    executionShardCount,
+		StateStorageUnitCount:  stateStorageUnitCount,
+		StatePlacementPolicy:   sectionFieldString(text, "state", "placement_policy", "hash_state_storage"),
+		StateBackend:           sectionFieldString(text, "state", "backend", "memory"),
+		RemoteFetchCostMS:      sectionFieldInt(text, "state", "remote_fetch_cost_ms", 1),
+		RoutingPlugin:          sectionFieldString(text, "routing", "plugin", sectionFieldString(text, "sharding", "plugin", "hash_sharding")),
+		RoutingScope:           sectionFieldString(text, "routing", "routing_scope", "execution_shard"),
+		NetworkPlugin:          sectionFieldString(text, "network", "plugin", "fixed_delay"),
+		NetworkBaseDelayMS:     sectionFieldInt(text, "network", "base_delay_ms", sectionFieldInt(text, "network", "delay_ms", 0)),
+		KeyCount:               fieldInt(text, "key_count", 100000),
+		MaxPoolSize:            fieldInt(text, "max_pool_size", 100000),
+		DedupEnabled:           fieldBool(text, "dedup_enabled", true),
+		BackpressurePolicy:     fieldString(text, "backpressure_policy", "reject"),
 	}
 }
 
@@ -465,12 +510,82 @@ func parseExperimentProfile(text string) ExperimentProfile {
 	}
 }
 
+func newConsensusEngine(chain ChainProfile, plugin PluginProfile) *ConsensusEngine {
+	validatorCount := chain.ValidatorCount
+	if validatorCount <= 0 {
+		validatorCount = 4
+	}
+	baseLatencyMS := chain.ConsensusBaseLatencyMS
+	if baseLatencyMS <= 0 {
+		baseLatencyMS = 1
+	}
+	return &ConsensusEngine{
+		PluginID:       plugin.ConsensusPlugin,
+		ValidatorCount: validatorCount,
+		NodeIDPrefix:   firstNonEmpty(chain.NodeIDPrefix, "node"),
+		BaseLatencyMS:  baseLatencyMS,
+	}
+}
+
+func (engine *ConsensusEngine) FinalizeBlock(block Block) ConsensusRecord {
+	validatorCount := max(1, engine.ValidatorCount)
+	viewID := 0
+	leaderIndex := viewID % validatorCount
+	leaderID := fmt.Sprintf("%s_%d", engine.NodeIDPrefix, leaderIndex)
+	record := ConsensusRecord{
+		BlockHeight:          block.Height,
+		BlockHash:            block.Hash,
+		PluginID:             engine.PluginID,
+		RoundID:              block.Height,
+		ViewID:               viewID,
+		SequenceID:           block.Height,
+		LeaderID:             leaderID,
+		ValidatorCount:       validatorCount,
+		ConsensusStartTimeMS: block.CutTimeMS,
+		Finalized:            true,
+		ViewChangeCount:      0,
+	}
+	switch engine.PluginID {
+	case "poa_light":
+		latency := max(1, engine.BaseLatencyMS)
+		record.ConsensusOrderedTimeMS = block.CutTimeMS + latency
+		record.ConsensusFinalizedTimeMS = record.ConsensusOrderedTimeMS + 1
+		record.ConsensusLatencyMS = record.ConsensusFinalizedTimeMS - record.ConsensusStartTimeMS
+		record.TotalMessageCount = validatorCount + 1
+		record.Reason = "authority_confirmed"
+	case "pbft_light_model":
+		f := (validatorCount - 1) / 3
+		prepareQuorum := 2*f + 1
+		commitQuorum := 2*f + 1
+		prePrepareCount := max(0, validatorCount-1)
+		prepareCount := validatorCount * max(0, validatorCount-1)
+		commitCount := validatorCount * max(0, validatorCount-1)
+		record.FaultToleranceF = f
+		record.PrepareQuorum = prepareQuorum
+		record.CommitQuorum = commitQuorum
+		record.PrePrepareMsgCount = prePrepareCount
+		record.PrepareMsgCount = prepareCount
+		record.CommitMsgCount = commitCount
+		record.TotalMessageCount = prePrepareCount + prepareCount + commitCount
+		record.ConsensusOrderedTimeMS = block.CutTimeMS + max(1, engine.BaseLatencyMS)*2
+		record.ConsensusFinalizedTimeMS = block.CutTimeMS + max(1, engine.BaseLatencyMS)*3
+		record.ConsensusLatencyMS = record.ConsensusFinalizedTimeMS - record.ConsensusStartTimeMS
+		record.Reason = "pbft_light_quorum_reached"
+	default:
+		record.PluginID = "simple_leader"
+		record.ConsensusOrderedTimeMS = block.CutTimeMS + 1
+		record.ConsensusFinalizedTimeMS = record.ConsensusOrderedTimeMS + 1
+		record.ConsensusLatencyMS = record.ConsensusFinalizedTimeMS - record.ConsensusStartTimeMS
+		record.Reason = "simple_leader_finalized"
+	}
+	return record
+}
+
 func requireSupportedPlugins(plugin PluginProfile) error {
 	baseExpected := map[string]string{
-		"TxPoolPlugin":    "fifo_pool",
-		"BlockProducer":   "time_or_count_block_producer",
-		"ConsensusPlugin": "simple_leader",
-		"MetricsPlugin":   "basic_metrics",
+		"TxPoolPlugin":  "fifo_pool",
+		"BlockProducer": "time_or_count_block_producer",
+		"MetricsPlugin": "basic_metrics",
 	}
 	actual := map[string]string{
 		"TxPoolPlugin":             plugin.TxPoolPlugin,
@@ -492,6 +607,7 @@ func requireSupportedPlugins(plugin PluginProfile) error {
 		"ExecutionSchedulerPlugin": {"serial_execution": true, "dual_track_execution": true},
 		"StateAccessPlugin":        {"direct_fetch": true, "access_list_prefetch": true},
 		"CommitPlugin":             {"normal_commit": true, "hot_update_aggregation_commit": true},
+		"ConsensusPlugin":          {"simple_leader": true, "poa_light": true, "pbft_light_model": true},
 	}
 	for key, values := range allowed {
 		if !values[actual[key]] {
@@ -917,7 +1033,36 @@ func applyBlockProducerMetrics(summary *Summary, producer *BlockProducer) {
 	summary.BlockProducerEmptyCut = producer.EmptyCutCount
 }
 
-func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, title string) error {
+func applyConsensusMetrics(summary *Summary, records []ConsensusRecord) {
+	latencies := []int{}
+	messageCounts := []int{}
+	totalMessages := 0
+	viewChanges := 0
+	finalized := 0
+	failed := 0
+	for _, record := range records {
+		latencies = append(latencies, record.ConsensusLatencyMS)
+		messageCounts = append(messageCounts, record.TotalMessageCount)
+		totalMessages += record.TotalMessageCount
+		viewChanges += record.ViewChangeCount
+		if record.Finalized {
+			finalized++
+		} else {
+			failed++
+		}
+	}
+	summary.ConsensusLatencyMS = round(avg(latencies))
+	summary.AvgConsensusLatencyMS = round(avg(latencies))
+	summary.P95ConsensusLatencyMS = percentileInt(latencies, 95)
+	summary.ConsensusMessageCount = totalMessages
+	summary.AvgConsensusMessageCount = round(avg(messageCounts))
+	summary.ConsensusRoundCount = len(records)
+	summary.ViewChangeCount = viewChanges
+	summary.FinalizedBlockCount = finalized
+	summary.FailedBlockCount = failed
+}
+
+func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
@@ -949,11 +1094,14 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := writeTxPoolLog(filepath.Join(out, "txpool_log.csv"), txPoolLog); err != nil {
 		return err
 	}
-	report := "# " + title + "\n\nThis is V3.4.2 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool and BlockProducer hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, local FIFO TxPool admission/selection behavior, and local logical BlockProducer cut behavior.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nThis is not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
+	if err := writeConsensusLog(filepath.Join(out, "consensus_log.csv"), consensusLog); err != nil {
+		return err
+	}
+	report := "# " + title + "\n\nThis is V3.4.3 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool, BlockProducer, and Consensus-light hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, local FIFO TxPool admission/selection behavior, local logical BlockProducer cut behavior, and local virtual-time Consensus-light finality metrics.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nConsensus-light models local stage, quorum, virtual message count, and finality observability. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
-	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nfabric_live=false\nmetaflow=false\npbft=false\nhotstuff=false\nraft=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
+	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nfabric_live=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
 	return os.WriteFile(filepath.Join(out, "runtime.log"), []byte(log), 0o644)
 }
 
@@ -963,12 +1111,13 @@ func writeSummaryCSV(path string, s Summary) error {
 		strconv.Itoa(s.TxCount), strconv.Itoa(s.SuccessCount), strconv.Itoa(s.FailureCount), strconv.Itoa(s.BlockCount),
 		fmt.Sprint(s.ThroughputTPS), fmt.Sprint(s.AvgLatencyMS), fmt.Sprint(s.P95LatencyMS), fmt.Sprint(s.P99LatencyMS), s.RuntimeMode,
 		strconv.Itoa(s.RemoteFetchCount), fmt.Sprint(s.CrossShardRatio), strconv.Itoa(s.FastTrackCount), strconv.Itoa(s.ConservativeTrackCount), strconv.Itoa(s.AggregatedUpdateCount), fmt.Sprint(s.AggregationRatio), strconv.Itoa(s.ConflictCount), fmt.Sprint(s.QueueWaitMS), strconv.Itoa(s.TxPoolAdmittedCount), strconv.Itoa(s.TxPoolRejectedCount), strconv.Itoa(s.TxPoolPeakSize), fmt.Sprint(s.TxPoolAvgWaitMS), fmt.Sprint(s.TxPoolP95WaitMS), strconv.Itoa(s.EmptyBlockCount), fmt.Sprint(s.AvgBlockSize), strconv.Itoa(s.MaxBlockSize), strconv.Itoa(s.BlockIntervalMS), fmt.Sprint(s.AvgBlockIntervalMS), strconv.Itoa(s.BlockProducerCountCut), strconv.Itoa(s.BlockProducerTimeCut), strconv.Itoa(s.BlockProducerDrainCut), strconv.Itoa(s.BlockProducerEmptyCut), fmt.Sprint(s.BlockCommitLatencyMS),
+		fmt.Sprint(s.ConsensusLatencyMS), fmt.Sprint(s.AvgConsensusLatencyMS), fmt.Sprint(s.P95ConsensusLatencyMS), strconv.Itoa(s.ConsensusMessageCount), fmt.Sprint(s.AvgConsensusMessageCount), strconv.Itoa(s.ConsensusRoundCount), strconv.Itoa(s.ViewChangeCount), strconv.Itoa(s.FinalizedBlockCount), strconv.Itoa(s.FailedBlockCount),
 		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {
@@ -1018,6 +1167,38 @@ func writeTxPoolLog(path string, events []TxPoolEvent) error {
 			strconv.Itoa(event.RejectedCount),
 			strconv.Itoa(event.QueueWaitMS),
 			event.Reason,
+		})
+	}
+	return writeCSV(path, fields, rows)
+}
+
+func writeConsensusLog(path string, records []ConsensusRecord) error {
+	fields := []string{"block_height", "block_hash", "consensus_plugin", "round_id", "view_id", "sequence_id", "leader_id", "validator_count", "fault_tolerance_f", "prepare_quorum", "commit_quorum", "preprepare_msg_count", "prepare_msg_count", "commit_msg_count", "total_message_count", "consensus_start_time_ms", "consensus_ordered_time_ms", "consensus_finalized_time_ms", "consensus_latency_ms", "finalized", "view_change_count", "reason"}
+	rows := [][]string{}
+	for _, record := range records {
+		rows = append(rows, []string{
+			strconv.Itoa(record.BlockHeight),
+			record.BlockHash,
+			record.PluginID,
+			strconv.Itoa(record.RoundID),
+			strconv.Itoa(record.ViewID),
+			strconv.Itoa(record.SequenceID),
+			record.LeaderID,
+			strconv.Itoa(record.ValidatorCount),
+			strconv.Itoa(record.FaultToleranceF),
+			strconv.Itoa(record.PrepareQuorum),
+			strconv.Itoa(record.CommitQuorum),
+			strconv.Itoa(record.PrePrepareMsgCount),
+			strconv.Itoa(record.PrepareMsgCount),
+			strconv.Itoa(record.CommitMsgCount),
+			strconv.Itoa(record.TotalMessageCount),
+			strconv.Itoa(record.ConsensusStartTimeMS),
+			strconv.Itoa(record.ConsensusOrderedTimeMS),
+			strconv.Itoa(record.ConsensusFinalizedTimeMS),
+			strconv.Itoa(record.ConsensusLatencyMS),
+			strconv.FormatBool(record.Finalized),
+			strconv.Itoa(record.ViewChangeCount),
+			record.Reason,
 		})
 	}
 	return writeCSV(path, fields, rows)

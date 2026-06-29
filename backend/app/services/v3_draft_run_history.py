@@ -100,6 +100,7 @@ def artifact_groups(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ("Draft config", {"composer_draft.json", "normalized_draft.json", "draft_validation.json", "generated_experiment_profile.json", "generated_experiment_profile.yaml", "generated_plugin_profile.json", "generated_plugin_profile.yaml"}),
         ("Run summary", {"summary.csv", "summary.json", "report.md", "latency.csv"}),
         ("Runtime queue logs", {"txpool_log.csv"}),
+        ("Runtime consensus logs", {"consensus_log.csv"}),
         ("Chain runtime logs", {"runtime.log", "block_log.csv", "tx_results.csv", "state_commit_log.csv"}),
         ("MetaTrack metrics", {"metatrack_summary.csv", "metatrack_summary.json", "metatrack_latency.csv", "metatrack_mechanism_metrics.csv", "metatrack_ablation_report.md"}),
         ("Used profiles", {"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "used_chain_profile.json", "used_plugin_profile.json", "used_experiment_profile.json"}),
@@ -200,6 +201,15 @@ def _pick_summary_fields(summary: dict[str, Any]) -> dict[str, Any]:
         "blockproducer_time_cut_count",
         "blockproducer_drain_cut_count",
         "blockproducer_empty_cut_count",
+        "consensus_latency_ms",
+        "avg_consensus_latency_ms",
+        "p95_consensus_latency_ms",
+        "consensus_message_count",
+        "avg_consensus_message_count",
+        "consensus_round_count",
+        "view_change_count",
+        "finalized_block_count",
+        "failed_block_count",
     )
     return {key: summary[key] for key in keys if key in summary}
 

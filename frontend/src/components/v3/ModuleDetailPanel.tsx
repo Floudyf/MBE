@@ -80,6 +80,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
         {selectedModule.module_id === "BlockProducer" && (
           <p className="muted">V3.4.2 realizes the time-or-count BlockProducer for Draft Smoke. Fixed-size and adaptive block cut plugins remain planned and are not real runtime implementations.</p>
         )}
+        {selectedModule.module_id === "Consensus" && (
+          <p className="muted">V3.4.3 realizes simple_leader, poa_light, and pbft_light_model as local virtual-time consensus-light models. pbft_light_model models PBFT stages and quorum accounting; it is not production PBFT or real network PBFT.</p>
+        )}
       </section>
 
       <section className="v3-config-section">
@@ -124,6 +127,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
                 {selectedModule.module_id === "BlockProducer" && (
                   <small>{plugin.id === "time_or_count_block_producer" ? "runtime-supported time/count hardening" : "planned only"}</small>
                 )}
+                {selectedModule.module_id === "Consensus" && (
+                  <small>{consensusPluginHint(plugin.id)}</small>
+                )}
               </span>
               <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
             </label>
@@ -164,6 +170,13 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange }
       </section>
     </aside>
   );
+}
+
+function consensusPluginHint(pluginId: string): string {
+  if (pluginId === "simple_leader") return "runtime-supported simple leader";
+  if (pluginId === "poa_light") return "runtime-supported PoA-light model";
+  if (pluginId === "pbft_light_model") return "PBFT-style light model only";
+  return "planned or unsupported";
 }
 
 function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {

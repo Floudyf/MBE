@@ -25,7 +25,7 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	if result.Summary.TxCount != 24 || result.Summary.SuccessCount != 24 || result.Summary.FailureCount != 0 {
 		t.Fatalf("unexpected summary: %+v", result.Summary)
 	}
-	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv"} {
+	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv"} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Fatalf("missing artifact %s: %v", name, err)
 		}
@@ -34,12 +34,16 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	assertCSVFields(t, filepath.Join(out, "tx_results.csv"), []string{"tx_id", "submit_time_ms", "admit_time_ms", "block_height", "execution_start_ms", "execution_end_ms", "commit_time_ms", "latency_ms", "status", "shard_id", "consensus_domain_id", "execution_shard_id", "home_state_unit_ids", "accessed_state_unit_ids", "remote_state_unit_count", "remote_fetch_count", "cross_state_unit_access", "state_locality_hit", "read_count", "write_count"})
 	assertCSVFields(t, filepath.Join(out, "state_commit_log.csv"), []string{"block_height", "tx_id", "state_key", "old_value", "delta", "new_value", "commit_plugin", "commit_time_ms", "status", "state_storage_unit_id", "execution_shard_id", "is_remote_commit", "placement_policy", "routing_plugin"})
 	assertCSVFields(t, filepath.Join(out, "txpool_log.csv"), []string{"event_time_ms", "event_type", "tx_id", "block_height", "pool_size_before", "pool_size_after", "admitted_count", "selected_count", "rejected_count", "queue_wait_ms", "reason"})
-	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"})
+	assertCSVFields(t, filepath.Join(out, "consensus_log.csv"), consensusLogFields())
+	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"})
 	if result.Summary.QueueWaitMS <= 0 || result.Summary.TxPoolAvgWaitMS <= 0 {
 		t.Fatalf("queue wait should be derived from txpool and non-zero in smoke profile: %+v", result.Summary)
 	}
 	if result.Summary.BlockProducerDrainCut != 1 || result.Summary.AvgBlockSize != 24 || result.Summary.MaxBlockSize != 24 {
 		t.Fatalf("unexpected default block producer metrics: %+v", result.Summary)
+	}
+	if result.Summary.ConsensusRoundCount != result.Summary.BlockCount || result.Summary.FinalizedBlockCount != result.Summary.BlockCount || result.Summary.FailedBlockCount != 0 {
+		t.Fatalf("unexpected simple leader consensus summary: %+v", result.Summary)
 	}
 }
 
@@ -298,6 +302,65 @@ func TestTxPoolMetricsAllowZeroAndNonZeroWaits(t *testing.T) {
 	}
 }
 
+func TestPoALightConsensusFinalizesBlocks(t *testing.T) {
+	engine := newConsensusEngine(ChainProfile{ValidatorCount: 4, NodeIDPrefix: "auth", ConsensusBaseLatencyMS: 2}, PluginProfile{ConsensusPlugin: "poa_light"})
+	record := engine.FinalizeBlock(Block{Height: 7, Hash: "block_hash", CutTimeMS: 100})
+	if record.PluginID != "poa_light" || !record.Finalized || record.Reason != "authority_confirmed" {
+		t.Fatalf("unexpected poa record: %+v", record)
+	}
+	if record.ValidatorCount != 4 || record.TotalMessageCount != 5 || record.ConsensusLatencyMS != 3 || record.ViewChangeCount != 0 {
+		t.Fatalf("unexpected poa metrics: %+v", record)
+	}
+}
+
+func TestPBFTLightConsensusQuorumAndMessages(t *testing.T) {
+	engine := newConsensusEngine(ChainProfile{ValidatorCount: 4, NodeIDPrefix: "v", ConsensusBaseLatencyMS: 1}, PluginProfile{ConsensusPlugin: "pbft_light_model"})
+	record := engine.FinalizeBlock(Block{Height: 3, Hash: "block_hash", CutTimeMS: 50})
+	if record.PluginID != "pbft_light_model" || !record.Finalized || record.Reason != "pbft_light_quorum_reached" {
+		t.Fatalf("unexpected pbft-light record: %+v", record)
+	}
+	if record.FaultToleranceF != 1 || record.PrepareQuorum != 3 || record.CommitQuorum != 3 {
+		t.Fatalf("unexpected pbft-light quorum: %+v", record)
+	}
+	if record.PrePrepareMsgCount != 3 || record.PrepareMsgCount != 12 || record.CommitMsgCount != 12 || record.TotalMessageCount != 27 {
+		t.Fatalf("unexpected pbft-light message counts: %+v", record)
+	}
+	if record.SequenceID != 3 || record.ViewChangeCount != 0 || record.ConsensusLatencyMS != 3 {
+		t.Fatalf("unexpected pbft-light timing: %+v", record)
+	}
+}
+
+func TestConsensusLogAlignsWithBlockLog(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "pbft")
+	pluginPath := writeConsensusPluginProfile(t, t.TempDir(), "pbft_light_model")
+	_, err := Run(Input{
+		ChainProfilePath:      "../../configs/v3/chains/chain_x_default.yaml",
+		PluginProfilePath:     pluginPath,
+		PluginProfileID:       "test_consensus",
+		ExperimentProfilePath: "../../configs/v3/experiments/single_chain_runtime_smoke.yaml",
+		OutputDir:             out,
+		RunID:                 "pbft_light",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockRows := readCSVRows(t, filepath.Join(out, "block_log.csv"))
+	consensusRows := readCSVRows(t, filepath.Join(out, "consensus_log.csv"))
+	if len(blockRows) != len(consensusRows) {
+		t.Fatalf("block and consensus rows should align: block=%d consensus=%d", len(blockRows), len(consensusRows))
+	}
+	for index, block := range blockRows {
+		consensus := consensusRows[index]
+		if block["block_height"] != consensus["block_height"] || block["block_hash"] != consensus["block_hash"] {
+			t.Fatalf("block/consensus mismatch: block=%+v consensus=%+v", block, consensus)
+		}
+		if block["consensus_plugin"] != "pbft_light_model" || consensus["consensus_plugin"] != "pbft_light_model" {
+			t.Fatalf("expected pbft_light_model in logs: block=%+v consensus=%+v", block, consensus)
+		}
+	}
+	assertCSVFields(t, filepath.Join(out, "consensus_log.csv"), consensusLogFields())
+}
+
 func assertCSVFields(t *testing.T, path string, fields []string) {
 	t.Helper()
 	file, err := os.Open(path)
@@ -318,6 +381,10 @@ func assertCSVFields(t *testing.T, path string, fields []string) {
 			t.Fatalf("%s missing field %s", path, field)
 		}
 	}
+}
+
+func consensusLogFields() []string {
+	return []string{"block_height", "block_hash", "consensus_plugin", "round_id", "view_id", "sequence_id", "leader_id", "validator_count", "fault_tolerance_f", "prepare_quorum", "commit_quorum", "preprepare_msg_count", "prepare_msg_count", "commit_msg_count", "total_message_count", "consensus_start_time_ms", "consensus_ordered_time_ms", "consensus_finalized_time_ms", "consensus_latency_ms", "finalized", "view_change_count", "reason"}
 }
 
 func readCSVRows(t *testing.T, path string) []map[string]string {
@@ -374,4 +441,14 @@ func testTx(id string, submitTimeMS int) Transaction {
 		Commutative:  true,
 		ConflictHint: "low",
 	}
+}
+
+func writeConsensusPluginProfile(t *testing.T, dir string, consensusPlugin string) string {
+	t.Helper()
+	path := filepath.Join(dir, "plugin_profile.yaml")
+	content := "profile_type: plugin_profile_collection\nversion: v3\nprofiles:\n  - plugin_profile_id: test_consensus\n    plugins:\n      TxPoolPlugin: fifo_pool\n      BlockProducer: time_or_count_block_producer\n      ConsensusPlugin: " + consensusPlugin + "\n      ShardingPlugin: hash_sharding\n      ExecutionSchedulerPlugin: serial_execution\n      StateAccessPlugin: direct_fetch\n      CommitPlugin: normal_commit\n      MetricsPlugin: basic_metrics\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

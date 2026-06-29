@@ -178,7 +178,18 @@ export type V3TemplateSummary = {
   planned_modules: string[];
   output_modules: string[];
 };
-export type V3SmokeRunResponse = V2SweepRunResponse & { runtime_mode?: string };
+export type V3RuntimeSummary = Record<string, unknown> & {
+  consensus_latency_ms?: number | string;
+  avg_consensus_latency_ms?: number | string;
+  p95_consensus_latency_ms?: number | string;
+  consensus_message_count?: number | string;
+  avg_consensus_message_count?: number | string;
+  consensus_round_count?: number | string;
+  view_change_count?: number | string;
+  finalized_block_count?: number | string;
+  failed_block_count?: number | string;
+};
+export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
 export type V3ComposerDraftModuleRequest = {
   module_id: string;

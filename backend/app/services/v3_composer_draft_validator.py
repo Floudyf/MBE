@@ -151,13 +151,16 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     fixed_runtime_requirements = {
         "TxPool": "fifo_pool",
         "BlockProducer": "time_or_count_block_producer",
-        "Consensus": "simple_leader",
         "CommitteeEpoch": "disabled",
         "MetricsReport": "basic_metrics",
     }
     for module_id, expected in fixed_runtime_requirements.items():
         if module_id in plugin_selection and plugin_selection[module_id] != expected:
             errors.append(f"当前 Go-backed Draft Smoke 要求 {module_label(module_id)} 使用 {expected}。")
+    allowed_consensus_plugins = {"simple_leader", "poa_light", "pbft_light_model"}
+    consensus_plugin = plugin_selection.get("Consensus")
+    if consensus_plugin and consensus_plugin not in allowed_consensus_plugins:
+        errors.append("当前 Go-backed Draft Smoke 仅支持 Consensus 使用 simple_leader、poa_light 或 pbft_light_model；PBFT / HotStuff / Raft 仍为 planned / unsupported。")
 
     normalized_draft = {
         "template_id": request.template_id,
