@@ -325,6 +325,16 @@ Frontend non-goals:
 
 目标：在保持 truthfulness 的前提下增强轻量 consensus model 的可观测性，例如 leader/ordering/finality events。不得声称 PBFT / HotStuff / Raft，除非真实实现对应 runtime state machine 和消息/投票语义。
 
+V3.4.3a is a design and BlockEmulator reference-check step. It records the current MBE consensus position and prepares V3.4.3b code boundaries in `docs/v3_4_3_consensus_light_design.md`.
+
+V3.4.3b may add `simple_leader` as the default local model, `poa_light` as a lightweight authority confirmation model, and `pbft_light_model` as a PBFT-style stage, quorum, and message-count model. It may also add `consensus_log.csv` and summary fields for consensus latency, message count, round count, finalized block count, failed block count, and view change count.
+
+The PBFT-light model may borrow BlockEmulator-style Propose / PrePrepare / Prepare / Commit / Finalized stage naming and quorum accounting: `f = (N - 1) / 3`, prepare quorum `2f + 1`, and commit quorum `2f + 1`.
+
+It must not copy or implement BlockEmulator's TCP listener, `networks.Broadcast`, `TcpDial`, goroutine message handler, LevelDB / MPT / BlockChain coupling, CLPA / Broker / Relay coupling, real view-change safety, old request sync, or multi-process node lifecycle.
+
+V3.4.3 remains local Go-backed modular runtime hardening. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, and not multi-node networking. Fabric-backed validation remains V3.5 and must not be pulled forward.
+
 ### V3.4.4 Single-module Experiment Templates
 
 目标：新增单模块实验模板和公平校验，让 TxPool、BlockProducer、Consensus-light 等后续模块测试只改变目标插件，其余 workload、seed、submit rate、block/network/hardware profile 和其它模块固定。

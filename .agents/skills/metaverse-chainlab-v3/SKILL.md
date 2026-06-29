@@ -167,7 +167,47 @@ V3.4.1 forbids:
 - Multi-process / multi-machine networking.
 - Describing Draft Smoke as formal paper experiment evidence or real-chain execution.
 
-## 5. Mandatory Start Check
+## 5. V3.4.3 Runtime Plugin Hardening: Consensus-light Boundary
+
+V3.4.3 is Consensus-light only. It may add local virtual-time consensus-light models after V3.4.2 BlockProducer hardening, but it must not become a real PBFT / HotStuff / Raft implementation.
+
+V3.4.3 allows:
+
+- Keep `simple_leader` as the default consensus plugin.
+- Add `poa_light` as a lightweight authority confirmation model.
+- Add `pbft_light_model` as a PBFT stage and message-count model.
+- Model PrePrepare / Prepare / Commit / Finalized stages for observability.
+- Account for `f = (N - 1) / 3`, prepare quorum `2f + 1`, and commit quorum `2f + 1`.
+- Add consensus-light summary metrics for consensus latency, message count, round count, finalized block count, failed block count, and view change count.
+- Add `consensus_log.csv` in the later V3.4.3b code stage.
+- Align frontend result panel, history, module detail, module card, Composer page, and artifact grouping for consensus-light fields and `consensus_log.csv`.
+
+V3.4.3 forbids:
+
+- Real PBFT or production PBFT.
+- HotStuff.
+- Raft.
+- Real TCP networking.
+- `net.Listen`, `TcpDial`, or `networks.Broadcast`.
+- Goroutine-based node message handling.
+- Real view-change safety.
+- Real Byzantine fault injection.
+- Fabric / EVM live backend.
+- Fabric Docker / `network.sh`.
+- MetaFlow.
+- Dual-chain runtime.
+- Cross-chain bridge.
+- Relay / broker / 2PC.
+- Dynamic resharding.
+- Committee lifecycle.
+- State migration.
+- State root / persistent KV / snapshot.
+- Multi-process / multi-machine networking.
+- Paper-ready sweep or full dashboard.
+
+`pbft_light_model` must always be described as a local light model that simulates PBFT-style stages, quorum accounting, and virtual message counts. It is not real PBFT, not production BFT safety, and not multi-node network consensus.
+
+## 6. Mandatory Start Check
 
 Every V3 round must start with:
 
@@ -178,13 +218,13 @@ git status --short
 
 If `git status --short` is not empty, stop and report unless the user explicitly identifies the existing changes as expected and authorizes continuing on top of them. Do not overwrite user changes.
 
-## 6. No Push Rule
+## 7. No Push Rule
 
 Codex may commit only when explicitly asked and after validation. Codex must not push unless the user explicitly asks for push.
 
 Codex must check `git status --short` before each V3 work round. If the worktree is dirty and the user did not explicitly allow continuing on top of those changes, stop and report.
 
-## 7. Data Truth Rules
+## 8. Data Truth Rules
 
 V3 must preserve and extend data truth labels:
 
@@ -210,7 +250,7 @@ Definitions:
 - `public_chain_imported_trace_semantic_unknown`: imported public-chain trace with unknown semantics; no default reliable access-set, delta, or commutativity semantics.
 - `planned_cross_chain_replay`: planned cross-chain replay marker; never runnable by itself.
 
-## 8. Backend / Runtime Types
+## 9. Backend / Runtime Types
 
 V3 backend/runtime types:
 
@@ -223,7 +263,7 @@ V3 backend/runtime types:
 
 Backend truth must be displayed in UI, metadata, reports, and artifacts. Planned backend types must not have run buttons or execution paths.
 
-## 9. Fair Baseline Rules
+## 10. Fair Baseline Rules
 
 MetaTrack V3.3 comparisons must use identical workload, seed, ChainProfile, hardware profile, block config, consensus config, submit rate, and network profile. Only the following plugin classes may differ:
 
@@ -254,7 +294,7 @@ Forbidden fairness shortcuts:
 - Do not create advantage by hiding metrics or artifacts in the frontend.
 - Do not present smoke-level results as paper-grade results.
 
-## 10. Artifact Rules
+## 11. Artifact Rules
 
 Every V3 modular runtime run after V3.4.1 should include at least:
 
@@ -272,6 +312,8 @@ txpool_log.csv
 ```
 
 `txpool_log.csv` is a V3.4.1 runtime hardening artifact. It belongs to the local modular runtime / Draft Smoke artifact set. It is not paper-grade final evidence by itself. It must explain TxPool admit, select, reject, queue wait, and pool size changes.
+
+`consensus_log.csv` may be added in the later V3.4.3b code stage. It is a local modular runtime / Draft Smoke artifact for consensus-light stage, quorum, virtual message count, and finality observability. It is not a Fabric artifact and not paper-grade final evidence by itself.
 
 Frontend artifact rules:
 
@@ -316,7 +358,7 @@ Built-in smoke vs Draft Smoke:
 - Draft Smoke must not auto-expand the MetaTrack ablation matrix;
 - Draft Smoke must not be described as paper-grade evidence.
 
-## 11. V3.4.1 Frontend Acceptance
+## 12. V3.4.1 Frontend Acceptance
 
 After V3.4.1 code implementation:
 
@@ -327,7 +369,7 @@ After V3.4.1 code implementation:
 - Page still clearly says non-Fabric, non-MetaFlow, non-PBFT, and non-multi-node network.
 - `npm.cmd run build` passes.
 
-## 12. Validation Commands
+## 13. Validation Commands
 
 Docs/config-only:
 
@@ -363,7 +405,7 @@ cd ..
 
 If validation cannot be completed, do not commit and report the blocker.
 
-## 13. Final Report Format
+## 14. Final Report Format
 
 Every V3 final report must include:
 
@@ -382,7 +424,7 @@ Every V3 final report must include:
 12. 是否 push：必须说明未 push
 ```
 
-## 14. Strict Truthfulness
+## 15. Strict Truthfulness
 
 Do not claim V3 runtime exists before V3.2.
 Do not claim MetaTrack V3 experiment exists before V3.3.
@@ -391,7 +433,11 @@ Do not claim Fabric validation exists before V3.5.
 Do not claim FIFO TxPool hardening makes MBE a full BlockEmulator-like emulator.
 Do not claim TxPool hardening provides real multi-node or real network execution.
 Do not claim PBFT / HotStuff / Raft before their actual runtime implementation.
+Do not claim `pbft_light_model` is real PBFT.
+Do not claim V3.4.3 has production-grade BFT safety.
+Do not claim V3.4.3 has real multi-node or network consensus.
 Do not claim `txpool_log.csv` is paper-grade evidence by itself.
+Do not claim `consensus_log.csv` is Fabric evidence or paper-grade evidence by itself.
 Do not claim frontend display of TxPool metrics makes Draft Smoke a formal result database or paper-grade result.
 Do not claim MetaFlow exists in current V3.4 scope.
 Do not claim production bridge support at any point.
