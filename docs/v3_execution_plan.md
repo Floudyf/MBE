@@ -6,8 +6,9 @@ V3.3 absorbs the earlier V3.2b / V3.2.5 Go-backed minimal runtime parity stage.
 
 - Gate A: Go-backed minimal runtime parity with the V3.2 Python reference runtime.
 - Gate B: Go-backed MetaTrack plugin combinations and fair ablation.
+- Gate C: single-chain Composer Draft loop with frontend Draft, backend `validate-draft`, backend `run-draft-smoke`, result display, local history, and artifact downloads.
 - V3.3 smoke / controlled results are not final paper-scale performance evidence.
-- V3.3 does not implement Fabric validation, frontend integration, dual-chain runtime, MetaFlow, AFS, or FDA.
+- V3.3 does not implement Fabric validation, frontend final acceptance, dual-chain runtime, MetaFlow, AFS, or FDA.
 
 ## 0.2 V3.3.1 Research-chain Role Separation Update
 
@@ -15,7 +16,7 @@ V3.3.1 is a platform abstraction correction stage after the Go-backed MetaTrack 
 
 The implementation remains lightweight: single-process logical runtime, fixed `consensus_0`, `simple_leader`, disabled/planned committee and epoch lifecycle, logical execution shards, and logical memory-backed state storage units.
 
-V3.3.1 is not V3.4 Fabric validation, not frontend integration, not MetaFlow, not dual-chain or cross-chain runtime, not AFS/FDA, not PBFT/HotStuff, not a real multi-machine network, and not state migration. MetaTrack co-access routing changes execution-side routing only; it does not migrate persistent state placement.
+V3.3.1 is not Fabric validation, not frontend final acceptance, not MetaFlow, not dual-chain or cross-chain runtime, not AFS/FDA, not PBFT/HotStuff, not a real multi-machine network, and not state migration. MetaTrack co-access routing changes execution-side routing only; it does not migrate persistent state placement.
 
 ## 0.3 V3.3.2 Single-chain Modular Composer Update
 
@@ -29,32 +30,60 @@ Workload -> TxPool -> BlockProducer -> Consensus -> CommitteeEpoch -> Routing ->
 
 Module status is limited to `fixed`, `variable`, `disabled`, `planned`, and `output`. V3.3.2 does not implement frontend UI, Fabric validation, MetaFlow, dual-chain runtime, PBFT/HotStuff, runnable committee lifecycle, runnable dynamic resharding, or runnable state migration.
 
+## 0.4 V3.4 Runtime Hardening Realignment
+
+The V3.4 runtime self-check in `docs/v3_4_runtime_self_check.md` found that V3.3 can run single-chain Composer Draft Smoke, but several foundation modules are still local logical, partially-runnable, or config-only:
+
+- TxPool is config-only / catalog-only; `AdmitTimeMS = SubmitTimeMS`.
+- `queue_wait_ms` is fixed to 0.
+- There is no `txpool_log.csv`.
+- BlockProducer is `cutBlocks(txs, chain)` logical slicing, not selection from TxPool.
+- Consensus is the local `simple_leader` model; PBFT / HotStuff / Raft are planned only.
+- StateStorage is memory map / memory_kv style with no state root, persistent KV, or snapshot.
+- There is no real multi-process, multi-node, or network communication.
+
+Therefore V3.4 no longer immediately enters Fabric-backed validation. V3.4 is now a runtime hardening series. Fabric-backed validation is deferred to V3.5 so that validation calibrates a more stable and observable modular runtime instead of a logical replay with missing queue behavior.
+
 ## 0. Current Scope Realignment
 
-Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + Fabric-backed validation + frontend acceptance:
+Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + V3.4 runtime hardening + V3.5 Fabric-backed validation + frontend acceptance:
 
 - V3.0 Planning Scaffold: complete.
 - V3.1 Profile Layer: complete.
 - V3.2 Minimal Single-chain Modular Runtime.
-- V3.2b / V3.2.5 Go-backed Minimal Runtime / Go parity: planned after V3.2.
+- V3.2b / V3.2.5 Go-backed Minimal Runtime / Go parity: absorbed into V3.3.
 - V3.3 MetaTrack Plugin Evaluation.
 - V3.3.1 Research-chain Role Separation.
 - V3.3.2 Single-chain Modular Composer Profile / Experiment Templates.
-- V3.4 Fabric-backed Validation for MetaTrack.
+- V3.3.3 Single-chain Composer Frontend MVP.
+- V3.3.4 Composer Chinese Localization and Snake Layout Polish.
+- V3.3.5a Interactive Single-chain Composer Draft UI.
+- V3.3.5b Backend Draft Validation and Draft Smoke Run.
+- V3.3.6 Draft Run Result UX and History Management.
+- V3.3.7 Boundary, Documentation, and Skill Closure.
+- V3.4.0 Runtime Self-check and Scope Realignment.
+- V3.4.1 Runtime Plugin Hardening: FIFO TxPool.
+- V3.4.2 Runtime Plugin Hardening: BlockProducer.
+- V3.4.3 Runtime Plugin Hardening: Consensus-light.
+- V3.4.4 Single-module Experiment Templates.
+- V3.5 Fabric-backed Validation for MetaTrack.
 - V3-final Frontend Integration and Acceptance.
 
 Deferred / future work:
 
-- V3.5 Minimal Dual-chain Runtime.
-- V3.6 MetaFlow Protocol Plugin and AFS/FDA.
+- Minimal dual-chain runtime.
+- MetaFlow Protocol Plugin and AFS/FDA.
+- Multi-process / multi-machine network emulator behavior.
 
-Current V3-final does not require V3.5 or V3.6. Existing MetaFlow preview profiles remain planned / not runnable. V3.2 is a Python backend reference runtime for stabilizing runtime semantics, profile contracts, and artifact schemas; it does not implement Go-backed parity, MetaTrack full evaluation, Fabric validation, dual-chain runtime, MetaFlow, AFS, or FDA.
+Current V3-final does not require dual-chain runtime or MetaFlow. Existing MetaFlow preview profiles remain planned / not runnable.
+
+Every V3.4.x runtime hardening substage must include corresponding frontend alignment. When runtime adds an artifact, summary metric, or module truth boundary, the frontend artifact grouping, result summary, history detail, and module detail must be aligned in the same implementation stage. Runtime must not output a new artifact that the frontend cannot download or explain.
 
 ## 1. V3 背景与动机
 
 V2 已经形成 V3-ready local replay / sweep / calibration 实验平台。它能组织实验、管理 run/artifact、执行 V1 single-chain replay、执行 V2.5 dual-chain replay、执行 V2.6 protocol baseline、生成 V2.8 sweep/report，并通过 V2.9 做 chain-backed calibration。
 
-V3 的动机不是继续扩展本地 replay，而是在 V2 实验组织层之上建立自研的模块化研究链 runtime，让 MetaTrack 与 baseline 在同一条研究链环境中公平替换插件，让 MetaFlow 与 cross-chain baselines 在同一双链环境中公平比较，并用 Fabric-backed observation / calibration / validation 防止实验被理解为纯模拟。
+V3 的动机不是继续扩展本地 replay，而是在 V2 实验组织层之上建立自研的模块化研究链 runtime，让 MetaTrack 与 baseline 在同一条研究链环境中公平替换插件，并用后续 Fabric-backed observation / calibration / validation 防止实验被理解为纯模拟。V3.4 先把 runtime 基础模块做成可观测行为，V3.5 再进入 Fabric-backed validation。
 
 ## 2. V2 当前能力基础
 
@@ -97,19 +126,21 @@ V2 仍缺少：
 
 ```text
 V3 = Modular Plugin Chain Runtime with Fabric-backed Validation
-V3 = 面向 MetaTrack + MetaFlow 的模块化插件链实验平台，并带 Fabric 链支持验证。
+V3 = 面向 MetaTrack 的模块化插件链实验平台，并带 Fabric 链支持验证。
 ```
+
+Fabric-backed validation is a validation layer, not the goal of V3.4.1 runtime hardening. V3.4 runtime hardening is a prerequisite for Fabric validation. After V3.4.1, the platform is still not a production chain, not a multi-node network emulator, and not Fabric live execution.
 
 V3 不是：
 
 - 纯 replay 平台。
 - 纯 simulation 平台。
-- 只在本地 trace 上跑的 emulator。
 - Fabric 内核修改版。
 - 生产级联盟链。
 - 生产级跨链桥。
 - 多公链跨链平台。
 - 公网链部署平台。
+- 多进程 / 多机器网络 emulator 的完成形态。
 
 V3 的主实验内核是 `modular research chain runtime`。Fabric 的定位是 validation backend，不是主实验内核。
 
@@ -129,20 +160,14 @@ V2.2 Job / Artifact Manager
 V2.3 Trace Source Layer
   -> V3 chain-backed trace ingestion and validation gate
 
-V2.4 Cross-chain Trace Schema
-  -> V3 event schema seed for dual-chain and cross-chain protocol logs
-
 V2.5 ChainBackend / dual-chain replay
-  -> V3 ChainProfile and dual-chain runtime reference
-
-V2.6 CrossChainProtocol Interface
-  -> V3 CrossChainProtocolPlugin seed
+  -> V3 ChainProfile and runtime boundary reference
 
 V2.8 Sweep / Report
   -> V3 fair baseline runner and report generator
 
 V2.9 Calibration / Realism Bridge
-  -> V3 Fabric-backed validation and replay-vs-observed calibration
+  -> V3.5 Fabric-backed validation and replay-vs-observed calibration
 
 V2-final Frontend Console
   -> V3 experiment console shell
@@ -167,32 +192,27 @@ Plugin Layer
   - ExecutionSchedulerPlugin
   - StateAccessPlugin
   - CommitPlugin
-  - CrossChainProtocolPlugin
         |
 Metrics / Artifact / Report Layer
         |
-Fabric-backed Validation Layer
+Fabric-backed Validation Layer (V3.5, validation only)
 ```
 
-V3 不是为了支持很多链，而是为了在同一个研究链环境下公平替换模块插件。Fabric 用于真实链观测、校准和补充验证。
+V3 is designed to fairly replace module plugins inside one research-chain environment. Fabric is for observation, calibration, and small-scale validation after runtime hardening.
 
 ## 6. V3 阶段路线
 
 ### V3.0 Planning Scaffold
 
-目标：建立 V3 skill、docs、边界、阶段路线、profile 定义、公平 baseline 政策。
-
-只写文档，不实现代码。
+目标：建立 V3 skill、docs、边界、阶段路线、profile 定义、公平 baseline 政策。只写文档，不实现代码。
 
 ### V3.1 Profile Layer
 
 目标：定义 `ChainProfile`、`PluginProfile`、`ExperimentProfile` 的 schema / loader / validator / preview。
 
-V3.1 才开始实现配置层。本轮 V3.0 不实现。
-
 ### V3.2 Minimal Single-chain Modular Runtime
 
-目标：实现最小单链模块化研究链 runtime：
+目标：实现最小单链模块化研究链 runtime semantics：
 
 - `NodeRuntime`
 - `TxPool`
@@ -207,12 +227,14 @@ V3.1 才开始实现配置层。本轮 V3.0 不实现。
 
 ### V3.3 MetaTrack Plugin Evaluation
 
-目标：在 V3.2 runtime 上实现 MetaTrack 所需插件组合：
+目标：在 Go-backed modular runtime 上实现 MetaTrack 所需插件组合：
 
 - `hash_sharding`
 - `co_access_sharding`
 - `serial_execution`
 - `dual_track_execution`
+- `direct_fetch`
+- `access_list_prefetch`
 - `normal_commit`
 - `hot_update_aggregation_commit`
 
@@ -223,46 +245,103 @@ V3.1 才开始实现配置层。本轮 V3.0 不实现。
 - `co_access_dual_track`
 - `full_MetaTrack`
 
-所有 baseline 与 full_MetaTrack 必须在同一 workload、同一 seed、同一 ChainProfile、同一 block config、同一 consensus config 下运行，只允许替换插件。
+所有 baseline 与 full_MetaTrack 必须在同一 workload、同一 seed、同一 ChainProfile、同一 block config、同一 consensus config 下运行，只允许替换 `ShardingPlugin`、`ExecutionSchedulerPlugin`、`StateAccessPlugin`、`CommitPlugin`。
 
-### V3.4 Fabric-backed Validation for MetaTrack
+### V3.4.0 Runtime Self-check and Scope Realignment
 
-目标：用 Fabric 产生真实 commit latency、tx_id、block_number、status、chain-backed trace，校准 V3 modular runtime，并做小规模真实 Fabric 黑盒验证。
+目标：完成 runtime self-check，确认当前模块真实状态，把路线从直接 Fabric-backed validation 调整为 V3.4 runtime hardening series，并把 Fabric validation 顺延为 V3.5。
 
-不改 Fabric peer 内核。
+产物：
 
-### V3.5 Minimal Dual-chain Runtime
+- `docs/v3_4_runtime_self_check.md`
+- 更新后的 skill / execution plan。
 
-目标：在 V3.2 单链 runtime 基础上创建 source_chain X 和 target_chain Y，支持 source lock、target mint、source complete/refund、finality wait、pending count。
+### V3.4.1 Runtime Plugin Hardening: FIFO TxPool
 
-服务 MetaFlow。
+目标：
 
-### V3.6 MetaFlow Protocol Plugin and AFS/FDA
+- 把 TxPool 从 config-only / catalog-only 推进为可观测 runtime object。
+- 让交易先进入 TxPool，再由 BlockProducer 选择出块。
+- 输出 `txpool_log.csv`。
+- 让 `queue_wait_ms` 来源于真实等待时间统计。
 
-目标：实现 `CrossChainProtocolPlugin`：
+后续实现阶段允许修改的业务代码范围建议限制在：
 
-- `lock_mint_serial`
-- `lock_mint_pipeline`
-- `fixed_window_baseline`
-- `committee_bridge_basic`
-- `metaflow_basic`
-- `metaflow_afs_fda`
+- `executor/v3runtime/runtime.go`
+- `executor/v3runtime/runtime_test.go`
+- `backend/app/services/artifact_manager.py`
+- `backend/app/services/v3_draft_run_history.py`
+- `frontend/src/api.ts`
+- `frontend/src/components/v3/ArtifactGroups.tsx`
+- `frontend/src/components/v3/DraftRunResultPanel.tsx`
+- `frontend/src/components/v3/DraftRunHistoryPanel.tsx`
+- `frontend/src/components/v3/ModuleDetailPanel.tsx`
+- `frontend/src/components/v3/ModuleCard.tsx`
+- `frontend/src/pages/V3ComposerPage.tsx`
 
-实现 MetaFlow 参数：
+本阶段非目标：
 
-- `B = batch size`
-- `D = pending/finality window`
-- `T = timeout`
-- `AFS = adaptive batch-size control`
-- `FDA = finality/pending-window control`
+- PBFT / HotStuff / Raft。
+- Fabric / EVM live backend。
+- MetaFlow。
+- dual-chain runtime。
+- cross-chain bridge。
+- cross-shard relay / broker / 2PC。
+- dynamic resharding。
+- committee lifecycle。
+- state root / persistent KV。
+- multi-process / network。
+
+Frontend alignment:
+
+- `frontend/src/api.ts` must add or remain compatible with TxPool summary fields: `txpool_admitted_count`, `txpool_rejected_count`, `txpool_peak_size`, `txpool_avg_wait_ms`, `txpool_p95_wait_ms`, and `queue_wait_ms`.
+- `DraftRunResultPanel.tsx` must display TxPool metrics, including average queue wait, peak pool size, admitted count, rejected count, and TxPool artifact availability.
+- `ArtifactGroups.tsx` must include `txpool_log.csv` under Runtime queue logs, TxPool logs, or Chain runtime logs, and must not label it as Fabric or paper-grade evidence.
+- `DraftRunHistoryPanel.tsx` must display or link historical runs containing `txpool_log.csv`; older runs without it must be treated as legacy missing artifact, not an error.
+- `ModuleDetailPanel.tsx` must distinguish `fifo_pool` as runtime-realized after V3.4.1 implementation, while `priority_pool`, `hotspot_aware_pool`, and `fee_based_pool` remain planned.
+- `ModuleCard.tsx` should distinguish configured runnable, runtime-supported, preview-only, and planned status so a selector option is not mistaken for runtime behavior.
+- `V3ComposerPage.tsx` must preserve or strengthen boundary wording: single-chain, Go Runtime, Smoke experiment, non-Fabric, non-MetaFlow, non-PBFT / HotStuff / Raft, and non-multi-node network. It may add TxPool runtime hardening, FIFO pool only, and local modular runtime.
+
+Frontend non-goals:
+
+- no full real-time dashboard;
+- no WebSocket live monitor;
+- no drag-and-drop freeform composer;
+- no multi-user permission system;
+- no formal result database;
+- no Fabric live status console;
+- no MetaFlow frontend;
+- no dual-chain frontend;
+- no cross-shard relay / broker / 2PC frontend;
+- no paper-grade framing for Draft Smoke.
+
+### V3.4.2 Runtime Plugin Hardening: BlockProducer
+
+目标：在 TxPool 可观测之后，把 BlockProducer 从逻辑切块推进为可解释的虚拟时间 producer。BlockProducer 应从 TxPool selection 生成 block，并保留 `block_log.csv` 与 `txpool_log.csv` 的互相解释关系。
+
+非目标：真实节点网络、BFT、Fabric live execution、cross-shard protocol。
+
+### V3.4.3 Runtime Plugin Hardening: Consensus-light
+
+目标：在保持 truthfulness 的前提下增强轻量 consensus model 的可观测性，例如 leader/ordering/finality events。不得声称 PBFT / HotStuff / Raft，除非真实实现对应 runtime state machine 和消息/投票语义。
+
+### V3.4.4 Single-module Experiment Templates
+
+目标：新增单模块实验模板和公平校验，让 TxPool、BlockProducer、Consensus-light 等后续模块测试只改变目标插件，其余 workload、seed、submit rate、block/network/hardware profile 和其它模块固定。
+
+### V3.5 Fabric-backed Validation for MetaTrack
+
+目标：在 V3.4 runtime hardening 之后，用 Fabric 产生真实 commit latency、tx_id、block_number、status、chain-backed trace，校准 V3 modular runtime，并做小规模真实 Fabric 黑盒验证。
+
+不改 Fabric peer 内核。Fabric-backed validation 是 validation / calibration layer，不是主实验 runtime。
 
 ### V3-final Frontend Integration and Acceptance
 
-目标：前端整合当前 V3 范围内的 MetaTrack 插件链实验、Fabric 验证、运行记录、报告下载、系统边界与开发者模式。MetaFlow 双链协议实验保留为 planned/deferred preview，不作为当前 V3-final 验收条件。
+目标：前端整合当前 V3 范围内的 MetaTrack 插件链实验、V3.4 runtime hardening artifacts、V3.5 Fabric 验证、运行记录、报告下载、系统边界与开发者模式。MetaFlow 双链协议实验保留为 planned/deferred preview，不作为当前 V3-final 验收条件。
 
 ## 7. MetaTrack 主线
 
-MetaTrack 主线在 V3.3 开始。它必须运行在 V3.2 modular research chain runtime 上。V3 不声称 MetaTrack 已经修改或嵌入 Fabric peer。
+MetaTrack 主线在 V3.3 开始。它必须运行在 modular research chain runtime 上。V3 不声称 MetaTrack 已经修改或嵌入 Fabric peer。
 
 MetaTrack 主线要求：
 
@@ -271,26 +350,34 @@ MetaTrack 主线要求：
 - 同一 seed。
 - 同一 hardware profile。
 - 同一 block/consensus config。
+- 同一 submit rate。
+- 同一 network profile。
 - 只替换 `ShardingPlugin`、`ExecutionSchedulerPlugin`、`StateAccessPlugin`、`CommitPlugin`。
 
-## 8. MetaFlow 主线
+## 8. Runtime Hardening 单模块公平规则
 
-MetaFlow 主线在 V3.6 开始。V2.6 baseline 可作为 interface seed，但不是 MetaFlow 实现。
+TxPool 单模块测试：
 
-MetaFlow 主线要求：
+- 只允许 `TxPoolPlugin` 变化。
+- 必须固定 Workload、BlockProducer、Consensus、Routing、Execution、StateAccess、StateStorage、Commit、Metrics、seed、submit rate、block config、network profile。
 
-- 同一 source ChainProfile。
-- 同一 target ChainProfile。
-- 同一 workload arrival sequence。
-- 同一 finality profile。
-- 同一 timeout baseline。
-- 只替换 `CrossChainProtocolPlugin` 和 control policy。
+BlockProducer 单模块测试：
+
+- 只允许 `BlockProducer` 变化。
+- 必须固定 Workload、TxPool、Consensus、Routing、Execution、StateAccess、StateStorage、Commit、Metrics、seed、submit rate、network profile。
+
+Consensus-light 单模块测试：
+
+- 只允许 `ConsensusPlugin` 变化。
+- 必须固定 Workload、TxPool、BlockProducer、Routing、Execution、StateAccess、StateStorage、Commit、Metrics、seed、submit rate、block config、network profile。
+
+禁止通过更换 workload、seed、submit rate、block config、network profile、hardware profile 制造优势。禁止把 smoke-level result 当作 paper-grade result。
 
 ## 9. Fabric-backed validation 主线
 
 Fabric 的定位是 validation backend，不是主实验内核。
 
-Fabric-backed validation 用于：
+Fabric-backed validation 从 V3.5 开始，用于：
 
 - 真实 tx submit / commit latency 观测。
 - 真实 block number / tx status 采集。
@@ -304,8 +391,37 @@ Fabric 不用于：
 - 修改 Fabric peer 内核。
 - 声称 MetaTrack 在 Fabric 内核中实现。
 - 提供生产级跨链桥证明。
+- 绕过 V3.4 runtime hardening。
 
-## 10. V3 成功标准
+## 10. Artifacts
+
+Every V3 modular runtime run after V3.4.1 should include:
+
+```text
+used_chain_profile.yaml/json
+used_plugin_profile.yaml/json
+used_experiment_profile.yaml/json
+runtime.log
+summary.csv/json
+report.md
+block_log.csv
+tx_results.csv
+state_commit_log.csv
+txpool_log.csv
+```
+
+`txpool_log.csv` is a V3.4.1 local modular runtime / Draft Smoke artifact. It is not paper-grade evidence by itself. It must explain TxPool admit, select, reject, queue wait, and pool size changes.
+
+Fabric validation artifacts are deferred to V3.5:
+
+```text
+fabric_validation_summary.csv/json
+fabric_tx_results.csv
+fabric_commit_latency.csv
+fabric_validation_report.md
+```
+
+## 11. V3 成功标准
 
 V3 成功标准：
 
@@ -313,12 +429,16 @@ V3 成功标准：
 - V3.1 profile 能 preview 和 validate。
 - V3.2 minimal runtime 能运行小 workload 并输出 block/tx/state logs。
 - V3.3 MetaTrack baseline/full comparison 遵守公平规则。
-- V3.4 Fabric-backed validation 能输出 calibration/validation report。
-- V3.5 dual-chain runtime remains deferred / future roadmap and is not a current V3-final gate。
-- V3.6 MetaFlow basic and AFS/FDA remain deferred / future roadmap and are not current V3-final gates。
+- V3.4.0 完成 runtime self-check 和 scope realignment。
+- V3.4.1 FIFO TxPool hardening 输出 `txpool_log.csv`，summary 中 queue wait 指标不再硬编码为 0。
+- V3.4.1 frontend alignment 显示 TxPool summary 指标、下载 `txpool_log.csv`、兼容旧 history run 缺失 artifact，并继续展示非 Fabric / 非 MetaFlow / 非 PBFT / 非多节点网络边界。
+- V3.4.2 BlockProducer 从 TxPool selection 生成 block，并保留 `block_log.csv` 可解释性。
+- V3.4.3 Consensus-light 在保持 truthfulness 的前提下增加轻量模型。
+- V3.4.4 支持 single-module experiment template 和公平校验。
+- V3.5 Fabric-backed validation 能输出 calibration/validation report。
 - V3-final 前端清楚展示 truth labels、backend types、artifacts 和 boundaries。
 
-## 11. V3 非目标
+## 12. V3 非目标
 
 V3 非目标：
 
@@ -329,24 +449,28 @@ V3 非目标：
 - 替代 Fabric。
 - 多公链生产系统。
 - 将 local/replay/smoke 结果当作真实链或论文最终性能结论。
+- 在 V3.4.1 声称 Fabric validation。
+- 在 TxPool hardening 后声称完整 BlockEmulator-like emulator。
 
-## 12. 风险与降级路线
+## 13. 风险与降级路线
 
 风险：
 
 - runtime 范围过大。
+- Fabric validation 过早进入，会校准一个尚未稳定的 logical runtime。
 - Fabric validation 环境不稳定。
-- MetaTrack/MetaFlow 公平性被配置差异污染。
+- MetaTrack 公平性被配置差异污染。
 - profile schema 过早复杂化。
 - 前端误导 data truth。
 
 降级路线：
 
-- V3.2 先做 single-process logical multi-node。
-- V3.3 先用 synthetic workload，再接 chain-backed calibration。
-- V3.4 Fabric validation 只做小规模黑盒验证。
-- V3.5 先表达 minimal two-chain path。
-- V3.6 先实现 structured research artifacts，real threshold signatures 可作为未来工作。
+- 先 V3.4.1 TxPool hardening，再 V3.4.2 BlockProducer hardening，再考虑 Fabric validation。
+- 如果 TxPool hardening 时间不够，只保留 FIFO pool、`txpool_log.csv`、`queue_wait_ms` 三件事，不开放 TxPool 多插件对比。
+- 如果前端对齐时间不够，必须至少保留 `txpool_log.csv` 下载、TxPool summary 指标展示、旧 run 缺失 artifact 不崩溃三件事。
+- V3.5 Fabric validation 只做小规模黑盒验证。
+- MetaFlow / dual-chain runtime 继续保持 planned/deferred preview。
+
 ## V3.3.3 Single-chain Modular Composer Frontend MVP
 
 V3.3.3 renders the V3.3.2 `composer_preview`, `module_graph`, `plugin_matrix`, and `fairness_scope` in the frontend as a read-only Single-chain Modular Composer MVP. It adds a narrow V3 composer preview API, template listing, smoke-run alignment, module detail view, Plugin Matrix, Fairness Scope, run level, and artifact grouping.
