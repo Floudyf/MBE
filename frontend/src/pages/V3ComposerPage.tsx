@@ -36,6 +36,11 @@ const metatrackPresets = [
   { preset_id: "metatrack_routing_execution_state_access_smoke", preset_name: "MetaTrack routing + execution + state access smoke", ablation_stage: "routing_execution_state_access", enabled_metatrack_components: ["routing", "execution", "state_access"], controlled_modules: ["Routing", "Execution", "StateAccess", "Commit"], default_plugin_selection: { Routing: "metatrack_coaccess_routing", Execution: "metatrack_dual_track_execution", StateAccess: "access_list_prefetch", Commit: "normal_commit" }, locked_modules: metatrackLockedModules, primary_metrics: metatrackPrimaryMetrics, expected_artifacts: metatrackExpectedArtifacts, result_guide: "Focus on routing, execution, state_access_log.csv, cache/prefetch hit rates, remote state access ratio, and latency.", truthfulness_note: metatrackTruthfulnessNote },
   { preset_id: "metatrack_full_smoke", preset_name: "MetaTrack full smoke", ablation_stage: "full", enabled_metatrack_components: ["routing", "execution", "state_access", "commit"], controlled_modules: ["Routing", "Execution", "StateAccess", "Commit"], default_plugin_selection: { Routing: "metatrack_coaccess_routing", Execution: "metatrack_dual_track_execution", StateAccess: "access_list_prefetch", Commit: "constraint_checked_aggregation" }, locked_modules: metatrackLockedModules, primary_metrics: metatrackPrimaryMetrics, expected_artifacts: metatrackExpectedArtifacts, result_guide: "Focus on the full MetaTrack component chain: routing, execution, state access, commit aggregation/constraints, and all runtime logs.", truthfulness_note: metatrackTruthfulnessNote },
 ];
+const currentStageLabel = "V3.4.11 Closure";
+const latestRuntimeLabel = "V3.4.10 Controlled Smoke Ready";
+const runtimeBoundaryText = "Current runnable capability is the V3.4.10 MetaTrack controlled smoke runner over a local Go-backed modular research chain Draft Smoke runtime. It is not Fabric live, not EVM live, not BlockEmulator backend, not a real multi-node network, not real PBFT/HotStuff/Raft, not a real cross-shard protocol, and not a paper-grade benchmark.";
+const templateStageNote = "Template stage note: metatrack_ablation was introduced in V3.4.9; the controlled runner was introduced in V3.4.10; this page wording is aligned by V3.4.11 closure.";
+const controlledSmokeDescription = "Runs the five MetaTrack presets in fixed order. Workload, seed, TxPool, BlockProducer, Consensus, CommitteeEpoch, StateStorage, and MetricsReport stay fixed; only Routing, Execution, StateAccess, and Commit vary. Outputs aggregate summary and realism readiness for smoke-level controlled comparison only.";
 
 const fallbackTemplates: V3TemplateSummary[] = [
   { template_id: "metatrack_ablation", template_name: "MetaTrack ablation", stage: "V3.4.9", chain_mode: "single_chain", runnable: true, preview_only: false, description: "MetaTrack preset-controlled local Draft Smoke ablation", variable_modules: ["Routing", "Execution", "StateAccess", "Commit"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "StateStorage"], disabled_modules: ["CommitteeEpoch"], planned_modules: [], output_modules: ["MetricsReport"], default_preset_id: "metatrack_baseline_smoke", locked_modules: metatrackLockedModules, presets: metatrackPresets, truthfulness_note: metatrackTruthfulnessNote },
@@ -252,7 +257,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const selectedVariableModules = selectedPreset?.controlled_modules || (selectedTemplate?.variable_module ? [selectedTemplate.variable_module] : selectedTemplate?.variable_modules || []);
   const identitySummary = [
     labelFor(profileLabels, preview?.experiment_profile_id || profileId),
-    preview?.stage || "-",
+    preview?.current_stage || preview?.stage || "-",
     composer?.truth_labels?.backend_type || String(profilePreview.backend_type || "-"),
     composer?.truth_labels?.truth_label || String(profilePreview.truth_label || "-"),
     composer?.chain_mode === "single_chain" ? "单链" : composer?.chain_mode || "-",
@@ -263,9 +268,9 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     <section className="page-grid v3-composer-page">
       <header className="final-card wide v3-composer-header v3-compact-header">
         <div>
-          <p className="eyebrow">V3.3.5a Composer Draft</p>
-          <h2>V3 单链 Composer</h2>
-          <p>选择模板，点击模块，配置插件与实验变量，查看 Draft 校验，然后运行已有 Smoke。</p>
+          <p className="eyebrow">{currentStageLabel}</p>
+          <h2>V3 Composer · {latestRuntimeLabel}</h2>
+          <p>{runtimeBoundaryText}</p>
         </div>
         <div className="v3-boundary-badges">
           <span>单链</span>
@@ -302,7 +307,9 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           <p className="v3-identity-summary">{identitySummary}</p>
           <dl className="v3-identity-grid">
             <div><dt>实验模板</dt><dd>{labelFor(templateLabels, composer?.template_id || preview?.experiment_template || "-")}</dd></div>
-            <div><dt>阶段</dt><dd>{preview?.stage || "-"}</dd></div>
+            <div><dt>current stage</dt><dd>{preview?.current_stage || preview?.stage || "-"}</dd></div>
+            <div><dt>latest runtime</dt><dd>{preview?.latest_runtime_stage || "-"}</dd></div>
+            <div><dt>next stage</dt><dd>{preview?.next_stage || "-"}</dd></div>
             <div><dt>后端类型</dt><dd>{composer?.truth_labels?.backend_type || String(profilePreview.backend_type || "-")}</dd></div>
             <div><dt>真实性标签</dt><dd>{composer?.truth_labels?.truth_label || String(profilePreview.truth_label || "-")}</dd></div>
             <div><dt>是否可运行</dt><dd>{yesNo(preview?.runnable && composer?.runnable)}</dd></div>
@@ -367,6 +374,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
                 </details>
               )}
               {selectedTemplate.truthfulness_note && <p className="muted">{selectedTemplate.truthfulness_note}</p>}
+              {selectedTemplate.template_id === "metatrack_ablation" && <p className="muted">{templateStageNote}</p>}
             </div>
           )}
         </section>
@@ -410,7 +418,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
             {runningControlled ? "Running..." : "Run controlled smoke"}
           </button>
         </div>
-        <p className="muted">Runs the five MetaTrack ablation presets with fixed workload, seed, TxPool, BlockProducer, Consensus, CommitteeEpoch, StateStorage, and MetricsReport. This is local Draft Smoke only, not Fabric, BlockEmulator, or a paper benchmark.</p>
+        <p className="muted">{controlledSmokeDescription}</p>
+        <p className="muted">Boundary: local Go-backed modular research chain Draft Smoke only; not Fabric live, not EVM live, not BlockEmulator backend, not real PBFT/HotStuff/Raft, not a real cross-shard protocol, and not paper-grade evidence.</p>
         {controlledSmokeResult && (
           <>
             <dl className="v3-result-grid">

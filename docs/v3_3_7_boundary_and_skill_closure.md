@@ -90,3 +90,8 @@ Either path must preserve V3.3 regression safety:
 - keep V3.3 built-in smoke working;
 - keep Draft Smoke single-configuration only;
 - never commit `.cache` artifacts.
+## V3.4.11 Closure Update
+
+V3.3.7 remains the earlier boundary and skill closure for the V3.3 Composer Draft surface. The current repository stage is now V3.4.11 closure. The latest runtime capability is V3.4.10 controlled smoke runner over local Go-backed modular research chain Draft Smoke, and the next stage is V3.5 node-level emulator skeleton.
+
+The V3.4.11 closure keeps the same truthfulness boundary: do not present Draft Smoke or controlled smoke output as paper-grade benchmark evidence, Fabric/EVM live execution, BlockEmulator backend execution, real multi-node networking, real PBFT/HotStuff/Raft, real cross-shard protocol, or real proof/witness/MPT/state root.

@@ -52,6 +52,12 @@ V1_SWEEP_DOWNLOADABLE_FILES = frozenset({"report.md", "sweep_summary.csv", "swee
 V1_CUSTOM_DOWNLOADABLE_FILES = frozenset({"trace_meta.json", "summary.csv", "latency.csv", "runtime.log", "report.md", "used_config.yaml", "used_config.json", "config.yaml"})
 app = FastAPI(title="MBE V0")
 
+V3_CURRENT_STAGE = "V3.4.11"
+V3_CLOSURE_STAGE = "V3.4.11"
+V3_LATEST_RUNTIME_STAGE = "V3.4.10"
+V3_RUNTIME_TRUTH = "local_go_backed_modular_research_chain_draft_smoke"
+V3_NEXT_STAGE = "V3.5_node_level_emulator_skeleton"
+
 ABLATION_PRESETS = {
     "baseline_hash_only": {"routing_policy": "hash", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},
     "co_access_only": {"routing_policy": "co_access", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},
@@ -120,6 +126,16 @@ def custom_files() -> list[dict]:
 
 def job_manager() -> JobManager:
     return JobManager(V2_JOBS_ROOT)
+
+
+def v3_stage_metadata() -> dict[str, str]:
+    return {
+        "current_stage": V3_CURRENT_STAGE,
+        "latest_runtime_stage": V3_LATEST_RUNTIME_STAGE,
+        "closure_stage": V3_CLOSURE_STAGE,
+        "runtime_truth": V3_RUNTIME_TRUTH,
+        "next_stage": V3_NEXT_STAGE,
+    }
 
 
 def v2_artifacts_response(run_id: str) -> dict:
@@ -759,7 +775,7 @@ def v3_composer_templates() -> dict:
         }
         for item in templates
     ]
-    return {"stage": "V3.3.3", "items": items}
+    return {"stage": V3_CURRENT_STAGE, **v3_stage_metadata(), "items": items}
 
 
 @app.get("/api/v3/composer/preview")
@@ -770,7 +786,8 @@ def v3_composer_preview(experiment_profile_id: str = "metatrack_go_backed_ablati
         raise HTTPException(404, str(exc)) from exc
     return {
         "experiment_profile_id": experiment_profile_id,
-        "stage": "V3.3.3",
+        "stage": V3_CURRENT_STAGE,
+        **v3_stage_metadata(),
         "profile_preview": preview,
         "composer_preview": preview.get("composer_preview", {}),
         "experiment_template": preview.get("experiment_template", ""),
@@ -828,7 +845,7 @@ def v3_composer_draft_artifact(run_id: str, filename: str) -> FileResponse:
 @app.post("/api/v3/composer/run-controlled-smoke")
 def v3_composer_run_controlled_smoke() -> dict:
     try:
-        return run_v3_4_10_controlled_smoke()
+        return {**run_v3_4_10_controlled_smoke(), **v3_stage_metadata()}
     except ControlledSmokeError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
@@ -853,11 +870,12 @@ def v3_composer_run_smoke() -> dict:
         source="v3_composer_frontend",
         experiment_name="metatrack_go_backed_ablation_smoke",
         data_truth_label="modular_runtime",
-        stage="V3.3.3",
+        stage=V3_LATEST_RUNTIME_STAGE,
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
             "experiment_profile_id": "metatrack_go_backed_ablation_smoke",
+            **v3_stage_metadata(),
         },
     )
     run_id = metadata["run_id"]
@@ -869,7 +887,8 @@ def v3_composer_run_smoke() -> dict:
         return {
             "run_id": run_id,
             "status": "completed",
-            "stage": "V3.3.3",
+            "stage": V3_LATEST_RUNTIME_STAGE,
+            **v3_stage_metadata(),
             "output_dir": str(result["output_dir"]),
             "data_truth_label": "modular_runtime",
             "backend_type": "modular_research_chain",

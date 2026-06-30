@@ -244,7 +244,13 @@ Recommended route:
 - V3.4.2 BlockProducer.
 - V3.4.3 Consensus-light.
 - V3.4.4 Single-module templates.
-- V3.5 Fabric-backed validation.
+- V3.4.9 MetaTrack ablation templates.
+- V3.4.10 controlled smoke runner.
+- V3.4.11 stage/version/frontend/docs/skill closure.
+- V3.5 node-level emulator skeleton.
 - Later work: multi-process runtime, network model, relay/broker, PBFT-style consensus, state root, persistent KV, state snapshot, and stronger emulator semantics.
 
 Each V3.4.x runtime hardening substage must include corresponding frontend alignment. When runtime adds a new artifact or summary metric, frontend artifact grouping, summary preview, and history detail must align in the same implementation stage. Runtime must not produce a new artifact that the frontend cannot download or explain.
+## V3.4.11 Closure Update
+
+Current stage is V3.4.11 closure. V3.4.1 remains the FIFO TxPool runtime hardening stage; the latest runtime capability is V3.4.10 controlled smoke runner, and V3.4.11 only aligns stage/version/frontend/docs/skill wording and validation. It does not add new TxPool, consensus, network, Fabric/EVM, or cross-shard runtime behavior.

@@ -18,6 +18,11 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
+CURRENT_STAGE = "V3.4.11"
+LATEST_RUNTIME_STAGE = "V3.4.10"
+CLOSURE_STAGE = "V3.4.11"
+RUNTIME_TRUTH = "local_go_backed_modular_research_chain_draft_smoke"
+NEXT_STAGE = "V3.5_node_level_emulator_skeleton"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -123,7 +128,12 @@ def run_v3_4_10_controlled_smoke(root: Path = CONTROLLED_SMOKE_ROOT) -> dict[str
         readiness = write_realism_readiness(run_dir)
         _write_json(run_dir / "controlled_run.json", {
             "run_id": run_id,
-            "stage": "V3.4.10",
+            "stage": LATEST_RUNTIME_STAGE,
+            "current_stage": CURRENT_STAGE,
+            "latest_runtime_stage": LATEST_RUNTIME_STAGE,
+            "closure_stage": CLOSURE_STAGE,
+            "runtime_truth": RUNTIME_TRUTH,
+            "next_stage": NEXT_STAGE,
             "preset_order": CONTROLLED_PRESET_ORDER,
             "run_index": run_rows,
             "aggregate_summary": aggregate_rows,
@@ -133,7 +143,12 @@ def run_v3_4_10_controlled_smoke(root: Path = CONTROLLED_SMOKE_ROOT) -> dict[str
         return {
             "run_id": run_id,
             "status": "completed",
-            "stage": "V3.4.10",
+            "stage": LATEST_RUNTIME_STAGE,
+            "current_stage": CURRENT_STAGE,
+            "latest_runtime_stage": LATEST_RUNTIME_STAGE,
+            "closure_stage": CLOSURE_STAGE,
+            "runtime_truth": RUNTIME_TRUTH,
+            "next_stage": NEXT_STAGE,
             "output_dir": str(run_dir),
             "data_truth_label": "modular_runtime",
             "backend_type": "modular_research_chain",
@@ -213,6 +228,7 @@ def _write_report(path: Path, run_id: str, rows: list[dict[str, Any]]) -> None:
         "# V3.4.10 Controlled MetaTrack Smoke",
         "",
         "This report summarizes five preset-controlled local Draft Smoke runs.",
+        "Repository closure stage: V3.4.11. Latest runtime capability: V3.4.10 controlled smoke runner.",
         "All presets keep workload, seed, TxPool, BlockProducer, Consensus, CommitteeEpoch, StateStorage, and MetricsReport fixed.",
         "It is not a paper-ready benchmark, Fabric live execution, BlockEmulator backend, or multi-node emulator.",
         "",

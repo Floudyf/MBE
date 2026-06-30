@@ -157,6 +157,11 @@ export type V3ComposerPreview = {
 export type V3ComposerPreviewResponse = {
   experiment_profile_id: string;
   stage: string;
+  current_stage?: string;
+  latest_runtime_stage?: string;
+  closure_stage?: string;
+  runtime_truth?: string;
+  next_stage?: string;
   profile_preview: Record<string, unknown>;
   composer_preview: V3ComposerPreview;
   experiment_template: string;
@@ -357,6 +362,11 @@ export type V3ControlledSmokeRunResponse = {
   run_id: string;
   status: string;
   stage: string;
+  current_stage?: string;
+  latest_runtime_stage?: string;
+  closure_stage?: string;
+  runtime_truth?: string;
+  next_stage?: string;
   output_dir: string;
   data_truth_label: string;
   backend_type: string;

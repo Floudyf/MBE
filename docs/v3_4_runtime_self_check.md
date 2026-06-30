@@ -137,3 +137,8 @@ The largest gap is not the Composer UI; it is runtime realism. The platform has 
 ### C. V3.4.1 Recommendation
 
 Implement the smallest real runtime hardening loop: FIFO TxPool + `txpool_log.csv` + non-zero queue wait + BlockProducer selecting from TxPool + frontend artifact/metric display. This gives the group an immediately inspectable module variable boundary without opening the much larger PBFT/Fabric/cross-shard scope.
+## V3.4.11 Closure Update
+
+Current stage is V3.4.11 closure. The latest runtime capability is the V3.4.10 controlled smoke runner for five MetaTrack presets over the local Go-backed modular research chain Draft Smoke runtime. V3.4.11 does not add runtime mechanisms; it aligns backend stage fields, frontend wording, README/docs, Codex skill guidance, and validation. Next stage is V3.5 node-level emulator skeleton.
+
+The current runtime is not a paper-grade benchmark, real on-chain execution, Fabric/EVM live backend, BlockEmulator backend, real multi-node network, real PBFT/HotStuff/Raft, real cross-shard protocol, or real proof/witness/MPT/state root implementation.

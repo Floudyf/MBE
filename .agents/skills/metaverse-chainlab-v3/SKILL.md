@@ -2,6 +2,10 @@
 
 ## 0. Current V3 Scope Realignment
 
+As of V3.4.11 closure, current_stage is V3.4.11, latest_runtime_stage is V3.4.10 controlled smoke runner, runtime_truth is local Go-backed modular research chain Draft Smoke, and next_stage is V3.5 node-level emulator skeleton. V3.4.11 is closure only and does not add runtime mechanisms.
+
+When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_4_11_stage_version_frontend_docs_closure.md`, the frontend V3 Composer header, backend V3 composer stage fields, and controlled smoke tests. Do not enter V3.5, Fabric/EVM live backend work, real PBFT/HotStuff/Raft, real multi-node networking, or real cross-shard protocol work unless explicitly requested. Do not present smoke output as a paper-grade benchmark.
+
 As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 
 - `V3.0 Planning Scaffold`: complete.
@@ -22,14 +26,17 @@ As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 - `V3.4.2 Runtime Plugin Hardening: BlockProducer`.
 - `V3.4.3 Runtime Plugin Hardening: Consensus-light`.
 - `V3.4.4 Single-module Experiment Templates`.
-- `V3.5 Fabric-backed Validation for MetaTrack`.
+- `V3.4.9 MetaTrack Ablation Templates`.
+- `V3.4.10 Controlled Smoke Runner`.
+- `V3.4.11 Stage / Version / Frontend / Docs / Skill Closure`.
+- `V3.5 Node-level Emulator Skeleton`.
 - `V3-final Frontend Integration and Acceptance`.
 
-V3.4 series goal: harden critical foundation modules in the V3 Go-backed modular research chain runtime into observable runtime behavior before any Fabric-backed validation. V3.4 remains a local modular research chain runtime. It is not Fabric live execution.
+V3.4 series goal: harden critical foundation modules in the V3 Go-backed modular research chain runtime into observable runtime behavior, add controlled smoke comparison, and close stage/version/frontend/docs/skill wording before V3.5. V3.4 remains a local modular research chain runtime. It is not Fabric live execution.
 
 Every V3.4.x runtime hardening substage must include corresponding frontend alignment. When runtime adds an artifact, summary metric, or module truth boundary, frontend artifact grouping, result summary, history detail, and module detail must align in the same implementation stage. Runtime must not output a new artifact that the frontend cannot download or explain.
 
-Fabric-backed validation is deferred to V3.5. V3.5 remains small-scale black-box validation / calibration for MetaTrack. It is not a Fabric peer kernel modification and not the main experiment runtime.
+V3.5 is the next node-level emulator skeleton stage. Do not enter V3.5 unless the user explicitly asks for it.
 
 Deferred / future scope:
 
@@ -52,7 +59,7 @@ V3 = Modular Plugin Chain Runtime with Fabric-backed Validation
 V3 = 面向 MetaTrack 的模块化插件链实验平台，并带 Fabric 链支持验证；MetaFlow 保留为 planned preview / future roadmap。
 ```
 
-Fabric-backed validation is a validation layer, not the V3.4.1 runtime hardening target. V3.4 runtime hardening is a prerequisite for calibrating a stable and observable modular runtime in V3.5.
+Fabric/EVM live backend work is not part of V3.4.11. V3.4 closure prepares the project for the next explicit V3.5 node-level emulator skeleton stage, not for an automatic Fabric/EVM live implementation.
 
 ## 2. V3 Non-goals
 
@@ -96,7 +103,10 @@ V3 stages:
 - `V3.4.2 Runtime Plugin Hardening: BlockProducer`: only BlockProducer hardening after TxPool is observable, plus frontend alignment for new producer artifacts/metrics.
 - `V3.4.3 Runtime Plugin Hardening: Consensus-light`: only lightweight truthful consensus model hardening, not PBFT/HotStuff/Raft, plus frontend alignment for consensus-light status/metrics.
 - `V3.4.4 Single-module Experiment Templates`: only single-module experiment templates, fairness validation, and frontend alignment for those templates.
-- `V3.5 Fabric-backed Validation for MetaTrack`: only Fabric-backed observation, calibration, and small-scale black-box validation after V3.4 runtime hardening. Do not patch Fabric peer internals.
+- `V3.4.9 MetaTrack Ablation Templates`: only MetaTrack ablation template and preset metadata.
+- `V3.4.10 Controlled Smoke Runner`: only the controlled five-preset smoke runner, controlled artifacts, readiness report, API, frontend panel, and tests.
+- `V3.4.11 Stage / Version / Frontend / Docs / Skill Closure`: only closure alignment; no new runtime mechanism.
+- `V3.5 Node-level Emulator Skeleton`: next stage only when explicitly requested.
 - `V3-final Frontend Integration and Acceptance`: only current-scope frontend integration, acceptance report, artifact browsing, and boundary presentation.
 
 Stage constraints:
@@ -111,7 +121,10 @@ V3.4.1 only FIFO TxPool hardening and frontend alignment.
 V3.4.2 only BlockProducer hardening and frontend alignment.
 V3.4.3 only Consensus-light hardening and frontend alignment.
 V3.4.4 only single-module experiment templates and frontend alignment.
-V3.5 only Fabric-backed validation after V3.4 runtime hardening.
+V3.4.9 only MetaTrack ablation templates.
+V3.4.10 only controlled smoke runner.
+V3.4.11 only stage/version/frontend/docs/skill closure.
+V3.5 only node-level emulator skeleton after explicit user request.
 V3-final only frontend integration and acceptance report for current V3 scope.
 ```
 
@@ -330,7 +343,7 @@ metatrack_latency.csv
 metatrack_mechanism_metrics.csv
 ```
 
-Fabric validation runs, deferred to V3.5, additionally output:
+Future Fabric validation runs, if a later stage explicitly reopens that scope, additionally output:
 
 ```text
 fabric_validation_summary.csv/json
@@ -429,7 +442,7 @@ Every V3 final report must include:
 Do not claim V3 runtime exists before V3.2.
 Do not claim MetaTrack V3 experiment exists before V3.3.
 Do not claim V3.4.1 implements Fabric validation.
-Do not claim Fabric validation exists before V3.5.
+Do not claim Fabric validation exists in current V3.4.11 closure.
 Do not claim FIFO TxPool hardening makes MBE a full BlockEmulator-like emulator.
 Do not claim TxPool hardening provides real multi-node or real network execution.
 Do not claim PBFT / HotStuff / Raft before their actual runtime implementation.

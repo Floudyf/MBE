@@ -122,6 +122,11 @@ MODULE_READINESS: list[dict[str, Any]] = [
 def build_realism_readiness() -> dict[str, Any]:
     return {
         "stage": "V3.4.10",
+        "current_stage": "V3.4.11",
+        "latest_runtime_stage": "V3.4.10",
+        "closure_stage": "V3.4.11",
+        "runtime_truth": "local_go_backed_modular_research_chain_draft_smoke",
+        "next_stage": "V3.5_node_level_emulator_skeleton",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",
@@ -148,6 +153,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         "# V3.4.10 Realism Readiness Check",
         "",
         "This is an internal readiness check for the local Go-backed Draft Smoke runtime.",
+        "Current repository closure stage is V3.4.11; the latest runtime capability remains the V3.4.10 controlled smoke runner.",
         "It is not a real-chain, Fabric/EVM live, BlockEmulator-backed, or multi-node emulator claim.",
         "",
         "| module_id | runtime_status | realism_level | implemented_plugins | next_step |",

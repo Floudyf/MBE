@@ -1,5 +1,11 @@
 # V3 Execution Plan
 
+## V3.4.11 Current Status
+
+Current stage is V3.4.11 closure. V3.4.9 introduced MetaTrack ablation templates, V3.4.10 introduced the controlled smoke runner, and V3.4.11 aligns stage/version/frontend/docs/skill wording and validation. Latest runtime capability is local Go-backed modular research chain Draft Smoke with five controlled MetaTrack presets. Next stage is V3.5 node-level emulator skeleton.
+
+This status does not claim paper-grade benchmark evidence, real chain execution, Fabric/EVM live backend, BlockEmulator backend, real multi-node networking, real PBFT/HotStuff/Raft, real cross-shard protocol, or real proof/witness/MPT/state root.
+
 ## 0.1 V3.3 Go-backed MetaTrack Update
 
 V3.3 absorbs the earlier V3.2b / V3.2.5 Go-backed minimal runtime parity stage.
@@ -42,11 +48,11 @@ The V3.4 runtime self-check in `docs/v3_4_runtime_self_check.md` found that V3.3
 - StateStorage is memory map / memory_kv style with no state root, persistent KV, or snapshot.
 - There is no real multi-process, multi-node, or network communication.
 
-Therefore V3.4 no longer immediately enters Fabric-backed validation. V3.4 is now a runtime hardening series. Fabric-backed validation is deferred to V3.5 so that validation calibrates a more stable and observable modular runtime instead of a logical replay with missing queue behavior.
+Therefore V3.4 no longer immediately enters Fabric-backed validation. V3.4 is now a runtime hardening and closure series. After V3.4.11 closure, the next stage is V3.5 node-level emulator skeleton; Fabric/EVM live backend work remains future scope unless explicitly reopened.
 
 ## 0. Current Scope Realignment
 
-Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + V3.4 runtime hardening + V3.5 Fabric-backed validation + frontend acceptance:
+Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + V3.4 runtime hardening/controlled smoke closure + V3.5 node-level emulator skeleton + frontend acceptance:
 
 - V3.0 Planning Scaffold: complete.
 - V3.1 Profile Layer: complete.
@@ -66,7 +72,10 @@ Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + V
 - V3.4.2 Runtime Plugin Hardening: BlockProducer.
 - V3.4.3 Runtime Plugin Hardening: Consensus-light.
 - V3.4.4 Single-module Experiment Templates.
-- V3.5 Fabric-backed Validation for MetaTrack.
+- V3.4.9 MetaTrack Ablation Templates.
+- V3.4.10 Controlled Smoke Runner.
+- V3.4.11 Stage / Version / Frontend / Docs Closure.
+- V3.5 Node-level Emulator Skeleton.
 - V3-final Frontend Integration and Acceptance.
 
 Deferred / future work:
@@ -167,7 +176,7 @@ V2.8 Sweep / Report
   -> V3 fair baseline runner and report generator
 
 V2.9 Calibration / Realism Bridge
-  -> V3.5 Fabric-backed validation and replay-vs-observed calibration
+  -> future chain-backed validation / calibration after node-level emulator foundations are explicit
 
 V2-final Frontend Console
   -> V3 experiment console shell
@@ -339,15 +348,15 @@ V3.4.3 remains local Go-backed modular runtime hardening. It is not real PBFT, n
 
 目标：新增单模块实验模板和公平校验，让 TxPool、BlockProducer、Consensus-light 等后续模块测试只改变目标插件，其余 workload、seed、submit rate、block/network/hardware profile 和其它模块固定。
 
-### V3.5 Fabric-backed Validation for MetaTrack
+### V3.5 Node-level Emulator Skeleton
 
-目标：在 V3.4 runtime hardening 之后，用 Fabric 产生真实 commit latency、tx_id、block_number、status、chain-backed trace，校准 V3 modular runtime，并做小规模真实 Fabric 黑盒验证。
+目标：在 V3.4.11 closure 之后，建立 node-level emulator skeleton 的最小边界与接口。V3.5 不自动进入 Fabric/EVM live backend，不实现真实 PBFT/HotStuff/Raft，不实现真实多节点网络，也不把 Draft Smoke 升级为 paper-grade benchmark。
 
 不改 Fabric peer 内核。Fabric-backed validation 是 validation / calibration layer，不是主实验 runtime。
 
 ### V3-final Frontend Integration and Acceptance
 
-目标：前端整合当前 V3 范围内的 MetaTrack 插件链实验、V3.4 runtime hardening artifacts、V3.5 Fabric 验证、运行记录、报告下载、系统边界与开发者模式。MetaFlow 双链协议实验保留为 planned/deferred preview，不作为当前 V3-final 验收条件。
+目标：前端整合当前 V3 范围内的 MetaTrack 插件链实验、V3.4 runtime hardening / controlled smoke artifacts、V3.5 node-level emulator skeleton 状态、运行记录、报告下载、系统边界与开发者模式。MetaFlow 双链协议实验保留为 planned/deferred preview，不作为当前 V3-final 验收条件。
 
 ## 7. MetaTrack 主线
 
@@ -445,7 +454,7 @@ V3 成功标准：
 - V3.4.2 BlockProducer 从 TxPool selection 生成 block，并保留 `block_log.csv` 可解释性。
 - V3.4.3 Consensus-light 在保持 truthfulness 的前提下增加轻量模型。
 - V3.4.4 支持 single-module experiment template 和公平校验。
-- V3.5 Fabric-backed validation 能输出 calibration/validation report。
+- V3.5 node-level emulator skeleton 能明确节点级 emulator 的最小接口、边界和非目标。
 - V3-final 前端清楚展示 truth labels、backend types、artifacts 和 boundaries。
 
 ## 12. V3 非目标
@@ -478,7 +487,7 @@ V3 非目标：
 - 先 V3.4.1 TxPool hardening，再 V3.4.2 BlockProducer hardening，再考虑 Fabric validation。
 - 如果 TxPool hardening 时间不够，只保留 FIFO pool、`txpool_log.csv`、`queue_wait_ms` 三件事，不开放 TxPool 多插件对比。
 - 如果前端对齐时间不够，必须至少保留 `txpool_log.csv` 下载、TxPool summary 指标展示、旧 run 缺失 artifact 不崩溃三件事。
-- V3.5 Fabric validation 只做小规模黑盒验证。
+- V3.5 node-level emulator skeleton 只建立最小节点级 emulator 骨架，不自动进入 Fabric/EVM live backend。
 - MetaFlow / dual-chain runtime 继续保持 planned/deferred preview。
 
 ## V3.3.3 Single-chain Modular Composer Frontend MVP
