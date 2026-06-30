@@ -22,6 +22,7 @@ export default function DraftRunResultPanel({ result }: Props) {
   const lockedModules = readStringMap(summary.locked_modules || normalized.locked_modules);
   const primaryMetrics = readStringArray(summary.primary_metrics || normalized.primary_metrics);
   const expectedArtifacts = readStringArray(summary.expected_artifacts || normalized.expected_artifacts);
+  const enabledComponents = readStringArray(summary.enabled_metatrack_components || normalized.enabled_metatrack_components);
   const resultGuide = String(summary.result_guide || normalized.result_guide || "");
   const truthfulnessNote = String(summary.truthfulness_note || normalized.truthfulness_note || "");
 
@@ -42,6 +43,8 @@ export default function DraftRunResultPanel({ result }: Props) {
         <div><dt>template</dt><dd>{String(summary.experiment_template || normalized.experiment_template || normalized.template_id || "-")}</dd></div>
         <div><dt>preset_id</dt><dd>{String(summary.preset_id || normalized.preset_id || "legacy/default smoke")}</dd></div>
         <div><dt>preset_name</dt><dd>{String(summary.preset_name || normalized.preset_name || "-")}</dd></div>
+        <div><dt>ablation_stage</dt><dd>{String(summary.ablation_stage || normalized.ablation_stage || "-")}</dd></div>
+        <div><dt>enabled_components</dt><dd>{enabledComponents.length ? enabledComponents.join(", ") : "baseline / none"}</dd></div>
         <div><dt>variable_module</dt><dd>{String(summary.variable_module || normalized.variable_module || "-")}</dd></div>
         <div><dt>fairness_validated</dt><dd>{String(summary.fairness_validated ?? normalized.fairness_validated ?? "false")}</dd></div>
         <div><dt>validation</dt><dd>{result.validation?.is_valid ? "valid" : "invalid"}</dd></div>

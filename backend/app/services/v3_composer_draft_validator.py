@@ -50,8 +50,18 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     presets_by_id = {str(preset.get("preset_id", "")): preset for preset in presets if preset.get("preset_id")}
     default_preset_id = str(template.get("default_preset_id") or (presets[0].get("preset_id") if presets else "") or "")
     requested_preset_id = (request.preset_id or "").strip()
-    preset_id = requested_preset_id or default_preset_id
+    preset_id = requested_preset_id or ("" if template_id == "metatrack_ablation" else default_preset_id)
     preset = presets_by_id.get(preset_id, {}) if preset_id else {}
+    preset_plugin_selection = {
+        str(key): str(value)
+        for key, value in (preset.get("default_plugin_selection") or {}).items()
+    }
+    preset_locked_modules = {
+        str(key): str(value)
+        for key, value in (preset.get("locked_modules") or {}).items()
+    }
+    preset_controlled_modules = [str(item) for item in preset.get("controlled_modules", [])]
+    template_controlled_modules = [str(item) for item in (template.get("controlled_modules", []) or preset_controlled_modules)]
     if requested_preset_id and requested_preset_id not in presets_by_id:
         errors.append(
             f"Invalid preset: {requested_preset_id} does not belong to {template_id}."
@@ -61,6 +71,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
             f"Invalid preset: {preset_id} belongs to {preset.get('variable_module')}, but template {template_id} uses {template_variable_module}."
         )
     is_single_module_template = template_id.startswith("single_module_") and bool(template_variable_module)
+    is_metatrack_ablation = template_id == "metatrack_ablation"
 
     if not request.modules:
         errors.append("Draft modules 不能为空。")
@@ -252,6 +263,38 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
                         actual,
                     )
                 )
+    elif is_metatrack_ablation:
+        fairness_validated = bool(requested_preset_id)
+        if requested_preset_id:
+            controlled = set(template_controlled_modules or ["Routing", "Execution", "StateAccess", "Commit"])
+            for module_id in variable_modules:
+                if module_id not in controlled:
+                    fairness_validated = False
+                    errors.append(
+                        f"Fairness violation: template {template_id} only allows preset-controlled MetaTrack modules {sorted(controlled)} to vary, but {plugin_selection_key(module_id)} changed."
+                    )
+            locked_for_preset = preset_locked_modules or template_locked_modules
+            for module_id, expected in locked_for_preset.items():
+                actual = plugin_selection.get(module_id)
+                if actual is not None and actual != expected:
+                    fairness_validated = False
+                    errors.append(
+                        fairness_error(
+                            template_id,
+                            "preset-controlled MetaTrack components",
+                            module_id,
+                            plugin_selection_key(module_id),
+                            expected,
+                            actual,
+                        )
+                    )
+            for module_id, expected in preset_plugin_selection.items():
+                actual = plugin_selection.get(module_id)
+                if actual is not None and actual != expected:
+                    fairness_validated = False
+                    errors.append(
+                        f"Fairness violation: preset {preset_id} requires {plugin_selection_key(module_id)}={expected}, but selected {actual}."
+                    )
     elif template_id in {"", "template_unset"}:
         fairness_scope = build_fairness_scope(
             template_id="template_unset",
@@ -273,9 +316,12 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         "planned_modules": sorted(set(planned_modules)),
         "output_modules": sorted(set(output_modules)),
         "fairness_scope": fairness_scope,
+        "ablation_stage": str(preset.get("ablation_stage", "")),
+        "enabled_metatrack_components": list(preset.get("enabled_metatrack_components", [])) if preset else [],
+        "controlled_modules": list(template_controlled_modules or preset_controlled_modules),
         "variable_module": fairness_scope.get("variable_module", ""),
         "locked_modules": fairness_scope.get("locked_modules", {}),
-        "fairness_validated": bool(fairness_validated and not errors) if is_single_module_template else False,
+        "fairness_validated": bool(fairness_validated and not errors) if (is_single_module_template or is_metatrack_ablation) else False,
         "preset_id": preset_id,
         "preset_name": str(preset.get("preset_name", "")),
         "primary_metrics": list(preset.get("primary_metrics", [])) if preset else [],
@@ -338,6 +384,9 @@ def build_fairness_scope(
         "experiment_template": template_id,
         "preset_id": str(preset.get("preset_id", "")),
         "preset_name": str(preset.get("preset_name", "")),
+        "ablation_stage": str(preset.get("ablation_stage", "")),
+        "enabled_metatrack_components": list(preset.get("enabled_metatrack_components", [])),
+        "controlled_modules": list(preset.get("controlled_modules", [])),
         "variable_module": variable_module,
         "allowed_variable_plugins": allowed_variable_plugins,
         "locked_modules": locked_modules,

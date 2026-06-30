@@ -1,9 +1,11 @@
 template_id: metatrack_ablation
-stage: V3.3.2
+stage: V3.4.9
 chain_mode: single_chain
 runnable: true
 preview_only: false
-description: Runnable MetaTrack single-chain ablation template with only routing, execution, state access, and commit modules variable.
+description: Runnable MetaTrack single-chain ablation template with preset-controlled Routing, Execution, StateAccess, and Commit component combinations.
+template_name: MetaTrack ablation
+status: runnable
 
 module_order:
   - Workload
@@ -43,17 +45,222 @@ allowed_plugins:
   Routing:
     - hash_sharding
     - co_access_sharding
+    - metatrack_coaccess_routing
   Execution:
     - serial_execution
     - dual_track_execution
+    - metatrack_dual_track_execution
   StateAccess:
     - direct_fetch
     - access_list_prefetch
   Commit:
     - normal_commit
     - hot_update_aggregation_commit
+    - constraint_checked_aggregation
+
+locked_plugin_values:
+  Workload: synthetic_hotspot
+  TxPool: fifo_pool
+  BlockProducer: time_or_count_block_producer
+  Consensus: simple_leader
+  CommitteeEpoch: disabled
+  StateStorage: hash_state_storage
+  MetricsReport: basic_metrics
+
+controlled_modules:
+  - Routing
+  - Execution
+  - StateAccess
+  - Commit
+
+default_preset_id: metatrack_baseline_smoke
+primary_metrics:
+  - cross_shard_ratio
+  - remote_state_access_ratio
+  - fast_track_count
+  - conservative_track_count
+  - cache_hit_rate
+  - prefetch_hit_rate
+  - aggregation_ratio
+  - constraint_failed_count
+  - avg_execution_latency_ms
+  - avg_state_access_latency_ms
+  - avg_commit_latency_ms
+expected_artifacts:
+  - routing_log.csv
+  - execution_log.csv
+  - state_access_log.csv
+  - state_commit_log.csv
+  - summary.csv
+  - summary.json
+  - block_log.csv
+  - tx_results.csv
+truthfulness_note: This ablation template compares deterministic local MetaTrack component combinations in the Go-backed Draft Smoke runtime. It is not a paper-ready benchmark sweep, not Fabric live execution, and not a full multi-node emulator.
+presets:
+  - preset_id: metatrack_baseline_smoke
+    preset_name: MetaTrack baseline smoke
+    description: Baseline local Draft Smoke with hash routing, serial execution, direct state access, and normal commit.
+    ablation_stage: baseline
+    enabled_metatrack_components: []
+    controlled_modules:
+      - Routing
+      - Execution
+      - StateAccess
+      - Commit
+    default_plugin_selection:
+      Routing: hash_sharding
+      Execution: serial_execution
+      StateAccess: direct_fetch
+      Commit: normal_commit
+    locked_modules:
+      Workload: synthetic_hotspot
+      TxPool: fifo_pool
+      BlockProducer: time_or_count_block_producer
+      Consensus: simple_leader
+      CommitteeEpoch: disabled
+      StateStorage: hash_state_storage
+      MetricsReport: basic_metrics
+    primary_metrics: &metatrack_primary_metrics
+      - cross_shard_ratio
+      - remote_state_access_ratio
+      - fast_track_count
+      - conservative_track_count
+      - cache_hit_rate
+      - prefetch_hit_rate
+      - aggregation_ratio
+      - constraint_failed_count
+      - avg_execution_latency_ms
+      - avg_state_access_latency_ms
+      - avg_commit_latency_ms
+    expected_artifacts: &metatrack_expected_artifacts
+      - routing_log.csv
+      - execution_log.csv
+      - state_access_log.csv
+      - state_commit_log.csv
+      - summary.csv
+      - summary.json
+      - block_log.csv
+      - tx_results.csv
+    result_guide: Compare this baseline against later presets; focus on routing/state access ratios, execution tracks, commit aggregation, and latency.
+    truthfulness_note: This ablation template compares deterministic local MetaTrack component combinations in the Go-backed Draft Smoke runtime. It is not a paper-ready benchmark sweep, not Fabric live execution, and not a full multi-node emulator.
+  - preset_id: metatrack_routing_only_smoke
+    preset_name: MetaTrack routing-only smoke
+    description: Enables only MetaTrack co-access routing.
+    ablation_stage: routing_only
+    enabled_metatrack_components:
+      - routing
+    controlled_modules: [Routing, Execution, StateAccess, Commit]
+    default_plugin_selection:
+      Routing: metatrack_coaccess_routing
+      Execution: serial_execution
+      StateAccess: direct_fetch
+      Commit: normal_commit
+    locked_modules:
+      Workload: synthetic_hotspot
+      TxPool: fifo_pool
+      BlockProducer: time_or_count_block_producer
+      Consensus: simple_leader
+      CommitteeEpoch: disabled
+      StateStorage: hash_state_storage
+      MetricsReport: basic_metrics
+    primary_metrics: *metatrack_primary_metrics
+    expected_artifacts: *metatrack_expected_artifacts
+    result_guide: Focus on routing_log.csv, cross_shard_ratio, touched shards, and downstream latency changes.
+    truthfulness_note: This ablation template compares deterministic local MetaTrack component combinations in the Go-backed Draft Smoke runtime. It is not a paper-ready benchmark sweep, not Fabric live execution, and not a full multi-node emulator.
+  - preset_id: metatrack_routing_execution_smoke
+    preset_name: MetaTrack routing + execution smoke
+    description: Enables MetaTrack co-access routing and dual-track execution.
+    ablation_stage: routing_execution
+    enabled_metatrack_components:
+      - routing
+      - execution
+    controlled_modules: [Routing, Execution, StateAccess, Commit]
+    default_plugin_selection:
+      Routing: metatrack_coaccess_routing
+      Execution: metatrack_dual_track_execution
+      StateAccess: direct_fetch
+      Commit: normal_commit
+    locked_modules:
+      Workload: synthetic_hotspot
+      TxPool: fifo_pool
+      BlockProducer: time_or_count_block_producer
+      Consensus: simple_leader
+      CommitteeEpoch: disabled
+      StateStorage: hash_state_storage
+      MetricsReport: basic_metrics
+    primary_metrics: *metatrack_primary_metrics
+    expected_artifacts: *metatrack_expected_artifacts
+    result_guide: Focus on routing_log.csv, execution_log.csv, fast/conservative tracks, dependency edges, and latency.
+    truthfulness_note: This ablation template compares deterministic local MetaTrack component combinations in the Go-backed Draft Smoke runtime. It is not a paper-ready benchmark sweep, not Fabric live execution, and not a full multi-node emulator.
+  - preset_id: metatrack_routing_execution_state_access_smoke
+    preset_name: MetaTrack routing + execution + state access smoke
+    description: Enables co-access routing, dual-track execution, and access-list prefetch.
+    ablation_stage: routing_execution_state_access
+    enabled_metatrack_components:
+      - routing
+      - execution
+      - state_access
+    controlled_modules: [Routing, Execution, StateAccess, Commit]
+    default_plugin_selection:
+      Routing: metatrack_coaccess_routing
+      Execution: metatrack_dual_track_execution
+      StateAccess: access_list_prefetch
+      Commit: normal_commit
+    locked_modules:
+      Workload: synthetic_hotspot
+      TxPool: fifo_pool
+      BlockProducer: time_or_count_block_producer
+      Consensus: simple_leader
+      CommitteeEpoch: disabled
+      StateStorage: hash_state_storage
+      MetricsReport: basic_metrics
+    primary_metrics: *metatrack_primary_metrics
+    expected_artifacts: *metatrack_expected_artifacts
+    result_guide: Focus on routing, execution, state_access_log.csv, cache/prefetch hit rates, remote state access ratio, and latency.
+    truthfulness_note: This ablation template compares deterministic local MetaTrack component combinations in the Go-backed Draft Smoke runtime. It is not a paper-ready benchmark sweep, not Fabric live execution, and not a full multi-node emulator.
+  - preset_id: metatrack_full_smoke
+    preset_name: MetaTrack full smoke
+    description: Enables co-access routing, dual-track execution, access-list prefetch, and constraint-checked aggregation.
+    ablation_stage: full
+    enabled_metatrack_components:
+      - routing
+      - execution
+      - state_access
+      - commit
+    controlled_modules: [Routing, Execution, StateAccess, Commit]
+    default_plugin_selection:
+      Routing: metatrack_coaccess_routing
+      Execution: metatrack_dual_track_execution
+      StateAccess: access_list_prefetch
+      Commit: constraint_checked_aggregation
+    locked_modules:
+      Workload: synthetic_hotspot
+      TxPool: fifo_pool
+      BlockProducer: time_or_count_block_producer
+      Consensus: simple_leader
+      CommitteeEpoch: disabled
+      StateStorage: hash_state_storage
+      MetricsReport: basic_metrics
+    primary_metrics: *metatrack_primary_metrics
+    expected_artifacts: *metatrack_expected_artifacts
+    result_guide: "Focus on the full MetaTrack component chain: routing, execution, state access, commit aggregation/constraints, and all runtime logs."
+    truthfulness_note: This ablation template compares deterministic local MetaTrack component combinations in the Go-backed Draft Smoke runtime. It is not a paper-ready benchmark sweep, not Fabric live execution, and not a full multi-node emulator.
 
 fairness:
   only_variable_modules_may_differ: true
   fixed_modules_must_match: true
   planned_modules_not_runnable: true
+  controlled_modules:
+    - Routing
+    - Execution
+    - StateAccess
+    - Commit
+  locked_modules:
+    Workload: synthetic_hotspot
+    TxPool: fifo_pool
+    BlockProducer: time_or_count_block_producer
+    Consensus: simple_leader
+    CommitteeEpoch: disabled
+    StateStorage: hash_state_storage
+    MetricsReport: basic_metrics
+  fairness_rule: MetaTrack ablation presets may vary Routing, Execution, StateAccess, and Commit only as the selected preset combination; workload, TxPool, BlockProducer, Consensus, CommitteeEpoch, StateStorage, MetricsReport, seed, submit rate, block config, and network profile stay fixed.

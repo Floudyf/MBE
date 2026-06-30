@@ -8,6 +8,7 @@ import {
   validateV3ComposerDraft,
   type V2Artifact,
   type V3ComposerPreviewResponse,
+  type V3DraftModuleStatus,
   type V3DraftSmokeRunResponse,
   type V3DraftValidationResponse,
   type V3TemplateSummary,
@@ -22,8 +23,20 @@ import SingleChainComposer from "../components/v3/SingleChainComposer";
 import { createComposerDraft, summarizeDraft, toComposerDraftRequest, type ComposerDraft } from "../components/v3/composerDraft";
 import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
 
+const metatrackPrimaryMetrics = ["cross_shard_ratio", "remote_state_access_ratio", "fast_track_count", "conservative_track_count", "cache_hit_rate", "prefetch_hit_rate", "aggregation_ratio", "constraint_failed_count", "avg_execution_latency_ms", "avg_state_access_latency_ms", "avg_commit_latency_ms"];
+const metatrackExpectedArtifacts = ["routing_log.csv", "execution_log.csv", "state_access_log.csv", "state_commit_log.csv", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"];
+const metatrackLockedModules = { Workload: "synthetic_hotspot", TxPool: "fifo_pool", BlockProducer: "time_or_count_block_producer", Consensus: "simple_leader", CommitteeEpoch: "disabled", StateStorage: "hash_state_storage", MetricsReport: "basic_metrics" };
+const metatrackTruthfulnessNote = "This ablation template compares deterministic local MetaTrack component combinations in the Go-backed Draft Smoke runtime. It is not a paper-ready benchmark sweep, not Fabric live execution, and not a full multi-node emulator.";
+const metatrackPresets = [
+  { preset_id: "metatrack_baseline_smoke", preset_name: "MetaTrack baseline smoke", ablation_stage: "baseline", enabled_metatrack_components: [], controlled_modules: ["Routing", "Execution", "StateAccess", "Commit"], default_plugin_selection: { Routing: "hash_sharding", Execution: "serial_execution", StateAccess: "direct_fetch", Commit: "normal_commit" }, locked_modules: metatrackLockedModules, primary_metrics: metatrackPrimaryMetrics, expected_artifacts: metatrackExpectedArtifacts, result_guide: "Compare this baseline against later presets; focus on routing/state access ratios, execution tracks, commit aggregation, and latency.", truthfulness_note: metatrackTruthfulnessNote },
+  { preset_id: "metatrack_routing_only_smoke", preset_name: "MetaTrack routing-only smoke", ablation_stage: "routing_only", enabled_metatrack_components: ["routing"], controlled_modules: ["Routing", "Execution", "StateAccess", "Commit"], default_plugin_selection: { Routing: "metatrack_coaccess_routing", Execution: "serial_execution", StateAccess: "direct_fetch", Commit: "normal_commit" }, locked_modules: metatrackLockedModules, primary_metrics: metatrackPrimaryMetrics, expected_artifacts: metatrackExpectedArtifacts, result_guide: "Focus on routing_log.csv, cross_shard_ratio, touched shards, and downstream latency changes.", truthfulness_note: metatrackTruthfulnessNote },
+  { preset_id: "metatrack_routing_execution_smoke", preset_name: "MetaTrack routing + execution smoke", ablation_stage: "routing_execution", enabled_metatrack_components: ["routing", "execution"], controlled_modules: ["Routing", "Execution", "StateAccess", "Commit"], default_plugin_selection: { Routing: "metatrack_coaccess_routing", Execution: "metatrack_dual_track_execution", StateAccess: "direct_fetch", Commit: "normal_commit" }, locked_modules: metatrackLockedModules, primary_metrics: metatrackPrimaryMetrics, expected_artifacts: metatrackExpectedArtifacts, result_guide: "Focus on routing_log.csv, execution_log.csv, fast/conservative tracks, dependency edges, and latency.", truthfulness_note: metatrackTruthfulnessNote },
+  { preset_id: "metatrack_routing_execution_state_access_smoke", preset_name: "MetaTrack routing + execution + state access smoke", ablation_stage: "routing_execution_state_access", enabled_metatrack_components: ["routing", "execution", "state_access"], controlled_modules: ["Routing", "Execution", "StateAccess", "Commit"], default_plugin_selection: { Routing: "metatrack_coaccess_routing", Execution: "metatrack_dual_track_execution", StateAccess: "access_list_prefetch", Commit: "normal_commit" }, locked_modules: metatrackLockedModules, primary_metrics: metatrackPrimaryMetrics, expected_artifacts: metatrackExpectedArtifacts, result_guide: "Focus on routing, execution, state_access_log.csv, cache/prefetch hit rates, remote state access ratio, and latency.", truthfulness_note: metatrackTruthfulnessNote },
+  { preset_id: "metatrack_full_smoke", preset_name: "MetaTrack full smoke", ablation_stage: "full", enabled_metatrack_components: ["routing", "execution", "state_access", "commit"], controlled_modules: ["Routing", "Execution", "StateAccess", "Commit"], default_plugin_selection: { Routing: "metatrack_coaccess_routing", Execution: "metatrack_dual_track_execution", StateAccess: "access_list_prefetch", Commit: "constraint_checked_aggregation" }, locked_modules: metatrackLockedModules, primary_metrics: metatrackPrimaryMetrics, expected_artifacts: metatrackExpectedArtifacts, result_guide: "Focus on the full MetaTrack component chain: routing, execution, state access, commit aggregation/constraints, and all runtime logs.", truthfulness_note: metatrackTruthfulnessNote },
+];
+
 const fallbackTemplates: V3TemplateSummary[] = [
-  { template_id: "metatrack_ablation", stage: "V3.3.2", chain_mode: "single_chain", runnable: true, preview_only: false, description: "MetaTrack single-chain ablation", variable_modules: ["Routing", "Execution", "StateAccess", "Commit"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "StateStorage"], disabled_modules: [], planned_modules: ["CommitteeEpoch"], output_modules: ["MetricsReport"] },
+  { template_id: "metatrack_ablation", template_name: "MetaTrack ablation", stage: "V3.4.9", chain_mode: "single_chain", runnable: true, preview_only: false, description: "MetaTrack preset-controlled local Draft Smoke ablation", variable_modules: ["Routing", "Execution", "StateAccess", "Commit"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "StateStorage"], disabled_modules: ["CommitteeEpoch"], planned_modules: [], output_modules: ["MetricsReport"], default_preset_id: "metatrack_baseline_smoke", locked_modules: metatrackLockedModules, presets: metatrackPresets, truthfulness_note: metatrackTruthfulnessNote },
   { template_id: "single_module_execution", template_name: "Single-module Execution", stage: "V3.4.6", chain_mode: "single_chain", runnable: true, preview_only: false, description: "Execution runtime hardening smoke preset", variable_module: "Execution", allowed_variable_plugins: ["serial_execution", "parallel_light_execution", "metatrack_dual_track_execution"], default_preset_id: "execution_dual_track_smoke", variable_modules: ["Execution"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "Routing", "StateAccess", "StateStorage", "Commit"], disabled_modules: ["CommitteeEpoch"], planned_modules: [], output_modules: ["MetricsReport"], presets: [{ preset_id: "execution_dual_track_smoke", preset_name: "Execution dual-track smoke", variable_module: "Execution", primary_metrics: ["fast_track_count", "conservative_track_count", "blocked_tx_count", "dependency_edge_count"], expected_artifacts: ["execution_log.csv", "routing_log.csv", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"], result_guide: "Focus on dependency edges, tracks, logical workers, and execution_log.csv.", truthfulness_note: "This is a local deterministic light model, not real concurrent execution or rollback." }] },
   { template_id: "single_module_state_access", template_name: "Single-module StateAccess", stage: "V3.4.7", chain_mode: "single_chain", runnable: true, preview_only: false, description: "StateAccess runtime hardening smoke preset", variable_module: "StateAccess", allowed_variable_plugins: ["direct_fetch", "remote_state_access_model", "cached_state_access", "access_list_prefetch"], default_preset_id: "state_access_remote_prefetch_smoke", variable_modules: ["StateAccess"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "Routing", "Execution", "StateStorage", "Commit"], disabled_modules: ["CommitteeEpoch"], planned_modules: [], output_modules: ["MetricsReport"], presets: [{ preset_id: "state_access_remote_prefetch_smoke", preset_name: "StateAccess remote/prefetch smoke", variable_module: "StateAccess", primary_metrics: ["remote_state_access_ratio", "cache_hit_rate", "prefetch_hit_rate", "avg_state_access_latency_ms"], expected_artifacts: ["state_access_log.csv", "execution_log.csv", "routing_log.csv", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"], result_guide: "Focus on local/remote access, cache/prefetch hit rates, latency, and state_access_log.csv.", truthfulness_note: "This is a local deterministic light model, not real proof/witness, MPT, or remote storage IO." }] },
   { template_id: "single_module_commit", template_name: "Single-module Commit", stage: "V3.4.8", chain_mode: "single_chain", runnable: true, preview_only: false, description: "Commit runtime hardening smoke preset", variable_module: "Commit", allowed_variable_plugins: ["normal_commit", "conservative_commit", "hot_update_aggregation", "constraint_checked_aggregation"], default_preset_id: "commit_hot_update_smoke", variable_modules: ["Commit"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "Routing", "Execution", "StateAccess", "StateStorage"], disabled_modules: ["CommitteeEpoch"], planned_modules: [], output_modules: ["MetricsReport"], presets: [{ preset_id: "commit_hot_update_smoke", preset_name: "Commit hot-update smoke", variable_module: "Commit", primary_metrics: ["aggregation_ratio", "hotspot_update_count", "aggregated_update_count", "constraint_check_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms"], expected_artifacts: ["state_commit_log.csv", "state_access_log.csv", "execution_log.csv", "routing_log.csv", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"], result_guide: "Focus on aggregation ratio, hotspot updates, constraint checks, commit latency, and state_commit_log.csv.", truthfulness_note: "This is a local deterministic light model, not real database locking, concurrent commit, or persistent state-tree validation." }] },
@@ -35,6 +48,12 @@ const profileOptions = [
   { id: "single_chain_role_separation_smoke", label: "单链角色拆分 Smoke" },
   { id: "single_chain_composer_preview", label: "单链 Composer 预览" },
 ];
+
+function moduleStatusForLockedPlugin(moduleId: string, plugin: string): V3DraftModuleStatus {
+  if (moduleId === "MetricsReport") return "output";
+  if (moduleId === "CommitteeEpoch" || plugin === "disabled") return "disabled";
+  return "fixed";
+}
 
 type Props = {
   onRunCompleted?: (runId: string) => void;
@@ -104,16 +123,23 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     if (!template) return;
     const variableModule = template.variable_module || "";
     const presetId = template.default_preset_id || template.presets?.[0]?.preset_id || "";
+    const preset = template.presets?.find((item) => item.preset_id === presetId);
     const allowedPlugins = template.allowed_variable_plugins || [];
-    const lockedModules = template.locked_modules || {};
+    const lockedModules = preset?.locked_modules || template.locked_modules || {};
+    const defaultSelection = preset?.default_plugin_selection || {};
+    const controlledModules = new Set([...(template.variable_modules || []), ...(preset?.controlled_modules || [])]);
     const nextModules = Object.fromEntries(
       Object.entries(draft.modules).map(([moduleId, module]) => {
+        if (defaultSelection[moduleId]) {
+          const nextStatus: V3DraftModuleStatus = controlledModules.has(moduleId) ? "variable" : moduleStatusForLockedPlugin(moduleId, defaultSelection[moduleId]);
+          return [moduleId, { ...module, status: nextStatus, plugin: defaultSelection[moduleId], runnable: true }];
+        }
         if (moduleId === variableModule) {
           const nextPlugin = allowedPlugins.includes(module.plugin) ? module.plugin : (allowedPlugins[0] || module.plugin);
           return [moduleId, { ...module, status: "variable" as const, plugin: nextPlugin, runnable: true }];
         }
         if (lockedModules[moduleId]) {
-          const nextStatus = moduleId === "MetricsReport" ? "output" : moduleId === "CommitteeEpoch" ? "disabled" : "fixed";
+          const nextStatus = moduleStatusForLockedPlugin(moduleId, lockedModules[moduleId]);
           return [moduleId, { ...module, status: nextStatus as typeof module.status, plugin: lockedModules[moduleId], runnable: true }];
         }
         return [moduleId, module];
@@ -124,7 +150,28 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
 
   function selectPreset(presetId: string) {
     if (!draft) return;
-    updateDraft(summarizeDraft({ templateId: draft.templateId, presetId, modules: draft.modules }));
+    const template = templates.find((item) => item.template_id === draft.templateId);
+    const preset = template?.presets?.find((item) => item.preset_id === presetId);
+    if (!template || !preset) {
+      updateDraft(summarizeDraft({ templateId: draft.templateId, presetId, modules: draft.modules }));
+      return;
+    }
+    const lockedModules = preset.locked_modules || template.locked_modules || {};
+    const defaultSelection = preset.default_plugin_selection || {};
+    const controlledModules = new Set([...(template.variable_modules || []), ...(preset.controlled_modules || [])]);
+    const nextModules = Object.fromEntries(
+      Object.entries(draft.modules).map(([moduleId, module]) => {
+        if (defaultSelection[moduleId]) {
+          const nextStatus: V3DraftModuleStatus = controlledModules.has(moduleId) ? "variable" : moduleStatusForLockedPlugin(moduleId, defaultSelection[moduleId]);
+          return [moduleId, { ...module, status: nextStatus, plugin: defaultSelection[moduleId], runnable: true }];
+        }
+        if (lockedModules[moduleId]) {
+          return [moduleId, { ...module, status: moduleStatusForLockedPlugin(moduleId, lockedModules[moduleId]), plugin: lockedModules[moduleId], runnable: true }];
+        }
+        return [moduleId, module];
+      }),
+    );
+    updateDraft(summarizeDraft({ templateId: draft.templateId, presetId, modules: nextModules }));
   }
 
   async function validateDraftOnServer(): Promise<V3DraftValidationResponse | null> {
@@ -181,6 +228,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     () => selectedTemplate?.presets?.find((preset) => preset.preset_id === (draft?.presetId || selectedTemplate.default_preset_id)) || selectedTemplate?.presets?.[0],
     [draft?.presetId, selectedTemplate],
   );
+  const selectedLockedModules = selectedPreset?.locked_modules || selectedTemplate?.locked_modules || {};
+  const selectedVariableModules = selectedPreset?.controlled_modules || (selectedTemplate?.variable_module ? [selectedTemplate.variable_module] : selectedTemplate?.variable_modules || []);
   const identitySummary = [
     labelFor(profileLabels, preview?.experiment_profile_id || profileId),
     preview?.stage || "-",
@@ -273,6 +322,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
                 <div><dt>variable module</dt><dd>{selectedTemplate.variable_module || selectedTemplate.variable_modules?.join(", ") || "-"}</dd></div>
                 <div><dt>allowed plugins</dt><dd>{(selectedTemplate.allowed_variable_plugins || []).join(", ") || "-"}</dd></div>
                 <div><dt>preset</dt><dd>{selectedPreset?.preset_id || selectedTemplate.default_preset_id || "legacy/default smoke"}</dd></div>
+                <div><dt>ablation stage</dt><dd>{selectedPreset?.ablation_stage || "-"}</dd></div>
+                <div><dt>enabled components</dt><dd>{(selectedPreset?.enabled_metatrack_components || []).join(", ") || "baseline / none"}</dd></div>
                 <div><dt>fairness rule</dt><dd>{selectedTemplate.fairness_rule || "Only configured variable modules may differ."}</dd></div>
               </dl>
               {selectedPreset && (
@@ -285,11 +336,11 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
                   </dl>
                 </details>
               )}
-              {selectedTemplate.locked_modules && Object.keys(selectedTemplate.locked_modules).length > 0 && (
+              {Object.keys(selectedLockedModules).length > 0 && (
                 <details className="v3-foldout">
                   <summary className="v3-foldout-summary">Locked modules</summary>
                   <ul className="v3-check-list compact">
-                    {Object.entries(selectedTemplate.locked_modules).map(([moduleId, plugin]) => (
+                    {Object.entries(selectedLockedModules).map(([moduleId, plugin]) => (
                       <li key={moduleId}><span>{moduleId}</span> <code>{plugin}</code></li>
                     ))}
                   </ul>
@@ -309,7 +360,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           draft={draft}
           onDraftChange={updateDraft}
           variableModule={selectedTemplate?.variable_module}
-          lockedModules={selectedTemplate?.locked_modules}
+          variableModules={selectedVariableModules}
+          lockedModules={selectedLockedModules}
         />
       )}
 

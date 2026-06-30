@@ -41,6 +41,14 @@ def test_catalog_returns_single_module_templates() -> None:
     assert "single_module_execution" in templates
     assert "single_module_state_access" in templates
     assert "single_module_commit" in templates
+    assert "metatrack_ablation" in templates
+    assert {preset["preset_id"] for preset in templates["metatrack_ablation"]["presets"]} == {
+        "metatrack_baseline_smoke",
+        "metatrack_routing_only_smoke",
+        "metatrack_routing_execution_smoke",
+        "metatrack_routing_execution_state_access_smoke",
+        "metatrack_full_smoke",
+    }
     assert templates["single_module_consensus"]["variable_module"] == "Consensus"
     assert templates["single_module_consensus"]["allowed_variable_plugins"] == [
         "simple_leader",
@@ -78,6 +86,7 @@ def test_catalog_returns_single_module_templates() -> None:
 def test_single_module_templates_have_default_presets() -> None:
     templates = load_templates()
     expected = {
+        "metatrack_ablation": "metatrack_baseline_smoke",
         "single_module_txpool": "txpool_fifo_smoke",
         "single_module_blockproducer": "blockproducer_time_or_count_smoke",
         "single_module_consensus": "consensus_light_smoke",
@@ -136,6 +145,22 @@ def test_single_module_template_rejects_mismatched_preset() -> None:
 
     assert result.is_valid is False
     assert any("Invalid preset" in error and "single_module_txpool" in error for error in result.errors)
+
+
+def test_metatrack_template_rejects_mismatched_preset() -> None:
+    result = validate_v3_composer_draft(
+        draft(
+            "metatrack_ablation",
+            preset_id="commit_hot_update_smoke",
+            Routing=("variable", "hash_sharding"),
+            Execution=("variable", "serial_execution"),
+            StateAccess=("variable", "direct_fetch"),
+            Commit=("variable", "normal_commit"),
+        )
+    )
+
+    assert result.is_valid is False
+    assert any("Invalid preset" in error and "metatrack_ablation" in error for error in result.errors)
 
 
 def test_single_module_routing_allows_runtime_routing_plugins() -> None:
@@ -367,21 +392,48 @@ def test_single_module_blockproducer_rejects_txpool_or_consensus_change() -> Non
     assert any("Fairness violation" in error and "ConsensusPlugin" in error for error in consensus_result.errors)
 
 
-def test_legacy_metatrack_draft_remains_compatible() -> None:
+def test_metatrack_ablation_presets_validate_expected_combinations() -> None:
+    cases = {
+        "metatrack_baseline_smoke": ("baseline", [], "hash_sharding", "serial_execution", "direct_fetch", "normal_commit"),
+        "metatrack_routing_only_smoke": ("routing_only", ["routing"], "metatrack_coaccess_routing", "serial_execution", "direct_fetch", "normal_commit"),
+        "metatrack_routing_execution_smoke": ("routing_execution", ["routing", "execution"], "metatrack_coaccess_routing", "metatrack_dual_track_execution", "direct_fetch", "normal_commit"),
+        "metatrack_routing_execution_state_access_smoke": ("routing_execution_state_access", ["routing", "execution", "state_access"], "metatrack_coaccess_routing", "metatrack_dual_track_execution", "access_list_prefetch", "normal_commit"),
+        "metatrack_full_smoke": ("full", ["routing", "execution", "state_access", "commit"], "metatrack_coaccess_routing", "metatrack_dual_track_execution", "access_list_prefetch", "constraint_checked_aggregation"),
+    }
+    for preset_id, (stage, components, routing, execution, state_access, commit) in cases.items():
+        result = validate_v3_composer_draft(
+            draft(
+                "metatrack_ablation",
+                preset_id=preset_id,
+                Routing=("variable", routing),
+                Execution=("variable", execution),
+                StateAccess=("variable", state_access),
+                Commit=("variable", commit),
+            )
+        )
+
+        assert result.is_valid is True
+        assert result.is_runnable is True
+        assert result.normalized_draft is not None
+        assert result.normalized_draft["fairness_validated"] is True
+        assert result.normalized_draft["ablation_stage"] == stage
+        assert result.normalized_draft["enabled_metatrack_components"] == components
+
+
+def test_metatrack_ablation_rejects_plugin_combo_outside_selected_preset() -> None:
     result = validate_v3_composer_draft(
         draft(
             "metatrack_ablation",
-            Routing=("variable", "co_access_sharding"),
-            Execution=("variable", "dual_track_execution"),
-            StateAccess=("variable", "access_list_prefetch"),
-            Commit=("variable", "hot_update_aggregation_commit"),
+            preset_id="metatrack_routing_only_smoke",
+            Routing=("variable", "metatrack_coaccess_routing"),
+            Execution=("variable", "metatrack_dual_track_execution"),
+            StateAccess=("variable", "direct_fetch"),
+            Commit=("variable", "normal_commit"),
         )
     )
 
-    assert result.is_valid is True
-    assert result.is_runnable is True
-    assert result.normalized_draft is not None
-    assert result.normalized_draft["fairness_validated"] is False
+    assert result.is_valid is False
+    assert any("preset metatrack_routing_only_smoke requires ExecutionSchedulerPlugin=serial_execution" in error for error in result.errors)
 
 
 def test_runner_summary_and_experiment_profile_include_preset_metadata() -> None:
@@ -403,6 +455,35 @@ def test_runner_summary_and_experiment_profile_include_preset_metadata() -> None
         assert "avg_consensus_latency_ms" in payload["primary_metrics"]
         assert "consensus_log.csv" in payload["expected_artifacts"]
         assert "PBFT" in payload["truthfulness_note"]
+
+
+def test_metatrack_runner_summary_and_experiment_profile_include_ablation_metadata() -> None:
+    validation = validate_v3_composer_draft(
+        draft(
+            "metatrack_ablation",
+            preset_id="metatrack_full_smoke",
+            Routing=("variable", "metatrack_coaccess_routing"),
+            Execution=("variable", "metatrack_dual_track_execution"),
+            StateAccess=("variable", "access_list_prefetch"),
+            Commit=("variable", "constraint_checked_aggregation"),
+        )
+    )
+    assert validation.normalized_draft is not None
+    normalized = validation.normalized_draft
+
+    profile = build_experiment_profile(normalized)
+    summary = merge_run_metadata({"tx_count": 24}, normalized)
+
+    for payload in (profile, summary):
+        assert payload["experiment_template"] == "metatrack_ablation"
+        assert payload["preset_id"] == "metatrack_full_smoke"
+        assert payload["ablation_stage"] == "full"
+        assert payload["enabled_metatrack_components"] == ["routing", "execution", "state_access", "commit"]
+        assert "Routing" in payload["controlled_modules"]
+        assert payload["fairness_validated"] is True
+        assert "avg_commit_latency_ms" in payload["primary_metrics"]
+        assert "state_commit_log.csv" in payload["expected_artifacts"]
+        assert "paper-ready benchmark" in payload["truthfulness_note"]
 
 
 def test_routing_runner_summary_and_experiment_profile_include_preset_metadata() -> None:

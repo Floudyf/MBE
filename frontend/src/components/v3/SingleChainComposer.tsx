@@ -10,6 +10,7 @@ type Props = {
   draft: ComposerDraft;
   onDraftChange: (draft: ComposerDraft) => void;
   variableModule?: string;
+  variableModules?: string[];
   lockedModules?: Record<string, string>;
 };
 
@@ -34,7 +35,7 @@ const snakeSlots: SnakeSlot[] = [
   { moduleId: "MetricsReport", row: 3, column: 3 },
 ];
 
-export default function SingleChainComposer({ preview, draft, onDraftChange, variableModule = "", lockedModules = {} }: Props) {
+export default function SingleChainComposer({ preview, draft, onDraftChange, variableModule = "", variableModules = [], lockedModules = {} }: Props) {
   const modules = preview.modules || [];
   const [selectedId, setSelectedId] = useState(modules[0]?.module_id || "");
   const modulesById = useMemo(
@@ -74,7 +75,7 @@ export default function SingleChainComposer({ preview, draft, onDraftChange, var
                 module={moduleView(module, draft)}
                 selected={selected?.module_id === module.module_id}
                 onSelect={selectModule}
-                templateRole={module.module_id === variableModule ? "variable" : lockedModules[module.module_id] ? "locked" : undefined}
+                templateRole={module.module_id === variableModule || variableModules.includes(module.module_id) ? "variable" : lockedModules[module.module_id] ? "locked" : undefined}
               />
               {slot.edge && (
                 <span className={`v3-edge v3-edge-${slot.edge}`} aria-hidden="true">

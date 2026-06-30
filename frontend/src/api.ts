@@ -193,6 +193,9 @@ export type V3TemplatePreset = {
   description?: string;
   default_chain_profile?: string;
   default_plugin_selection?: Record<string, string>;
+  ablation_stage?: string;
+  enabled_metatrack_components?: string[];
+  controlled_modules?: string[];
   variable_module?: string;
   locked_modules?: Record<string, string>;
   primary_metrics?: string[];
@@ -205,6 +208,9 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   experiment_template?: string;
   preset_id?: string;
   preset_name?: string;
+  ablation_stage?: string;
+  enabled_metatrack_components?: string[] | string;
+  controlled_modules?: string[] | string;
   variable_module?: string;
   locked_modules?: Record<string, string> | string;
   fairness_scope?: Record<string, unknown>;
