@@ -24,6 +24,7 @@ import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3
 
 const fallbackTemplates: V3TemplateSummary[] = [
   { template_id: "metatrack_ablation", stage: "V3.3.2", chain_mode: "single_chain", runnable: true, preview_only: false, description: "MetaTrack single-chain ablation", variable_modules: ["Routing", "Execution", "StateAccess", "Commit"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "StateStorage"], disabled_modules: [], planned_modules: ["CommitteeEpoch"], output_modules: ["MetricsReport"] },
+  { template_id: "single_module_execution", template_name: "Single-module Execution", stage: "V3.4.6", chain_mode: "single_chain", runnable: true, preview_only: false, description: "Execution runtime hardening smoke preset", variable_module: "Execution", allowed_variable_plugins: ["serial_execution", "parallel_light_execution", "metatrack_dual_track_execution"], default_preset_id: "execution_dual_track_smoke", variable_modules: ["Execution"], fixed_modules: ["Workload", "TxPool", "BlockProducer", "Consensus", "Routing", "StateAccess", "StateStorage", "Commit"], disabled_modules: ["CommitteeEpoch"], planned_modules: [], output_modules: ["MetricsReport"], presets: [{ preset_id: "execution_dual_track_smoke", preset_name: "Execution dual-track smoke", variable_module: "Execution", primary_metrics: ["fast_track_count", "conservative_track_count", "blocked_tx_count", "dependency_edge_count"], expected_artifacts: ["execution_log.csv", "routing_log.csv", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"], result_guide: "Focus on dependency edges, tracks, logical workers, and execution_log.csv.", truthfulness_note: "This is a local deterministic light model, not real concurrent execution or rollback." }] },
   { template_id: "committee_lifecycle_planned", stage: "V3.3.2", chain_mode: "single_chain", runnable: false, preview_only: true, description: "Committee lifecycle preview", variable_modules: ["CommitteeEpoch", "Consensus"], fixed_modules: [], disabled_modules: [], planned_modules: ["CommitteeEpoch"], output_modules: ["MetricsReport"] },
 ];
 
@@ -203,10 +204,12 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           <span>Time/Count Producer</span>
           <span>Consensus-light</span>
           <span>PoA/PBFT-light</span>
+          <span>Execution-light</span>
           <span>非 Fabric</span>
           <span>非 MetaFlow</span>
           <span>非 real PBFT</span>
           <span>非 HotStuff/Raft</span>
+          <span>非真实并发/rollback</span>
           <span>非多节点网络</span>
         </div>
       </header>

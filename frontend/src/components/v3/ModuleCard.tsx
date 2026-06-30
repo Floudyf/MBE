@@ -56,6 +56,12 @@ function moduleSupportHint(moduleId: string, status: string, plugin: string): st
     if (plugin === "hotspot_aware_routing") return "runtime-supported hotspot-aware light routing";
     return "planned/future routing strategy";
   }
+  if (moduleId === "Execution") {
+    if (plugin === "serial_execution") return "runtime-supported serial execution";
+    if (plugin === "parallel_light_execution") return "runtime-supported parallel-light model";
+    if (plugin === "metatrack_dual_track_execution" || plugin === "dual_track_execution") return "runtime-supported dual-track light model";
+    return "planned/future execution strategy";
+  }
   if (status === "variable" || status === "fixed" || status === "default") return "configured runnable; runtime support depends on backend validation";
   return String(status);
 }

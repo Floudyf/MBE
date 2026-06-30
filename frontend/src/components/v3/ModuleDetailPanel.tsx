@@ -96,6 +96,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
         {selectedModule.module_id === "Routing" && (
           <p className="muted">V3.4.5 realizes Routing/Sharding decision records for hash_sharding, metatrack_coaccess_routing, and hotspot_aware_routing. Routing estimates shard assignment, touched shards, hotspots, and co-access groups; it does not implement relay, broker, 2PC, CLPA, ShardCutter, state migration, or real cross-shard protocols.</p>
         )}
+        {selectedModule.module_id === "Execution" && (
+          <p className="muted">V3.4.6 realizes Execution records for serial_execution, parallel_light_execution, and metatrack_dual_track_execution. Execution estimates scheduling order, dependency edges, logical workers, blocking, and fast/conservative tracks; it does not implement real concurrent execution, rollback, Block-STM, Calvin, or database lock management.</p>
+        )}
       </section>
 
       <section className="v3-config-section">
@@ -145,6 +148,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
                 )}
                 {selectedModule.module_id === "Routing" && (
                   <small>{routingPluginHint(plugin.id)}</small>
+                )}
+                {selectedModule.module_id === "Execution" && (
+                  <small>{executionPluginHint(plugin.id)}</small>
                 )}
               </span>
               <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
@@ -200,6 +206,13 @@ function routingPluginHint(pluginId: string): string {
   if (pluginId === "metatrack_coaccess_routing" || pluginId === "co_access_sharding") return "runtime-supported co-access light routing";
   if (pluginId === "hotspot_aware_routing") return "runtime-supported hotspot-aware light routing";
   return "planned/future strategy, not a real cross-shard protocol";
+}
+
+function executionPluginHint(pluginId: string): string {
+  if (pluginId === "serial_execution") return "runtime-supported serial execution";
+  if (pluginId === "parallel_light_execution") return "runtime-supported deterministic logical parallel model";
+  if (pluginId === "metatrack_dual_track_execution" || pluginId === "dual_track_execution") return "runtime-supported dual-track light model";
+  return "planned/future execution strategy, not real concurrency or rollback";
 }
 
 function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {

@@ -9,6 +9,7 @@ const txPoolSummaryKeys = ["queue_wait_ms", "txpool_avg_wait_ms", "txpool_p95_wa
 const blockProducerSummaryKeys = ["block_count", "avg_block_size", "max_block_size", "empty_block_count", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count"];
 const consensusSummaryKeys = ["avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "finalized_block_count", "failed_block_count", "view_change_count"];
 const routingSummaryKeys = ["routing_plugin", "routing_decision_count", "cross_shard_tx_count", "cross_shard_ratio", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms"];
+const executionSummaryKeys = ["execution_plugin", "execution_tx_count", "fast_track_count", "conservative_track_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
@@ -109,6 +110,12 @@ export default function DraftRunResultPanel({ result }: Props) {
           <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
         ))}
         <div><dt>routing_log.csv</dt><dd>{artifactNames.has("routing_log.csv") ? "available" : "missing"}</dd></div>
+      </div>
+      <div className="v3-summary-preview">
+        {executionSummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>execution_log.csv</dt><dd>{artifactNames.has("execution_log.csv") ? "available" : "missing"}</dd></div>
       </div>
       <p className="muted">Draft Smoke history is a local debugging, demo, and configuration tracing record. It is not a formal paper experiment result.</p>
     </section>

@@ -34,6 +34,7 @@ ARTIFACT_ALLOWLIST = frozenset({
     "txpool_log.csv",
     "consensus_log.csv",
     "routing_log.csv",
+    "execution_log.csv",
     "used_chain_profile.yaml",
     "used_chain_profile.json",
     "used_plugin_profile.yaml",

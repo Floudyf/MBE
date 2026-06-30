@@ -25,7 +25,7 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	if result.Summary.TxCount != 24 || result.Summary.SuccessCount != 24 || result.Summary.FailureCount != 0 {
 		t.Fatalf("unexpected summary: %+v", result.Summary)
 	}
-	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv"} {
+	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv"} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Fatalf("missing artifact %s: %v", name, err)
 		}
@@ -36,7 +36,8 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	assertCSVFields(t, filepath.Join(out, "txpool_log.csv"), []string{"event_time_ms", "event_type", "tx_id", "block_height", "pool_size_before", "pool_size_after", "admitted_count", "selected_count", "rejected_count", "queue_wait_ms", "reason"})
 	assertCSVFields(t, filepath.Join(out, "consensus_log.csv"), consensusLogFields())
 	assertCSVFields(t, filepath.Join(out, "routing_log.csv"), routingLogFields())
-	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_plugin", "routing_decision_count", "cross_shard_tx_count", "cross_shard_ratio", "remote_state_access_count", "avg_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"})
+	assertCSVFields(t, filepath.Join(out, "execution_log.csv"), executionLogFields())
+	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_plugin", "routing_decision_count", "cross_shard_tx_count", "cross_shard_ratio", "remote_state_access_count", "avg_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "execution_plugin", "execution_tx_count", "fast_track_count", "conservative_track_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "parallelizable_tx_count", "serial_tx_count", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"})
 	if result.Summary.QueueWaitMS <= 0 || result.Summary.TxPoolAvgWaitMS <= 0 {
 		t.Fatalf("queue wait should be derived from txpool and non-zero in smoke profile: %+v", result.Summary)
 	}
@@ -457,6 +458,98 @@ func TestHotspotAwareRoutingIdentifiesHotspotsDeterministically(t *testing.T) {
 	}
 }
 
+func TestSerialExecutionLogAndSummary(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "execution_serial")
+	result, err := Run(Input{
+		ChainProfilePath:      "../../configs/v3/chains/chain_x_default.yaml",
+		PluginProfilePath:     "../../configs/v3/plugins/v3_2_minimal_plugin_profile.yaml",
+		PluginProfileID:       "v3_2_minimal_single_chain",
+		ExperimentProfilePath: "../../configs/v3/experiments/single_chain_runtime_smoke.yaml",
+		OutputDir:             out,
+		RunID:                 "execution_serial",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCSVFields(t, filepath.Join(out, "execution_log.csv"), executionLogFields())
+	rows := readCSVRows(t, filepath.Join(out, "execution_log.csv"))
+	txRows := readCSVRows(t, filepath.Join(out, "tx_results.csv"))
+	blockRows := readCSVRows(t, filepath.Join(out, "block_log.csv"))
+	if len(rows) == 0 || rows[0]["execution_plugin"] != "serial_execution" || rows[0]["track"] != "serial" {
+		t.Fatalf("expected serial execution rows: %+v", rows)
+	}
+	if rows[0]["tx_id"] != txRows[0]["tx_id"] || rows[0]["block_height"] != txRows[0]["block_height"] {
+		t.Fatalf("execution log should align with tx_results: execution=%+v tx=%+v", rows[0], txRows[0])
+	}
+	if rows[0]["block_height"] != blockRows[0]["block_height"] {
+		t.Fatalf("execution log should align with block_log: execution=%+v block=%+v", rows[0], blockRows[0])
+	}
+	if result.Summary.ExecutionPlugin != "serial_execution" || result.Summary.ExecutionTxCount != result.Summary.TxCount || result.Summary.SerialTxCount != result.Summary.TxCount {
+		t.Fatalf("unexpected serial execution summary: %+v", result.Summary)
+	}
+}
+
+func TestParallelLightExecutionProducesWorkersAndDependencies(t *testing.T) {
+	engine := newExecutionEngine(ChainProfile{ExecutionShardCount: 4}, PluginProfile{ExecutionSchedulerPlugin: "parallel_light_execution"})
+	block := Block{Height: 1, Txs: []PooledTransaction{
+		{Tx: testRoutingTx("tx_a", []string{"asset_1"}, map[string]int{"asset_1": 1})},
+		{Tx: testRoutingTx("tx_b", []string{"asset_1"}, map[string]int{"asset_2": 1})},
+		{Tx: testRoutingTx("tx_c", []string{"asset_3"}, map[string]int{"asset_4": 1})},
+	}}
+	first := engine.ExecuteBlock(block, 10)
+	second := newExecutionEngine(ChainProfile{ExecutionShardCount: 4}, PluginProfile{ExecutionSchedulerPlugin: "parallel_light_execution"}).ExecuteBlock(block, 10)
+	if engine.DependencyEdgeCount == 0 || first[1].DependencyEdgeCount == 0 || !first[1].Blocked {
+		t.Fatalf("expected dependency edge and blocked tx: engine=%+v records=%+v", engine, first)
+	}
+	if first[0].WorkerID != second[0].WorkerID || first[2].WorkerID != second[2].WorkerID {
+		t.Fatalf("parallel worker assignment should be deterministic: %+v vs %+v", first, second)
+	}
+}
+
+func TestDualTrackExecutionProducesFastAndConservativeTracks(t *testing.T) {
+	engine := newExecutionEngine(ChainProfile{ExecutionShardCount: 4}, PluginProfile{ExecutionSchedulerPlugin: "metatrack_dual_track_execution"})
+	block := Block{Height: 1, Txs: []PooledTransaction{
+		{Tx: testRoutingTx("tx_fast", []string{"asset_1"}, map[string]int{"asset_2": 1})},
+		{Tx: testRoutingTx("tx_conservative", []string{"asset_1", "asset_2", "asset_3"}, map[string]int{"asset_1": 1, "asset_3": 1})},
+	}}
+	records := engine.ExecuteBlock(block, 10)
+	if records[0].Track != "fast" || records[1].Track != "conservative" {
+		t.Fatalf("expected fast then conservative tracks: %+v", records)
+	}
+	if engine.FastTrackCount != 1 || engine.ConservativeTrackCount != 1 {
+		t.Fatalf("unexpected dual-track metrics: %+v", engine)
+	}
+}
+
+func TestExecutionRuntimePreservesExistingArtifacts(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "execution_runtime")
+	pluginPath := writeExecutionPluginProfile(t, t.TempDir(), "metatrack_dual_track_execution")
+	result, err := Run(Input{
+		ChainProfilePath:      "../../configs/v3/chains/chain_x_default.yaml",
+		PluginProfilePath:     pluginPath,
+		PluginProfileID:       "test_execution",
+		ExperimentProfilePath: "../../configs/v3/experiments/single_chain_runtime_smoke.yaml",
+		OutputDir:             out,
+		RunID:                 "execution_runtime",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"txpool_log.csv", "block_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Fatalf("missing regression artifact %s: %v", name, err)
+		}
+	}
+	if result.Summary.ExecutionPlugin != "metatrack_dual_track_execution" || result.Summary.ExecutionTxCount != result.Summary.TxCount {
+		t.Fatalf("unexpected execution runtime summary: %+v", result.Summary)
+	}
+	rows := readCSVRows(t, filepath.Join(out, "execution_log.csv"))
+	routingRows := readCSVRows(t, filepath.Join(out, "routing_log.csv"))
+	if len(rows) == 0 || rows[0]["tx_id"] != routingRows[0]["tx_id"] || rows[0]["block_height"] != routingRows[0]["block_height"] {
+		t.Fatalf("execution log should align with routing log: execution=%+v routing=%+v", rows, routingRows)
+	}
+}
+
 func assertCSVFields(t *testing.T, path string, fields []string) {
 	t.Helper()
 	file, err := os.Open(path)
@@ -485,6 +578,10 @@ func consensusLogFields() []string {
 
 func routingLogFields() []string {
 	return []string{"tx_id", "block_height", "tx_index", "routing_plugin", "access_key_count", "read_key_count", "write_key_count", "primary_shard", "touched_shards", "touched_shard_count", "cross_shard", "remote_state_access_estimate", "hotspot_key_count", "coaccess_group_id", "routing_overhead_ms", "reason"}
+}
+
+func executionLogFields() []string {
+	return []string{"tx_id", "block_height", "tx_index", "execution_plugin", "track", "access_key_count", "read_key_count", "write_key_count", "dependency_edge_count", "dependency_risk", "ready_time_ms", "start_time_ms", "end_time_ms", "execution_latency_ms", "blocked", "block_reason", "worker_id", "reason"}
 }
 
 func readCSVRows(t *testing.T, path string) []map[string]string {
@@ -568,6 +665,16 @@ func writeRoutingPluginProfile(t *testing.T, dir string, routingPlugin string) s
 	t.Helper()
 	path := filepath.Join(dir, "plugin_profile.yaml")
 	content := "profile_type: plugin_profile_collection\nversion: v3\nprofiles:\n  - plugin_profile_id: test_routing\n    plugins:\n      TxPoolPlugin: fifo_pool\n      BlockProducer: time_or_count_block_producer\n      ConsensusPlugin: simple_leader\n      ShardingPlugin: " + routingPlugin + "\n      ExecutionSchedulerPlugin: serial_execution\n      StateAccessPlugin: direct_fetch\n      CommitPlugin: normal_commit\n      MetricsPlugin: basic_metrics\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeExecutionPluginProfile(t *testing.T, dir string, executionPlugin string) string {
+	t.Helper()
+	path := filepath.Join(dir, "plugin_profile.yaml")
+	content := "profile_type: plugin_profile_collection\nversion: v3\nprofiles:\n  - plugin_profile_id: test_execution\n    plugins:\n      TxPoolPlugin: fifo_pool\n      BlockProducer: time_or_count_block_producer\n      ConsensusPlugin: simple_leader\n      ShardingPlugin: hash_sharding\n      ExecutionSchedulerPlugin: " + executionPlugin + "\n      StateAccessPlugin: direct_fetch\n      CommitPlugin: normal_commit\n      MetricsPlugin: basic_metrics\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}

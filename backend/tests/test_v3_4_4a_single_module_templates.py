@@ -38,6 +38,7 @@ def test_catalog_returns_single_module_templates() -> None:
     assert "single_module_blockproducer" in templates
     assert "single_module_consensus" in templates
     assert "single_module_routing" in templates
+    assert "single_module_execution" in templates
     assert templates["single_module_consensus"]["variable_module"] == "Consensus"
     assert templates["single_module_consensus"]["allowed_variable_plugins"] == [
         "simple_leader",
@@ -50,6 +51,12 @@ def test_catalog_returns_single_module_templates() -> None:
         "metatrack_coaccess_routing",
         "hotspot_aware_routing",
     ]
+    assert templates["single_module_execution"]["variable_module"] == "Execution"
+    assert templates["single_module_execution"]["allowed_variable_plugins"] == [
+        "serial_execution",
+        "parallel_light_execution",
+        "metatrack_dual_track_execution",
+    ]
 
 
 def test_single_module_templates_have_default_presets() -> None:
@@ -59,6 +66,7 @@ def test_single_module_templates_have_default_presets() -> None:
         "single_module_blockproducer": "blockproducer_time_or_count_smoke",
         "single_module_consensus": "consensus_light_smoke",
         "single_module_routing": "routing_coaccess_smoke",
+        "single_module_execution": "execution_dual_track_smoke",
     }
 
     for template_id, preset_id in expected.items():
@@ -83,6 +91,7 @@ def test_single_module_templates_auto_fill_default_presets() -> None:
         ),
         "single_module_consensus": ("Consensus", "consensus_light_smoke", {"Consensus": ("variable", "simple_leader")}),
         "single_module_routing": ("Routing", "routing_coaccess_smoke", {"Routing": ("variable", "metatrack_coaccess_routing")}),
+        "single_module_execution": ("Execution", "execution_dual_track_smoke", {"Execution": ("variable", "metatrack_dual_track_execution")}),
     }
 
     for template_id, (variable_module, preset_id, overrides) in cases.items():
@@ -130,6 +139,51 @@ def test_single_module_routing_rejects_planned_cross_shard_protocols() -> None:
 
         assert result.is_valid is False
         assert result.is_runnable is False
+
+
+def test_single_module_execution_allows_runtime_execution_plugins() -> None:
+    for plugin_id in ("serial_execution", "parallel_light_execution", "metatrack_dual_track_execution"):
+        result = validate_v3_composer_draft(
+            draft("single_module_execution", Execution=("variable", plugin_id))
+        )
+
+        assert result.is_valid is True
+        assert result.is_runnable is True
+        assert result.normalized_draft is not None
+        assert result.normalized_draft["variable_module"] == "Execution"
+        assert result.normalized_draft["preset_id"] == "execution_dual_track_smoke"
+
+
+def test_single_module_execution_rejects_planned_execution_plugins() -> None:
+    for plugin_id in ("block_stm_like_model", "calvin_like_model", "real_optimistic_execution", "real_rollback_engine"):
+        result = validate_v3_composer_draft(
+            draft("single_module_execution", Execution=("variable", plugin_id))
+        )
+
+        assert result.is_valid is False
+        assert result.is_runnable is False
+
+
+def test_single_module_execution_rejects_routing_or_consensus_change() -> None:
+    routing_result = validate_v3_composer_draft(
+        draft(
+            "single_module_execution",
+            Execution=("variable", "parallel_light_execution"),
+            Routing=("fixed", "hash_sharding"),
+        )
+    )
+    consensus_result = validate_v3_composer_draft(
+        draft(
+            "single_module_execution",
+            Execution=("variable", "metatrack_dual_track_execution"),
+            Consensus=("fixed", "poa_light"),
+        )
+    )
+
+    assert routing_result.is_valid is False
+    assert any("Fairness violation" in error and "ShardingPlugin" in error for error in routing_result.errors)
+    assert consensus_result.is_valid is False
+    assert any("Fairness violation" in error and "ConsensusPlugin" in error for error in consensus_result.errors)
 
 
 def test_single_module_consensus_allows_consensus_light_plugins() -> None:
@@ -260,3 +314,24 @@ def test_routing_runner_summary_and_experiment_profile_include_preset_metadata()
         assert "cross_shard_ratio" in payload["primary_metrics"]
         assert "routing_log.csv" in payload["expected_artifacts"]
         assert "real cross-shard" in payload["truthfulness_note"]
+
+
+def test_execution_runner_summary_and_experiment_profile_include_preset_metadata() -> None:
+    validation = validate_v3_composer_draft(
+        draft("single_module_execution", Execution=("variable", "parallel_light_execution"))
+    )
+    assert validation.normalized_draft is not None
+    normalized = validation.normalized_draft
+
+    profile = build_experiment_profile(normalized)
+    summary = merge_run_metadata({"tx_count": 24}, normalized)
+
+    for payload in (profile, summary):
+        assert payload["experiment_template"] == "single_module_execution"
+        assert payload["preset_id"] == "execution_dual_track_smoke"
+        assert payload["preset_name"] == "Execution dual-track smoke"
+        assert payload["variable_module"] == "Execution"
+        assert payload["fairness_validated"] is True
+        assert "fast_track_count" in payload["primary_metrics"]
+        assert "execution_log.csv" in payload["expected_artifacts"]
+        assert "real concurrent execution" in payload["truthfulness_note"]

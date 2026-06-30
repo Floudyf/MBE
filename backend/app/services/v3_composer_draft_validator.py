@@ -196,6 +196,10 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     consensus_plugin = plugin_selection.get("Consensus")
     if consensus_plugin and consensus_plugin not in allowed_consensus_plugins:
         errors.append("当前 Go-backed Draft Smoke 仅支持 Consensus 使用 simple_leader、poa_light 或 pbft_light_model；PBFT / HotStuff / Raft 仍为 planned / unsupported。")
+    allowed_execution_plugins = {"serial_execution", "parallel_light_execution", "metatrack_dual_track_execution", "dual_track_execution"}
+    execution_plugin = plugin_selection.get("Execution")
+    if execution_plugin and execution_plugin not in allowed_execution_plugins:
+        errors.append("当前 Go-backed Draft Smoke 仅支持 Execution 使用 serial_execution、parallel_light_execution 或 metatrack_dual_track_execution；Block-STM / Calvin / real rollback 仍为 planned / unsupported。")
     fairness_scope = build_fairness_scope(
         template_id=template_id,
         variable_module=template_variable_module,
@@ -274,7 +278,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     }
 
     is_valid = not errors
-    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus", "single_module_routing"} and not has_preview_only)
+    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus", "single_module_routing", "single_module_execution"} and not has_preview_only)
     return V3DraftValidationResponse(
         is_valid=is_valid,
         is_runnable=is_runnable,
