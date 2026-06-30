@@ -62,6 +62,13 @@ function moduleSupportHint(moduleId: string, status: string, plugin: string): st
     if (plugin === "metatrack_dual_track_execution" || plugin === "dual_track_execution") return "runtime-supported dual-track light model";
     return "planned/future execution strategy";
   }
+  if (moduleId === "StateAccess") {
+    if (plugin === "direct_fetch") return "runtime-supported direct fetch";
+    if (plugin === "remote_state_access_model") return "runtime-supported remote access light model";
+    if (plugin === "cached_state_access") return "runtime-supported cache light model";
+    if (plugin === "access_list_prefetch") return "runtime-supported prefetch light model";
+    return "planned/future state access strategy";
+  }
   if (status === "variable" || status === "fixed" || status === "default") return "configured runnable; runtime support depends on backend validation";
   return String(status);
 }

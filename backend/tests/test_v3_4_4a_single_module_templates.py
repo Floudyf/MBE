@@ -39,6 +39,7 @@ def test_catalog_returns_single_module_templates() -> None:
     assert "single_module_consensus" in templates
     assert "single_module_routing" in templates
     assert "single_module_execution" in templates
+    assert "single_module_state_access" in templates
     assert templates["single_module_consensus"]["variable_module"] == "Consensus"
     assert templates["single_module_consensus"]["allowed_variable_plugins"] == [
         "simple_leader",
@@ -57,6 +58,13 @@ def test_catalog_returns_single_module_templates() -> None:
         "parallel_light_execution",
         "metatrack_dual_track_execution",
     ]
+    assert templates["single_module_state_access"]["variable_module"] == "StateAccess"
+    assert templates["single_module_state_access"]["allowed_variable_plugins"] == [
+        "direct_fetch",
+        "remote_state_access_model",
+        "cached_state_access",
+        "access_list_prefetch",
+    ]
 
 
 def test_single_module_templates_have_default_presets() -> None:
@@ -67,6 +75,7 @@ def test_single_module_templates_have_default_presets() -> None:
         "single_module_consensus": "consensus_light_smoke",
         "single_module_routing": "routing_coaccess_smoke",
         "single_module_execution": "execution_dual_track_smoke",
+        "single_module_state_access": "state_access_remote_prefetch_smoke",
     }
 
     for template_id, preset_id in expected.items():
@@ -92,6 +101,7 @@ def test_single_module_templates_auto_fill_default_presets() -> None:
         "single_module_consensus": ("Consensus", "consensus_light_smoke", {"Consensus": ("variable", "simple_leader")}),
         "single_module_routing": ("Routing", "routing_coaccess_smoke", {"Routing": ("variable", "metatrack_coaccess_routing")}),
         "single_module_execution": ("Execution", "execution_dual_track_smoke", {"Execution": ("variable", "metatrack_dual_track_execution")}),
+        "single_module_state_access": ("StateAccess", "state_access_remote_prefetch_smoke", {"StateAccess": ("variable", "access_list_prefetch")}),
     }
 
     for template_id, (variable_module, preset_id, overrides) in cases.items():
@@ -184,6 +194,51 @@ def test_single_module_execution_rejects_routing_or_consensus_change() -> None:
     assert any("Fairness violation" in error and "ShardingPlugin" in error for error in routing_result.errors)
     assert consensus_result.is_valid is False
     assert any("Fairness violation" in error and "ConsensusPlugin" in error for error in consensus_result.errors)
+
+
+def test_single_module_state_access_allows_runtime_state_access_plugins() -> None:
+    for plugin_id in ("direct_fetch", "remote_state_access_model", "cached_state_access", "access_list_prefetch"):
+        result = validate_v3_composer_draft(
+            draft("single_module_state_access", StateAccess=("variable", plugin_id))
+        )
+
+        assert result.is_valid is True
+        assert result.is_runnable is True
+        assert result.normalized_draft is not None
+        assert result.normalized_draft["variable_module"] == "StateAccess"
+        assert result.normalized_draft["preset_id"] == "state_access_remote_prefetch_smoke"
+
+
+def test_single_module_state_access_rejects_planned_state_access_plugins() -> None:
+    for plugin_id in ("real_witness_fetch", "real_proof_fetch", "mpt_proof_model", "persistent_kv_access", "snapshot_access"):
+        result = validate_v3_composer_draft(
+            draft("single_module_state_access", StateAccess=("variable", plugin_id))
+        )
+
+        assert result.is_valid is False
+        assert result.is_runnable is False
+
+
+def test_single_module_state_access_rejects_execution_or_routing_change() -> None:
+    execution_result = validate_v3_composer_draft(
+        draft(
+            "single_module_state_access",
+            StateAccess=("variable", "cached_state_access"),
+            Execution=("fixed", "serial_execution"),
+        )
+    )
+    routing_result = validate_v3_composer_draft(
+        draft(
+            "single_module_state_access",
+            StateAccess=("variable", "remote_state_access_model"),
+            Routing=("fixed", "hash_sharding"),
+        )
+    )
+
+    assert execution_result.is_valid is False
+    assert any("Fairness violation" in error and "ExecutionSchedulerPlugin" in error for error in execution_result.errors)
+    assert routing_result.is_valid is False
+    assert any("Fairness violation" in error and "ShardingPlugin" in error for error in routing_result.errors)
 
 
 def test_single_module_consensus_allows_consensus_light_plugins() -> None:
@@ -335,3 +390,24 @@ def test_execution_runner_summary_and_experiment_profile_include_preset_metadata
         assert "fast_track_count" in payload["primary_metrics"]
         assert "execution_log.csv" in payload["expected_artifacts"]
         assert "real concurrent execution" in payload["truthfulness_note"]
+
+
+def test_state_access_runner_summary_and_experiment_profile_include_preset_metadata() -> None:
+    validation = validate_v3_composer_draft(
+        draft("single_module_state_access", StateAccess=("variable", "remote_state_access_model"))
+    )
+    assert validation.normalized_draft is not None
+    normalized = validation.normalized_draft
+
+    profile = build_experiment_profile(normalized)
+    summary = merge_run_metadata({"tx_count": 24}, normalized)
+
+    for payload in (profile, summary):
+        assert payload["experiment_template"] == "single_module_state_access"
+        assert payload["preset_id"] == "state_access_remote_prefetch_smoke"
+        assert payload["preset_name"] == "StateAccess remote/prefetch smoke"
+        assert payload["variable_module"] == "StateAccess"
+        assert payload["fairness_validated"] is True
+        assert "remote_state_access_ratio" in payload["primary_metrics"]
+        assert "state_access_log.csv" in payload["expected_artifacts"]
+        assert "real proofs" in payload["truthfulness_note"]

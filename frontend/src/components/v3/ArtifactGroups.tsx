@@ -16,6 +16,7 @@ const groups = [
   { title: "Runtime consensus logs", files: ["consensus_log.csv"] },
   { title: "Runtime routing logs", files: ["routing_log.csv"] },
   { title: "Runtime execution logs", files: ["execution_log.csv"] },
+  { title: "Runtime state access logs", files: ["state_access_log.csv"] },
   { title: "Chain runtime logs", files: ["runtime.log", "block_log.csv", "tx_results.csv", "state_commit_log.csv"] },
   { title: "MetaTrack metrics", files: ["metatrack_latency.csv", "metatrack_mechanism_metrics.csv"] },
   { title: "Used profiles", files: ["used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "used_chain_profile.json", "used_plugin_profile.json", "used_experiment_profile.json"] },

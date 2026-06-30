@@ -243,6 +243,48 @@ type ExecutionEngine struct {
 	SerialTxCount           int
 }
 
+type StateAccessRecord struct {
+	TxID              string
+	BlockHeight       int
+	TxIndex           int
+	StateAccessPlugin string
+	AccessKey         string
+	AccessType        string
+	IsRead            bool
+	IsWrite           bool
+	HomeShard         int
+	ExecutionShard    int
+	IsRemote          bool
+	CacheHit          bool
+	Prefetched        bool
+	WitnessEstimated  bool
+	ProofEstimated    bool
+	AccessLatencyMS   int
+	Reason            string
+}
+
+type StateAccessEngine struct {
+	PluginID                  string
+	LocalLatencyMS            int
+	RemoteLatencyMS           int
+	CacheHitLatencyMS         int
+	PrefetchLatencyMS         int
+	Cache                     map[string]bool
+	CacheHitCount             int
+	CacheMissCount            int
+	LocalAccessCount          int
+	RemoteAccessCount         int
+	PrefetchHitCount          int
+	PrefetchMissCount         int
+	StateAccessLatencyTotalMS int
+	Latencies                 []int
+	RemoteLatencies           []int
+	WitnessEstimatedCount     int
+	ProofEstimatedCount       int
+	EstimatedWitnessBytes     int
+	EstimatedProofBytes       int
+}
+
 type txPoolEntry struct {
 	tx          Transaction
 	admitTimeMS int
@@ -305,82 +347,100 @@ type StateCommit struct {
 }
 
 type Summary struct {
-	RunID                     string  `json:"run_id"`
-	Stage                     string  `json:"stage"`
-	BackendType               string  `json:"backend_type"`
-	TruthLabel                string  `json:"truth_label"`
-	ChainProfileID            string  `json:"chain_profile_id"`
-	PluginProfileID           string  `json:"plugin_profile_id"`
-	ExperimentProfileID       string  `json:"experiment_profile_id"`
-	TxCount                   int     `json:"tx_count"`
-	SuccessCount              int     `json:"success_count"`
-	FailureCount              int     `json:"failure_count"`
-	BlockCount                int     `json:"block_count"`
-	ThroughputTPS             float64 `json:"throughput_tps"`
-	AvgLatencyMS              float64 `json:"avg_latency_ms"`
-	P95LatencyMS              float64 `json:"p95_latency_ms"`
-	P99LatencyMS              float64 `json:"p99_latency_ms"`
-	RuntimeMode               string  `json:"runtime_mode"`
-	RemoteFetchCount          int     `json:"remote_fetch_count"`
-	CrossShardRatio           float64 `json:"cross_shard_ratio"`
-	FastTrackCount            int     `json:"fast_track_count"`
-	ConservativeTrackCount    int     `json:"conservative_track_count"`
-	AggregatedUpdateCount     int     `json:"aggregated_update_count"`
-	AggregationRatio          float64 `json:"aggregation_ratio"`
-	ConflictCount             int     `json:"conflict_count"`
-	QueueWaitMS               float64 `json:"queue_wait_ms"`
-	TxPoolAdmittedCount       int     `json:"txpool_admitted_count"`
-	TxPoolRejectedCount       int     `json:"txpool_rejected_count"`
-	TxPoolPeakSize            int     `json:"txpool_peak_size"`
-	TxPoolAvgWaitMS           float64 `json:"txpool_avg_wait_ms"`
-	TxPoolP95WaitMS           float64 `json:"txpool_p95_wait_ms"`
-	EmptyBlockCount           int     `json:"empty_block_count"`
-	AvgBlockSize              float64 `json:"avg_block_size"`
-	MaxBlockSize              int     `json:"max_block_size"`
-	BlockIntervalMS           int     `json:"block_interval_ms"`
-	AvgBlockIntervalMS        float64 `json:"avg_block_interval_ms"`
-	BlockProducerCountCut     int     `json:"blockproducer_count_cut_count"`
-	BlockProducerTimeCut      int     `json:"blockproducer_time_cut_count"`
-	BlockProducerDrainCut     int     `json:"blockproducer_drain_cut_count"`
-	BlockProducerEmptyCut     int     `json:"blockproducer_empty_cut_count"`
-	BlockCommitLatencyMS      float64 `json:"block_commit_latency_ms"`
-	ConsensusLatencyMS        float64 `json:"consensus_latency_ms"`
-	AvgConsensusLatencyMS     float64 `json:"avg_consensus_latency_ms"`
-	P95ConsensusLatencyMS     float64 `json:"p95_consensus_latency_ms"`
-	ConsensusMessageCount     int     `json:"consensus_message_count"`
-	AvgConsensusMessageCount  float64 `json:"avg_consensus_message_count"`
-	ConsensusRoundCount       int     `json:"consensus_round_count"`
-	ViewChangeCount           int     `json:"view_change_count"`
-	FinalizedBlockCount       int     `json:"finalized_block_count"`
-	FailedBlockCount          int     `json:"failed_block_count"`
-	RoutingDecisionCount      int     `json:"routing_decision_count"`
-	CrossShardTxCount         int     `json:"cross_shard_tx_count"`
-	LocalTxCount              int     `json:"local_tx_count"`
-	RemoteStateAccessCount    int     `json:"remote_state_access_count"`
-	AvgTouchedShards          float64 `json:"avg_touched_shards"`
-	MaxTouchedShards          int     `json:"max_touched_shards"`
-	HotspotKeyCount           int     `json:"hotspot_key_count"`
-	CoaccessGroupCount        int     `json:"coaccess_group_count"`
-	AvgRoutingOverheadMS      float64 `json:"avg_routing_overhead_ms"`
-	RoutingPlugin             string  `json:"routing_plugin"`
-	ExecutionPlugin           string  `json:"execution_plugin"`
-	ExecutionTxCount          int     `json:"execution_tx_count"`
-	BlockedTxCount            int     `json:"blocked_tx_count"`
-	DependencyEdgeCount       int     `json:"dependency_edge_count"`
-	AvgDependencyEdgesPerTx   float64 `json:"avg_dependency_edges_per_tx"`
-	AvgExecutionLatencyMS     float64 `json:"avg_execution_latency_ms"`
-	P95ExecutionLatencyMS     float64 `json:"p95_execution_latency_ms"`
-	MaxExecutionLatencyMS     int     `json:"max_execution_latency_ms"`
-	LogicalWorkerCount        int     `json:"logical_worker_count"`
-	ParallelizableTxCount     int     `json:"parallelizable_tx_count"`
-	SerialTxCount             int     `json:"serial_tx_count"`
-	ExecutionShardCount       int     `json:"execution_shard_count"`
-	StateStorageUnitCount     int     `json:"state_storage_unit_count"`
-	CrossStateUnitAccessCount int     `json:"cross_state_unit_access_count"`
-	RemoteStateFetchCount     int     `json:"remote_state_fetch_count"`
-	StateLocalityRatio        float64 `json:"state_locality_ratio"`
-	ExecutionShardLoadBalance float64 `json:"execution_shard_load_balance"`
-	StateUnitLoadBalance      float64 `json:"state_unit_load_balance"`
+	RunID                      string  `json:"run_id"`
+	Stage                      string  `json:"stage"`
+	BackendType                string  `json:"backend_type"`
+	TruthLabel                 string  `json:"truth_label"`
+	ChainProfileID             string  `json:"chain_profile_id"`
+	PluginProfileID            string  `json:"plugin_profile_id"`
+	ExperimentProfileID        string  `json:"experiment_profile_id"`
+	TxCount                    int     `json:"tx_count"`
+	SuccessCount               int     `json:"success_count"`
+	FailureCount               int     `json:"failure_count"`
+	BlockCount                 int     `json:"block_count"`
+	ThroughputTPS              float64 `json:"throughput_tps"`
+	AvgLatencyMS               float64 `json:"avg_latency_ms"`
+	P95LatencyMS               float64 `json:"p95_latency_ms"`
+	P99LatencyMS               float64 `json:"p99_latency_ms"`
+	RuntimeMode                string  `json:"runtime_mode"`
+	RemoteFetchCount           int     `json:"remote_fetch_count"`
+	CrossShardRatio            float64 `json:"cross_shard_ratio"`
+	FastTrackCount             int     `json:"fast_track_count"`
+	ConservativeTrackCount     int     `json:"conservative_track_count"`
+	AggregatedUpdateCount      int     `json:"aggregated_update_count"`
+	AggregationRatio           float64 `json:"aggregation_ratio"`
+	ConflictCount              int     `json:"conflict_count"`
+	QueueWaitMS                float64 `json:"queue_wait_ms"`
+	TxPoolAdmittedCount        int     `json:"txpool_admitted_count"`
+	TxPoolRejectedCount        int     `json:"txpool_rejected_count"`
+	TxPoolPeakSize             int     `json:"txpool_peak_size"`
+	TxPoolAvgWaitMS            float64 `json:"txpool_avg_wait_ms"`
+	TxPoolP95WaitMS            float64 `json:"txpool_p95_wait_ms"`
+	EmptyBlockCount            int     `json:"empty_block_count"`
+	AvgBlockSize               float64 `json:"avg_block_size"`
+	MaxBlockSize               int     `json:"max_block_size"`
+	BlockIntervalMS            int     `json:"block_interval_ms"`
+	AvgBlockIntervalMS         float64 `json:"avg_block_interval_ms"`
+	BlockProducerCountCut      int     `json:"blockproducer_count_cut_count"`
+	BlockProducerTimeCut       int     `json:"blockproducer_time_cut_count"`
+	BlockProducerDrainCut      int     `json:"blockproducer_drain_cut_count"`
+	BlockProducerEmptyCut      int     `json:"blockproducer_empty_cut_count"`
+	BlockCommitLatencyMS       float64 `json:"block_commit_latency_ms"`
+	ConsensusLatencyMS         float64 `json:"consensus_latency_ms"`
+	AvgConsensusLatencyMS      float64 `json:"avg_consensus_latency_ms"`
+	P95ConsensusLatencyMS      float64 `json:"p95_consensus_latency_ms"`
+	ConsensusMessageCount      int     `json:"consensus_message_count"`
+	AvgConsensusMessageCount   float64 `json:"avg_consensus_message_count"`
+	ConsensusRoundCount        int     `json:"consensus_round_count"`
+	ViewChangeCount            int     `json:"view_change_count"`
+	FinalizedBlockCount        int     `json:"finalized_block_count"`
+	FailedBlockCount           int     `json:"failed_block_count"`
+	RoutingDecisionCount       int     `json:"routing_decision_count"`
+	CrossShardTxCount          int     `json:"cross_shard_tx_count"`
+	LocalTxCount               int     `json:"local_tx_count"`
+	RemoteStateAccessCount     int     `json:"remote_state_access_count"`
+	AvgTouchedShards           float64 `json:"avg_touched_shards"`
+	MaxTouchedShards           int     `json:"max_touched_shards"`
+	HotspotKeyCount            int     `json:"hotspot_key_count"`
+	CoaccessGroupCount         int     `json:"coaccess_group_count"`
+	AvgRoutingOverheadMS       float64 `json:"avg_routing_overhead_ms"`
+	RoutingPlugin              string  `json:"routing_plugin"`
+	ExecutionPlugin            string  `json:"execution_plugin"`
+	ExecutionTxCount           int     `json:"execution_tx_count"`
+	BlockedTxCount             int     `json:"blocked_tx_count"`
+	DependencyEdgeCount        int     `json:"dependency_edge_count"`
+	AvgDependencyEdgesPerTx    float64 `json:"avg_dependency_edges_per_tx"`
+	AvgExecutionLatencyMS      float64 `json:"avg_execution_latency_ms"`
+	P95ExecutionLatencyMS      float64 `json:"p95_execution_latency_ms"`
+	MaxExecutionLatencyMS      int     `json:"max_execution_latency_ms"`
+	LogicalWorkerCount         int     `json:"logical_worker_count"`
+	ParallelizableTxCount      int     `json:"parallelizable_tx_count"`
+	SerialTxCount              int     `json:"serial_tx_count"`
+	StateAccessPlugin          string  `json:"state_access_plugin"`
+	StateAccessCount           int     `json:"state_access_count"`
+	LocalStateAccessCount      int     `json:"local_state_access_count"`
+	RemoteStateAccessRatio     float64 `json:"remote_state_access_ratio"`
+	CacheHitCount              int     `json:"cache_hit_count"`
+	CacheMissCount             int     `json:"cache_miss_count"`
+	CacheHitRate               float64 `json:"cache_hit_rate"`
+	PrefetchHitCount           int     `json:"prefetch_hit_count"`
+	PrefetchMissCount          int     `json:"prefetch_miss_count"`
+	PrefetchHitRate            float64 `json:"prefetch_hit_rate"`
+	AvgStateAccessLatencyMS    float64 `json:"avg_state_access_latency_ms"`
+	P95StateAccessLatencyMS    float64 `json:"p95_state_access_latency_ms"`
+	MaxStateAccessLatencyMS    int     `json:"max_state_access_latency_ms"`
+	RemoteStateAccessLatencyMS float64 `json:"remote_state_access_latency_ms"`
+	WitnessEstimatedCount      int     `json:"witness_estimated_count"`
+	ProofEstimatedCount        int     `json:"proof_estimated_count"`
+	EstimatedWitnessBytes      int     `json:"estimated_witness_bytes"`
+	EstimatedProofBytes        int     `json:"estimated_proof_bytes"`
+	ExecutionShardCount        int     `json:"execution_shard_count"`
+	StateStorageUnitCount      int     `json:"state_storage_unit_count"`
+	CrossStateUnitAccessCount  int     `json:"cross_state_unit_access_count"`
+	RemoteStateFetchCount      int     `json:"remote_state_fetch_count"`
+	StateLocalityRatio         float64 `json:"state_locality_ratio"`
+	ExecutionShardLoadBalance  float64 `json:"execution_shard_load_balance"`
+	StateUnitLoadBalance       float64 `json:"state_unit_load_balance"`
 }
 
 type Result struct {
@@ -393,6 +453,7 @@ type Result struct {
 	ConsensusLog   []ConsensusRecord
 	RoutingLog     []RoutingRecord
 	ExecutionLog   []ExecutionRecord
+	StateAccessLog []StateAccessRecord
 	FinalState     map[string]int
 }
 
@@ -431,6 +492,7 @@ func Run(input Input) (Result, error) {
 	consensusEngine := newConsensusEngine(chain, plugin)
 	routingEngine := newRoutingEngine(chain, plugin)
 	executionEngine := newExecutionEngine(chain, plugin)
+	stateAccessEngine := newStateAccessEngine(chain, plugin)
 	blocks := produceBlocksFromTxPool(txs, chain, txPool, blockProducer)
 	state := map[string]int{}
 	blockLog := []map[string]string{}
@@ -439,6 +501,7 @@ func Run(input Input) (Result, error) {
 	consensusLog := []ConsensusRecord{}
 	routingLog := []RoutingRecord{}
 	executionLog := []ExecutionRecord{}
+	stateAccessLog := []StateAccessRecord{}
 	for _, block := range blocks {
 		consensusRecord := consensusEngine.FinalizeBlock(block)
 		consensusLog = append(consensusLog, consensusRecord)
@@ -477,6 +540,7 @@ func Run(input Input) (Result, error) {
 			executionLog = append(executionLog, record)
 			executionByTx[record.TxID] = record
 		}
+		blockPrefetchSet := stateAccessEngine.PrefetchSet(block)
 		for txIndex, pooledTx := range block.Txs {
 			tx := pooledTx.Tx
 			routingRecord := routingByTx[tx.ID]
@@ -490,11 +554,17 @@ func Run(input Input) (Result, error) {
 				executionLog = append(executionLog, executionRecord)
 			}
 			executionShardID := routingRecord.PrimaryShard
+			stateAccessRecords := stateAccessEngine.AccessTransaction(tx, block.Height, txIndex, executionShardID, blockPrefetchSet, chain)
+			stateAccessLog = append(stateAccessLog, stateAccessRecords...)
 			accessedUnits := accessedStateUnits(tx, chain)
 			homeUnits := writeStateUnits(tx, chain)
+			remoteAccesses := stateAccessRemoteCount(stateAccessRecords)
 			remoteStateUnits := remoteStateUnitCount(accessedUnits, executionShardID)
+			if remoteAccesses > 0 {
+				remoteStateUnits = remoteAccesses
+			}
 			start := executionRecord.StartAtMS
-			end := executionRecord.EndAtMS
+			end := executionRecord.EndAtMS + stateAccessLatencyForTx(stateAccessRecords)
 			commitTime := end + 1
 			deltas := map[string][3]int{}
 			for key, delta := range tx.WriteDeltas {
@@ -522,7 +592,7 @@ func Run(input Input) (Result, error) {
 				StateLocalityHit:     remoteStateUnits == 0,
 				ReadCount:            len(tx.ReadKeys),
 				WriteCount:           len(tx.WriteDeltas),
-				RemoteFetchCount:     remoteFetchCount(remoteStateUnits, plugin),
+				RemoteFetchCount:     stateAccessRemoteFetchCount(stateAccessRecords, plugin),
 				Track:                executionRecord.Track,
 				Deltas:               deltas,
 			}
@@ -558,10 +628,11 @@ func Run(input Input) (Result, error) {
 	applyConsensusMetrics(&summary, consensusLog)
 	applyRoutingMetrics(&summary, routingEngine, routingLog)
 	applyExecutionMetrics(&summary, executionEngine, executionLog)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, "V3.4.6 Go-backed Execution runtime hardening run"); err != nil {
+	applyStateAccessMetrics(&summary, stateAccessEngine)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, "V3.4.7 Go-backed StateAccess runtime hardening run"); err != nil {
 		return Result{}, err
 	}
-	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, ExecutionLog: executionLog, FinalState: state}, nil
+	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, ExecutionLog: executionLog, StateAccessLog: stateAccessLog, FinalState: state}, nil
 }
 
 func parseChainProfile(text string) ChainProfile {
@@ -1073,6 +1144,222 @@ func hasKeyOverlap(left, right map[string]bool) bool {
 	return false
 }
 
+func newStateAccessEngine(chain ChainProfile, plugin PluginProfile) *StateAccessEngine {
+	return &StateAccessEngine{
+		PluginID:          normalizeStateAccessPlugin(plugin.StateAccessPlugin),
+		LocalLatencyMS:    1,
+		RemoteLatencyMS:   max(2, chain.RemoteFetchCostMS+1),
+		CacheHitLatencyMS: 0,
+		PrefetchLatencyMS: 0,
+		Cache:             map[string]bool{},
+	}
+}
+
+func (engine *StateAccessEngine) PrefetchSet(block Block) map[string]bool {
+	prefetch := map[string]bool{}
+	if engine.PluginID != "access_list_prefetch" {
+		return prefetch
+	}
+	for _, pooledTx := range block.Txs {
+		for _, key := range transactionAccessKeys(pooledTx.Tx) {
+			prefetch[key] = true
+		}
+	}
+	return prefetch
+}
+
+func (engine *StateAccessEngine) AccessTransaction(tx Transaction, blockHeight, txIndex, executionShard int, prefetchSet map[string]bool, chain ChainProfile) []StateAccessRecord {
+	keys := transactionAccessItems(tx)
+	records := []StateAccessRecord{}
+	for _, item := range keys {
+		homeShard := stateUnit(item.key, chain)
+		isRemote := homeShard != executionShard
+		cacheHit := false
+		prefetched := false
+		latency := engine.LocalLatencyMS
+		reason := "local_direct_fetch"
+		switch engine.PluginID {
+		case "remote_state_access_model":
+			if isRemote {
+				latency = engine.RemoteLatencyMS
+				reason = "remote_state_access_estimate"
+			}
+		case "cached_state_access":
+			cacheHit = engine.Cache[item.key]
+			if cacheHit {
+				latency = engine.CacheHitLatencyMS
+				reason = "cache_hit"
+			} else if isRemote {
+				latency = engine.RemoteLatencyMS
+				reason = "cache_miss_remote_fetch"
+			} else {
+				reason = "cache_miss_local_fetch"
+			}
+			engine.Cache[item.key] = true
+		case "access_list_prefetch":
+			prefetched = prefetchSet != nil && prefetchSet[item.key]
+			if prefetched {
+				latency = engine.PrefetchLatencyMS
+				reason = "access_list_prefetch_hit"
+			} else if isRemote {
+				latency = engine.RemoteLatencyMS
+				reason = "access_list_prefetch_miss_remote"
+			} else {
+				reason = "access_list_prefetch_miss_local"
+			}
+		default:
+			reason = "direct_fetch"
+		}
+		witnessEstimated := isRemote || engine.PluginID == "remote_state_access_model"
+		proofEstimated := witnessEstimated
+		record := StateAccessRecord{
+			TxID:              tx.ID,
+			BlockHeight:       blockHeight,
+			TxIndex:           txIndex,
+			StateAccessPlugin: engine.PluginID,
+			AccessKey:         item.key,
+			AccessType:        item.accessType,
+			IsRead:            item.isRead,
+			IsWrite:           item.isWrite,
+			HomeShard:         homeShard,
+			ExecutionShard:    executionShard,
+			IsRemote:          isRemote,
+			CacheHit:          cacheHit,
+			Prefetched:        prefetched,
+			WitnessEstimated:  witnessEstimated,
+			ProofEstimated:    proofEstimated,
+			AccessLatencyMS:   latency,
+			Reason:            reason,
+		}
+		engine.record(record)
+		records = append(records, record)
+	}
+	return records
+}
+
+func (engine *StateAccessEngine) record(record StateAccessRecord) {
+	if record.IsRemote {
+		engine.RemoteAccessCount++
+		engine.RemoteLatencies = append(engine.RemoteLatencies, record.AccessLatencyMS)
+	} else {
+		engine.LocalAccessCount++
+	}
+	if engine.PluginID == "cached_state_access" {
+		if record.CacheHit {
+			engine.CacheHitCount++
+		} else {
+			engine.CacheMissCount++
+		}
+	}
+	if engine.PluginID == "access_list_prefetch" {
+		if record.Prefetched {
+			engine.PrefetchHitCount++
+		} else {
+			engine.PrefetchMissCount++
+		}
+	}
+	if record.WitnessEstimated {
+		engine.WitnessEstimatedCount++
+		engine.EstimatedWitnessBytes += 128
+	}
+	if record.ProofEstimated {
+		engine.ProofEstimatedCount++
+		engine.EstimatedProofBytes += 256
+	}
+	engine.StateAccessLatencyTotalMS += record.AccessLatencyMS
+	engine.Latencies = append(engine.Latencies, record.AccessLatencyMS)
+}
+
+type accessItem struct {
+	key        string
+	accessType string
+	isRead     bool
+	isWrite    bool
+}
+
+func transactionAccessItems(tx Transaction) []accessItem {
+	items := []accessItem{}
+	seen := map[string]int{}
+	for _, key := range tx.ReadKeys {
+		if key == "" {
+			continue
+		}
+		index, ok := seen[key]
+		if ok {
+			items[index].isRead = true
+			if items[index].isWrite {
+				items[index].accessType = "read_write"
+			}
+			continue
+		}
+		seen[key] = len(items)
+		items = append(items, accessItem{key: key, accessType: "read", isRead: true})
+	}
+	writeKeys := make([]string, 0, len(tx.WriteDeltas))
+	for key := range tx.WriteDeltas {
+		writeKeys = append(writeKeys, key)
+	}
+	sort.Strings(writeKeys)
+	for _, key := range writeKeys {
+		if key == "" {
+			continue
+		}
+		index, ok := seen[key]
+		if ok {
+			items[index].isWrite = true
+			if items[index].isRead {
+				items[index].accessType = "read_write"
+			} else {
+				items[index].accessType = "write"
+			}
+			continue
+		}
+		seen[key] = len(items)
+		items = append(items, accessItem{key: key, accessType: "write", isWrite: true})
+	}
+	return items
+}
+
+func normalizeStateAccessPlugin(pluginID string) string {
+	switch pluginID {
+	case "", "direct_fetch":
+		return "direct_fetch"
+	case "remote_state_access_model":
+		return "remote_state_access_model"
+	case "cached_state_access":
+		return "cached_state_access"
+	case "access_list_prefetch":
+		return "access_list_prefetch"
+	default:
+		return pluginID
+	}
+}
+
+func stateAccessRemoteCount(records []StateAccessRecord) int {
+	count := 0
+	for _, record := range records {
+		if record.IsRemote {
+			count++
+		}
+	}
+	return count
+}
+
+func stateAccessRemoteFetchCount(records []StateAccessRecord, plugin PluginProfile) int {
+	if normalizeStateAccessPlugin(plugin.StateAccessPlugin) == "access_list_prefetch" {
+		return 0
+	}
+	return stateAccessRemoteCount(records)
+}
+
+func stateAccessLatencyForTx(records []StateAccessRecord) int {
+	total := 0
+	for _, record := range records {
+		total += record.AccessLatencyMS
+	}
+	return total
+}
+
 func requireSupportedPlugins(plugin PluginProfile) error {
 	baseExpected := map[string]string{
 		"TxPoolPlugin":  "fifo_pool",
@@ -1097,7 +1384,7 @@ func requireSupportedPlugins(plugin PluginProfile) error {
 	allowed := map[string]map[string]bool{
 		"ShardingPlugin":           {"hash_sharding": true, "co_access_sharding": true, "metatrack_coaccess_routing": true, "hotspot_aware_routing": true},
 		"ExecutionSchedulerPlugin": {"serial_execution": true, "dual_track_execution": true, "parallel_light_execution": true, "metatrack_dual_track_execution": true},
-		"StateAccessPlugin":        {"direct_fetch": true, "access_list_prefetch": true},
+		"StateAccessPlugin":        {"direct_fetch": true, "remote_state_access_model": true, "cached_state_access": true, "access_list_prefetch": true},
 		"CommitPlugin":             {"normal_commit": true, "hot_update_aggregation_commit": true},
 		"ConsensusPlugin":          {"simple_leader": true, "poa_light": true, "pbft_light_model": true},
 	}
@@ -1603,7 +1890,38 @@ func applyExecutionMetrics(summary *Summary, engine *ExecutionEngine, records []
 	summary.ConflictCount = conflicts
 }
 
-func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, executionLog []ExecutionRecord, title string) error {
+func applyStateAccessMetrics(summary *Summary, engine *StateAccessEngine) {
+	total := engine.LocalAccessCount + engine.RemoteAccessCount
+	summary.StateAccessPlugin = engine.PluginID
+	summary.StateAccessCount = total
+	summary.LocalStateAccessCount = engine.LocalAccessCount
+	summary.RemoteStateAccessCount = engine.RemoteAccessCount
+	if total > 0 {
+		summary.RemoteStateAccessRatio = round(float64(engine.RemoteAccessCount) / float64(total))
+	}
+	summary.CacheHitCount = engine.CacheHitCount
+	summary.CacheMissCount = engine.CacheMissCount
+	if engine.CacheHitCount+engine.CacheMissCount > 0 {
+		summary.CacheHitRate = round(float64(engine.CacheHitCount) / float64(engine.CacheHitCount+engine.CacheMissCount))
+	}
+	summary.PrefetchHitCount = engine.PrefetchHitCount
+	summary.PrefetchMissCount = engine.PrefetchMissCount
+	if engine.PrefetchHitCount+engine.PrefetchMissCount > 0 {
+		summary.PrefetchHitRate = round(float64(engine.PrefetchHitCount) / float64(engine.PrefetchHitCount+engine.PrefetchMissCount))
+	}
+	summary.AvgStateAccessLatencyMS = round(avg(engine.Latencies))
+	summary.P95StateAccessLatencyMS = percentileInt(engine.Latencies, 95)
+	summary.MaxStateAccessLatencyMS = maxInt(engine.Latencies)
+	summary.RemoteStateAccessLatencyMS = round(avg(engine.RemoteLatencies))
+	summary.WitnessEstimatedCount = engine.WitnessEstimatedCount
+	summary.ProofEstimatedCount = engine.ProofEstimatedCount
+	summary.EstimatedWitnessBytes = engine.EstimatedWitnessBytes
+	summary.EstimatedProofBytes = engine.EstimatedProofBytes
+	summary.RemoteFetchCount = engine.RemoteAccessCount
+	summary.RemoteStateFetchCount = engine.RemoteAccessCount
+}
+
+func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, executionLog []ExecutionRecord, stateAccessLog []StateAccessRecord, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
@@ -1644,11 +1962,14 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := writeExecutionLog(filepath.Join(out, "execution_log.csv"), executionLog); err != nil {
 		return err
 	}
-	report := "# " + title + "\n\nThis is V3.4.6 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool, BlockProducer, Consensus-light, Routing/Sharding, and Execution hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, local FIFO TxPool admission/selection behavior, local logical BlockProducer cut behavior, local virtual-time Consensus-light finality metrics, local Routing/Sharding decision records, and local deterministic Execution scheduling records.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement. Routing light models estimate touched shards, cross-shard ratio, co-access groups, and hotspot keys; they do not implement relay, broker, 2PC, CLPA, ShardCutter, state migration, or real shard-to-shard messages.\n\nExecution light models estimate serial order, logical worker assignment, dependency edges, blocking, and fast/conservative track assignment. They do not implement real concurrent execution, real rollback, Block-STM, Calvin, database lock management, or a real thread pool.\n\nConsensus-light models local stage, quorum, virtual message count, and finality observability. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
+	if err := writeStateAccessLog(filepath.Join(out, "state_access_log.csv"), stateAccessLog); err != nil {
+		return err
+	}
+	report := "# " + title + "\n\nThis is V3.4.7 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool, BlockProducer, Consensus-light, Routing/Sharding, Execution, and StateAccess hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, local FIFO TxPool admission/selection behavior, local logical BlockProducer cut behavior, local virtual-time Consensus-light finality metrics, local Routing/Sharding decision records, local deterministic Execution scheduling records, and local StateAccess records.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement. Routing light models estimate touched shards, cross-shard ratio, co-access groups, and hotspot keys; they do not implement relay, broker, 2PC, CLPA, ShardCutter, state migration, or real shard-to-shard messages.\n\nExecution light models estimate serial order, logical worker assignment, dependency edges, blocking, and fast/conservative track assignment. They do not implement real concurrent execution, real rollback, Block-STM, Calvin, database lock management, or a real thread pool.\n\nStateAccess light models estimate local/remote access, deterministic cache/prefetch behavior, and proof/witness sizes. They do not implement real remote storage, real proof or witness generation, MPT, state root, persistent KV, snapshot, or state migration.\n\nConsensus-light models local stage, quorum, virtual message count, and finality observability. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
-	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nrouting_plugin=" + summary.RoutingPlugin + "\nexecution_plugin=" + summary.ExecutionPlugin + "\nfabric_live=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nreal_cross_shard_protocol=false\nreal_concurrent_execution=false\nreal_rollback=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
+	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nrouting_plugin=" + summary.RoutingPlugin + "\nexecution_plugin=" + summary.ExecutionPlugin + "\nstate_access_plugin=" + summary.StateAccessPlugin + "\nfabric_live=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nreal_cross_shard_protocol=false\nreal_concurrent_execution=false\nreal_rollback=false\nreal_remote_storage=false\nreal_proof_witness=false\nmpt=false\nstate_root=false\nsnapshot=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
 	return os.WriteFile(filepath.Join(out, "runtime.log"), []byte(log), 0o644)
 }
 
@@ -1661,12 +1982,13 @@ func writeSummaryCSV(path string, s Summary) error {
 		fmt.Sprint(s.ConsensusLatencyMS), fmt.Sprint(s.AvgConsensusLatencyMS), fmt.Sprint(s.P95ConsensusLatencyMS), strconv.Itoa(s.ConsensusMessageCount), fmt.Sprint(s.AvgConsensusMessageCount), strconv.Itoa(s.ConsensusRoundCount), strconv.Itoa(s.ViewChangeCount), strconv.Itoa(s.FinalizedBlockCount), strconv.Itoa(s.FailedBlockCount),
 		strconv.Itoa(s.RoutingDecisionCount), strconv.Itoa(s.CrossShardTxCount), strconv.Itoa(s.LocalTxCount), strconv.Itoa(s.RemoteStateAccessCount), fmt.Sprint(s.AvgTouchedShards), strconv.Itoa(s.MaxTouchedShards), strconv.Itoa(s.HotspotKeyCount), strconv.Itoa(s.CoaccessGroupCount), fmt.Sprint(s.AvgRoutingOverheadMS), s.RoutingPlugin,
 		s.ExecutionPlugin, strconv.Itoa(s.ExecutionTxCount), strconv.Itoa(s.BlockedTxCount), strconv.Itoa(s.DependencyEdgeCount), fmt.Sprint(s.AvgDependencyEdgesPerTx), fmt.Sprint(s.AvgExecutionLatencyMS), fmt.Sprint(s.P95ExecutionLatencyMS), strconv.Itoa(s.MaxExecutionLatencyMS), strconv.Itoa(s.LogicalWorkerCount), strconv.Itoa(s.ParallelizableTxCount), strconv.Itoa(s.SerialTxCount),
+		s.StateAccessPlugin, strconv.Itoa(s.StateAccessCount), strconv.Itoa(s.LocalStateAccessCount), strconv.Itoa(s.RemoteStateAccessCount), fmt.Sprint(s.RemoteStateAccessRatio), strconv.Itoa(s.CacheHitCount), strconv.Itoa(s.CacheMissCount), fmt.Sprint(s.CacheHitRate), strconv.Itoa(s.PrefetchHitCount), strconv.Itoa(s.PrefetchMissCount), fmt.Sprint(s.PrefetchHitRate), fmt.Sprint(s.AvgStateAccessLatencyMS), fmt.Sprint(s.P95StateAccessLatencyMS), strconv.Itoa(s.MaxStateAccessLatencyMS), fmt.Sprint(s.RemoteStateAccessLatencyMS), strconv.Itoa(s.WitnessEstimatedCount), strconv.Itoa(s.ProofEstimatedCount), strconv.Itoa(s.EstimatedWitnessBytes), strconv.Itoa(s.EstimatedProofBytes),
 		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {
@@ -1801,6 +2123,33 @@ func writeExecutionLog(path string, records []ExecutionRecord) error {
 			strconv.FormatBool(record.Blocked),
 			record.BlockReason,
 			strconv.Itoa(record.WorkerID),
+			record.Reason,
+		})
+	}
+	return writeCSV(path, fields, rows)
+}
+
+func writeStateAccessLog(path string, records []StateAccessRecord) error {
+	fields := []string{"tx_id", "block_height", "tx_index", "state_access_plugin", "access_key", "access_type", "is_read", "is_write", "home_shard", "execution_shard", "is_remote", "cache_hit", "prefetched", "witness_estimated", "proof_estimated", "access_latency_ms", "reason"}
+	rows := [][]string{}
+	for _, record := range records {
+		rows = append(rows, []string{
+			record.TxID,
+			strconv.Itoa(record.BlockHeight),
+			strconv.Itoa(record.TxIndex),
+			record.StateAccessPlugin,
+			record.AccessKey,
+			record.AccessType,
+			strconv.FormatBool(record.IsRead),
+			strconv.FormatBool(record.IsWrite),
+			strconv.Itoa(record.HomeShard),
+			strconv.Itoa(record.ExecutionShard),
+			strconv.FormatBool(record.IsRemote),
+			strconv.FormatBool(record.CacheHit),
+			strconv.FormatBool(record.Prefetched),
+			strconv.FormatBool(record.WitnessEstimated),
+			strconv.FormatBool(record.ProofEstimated),
+			strconv.Itoa(record.AccessLatencyMS),
 			record.Reason,
 		})
 	}

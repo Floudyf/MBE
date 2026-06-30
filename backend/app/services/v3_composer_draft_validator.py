@@ -200,6 +200,10 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     execution_plugin = plugin_selection.get("Execution")
     if execution_plugin and execution_plugin not in allowed_execution_plugins:
         errors.append("当前 Go-backed Draft Smoke 仅支持 Execution 使用 serial_execution、parallel_light_execution 或 metatrack_dual_track_execution；Block-STM / Calvin / real rollback 仍为 planned / unsupported。")
+    allowed_state_access_plugins = {"direct_fetch", "remote_state_access_model", "cached_state_access", "access_list_prefetch"}
+    state_access_plugin = plugin_selection.get("StateAccess")
+    if state_access_plugin and state_access_plugin not in allowed_state_access_plugins:
+        errors.append("当前 Go-backed Draft Smoke 仅支持 StateAccess 使用 direct_fetch、remote_state_access_model、cached_state_access 或 access_list_prefetch；real proof / witness / MPT / snapshot 仍为 planned / unsupported。")
     fairness_scope = build_fairness_scope(
         template_id=template_id,
         variable_module=template_variable_module,
@@ -278,7 +282,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     }
 
     is_valid = not errors
-    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus", "single_module_routing", "single_module_execution"} and not has_preview_only)
+    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus", "single_module_routing", "single_module_execution", "single_module_state_access"} and not has_preview_only)
     return V3DraftValidationResponse(
         is_valid=is_valid,
         is_runnable=is_runnable,

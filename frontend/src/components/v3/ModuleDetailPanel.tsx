@@ -99,6 +99,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
         {selectedModule.module_id === "Execution" && (
           <p className="muted">V3.4.6 realizes Execution records for serial_execution, parallel_light_execution, and metatrack_dual_track_execution. Execution estimates scheduling order, dependency edges, logical workers, blocking, and fast/conservative tracks; it does not implement real concurrent execution, rollback, Block-STM, Calvin, or database lock management.</p>
         )}
+        {selectedModule.module_id === "StateAccess" && (
+          <p className="muted">V3.4.7 realizes StateAccess records for direct_fetch, remote_state_access_model, cached_state_access, and access_list_prefetch. StateAccess estimates local/remote access, cache/prefetch hits, latency, and proof/witness sizes; it does not implement real remote storage, real proofs, witnesses, MPT, state root, persistent KV, snapshot, or state migration.</p>
+        )}
       </section>
 
       <section className="v3-config-section">
@@ -151,6 +154,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
                 )}
                 {selectedModule.module_id === "Execution" && (
                   <small>{executionPluginHint(plugin.id)}</small>
+                )}
+                {selectedModule.module_id === "StateAccess" && (
+                  <small>{stateAccessPluginHint(plugin.id)}</small>
                 )}
               </span>
               <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
@@ -213,6 +219,14 @@ function executionPluginHint(pluginId: string): string {
   if (pluginId === "parallel_light_execution") return "runtime-supported deterministic logical parallel model";
   if (pluginId === "metatrack_dual_track_execution" || pluginId === "dual_track_execution") return "runtime-supported dual-track light model";
   return "planned/future execution strategy, not real concurrency or rollback";
+}
+
+function stateAccessPluginHint(pluginId: string): string {
+  if (pluginId === "direct_fetch") return "runtime-supported direct fetch";
+  if (pluginId === "remote_state_access_model") return "runtime-supported remote access light model";
+  if (pluginId === "cached_state_access") return "runtime-supported cache light model";
+  if (pluginId === "access_list_prefetch") return "runtime-supported prefetch light model";
+  return "planned/future state access strategy, not real proof, witness, MPT, or remote storage";
 }
 
 function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {

@@ -25,7 +25,7 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	if result.Summary.TxCount != 24 || result.Summary.SuccessCount != 24 || result.Summary.FailureCount != 0 {
 		t.Fatalf("unexpected summary: %+v", result.Summary)
 	}
-	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv"} {
+	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv"} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Fatalf("missing artifact %s: %v", name, err)
 		}
@@ -37,7 +37,8 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	assertCSVFields(t, filepath.Join(out, "consensus_log.csv"), consensusLogFields())
 	assertCSVFields(t, filepath.Join(out, "routing_log.csv"), routingLogFields())
 	assertCSVFields(t, filepath.Join(out, "execution_log.csv"), executionLogFields())
-	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_plugin", "routing_decision_count", "cross_shard_tx_count", "cross_shard_ratio", "remote_state_access_count", "avg_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "execution_plugin", "execution_tx_count", "fast_track_count", "conservative_track_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "parallelizable_tx_count", "serial_tx_count", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"})
+	assertCSVFields(t, filepath.Join(out, "state_access_log.csv"), stateAccessLogFields())
+	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_plugin", "routing_decision_count", "cross_shard_tx_count", "cross_shard_ratio", "remote_state_access_count", "avg_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "execution_plugin", "execution_tx_count", "fast_track_count", "conservative_track_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"})
 	if result.Summary.QueueWaitMS <= 0 || result.Summary.TxPoolAvgWaitMS <= 0 {
 		t.Fatalf("queue wait should be derived from txpool and non-zero in smoke profile: %+v", result.Summary)
 	}
@@ -550,6 +551,108 @@ func TestExecutionRuntimePreservesExistingArtifacts(t *testing.T) {
 	}
 }
 
+func TestDirectFetchStateAccessLogAndSummary(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state_access_direct")
+	result, err := Run(Input{
+		ChainProfilePath:      "../../configs/v3/chains/chain_x_default.yaml",
+		PluginProfilePath:     "../../configs/v3/plugins/v3_2_minimal_plugin_profile.yaml",
+		PluginProfileID:       "v3_2_minimal_single_chain",
+		ExperimentProfilePath: "../../configs/v3/experiments/single_chain_runtime_smoke.yaml",
+		OutputDir:             out,
+		RunID:                 "state_access_direct",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCSVFields(t, filepath.Join(out, "state_access_log.csv"), stateAccessLogFields())
+	rows := readCSVRows(t, filepath.Join(out, "state_access_log.csv"))
+	txRows := readCSVRows(t, filepath.Join(out, "tx_results.csv"))
+	blockRows := readCSVRows(t, filepath.Join(out, "block_log.csv"))
+	routingRows := readCSVRows(t, filepath.Join(out, "routing_log.csv"))
+	executionRows := readCSVRows(t, filepath.Join(out, "execution_log.csv"))
+	if len(rows) == 0 || rows[0]["state_access_plugin"] != "direct_fetch" {
+		t.Fatalf("expected direct_fetch state access rows: %+v", rows)
+	}
+	if rows[0]["tx_id"] != txRows[0]["tx_id"] || rows[0]["block_height"] != txRows[0]["block_height"] {
+		t.Fatalf("state access should align with tx_results: access=%+v tx=%+v", rows[0], txRows[0])
+	}
+	if rows[0]["block_height"] != blockRows[0]["block_height"] || rows[0]["tx_id"] != routingRows[0]["tx_id"] || rows[0]["tx_id"] != executionRows[0]["tx_id"] {
+		t.Fatalf("state access should align with block/routing/execution logs: access=%+v block=%+v routing=%+v execution=%+v", rows[0], blockRows[0], routingRows[0], executionRows[0])
+	}
+	if result.Summary.StateAccessPlugin != "direct_fetch" || result.Summary.StateAccessCount == 0 || result.Summary.AvgStateAccessLatencyMS == 0 {
+		t.Fatalf("unexpected direct fetch summary: %+v", result.Summary)
+	}
+}
+
+func TestRemoteStateAccessModelCountsRemoteDeterministically(t *testing.T) {
+	chain := ChainProfile{ExecutionShardCount: 4, StateStorageUnitCount: 4, RemoteFetchCostMS: 3}
+	tx := testRoutingTx("tx_remote", []string{"asset_1", "asset_2"}, map[string]int{"asset_3": 1})
+	first := newStateAccessEngine(chain, PluginProfile{StateAccessPlugin: "remote_state_access_model"})
+	second := newStateAccessEngine(chain, PluginProfile{StateAccessPlugin: "remote_state_access_model"})
+	firstRecords := first.AccessTransaction(tx, 1, 0, 0, nil, chain)
+	secondRecords := second.AccessTransaction(tx, 1, 0, 0, nil, chain)
+	if first.RemoteAccessCount == 0 || first.LocalAccessCount+first.RemoteAccessCount != len(firstRecords) {
+		t.Fatalf("expected local/remote state access counts: engine=%+v records=%+v", first, firstRecords)
+	}
+	if first.RemoteAccessCount != second.RemoteAccessCount || first.Latencies[0] != second.Latencies[0] {
+		t.Fatalf("remote state access should be deterministic: %+v vs %+v", firstRecords, secondRecords)
+	}
+}
+
+func TestCachedStateAccessProducesHitsAndMisses(t *testing.T) {
+	chain := ChainProfile{ExecutionShardCount: 4, StateStorageUnitCount: 4, RemoteFetchCostMS: 2}
+	engine := newStateAccessEngine(chain, PluginProfile{StateAccessPlugin: "cached_state_access"})
+	tx1 := testRoutingTx("tx_cache_1", []string{"hot"}, map[string]int{"asset_1": 1})
+	tx2 := testRoutingTx("tx_cache_2", []string{"hot"}, map[string]int{"asset_2": 1})
+	engine.AccessTransaction(tx1, 1, 0, 0, nil, chain)
+	records := engine.AccessTransaction(tx2, 1, 1, 0, nil, chain)
+	if engine.CacheHitCount == 0 || engine.CacheMissCount == 0 || !records[0].CacheHit {
+		t.Fatalf("expected cache hit and miss records: engine=%+v records=%+v", engine, records)
+	}
+}
+
+func TestAccessListPrefetchProducesHits(t *testing.T) {
+	chain := ChainProfile{ExecutionShardCount: 4, StateStorageUnitCount: 4}
+	block := Block{Height: 1, Txs: []PooledTransaction{
+		{Tx: testRoutingTx("tx_prefetch", []string{"asset_1"}, map[string]int{"asset_2": 1})},
+	}}
+	engine := newStateAccessEngine(chain, PluginProfile{StateAccessPlugin: "access_list_prefetch"})
+	prefetch := engine.PrefetchSet(block)
+	records := engine.AccessTransaction(block.Txs[0].Tx, 1, 0, 0, prefetch, chain)
+	if engine.PrefetchHitCount != len(records) || engine.PrefetchMissCount != 0 {
+		t.Fatalf("expected all access list prefetch hits: engine=%+v records=%+v", engine, records)
+	}
+}
+
+func TestStateAccessRuntimePreservesArtifactsAndDoesNotWriteProofFiles(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "state_access_runtime")
+	pluginPath := writeStateAccessPluginProfile(t, t.TempDir(), "remote_state_access_model")
+	result, err := Run(Input{
+		ChainProfilePath:      "../../configs/v3/chains/chain_x_default.yaml",
+		PluginProfilePath:     pluginPath,
+		PluginProfileID:       "test_state_access",
+		ExperimentProfilePath: "../../configs/v3/experiments/single_chain_runtime_smoke.yaml",
+		OutputDir:             out,
+		RunID:                 "state_access_runtime",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"txpool_log.csv", "block_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Fatalf("missing regression artifact %s: %v", name, err)
+		}
+	}
+	for _, forbidden := range []string{"proof.json", "witness.json", "state_root.txt", "snapshot.bin"} {
+		if _, err := os.Stat(filepath.Join(out, forbidden)); err == nil {
+			t.Fatalf("state access hardening must not generate real proof/witness/snapshot artifact: %s", forbidden)
+		}
+	}
+	if result.Summary.StateAccessPlugin != "remote_state_access_model" || result.Summary.WitnessEstimatedCount == 0 || result.Summary.ProofEstimatedCount == 0 {
+		t.Fatalf("unexpected state access runtime summary: %+v", result.Summary)
+	}
+}
+
 func assertCSVFields(t *testing.T, path string, fields []string) {
 	t.Helper()
 	file, err := os.Open(path)
@@ -582,6 +685,10 @@ func routingLogFields() []string {
 
 func executionLogFields() []string {
 	return []string{"tx_id", "block_height", "tx_index", "execution_plugin", "track", "access_key_count", "read_key_count", "write_key_count", "dependency_edge_count", "dependency_risk", "ready_time_ms", "start_time_ms", "end_time_ms", "execution_latency_ms", "blocked", "block_reason", "worker_id", "reason"}
+}
+
+func stateAccessLogFields() []string {
+	return []string{"tx_id", "block_height", "tx_index", "state_access_plugin", "access_key", "access_type", "is_read", "is_write", "home_shard", "execution_shard", "is_remote", "cache_hit", "prefetched", "witness_estimated", "proof_estimated", "access_latency_ms", "reason"}
 }
 
 func readCSVRows(t *testing.T, path string) []map[string]string {
@@ -675,6 +782,16 @@ func writeExecutionPluginProfile(t *testing.T, dir string, executionPlugin strin
 	t.Helper()
 	path := filepath.Join(dir, "plugin_profile.yaml")
 	content := "profile_type: plugin_profile_collection\nversion: v3\nprofiles:\n  - plugin_profile_id: test_execution\n    plugins:\n      TxPoolPlugin: fifo_pool\n      BlockProducer: time_or_count_block_producer\n      ConsensusPlugin: simple_leader\n      ShardingPlugin: hash_sharding\n      ExecutionSchedulerPlugin: " + executionPlugin + "\n      StateAccessPlugin: direct_fetch\n      CommitPlugin: normal_commit\n      MetricsPlugin: basic_metrics\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeStateAccessPluginProfile(t *testing.T, dir string, stateAccessPlugin string) string {
+	t.Helper()
+	path := filepath.Join(dir, "plugin_profile.yaml")
+	content := "profile_type: plugin_profile_collection\nversion: v3\nprofiles:\n  - plugin_profile_id: test_state_access\n    plugins:\n      TxPoolPlugin: fifo_pool\n      BlockProducer: time_or_count_block_producer\n      ConsensusPlugin: simple_leader\n      ShardingPlugin: hash_sharding\n      ExecutionSchedulerPlugin: serial_execution\n      StateAccessPlugin: " + stateAccessPlugin + "\n      CommitPlugin: normal_commit\n      MetricsPlugin: basic_metrics\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}

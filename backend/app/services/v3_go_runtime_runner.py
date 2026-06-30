@@ -81,6 +81,24 @@ MECHANISM_FIELDS = [
     "logical_worker_count",
     "parallelizable_tx_count",
     "serial_tx_count",
+    "state_access_plugin",
+    "state_access_count",
+    "local_state_access_count",
+    "remote_state_access_ratio",
+    "cache_hit_count",
+    "cache_miss_count",
+    "cache_hit_rate",
+    "prefetch_hit_count",
+    "prefetch_miss_count",
+    "prefetch_hit_rate",
+    "avg_state_access_latency_ms",
+    "p95_state_access_latency_ms",
+    "max_state_access_latency_ms",
+    "remote_state_access_latency_ms",
+    "witness_estimated_count",
+    "proof_estimated_count",
+    "estimated_witness_bytes",
+    "estimated_proof_bytes",
     "execution_shard_count",
     "state_storage_unit_count",
     "cross_state_unit_access_count",
@@ -203,7 +221,7 @@ def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
         if target.exists():
             target.unlink()
     representative = next((run for run in runs if run.summary.get("plugin_profile_id") == "full_MetaTrack"), runs[0])
-    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
+    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
         source = representative.output_dir / filename
         if source.is_file():
             shutil.copyfile(source, root / filename)
