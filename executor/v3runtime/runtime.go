@@ -285,6 +285,27 @@ type StateAccessEngine struct {
 	EstimatedProofBytes       int
 }
 
+type CommitEngine struct {
+	PluginID                string
+	CommitTxCount           int
+	CommitUpdateCount       int
+	NormalCommitCount       int
+	ConservativeCommitCount int
+	HotspotUpdateCount      int
+	AggregatedUpdateCount   int
+	RawUpdateCount          int
+	AggregationGroupCount   int
+	ConstraintCheckCount    int
+	ConstraintPassedCount   int
+	ConstraintFailedCount   int
+	Latencies               []int
+	aggregationGroups       map[string]bool
+}
+
+type CommitPlan struct {
+	RawByKey map[string]int
+}
+
 type txPoolEntry struct {
 	tx          Transaction
 	admitTimeMS int
@@ -331,12 +352,24 @@ type TxResult struct {
 
 type StateCommit struct {
 	BlockHeight        int
+	TxIndex            int
 	TxID               string
 	StateKey           string
 	OldValue           int
 	Delta              int
 	NewValue           int
 	CommitPlugin       string
+	CommitPath         string
+	UpdateType         string
+	IsHotspot          bool
+	Aggregated         bool
+	AggregationGroupID string
+	RawUpdateCount     int
+	AggregatedCount    int
+	ConstraintChecked  bool
+	ConstraintPassed   bool
+	CommitLatencyMS    int
+	Reason             string
 	CommitTimeMS       int
 	Status             string
 	StateStorageUnitID int
@@ -434,6 +467,20 @@ type Summary struct {
 	ProofEstimatedCount        int     `json:"proof_estimated_count"`
 	EstimatedWitnessBytes      int     `json:"estimated_witness_bytes"`
 	EstimatedProofBytes        int     `json:"estimated_proof_bytes"`
+	CommitPlugin               string  `json:"commit_plugin"`
+	CommitTxCount              int     `json:"commit_tx_count"`
+	CommitUpdateCount          int     `json:"commit_update_count"`
+	NormalCommitCount          int     `json:"normal_commit_count"`
+	ConservativeCommitCount    int     `json:"conservative_commit_count"`
+	HotspotUpdateCount         int     `json:"hotspot_update_count"`
+	RawUpdateCount             int     `json:"raw_update_count"`
+	AggregationGroupCount      int     `json:"aggregation_group_count"`
+	ConstraintCheckCount       int     `json:"constraint_check_count"`
+	ConstraintPassedCount      int     `json:"constraint_passed_count"`
+	ConstraintFailedCount      int     `json:"constraint_failed_count"`
+	AvgCommitLatencyMS         float64 `json:"avg_commit_latency_ms"`
+	P95CommitLatencyMS         float64 `json:"p95_commit_latency_ms"`
+	MaxCommitLatencyMS         int     `json:"max_commit_latency_ms"`
 	ExecutionShardCount        int     `json:"execution_shard_count"`
 	StateStorageUnitCount      int     `json:"state_storage_unit_count"`
 	CrossStateUnitAccessCount  int     `json:"cross_state_unit_access_count"`
@@ -493,6 +540,7 @@ func Run(input Input) (Result, error) {
 	routingEngine := newRoutingEngine(chain, plugin)
 	executionEngine := newExecutionEngine(chain, plugin)
 	stateAccessEngine := newStateAccessEngine(chain, plugin)
+	commitEngine := newCommitEngine(plugin)
 	blocks := produceBlocksFromTxPool(txs, chain, txPool, blockProducer)
 	state := map[string]int{}
 	blockLog := []map[string]string{}
@@ -541,6 +589,7 @@ func Run(input Input) (Result, error) {
 			executionByTx[record.TxID] = record
 		}
 		blockPrefetchSet := stateAccessEngine.PrefetchSet(block)
+		commitPlan := commitEngine.PlanBlock(block)
 		for txIndex, pooledTx := range block.Txs {
 			tx := pooledTx.Tx
 			routingRecord := routingByTx[tx.ID]
@@ -597,25 +646,7 @@ func Run(input Input) (Result, error) {
 				Deltas:               deltas,
 			}
 			txResults = append(txResults, result)
-			for key, values := range deltas {
-				state[key] = values[2]
-				stateCommits = append(stateCommits, StateCommit{
-					BlockHeight:        block.Height,
-					TxID:               tx.ID,
-					StateKey:           key,
-					OldValue:           values[0],
-					Delta:              values[1],
-					NewValue:           values[2],
-					CommitPlugin:       "normal_commit",
-					CommitTimeMS:       commitTime,
-					Status:             "success",
-					StateStorageUnitID: stateUnit(key, chain),
-					ExecutionShardID:   executionShardID,
-					IsRemoteCommit:     stateUnit(key, chain) != executionShardID,
-					PlacementPolicy:    chain.StatePlacementPolicy,
-					RoutingPlugin:      plugin.ShardingPlugin,
-				})
-			}
+			stateCommits = append(stateCommits, commitEngine.CommitTransaction(tx, block.Height, txIndex, executionShardID, commitTime, deltas, state, chain, plugin, commitPlan)...)
 			if end > cursor {
 				cursor = end
 			}
@@ -629,7 +660,8 @@ func Run(input Input) (Result, error) {
 	applyRoutingMetrics(&summary, routingEngine, routingLog)
 	applyExecutionMetrics(&summary, executionEngine, executionLog)
 	applyStateAccessMetrics(&summary, stateAccessEngine)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, "V3.4.7 Go-backed StateAccess runtime hardening run"); err != nil {
+	applyCommitMetrics(&summary, commitEngine)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, "V3.4.8 Go-backed Commit runtime hardening run"); err != nil {
 		return Result{}, err
 	}
 	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, ExecutionLog: executionLog, StateAccessLog: stateAccessLog, FinalState: state}, nil
@@ -1360,6 +1392,172 @@ func stateAccessLatencyForTx(records []StateAccessRecord) int {
 	return total
 }
 
+func newCommitEngine(plugin PluginProfile) *CommitEngine {
+	return &CommitEngine{
+		PluginID:          normalizeCommitPlugin(plugin.CommitPlugin),
+		aggregationGroups: map[string]bool{},
+	}
+}
+
+func (engine *CommitEngine) PlanBlock(block Block) CommitPlan {
+	rawByKey := map[string]int{}
+	for _, pooledTx := range block.Txs {
+		for key := range pooledTx.Tx.WriteDeltas {
+			rawByKey[key]++
+		}
+	}
+	return CommitPlan{RawByKey: rawByKey}
+}
+
+func (engine *CommitEngine) CommitTransaction(tx Transaction, blockHeight, txIndex, executionShardID, commitTime int, deltas map[string][3]int, state map[string]int, chain ChainProfile, plugin PluginProfile, plan CommitPlan) []StateCommit {
+	records := []StateCommit{}
+	if len(deltas) > 0 {
+		engine.CommitTxCount++
+	}
+	keys := sortedDeltaKeys(deltas)
+	for _, key := range keys {
+		values := deltas[key]
+		oldValue, delta, newValue := values[0], values[1], values[2]
+		state[key] = newValue
+		rawCount := plan.RawByKey[key]
+		if rawCount <= 0 {
+			rawCount = 1
+		}
+		hotspot := commitHotspotKey(key) || rawCount >= 2
+		path := "normal"
+		reason := "normal_commit"
+		aggregated := false
+		groupID := ""
+		aggregatedCount := 0
+		constraintChecked := false
+		constraintPassed := true
+		latency := 1
+		switch engine.PluginID {
+		case "conservative_commit":
+			path = "conservative"
+			reason = "conservative_path"
+			latency = 2
+		case "hot_update_aggregation":
+			if hotspot && rawCount >= 2 {
+				path = "aggregated"
+				reason = "hot_update_aggregated"
+				aggregated = true
+				aggregatedCount = 1
+				groupID = fmt.Sprintf("agg_%d_%s", blockHeight, key)
+			} else {
+				reason = "hot_update_no_group"
+			}
+		case "constraint_checked_aggregation":
+			constraintChecked = true
+			constraintPassed = newValue >= 0
+			latency = 2
+			if constraintPassed && hotspot && rawCount >= 2 {
+				path = "aggregated"
+				reason = "constraint_checked_aggregation"
+				aggregated = true
+				aggregatedCount = 1
+				groupID = fmt.Sprintf("agg_%d_%s", blockHeight, key)
+			} else if !constraintPassed {
+				path = "conservative"
+				reason = "constraint_failed_conservative_path"
+				latency = 3
+			} else {
+				reason = "constraint_checked_no_group"
+			}
+		}
+		storageUnit := stateUnit(key, chain)
+		record := StateCommit{
+			BlockHeight:        blockHeight,
+			TxIndex:            txIndex,
+			TxID:               tx.ID,
+			StateKey:           key,
+			OldValue:           oldValue,
+			Delta:              delta,
+			NewValue:           newValue,
+			CommitPlugin:       engine.PluginID,
+			CommitPath:         path,
+			UpdateType:         "delta",
+			IsHotspot:          hotspot,
+			Aggregated:         aggregated,
+			AggregationGroupID: groupID,
+			RawUpdateCount:     rawCount,
+			AggregatedCount:    aggregatedCount,
+			ConstraintChecked:  constraintChecked,
+			ConstraintPassed:   constraintPassed,
+			CommitLatencyMS:    latency,
+			Reason:             reason,
+			CommitTimeMS:       commitTime,
+			Status:             "success",
+			StateStorageUnitID: storageUnit,
+			ExecutionShardID:   executionShardID,
+			IsRemoteCommit:     storageUnit != executionShardID,
+			PlacementPolicy:    chain.StatePlacementPolicy,
+			RoutingPlugin:      plugin.ShardingPlugin,
+		}
+		engine.recordCommit(record)
+		records = append(records, record)
+	}
+	return records
+}
+
+func (engine *CommitEngine) recordCommit(record StateCommit) {
+	engine.CommitUpdateCount++
+	engine.RawUpdateCount++
+	engine.Latencies = append(engine.Latencies, record.CommitLatencyMS)
+	if record.IsHotspot {
+		engine.HotspotUpdateCount++
+	}
+	if record.Aggregated {
+		engine.AggregatedUpdateCount++
+		if record.AggregationGroupID != "" && !engine.aggregationGroups[record.AggregationGroupID] {
+			engine.aggregationGroups[record.AggregationGroupID] = true
+			engine.AggregationGroupCount++
+		}
+	}
+	if record.ConstraintChecked {
+		engine.ConstraintCheckCount++
+		if record.ConstraintPassed {
+			engine.ConstraintPassedCount++
+		} else {
+			engine.ConstraintFailedCount++
+		}
+	}
+	switch record.CommitPath {
+	case "conservative":
+		engine.ConservativeCommitCount++
+	default:
+		engine.NormalCommitCount++
+	}
+}
+
+func normalizeCommitPlugin(pluginID string) string {
+	switch pluginID {
+	case "", "normal_commit":
+		return "normal_commit"
+	case "conservative_commit":
+		return "conservative_commit"
+	case "hot_update_aggregation", "hot_update_aggregation_commit":
+		return "hot_update_aggregation"
+	case "constraint_checked_aggregation":
+		return "constraint_checked_aggregation"
+	default:
+		return pluginID
+	}
+}
+
+func sortedDeltaKeys(deltas map[string][3]int) []string {
+	keys := make([]string, 0, len(deltas))
+	for key := range deltas {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func commitHotspotKey(key string) bool {
+	return strings.HasPrefix(key, "asset_0") || strings.HasPrefix(key, "asset_1") || strings.HasPrefix(key, "asset_2") || strings.HasPrefix(key, "asset_3")
+}
+
 func requireSupportedPlugins(plugin PluginProfile) error {
 	baseExpected := map[string]string{
 		"TxPoolPlugin":  "fifo_pool",
@@ -1385,7 +1583,7 @@ func requireSupportedPlugins(plugin PluginProfile) error {
 		"ShardingPlugin":           {"hash_sharding": true, "co_access_sharding": true, "metatrack_coaccess_routing": true, "hotspot_aware_routing": true},
 		"ExecutionSchedulerPlugin": {"serial_execution": true, "dual_track_execution": true, "parallel_light_execution": true, "metatrack_dual_track_execution": true},
 		"StateAccessPlugin":        {"direct_fetch": true, "remote_state_access_model": true, "cached_state_access": true, "access_list_prefetch": true},
-		"CommitPlugin":             {"normal_commit": true, "hot_update_aggregation_commit": true},
+		"CommitPlugin":             {"normal_commit": true, "conservative_commit": true, "hot_update_aggregation": true, "hot_update_aggregation_commit": true, "constraint_checked_aggregation": true},
 		"ConsensusPlugin":          {"simple_leader": true, "poa_light": true, "pbft_light_model": true},
 	}
 	for key, values := range allowed {
@@ -1921,6 +2119,28 @@ func applyStateAccessMetrics(summary *Summary, engine *StateAccessEngine) {
 	summary.RemoteStateFetchCount = engine.RemoteAccessCount
 }
 
+func applyCommitMetrics(summary *Summary, engine *CommitEngine) {
+	summary.CommitPlugin = engine.PluginID
+	summary.CommitTxCount = engine.CommitTxCount
+	summary.CommitUpdateCount = engine.CommitUpdateCount
+	summary.NormalCommitCount = engine.NormalCommitCount
+	summary.ConservativeCommitCount = engine.ConservativeCommitCount
+	summary.HotspotUpdateCount = engine.HotspotUpdateCount
+	summary.AggregatedUpdateCount = engine.AggregatedUpdateCount
+	summary.RawUpdateCount = engine.RawUpdateCount
+	summary.AggregationGroupCount = engine.AggregationGroupCount
+	if engine.RawUpdateCount > 0 {
+		summary.AggregationRatio = round(float64(engine.AggregatedUpdateCount) / float64(engine.RawUpdateCount))
+	}
+	summary.ConstraintCheckCount = engine.ConstraintCheckCount
+	summary.ConstraintPassedCount = engine.ConstraintPassedCount
+	summary.ConstraintFailedCount = engine.ConstraintFailedCount
+	summary.AvgCommitLatencyMS = round(avg(engine.Latencies))
+	summary.P95CommitLatencyMS = percentileInt(engine.Latencies, 95)
+	summary.MaxCommitLatencyMS = maxInt(engine.Latencies)
+	summary.BlockCommitLatencyMS = summary.AvgCommitLatencyMS
+}
+
 func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, executionLog []ExecutionRecord, stateAccessLog []StateAccessRecord, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
@@ -1983,12 +2203,13 @@ func writeSummaryCSV(path string, s Summary) error {
 		strconv.Itoa(s.RoutingDecisionCount), strconv.Itoa(s.CrossShardTxCount), strconv.Itoa(s.LocalTxCount), strconv.Itoa(s.RemoteStateAccessCount), fmt.Sprint(s.AvgTouchedShards), strconv.Itoa(s.MaxTouchedShards), strconv.Itoa(s.HotspotKeyCount), strconv.Itoa(s.CoaccessGroupCount), fmt.Sprint(s.AvgRoutingOverheadMS), s.RoutingPlugin,
 		s.ExecutionPlugin, strconv.Itoa(s.ExecutionTxCount), strconv.Itoa(s.BlockedTxCount), strconv.Itoa(s.DependencyEdgeCount), fmt.Sprint(s.AvgDependencyEdgesPerTx), fmt.Sprint(s.AvgExecutionLatencyMS), fmt.Sprint(s.P95ExecutionLatencyMS), strconv.Itoa(s.MaxExecutionLatencyMS), strconv.Itoa(s.LogicalWorkerCount), strconv.Itoa(s.ParallelizableTxCount), strconv.Itoa(s.SerialTxCount),
 		s.StateAccessPlugin, strconv.Itoa(s.StateAccessCount), strconv.Itoa(s.LocalStateAccessCount), strconv.Itoa(s.RemoteStateAccessCount), fmt.Sprint(s.RemoteStateAccessRatio), strconv.Itoa(s.CacheHitCount), strconv.Itoa(s.CacheMissCount), fmt.Sprint(s.CacheHitRate), strconv.Itoa(s.PrefetchHitCount), strconv.Itoa(s.PrefetchMissCount), fmt.Sprint(s.PrefetchHitRate), fmt.Sprint(s.AvgStateAccessLatencyMS), fmt.Sprint(s.P95StateAccessLatencyMS), strconv.Itoa(s.MaxStateAccessLatencyMS), fmt.Sprint(s.RemoteStateAccessLatencyMS), strconv.Itoa(s.WitnessEstimatedCount), strconv.Itoa(s.ProofEstimatedCount), strconv.Itoa(s.EstimatedWitnessBytes), strconv.Itoa(s.EstimatedProofBytes),
+		s.CommitPlugin, strconv.Itoa(s.CommitTxCount), strconv.Itoa(s.CommitUpdateCount), strconv.Itoa(s.NormalCommitCount), strconv.Itoa(s.ConservativeCommitCount), strconv.Itoa(s.HotspotUpdateCount), strconv.Itoa(s.RawUpdateCount), strconv.Itoa(s.AggregationGroupCount), strconv.Itoa(s.ConstraintCheckCount), strconv.Itoa(s.ConstraintPassedCount), strconv.Itoa(s.ConstraintFailedCount), fmt.Sprint(s.AvgCommitLatencyMS), fmt.Sprint(s.P95CommitLatencyMS), strconv.Itoa(s.MaxCommitLatencyMS),
 		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "raw_update_count", "aggregation_group_count", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {
@@ -2014,10 +2235,37 @@ func writeTxResults(path string, txs []TxResult) error {
 }
 
 func writeStateCommitLog(path string, commits []StateCommit) error {
-	fields := []string{"block_height", "tx_id", "state_key", "old_value", "delta", "new_value", "commit_plugin", "commit_time_ms", "status", "state_storage_unit_id", "execution_shard_id", "is_remote_commit", "placement_policy", "routing_plugin"}
+	fields := []string{"tx_id", "block_height", "tx_index", "commit_plugin", "commit_path", "state_key", "update_type", "is_hotspot", "aggregated", "aggregation_group_id", "raw_update_count", "aggregated_update_count", "constraint_checked", "constraint_passed", "commit_latency_ms", "reason", "old_value", "delta", "new_value", "commit_time_ms", "status", "state_storage_unit_id", "execution_shard_id", "is_remote_commit", "placement_policy", "routing_plugin"}
 	rows := [][]string{}
 	for _, c := range commits {
-		rows = append(rows, []string{strconv.Itoa(c.BlockHeight), c.TxID, c.StateKey, strconv.Itoa(c.OldValue), strconv.Itoa(c.Delta), strconv.Itoa(c.NewValue), c.CommitPlugin, strconv.Itoa(c.CommitTimeMS), c.Status, strconv.Itoa(c.StateStorageUnitID), strconv.Itoa(c.ExecutionShardID), strconv.FormatBool(c.IsRemoteCommit), c.PlacementPolicy, c.RoutingPlugin})
+		rows = append(rows, []string{
+			c.TxID,
+			strconv.Itoa(c.BlockHeight),
+			strconv.Itoa(c.TxIndex),
+			c.CommitPlugin,
+			c.CommitPath,
+			c.StateKey,
+			c.UpdateType,
+			strconv.FormatBool(c.IsHotspot),
+			strconv.FormatBool(c.Aggregated),
+			c.AggregationGroupID,
+			strconv.Itoa(c.RawUpdateCount),
+			strconv.Itoa(c.AggregatedCount),
+			strconv.FormatBool(c.ConstraintChecked),
+			strconv.FormatBool(c.ConstraintPassed),
+			strconv.Itoa(c.CommitLatencyMS),
+			c.Reason,
+			strconv.Itoa(c.OldValue),
+			strconv.Itoa(c.Delta),
+			strconv.Itoa(c.NewValue),
+			strconv.Itoa(c.CommitTimeMS),
+			c.Status,
+			strconv.Itoa(c.StateStorageUnitID),
+			strconv.Itoa(c.ExecutionShardID),
+			strconv.FormatBool(c.IsRemoteCommit),
+			c.PlacementPolicy,
+			c.RoutingPlugin,
+		})
 	}
 	return writeCSV(path, fields, rows)
 }

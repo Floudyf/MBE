@@ -653,6 +653,58 @@ func TestStateAccessRuntimePreservesArtifactsAndDoesNotWriteProofFiles(t *testin
 	}
 }
 
+func TestCommitRuntimeWritesLogAndSummary(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "commit_runtime")
+	pluginPath := writeCommitPluginProfile(t, t.TempDir(), "hot_update_aggregation")
+	result, err := Run(Input{
+		ChainProfilePath:      "../../configs/v3/chains/chain_x_default.yaml",
+		PluginProfilePath:     pluginPath,
+		PluginProfileID:       "test_commit",
+		ExperimentProfilePath: "../../configs/v3/experiments/single_chain_runtime_smoke.yaml",
+		OutputDir:             out,
+		RunID:                 "commit_runtime",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCSVFields(t, filepath.Join(out, "state_commit_log.csv"), stateCommitLogFields())
+	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "raw_update_count", "aggregation_group_count", "constraint_check_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms"})
+	rows := readCSVRows(t, filepath.Join(out, "state_commit_log.csv"))
+	txRows := readCSVRows(t, filepath.Join(out, "tx_results.csv"))
+	blockRows := readCSVRows(t, filepath.Join(out, "block_log.csv"))
+	if len(rows) == 0 || rows[0]["tx_id"] != txRows[0]["tx_id"] || rows[0]["block_height"] != blockRows[0]["block_height"] {
+		t.Fatalf("commit log should align with tx and block logs: commit=%+v tx=%+v block=%+v", rows, txRows, blockRows)
+	}
+	if result.Summary.CommitPlugin != "hot_update_aggregation" || result.Summary.CommitUpdateCount == 0 || result.Summary.RawUpdateCount == 0 {
+		t.Fatalf("unexpected commit summary: %+v", result.Summary)
+	}
+	for _, name := range []string{"txpool_log.csv", "block_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Fatalf("missing regression artifact %s: %v", name, err)
+		}
+	}
+}
+
+func TestCommitEngineModelsConservativeAndConstraintPaths(t *testing.T) {
+	chain := ChainProfile{StateStorageUnitCount: 4, StatePlacementPolicy: "hash_state_storage"}
+	tx := Transaction{ID: "tx_negative", WriteDeltas: map[string]int{"asset_1": -1}}
+	deltas := map[string][3]int{"asset_1": {0, -1, -1}}
+	state := map[string]int{}
+	engine := newCommitEngine(PluginProfile{CommitPlugin: "constraint_checked_aggregation"})
+	records := engine.CommitTransaction(tx, 1, 0, 0, 10, deltas, state, chain, PluginProfile{ShardingPlugin: "hash_sharding"}, CommitPlan{RawByKey: map[string]int{"asset_1": 2}})
+	if len(records) != 1 || records[0].CommitPath != "conservative" || !records[0].ConstraintChecked || records[0].ConstraintPassed {
+		t.Fatalf("constraint failure should use conservative path: %+v", records)
+	}
+	if engine.ConstraintFailedCount != 1 || engine.ConservativeCommitCount != 1 || len(engine.Latencies) != 1 || engine.Latencies[0] != 3 {
+		t.Fatalf("unexpected constraint metrics: %+v", engine)
+	}
+	conservative := newCommitEngine(PluginProfile{CommitPlugin: "conservative_commit"})
+	records = conservative.CommitTransaction(testTx("tx_conservative", 0), 1, 0, 0, 10, map[string][3]int{"asset_1": {0, 1, 1}}, map[string]int{}, chain, PluginProfile{ShardingPlugin: "hash_sharding"}, CommitPlan{RawByKey: map[string]int{"asset_1": 1}})
+	if records[0].CommitPath != "conservative" || conservative.ConservativeCommitCount != 1 {
+		t.Fatalf("conservative commit should record conservative path: %+v engine=%+v", records, conservative)
+	}
+}
+
 func assertCSVFields(t *testing.T, path string, fields []string) {
 	t.Helper()
 	file, err := os.Open(path)
@@ -689,6 +741,10 @@ func executionLogFields() []string {
 
 func stateAccessLogFields() []string {
 	return []string{"tx_id", "block_height", "tx_index", "state_access_plugin", "access_key", "access_type", "is_read", "is_write", "home_shard", "execution_shard", "is_remote", "cache_hit", "prefetched", "witness_estimated", "proof_estimated", "access_latency_ms", "reason"}
+}
+
+func stateCommitLogFields() []string {
+	return []string{"tx_id", "block_height", "tx_index", "commit_plugin", "commit_path", "state_key", "update_type", "is_hotspot", "aggregated", "aggregation_group_id", "raw_update_count", "aggregated_update_count", "constraint_checked", "constraint_passed", "commit_latency_ms", "reason"}
 }
 
 func readCSVRows(t *testing.T, path string) []map[string]string {
@@ -792,6 +848,16 @@ func writeStateAccessPluginProfile(t *testing.T, dir string, stateAccessPlugin s
 	t.Helper()
 	path := filepath.Join(dir, "plugin_profile.yaml")
 	content := "profile_type: plugin_profile_collection\nversion: v3\nprofiles:\n  - plugin_profile_id: test_state_access\n    plugins:\n      TxPoolPlugin: fifo_pool\n      BlockProducer: time_or_count_block_producer\n      ConsensusPlugin: simple_leader\n      ShardingPlugin: hash_sharding\n      ExecutionSchedulerPlugin: serial_execution\n      StateAccessPlugin: " + stateAccessPlugin + "\n      CommitPlugin: normal_commit\n      MetricsPlugin: basic_metrics\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeCommitPluginProfile(t *testing.T, dir string, commitPlugin string) string {
+	t.Helper()
+	path := filepath.Join(dir, "plugin_profile.yaml")
+	content := "profile_type: plugin_profile_collection\nversion: v3\nprofiles:\n  - plugin_profile_id: test_commit\n    plugins:\n      TxPoolPlugin: fifo_pool\n      BlockProducer: time_or_count_block_producer\n      ConsensusPlugin: simple_leader\n      ShardingPlugin: hash_sharding\n      ExecutionSchedulerPlugin: serial_execution\n      StateAccessPlugin: direct_fetch\n      CommitPlugin: " + commitPlugin + "\n      MetricsPlugin: basic_metrics\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}

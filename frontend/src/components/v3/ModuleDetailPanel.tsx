@@ -102,6 +102,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
         {selectedModule.module_id === "StateAccess" && (
           <p className="muted">V3.4.7 realizes StateAccess records for direct_fetch, remote_state_access_model, cached_state_access, and access_list_prefetch. StateAccess estimates local/remote access, cache/prefetch hits, latency, and proof/witness sizes; it does not implement real remote storage, real proofs, witnesses, MPT, state root, persistent KV, snapshot, or state migration.</p>
         )}
+        {selectedModule.module_id === "Commit" && (
+          <p className="muted">V3.4.8 realizes Commit records for normal_commit, conservative_commit, hot_update_aggregation, and constraint_checked_aggregation. These are deterministic local commit light models; they do not implement real database locking, real concurrent commit, rollback, MPT/state root, persistent KV, or snapshots.</p>
+        )}
       </section>
 
       <section className="v3-config-section">
@@ -157,6 +160,9 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
                 )}
                 {selectedModule.module_id === "StateAccess" && (
                   <small>{stateAccessPluginHint(plugin.id)}</small>
+                )}
+                {selectedModule.module_id === "Commit" && (
+                  <small>{commitPluginHint(plugin.id)}</small>
                 )}
               </span>
               <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
@@ -227,6 +233,14 @@ function stateAccessPluginHint(pluginId: string): string {
   if (pluginId === "cached_state_access") return "runtime-supported cache light model";
   if (pluginId === "access_list_prefetch") return "runtime-supported prefetch light model";
   return "planned/future state access strategy, not real proof, witness, MPT, or remote storage";
+}
+
+function commitPluginHint(pluginId: string): string {
+  if (pluginId === "normal_commit") return "runtime-supported default commit path";
+  if (pluginId === "conservative_commit") return "runtime-supported conservative commit light model";
+  if (pluginId === "hot_update_aggregation" || pluginId === "hot_update_aggregation_commit") return "runtime-supported hot-update aggregation light model";
+  if (pluginId === "constraint_checked_aggregation") return "runtime-supported constraint-check aggregation light model";
+  return "planned/future commit strategy, not real DB lock, rollback, MPT/state root, or persistent KV";
 }
 
 function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {

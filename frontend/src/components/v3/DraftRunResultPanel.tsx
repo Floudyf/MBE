@@ -11,6 +11,7 @@ const consensusSummaryKeys = ["avg_consensus_latency_ms", "p95_consensus_latency
 const routingSummaryKeys = ["routing_plugin", "routing_decision_count", "cross_shard_tx_count", "cross_shard_ratio", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms"];
 const executionSummaryKeys = ["execution_plugin", "execution_tx_count", "fast_track_count", "conservative_track_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count"];
 const stateAccessSummaryKeys = ["state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes"];
+const commitSummaryKeys = ["commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "aggregated_update_count", "raw_update_count", "aggregation_group_count", "aggregation_ratio", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
@@ -123,6 +124,12 @@ export default function DraftRunResultPanel({ result }: Props) {
           <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
         ))}
         <div><dt>state_access_log.csv</dt><dd>{artifactNames.has("state_access_log.csv") ? "available" : "missing"}</dd></div>
+      </div>
+      <div className="v3-summary-preview">
+        {commitSummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>state_commit_log.csv</dt><dd>{artifactNames.has("state_commit_log.csv") ? "available" : "missing"}</dd></div>
       </div>
       <p className="muted">Draft Smoke history is a local debugging, demo, and configuration tracing record. It is not a formal paper experiment result.</p>
     </section>

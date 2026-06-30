@@ -204,6 +204,10 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     state_access_plugin = plugin_selection.get("StateAccess")
     if state_access_plugin and state_access_plugin not in allowed_state_access_plugins:
         errors.append("当前 Go-backed Draft Smoke 仅支持 StateAccess 使用 direct_fetch、remote_state_access_model、cached_state_access 或 access_list_prefetch；real proof / witness / MPT / snapshot 仍为 planned / unsupported。")
+    allowed_commit_plugins = {"normal_commit", "conservative_commit", "hot_update_aggregation", "constraint_checked_aggregation", "hot_update_aggregation_commit"}
+    commit_plugin = plugin_selection.get("Commit")
+    if commit_plugin and commit_plugin not in allowed_commit_plugins:
+        errors.append("当前 Go-backed Draft Smoke 仅支持 Commit 使用 normal_commit、conservative_commit、hot_update_aggregation 或 constraint_checked_aggregation；real DB lock / batch commit / state-tree validation 仍为 planned / unsupported。")
     fairness_scope = build_fairness_scope(
         template_id=template_id,
         variable_module=template_variable_module,
@@ -282,7 +286,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     }
 
     is_valid = not errors
-    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus", "single_module_routing", "single_module_execution", "single_module_state_access"} and not has_preview_only)
+    is_runnable = bool(is_valid and template_id in {"metatrack_ablation", "single_module_txpool", "single_module_blockproducer", "single_module_consensus", "single_module_routing", "single_module_execution", "single_module_state_access", "single_module_commit"} and not has_preview_only)
     return V3DraftValidationResponse(
         is_valid=is_valid,
         is_runnable=is_runnable,

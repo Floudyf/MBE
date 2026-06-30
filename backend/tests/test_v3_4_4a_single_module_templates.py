@@ -40,6 +40,7 @@ def test_catalog_returns_single_module_templates() -> None:
     assert "single_module_routing" in templates
     assert "single_module_execution" in templates
     assert "single_module_state_access" in templates
+    assert "single_module_commit" in templates
     assert templates["single_module_consensus"]["variable_module"] == "Consensus"
     assert templates["single_module_consensus"]["allowed_variable_plugins"] == [
         "simple_leader",
@@ -65,6 +66,13 @@ def test_catalog_returns_single_module_templates() -> None:
         "cached_state_access",
         "access_list_prefetch",
     ]
+    assert templates["single_module_commit"]["variable_module"] == "Commit"
+    assert templates["single_module_commit"]["allowed_variable_plugins"] == [
+        "normal_commit",
+        "conservative_commit",
+        "hot_update_aggregation",
+        "constraint_checked_aggregation",
+    ]
 
 
 def test_single_module_templates_have_default_presets() -> None:
@@ -76,6 +84,7 @@ def test_single_module_templates_have_default_presets() -> None:
         "single_module_routing": "routing_coaccess_smoke",
         "single_module_execution": "execution_dual_track_smoke",
         "single_module_state_access": "state_access_remote_prefetch_smoke",
+        "single_module_commit": "commit_hot_update_smoke",
     }
 
     for template_id, preset_id in expected.items():
@@ -102,6 +111,7 @@ def test_single_module_templates_auto_fill_default_presets() -> None:
         "single_module_routing": ("Routing", "routing_coaccess_smoke", {"Routing": ("variable", "metatrack_coaccess_routing")}),
         "single_module_execution": ("Execution", "execution_dual_track_smoke", {"Execution": ("variable", "metatrack_dual_track_execution")}),
         "single_module_state_access": ("StateAccess", "state_access_remote_prefetch_smoke", {"StateAccess": ("variable", "access_list_prefetch")}),
+        "single_module_commit": ("Commit", "commit_hot_update_smoke", {"Commit": ("variable", "hot_update_aggregation")}),
     }
 
     for template_id, (variable_module, preset_id, overrides) in cases.items():
@@ -239,6 +249,51 @@ def test_single_module_state_access_rejects_execution_or_routing_change() -> Non
     assert any("Fairness violation" in error and "ExecutionSchedulerPlugin" in error for error in execution_result.errors)
     assert routing_result.is_valid is False
     assert any("Fairness violation" in error and "ShardingPlugin" in error for error in routing_result.errors)
+
+
+def test_single_module_commit_allows_runtime_commit_plugins() -> None:
+    for plugin_id in ("normal_commit", "conservative_commit", "hot_update_aggregation", "constraint_checked_aggregation"):
+        result = validate_v3_composer_draft(
+            draft("single_module_commit", Commit=("variable", plugin_id))
+        )
+
+        assert result.is_valid is True
+        assert result.is_runnable is True
+        assert result.normalized_draft is not None
+        assert result.normalized_draft["variable_module"] == "Commit"
+        assert result.normalized_draft["preset_id"] == "commit_hot_update_smoke"
+
+
+def test_single_module_commit_rejects_planned_commit_plugins() -> None:
+    for plugin_id in ("atomic_reservation_commit", "batch_commit", "real_db_lock_commit"):
+        result = validate_v3_composer_draft(
+            draft("single_module_commit", Commit=("variable", plugin_id))
+        )
+
+        assert result.is_valid is False
+        assert result.is_runnable is False
+
+
+def test_single_module_commit_rejects_state_access_or_execution_change() -> None:
+    state_access_result = validate_v3_composer_draft(
+        draft(
+            "single_module_commit",
+            Commit=("variable", "hot_update_aggregation"),
+            StateAccess=("fixed", "direct_fetch"),
+        )
+    )
+    execution_result = validate_v3_composer_draft(
+        draft(
+            "single_module_commit",
+            Commit=("variable", "constraint_checked_aggregation"),
+            Execution=("fixed", "serial_execution"),
+        )
+    )
+
+    assert state_access_result.is_valid is False
+    assert any("Fairness violation" in error and "StateAccessPlugin" in error for error in state_access_result.errors)
+    assert execution_result.is_valid is False
+    assert any("Fairness violation" in error and "ExecutionSchedulerPlugin" in error for error in execution_result.errors)
 
 
 def test_single_module_consensus_allows_consensus_light_plugins() -> None:
@@ -411,3 +466,24 @@ def test_state_access_runner_summary_and_experiment_profile_include_preset_metad
         assert "remote_state_access_ratio" in payload["primary_metrics"]
         assert "state_access_log.csv" in payload["expected_artifacts"]
         assert "real proofs" in payload["truthfulness_note"]
+
+
+def test_commit_runner_summary_and_experiment_profile_include_preset_metadata() -> None:
+    validation = validate_v3_composer_draft(
+        draft("single_module_commit", Commit=("variable", "constraint_checked_aggregation"))
+    )
+    assert validation.normalized_draft is not None
+    normalized = validation.normalized_draft
+
+    profile = build_experiment_profile(normalized)
+    summary = merge_run_metadata({"tx_count": 24}, normalized)
+
+    for payload in (profile, summary):
+        assert payload["experiment_template"] == "single_module_commit"
+        assert payload["preset_id"] == "commit_hot_update_smoke"
+        assert payload["preset_name"] == "Commit hot-update smoke"
+        assert payload["variable_module"] == "Commit"
+        assert payload["fairness_validated"] is True
+        assert "aggregation_ratio" in payload["primary_metrics"]
+        assert "state_commit_log.csv" in payload["expected_artifacts"]
+        assert "real database locking" in payload["truthfulness_note"]

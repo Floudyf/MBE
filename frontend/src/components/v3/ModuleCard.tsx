@@ -69,6 +69,13 @@ function moduleSupportHint(moduleId: string, status: string, plugin: string): st
     if (plugin === "access_list_prefetch") return "runtime-supported prefetch light model";
     return "planned/future state access strategy";
   }
+  if (moduleId === "Commit") {
+    if (plugin === "normal_commit") return "runtime-supported normal commit";
+    if (plugin === "conservative_commit") return "runtime-supported conservative commit light model";
+    if (plugin === "hot_update_aggregation" || plugin === "hot_update_aggregation_commit") return "runtime-supported hot-update aggregation light model";
+    if (plugin === "constraint_checked_aggregation") return "runtime-supported constraint-check aggregation light model";
+    return "planned/future commit strategy";
+  }
   if (status === "variable" || status === "fixed" || status === "default") return "configured runnable; runtime support depends on backend validation";
   return String(status);
 }
