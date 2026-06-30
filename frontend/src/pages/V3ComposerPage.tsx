@@ -3,11 +3,13 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchV3ComposerPreview,
   fetchV3ComposerTemplates,
+  runV3ControlledSmoke,
   runV3ComposerDraftSmoke,
   runV3ComposerSmoke,
   validateV3ComposerDraft,
   type V2Artifact,
   type V3ComposerPreviewResponse,
+  type V3ControlledSmokeRunResponse,
   type V3DraftModuleStatus,
   type V3DraftSmokeRunResponse,
   type V3DraftValidationResponse,
@@ -65,12 +67,14 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [templates, setTemplates] = useState<V3TemplateSummary[]>(fallbackTemplates);
   const [artifacts, setArtifacts] = useState<V2Artifact[]>([]);
   const [draftRunResult, setDraftRunResult] = useState<V3DraftSmokeRunResponse | null>(null);
+  const [controlledSmokeResult, setControlledSmokeResult] = useState<V3ControlledSmokeRunResponse | null>(null);
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
   const [backendValidation, setBackendValidation] = useState<V3DraftValidationResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [validatingDraft, setValidatingDraft] = useState(false);
   const [runningDraft, setRunningDraft] = useState(false);
+  const [runningControlled, setRunningControlled] = useState(false);
   const [error, setError] = useState("");
   const [draftError, setDraftError] = useState("");
 
@@ -211,6 +215,22 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       setDraftError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setRunningDraft(false);
+    }
+  }
+
+  async function runControlledSmoke() {
+    try {
+      setRunningControlled(true);
+      const result = await runV3ControlledSmoke();
+      setControlledSmokeResult(result);
+      setArtifacts(result.artifacts || []);
+      setDraftRunResult(null);
+      if (result.run_id) onRunCompleted?.(result.run_id);
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRunningControlled(false);
     }
   }
 
@@ -380,6 +400,50 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           onRunDraftSmoke={runDraftSmoke}
         />
       </div>
+      <section className="final-card wide v3-controlled-smoke">
+        <div className="v3-section-head">
+          <div>
+            <p className="eyebrow">V3.4.10 Controlled Smoke</p>
+            <h3>MetaTrack controlled preset comparison</h3>
+          </div>
+          <button type="button" className="v3-secondary-button" disabled={runningControlled} onClick={runControlledSmoke}>
+            {runningControlled ? "Running..." : "Run controlled smoke"}
+          </button>
+        </div>
+        <p className="muted">Runs the five MetaTrack ablation presets with fixed workload, seed, TxPool, BlockProducer, Consensus, CommitteeEpoch, StateStorage, and MetricsReport. This is local Draft Smoke only, not Fabric, BlockEmulator, or a paper benchmark.</p>
+        {controlledSmokeResult && (
+          <>
+            <dl className="v3-result-grid">
+              <div><dt>run_id</dt><dd>{controlledSmokeResult.run_id}</dd></div>
+              <div><dt>run_mode</dt><dd>{controlledSmokeResult.run_mode}</dd></div>
+              <div><dt>preset_count</dt><dd>{controlledSmokeResult.preset_order.length}</dd></div>
+              <div><dt>backend_truth</dt><dd>{controlledSmokeResult.realism_readiness?.backend_truth || "local Go-backed Draft Smoke"}</dd></div>
+            </dl>
+            <div className="v3-summary-preview">
+              {controlledSmokeResult.aggregate_summary.map((row) => (
+                <div key={String(row.preset_id)}>
+                  <dt>{String(row.preset_id)}</dt>
+                  <dd>{String(row.ablation_stage || "-")} / cross {String(row.cross_shard_ratio ?? "-")} / exec {String(row.avg_execution_latency_ms ?? "-")} / state {String(row.avg_state_access_latency_ms ?? "-")} / commit {String(row.avg_commit_latency_ms ?? "-")}</dd>
+                </div>
+              ))}
+            </div>
+            <div className="v3-summary-preview">
+              {(controlledSmokeResult.realism_readiness?.modules || []).map((module) => (
+                <div key={String(module.module_id)}>
+                  <dt>{String(module.module_id)}</dt>
+                  <dd>{String(module.realism_level || "-")} / {String(module.runtime_status || "-")}</dd>
+                </div>
+              ))}
+            </div>
+            <ArtifactGroups
+              artifacts={controlledSmokeResult.artifacts}
+              title="Controlled smoke artifacts"
+              expectedArtifacts={["run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"]}
+              defaultOpen
+            />
+          </>
+        )}
+      </section>
       <DraftRunResultPanel result={draftRunResult} />
       <DraftRunHistoryPanel />
 

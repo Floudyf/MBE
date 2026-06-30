@@ -113,6 +113,7 @@ def artifact_groups(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ("Runtime commit logs", {"state_commit_log.csv"}),
         ("Chain runtime logs", {"runtime.log", "block_log.csv", "tx_results.csv"}),
         ("MetaTrack metrics", {"metatrack_summary.csv", "metatrack_summary.json", "metatrack_latency.csv", "metatrack_mechanism_metrics.csv", "metatrack_ablation_report.md"}),
+        ("Controlled smoke", {"run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"}),
         ("Used profiles", {"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "used_chain_profile.json", "used_plugin_profile.json", "used_experiment_profile.json"}),
     ]
     by_name = {artifact["name"]: artifact for artifact in artifacts}

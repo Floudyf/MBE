@@ -353,6 +353,26 @@ export type V3DraftRunDetail = {
   summary_preview: Record<string, unknown>;
   missing_files: string[];
 };
+export type V3ControlledSmokeRunResponse = {
+  run_id: string;
+  status: string;
+  stage: string;
+  output_dir: string;
+  data_truth_label: string;
+  backend_type: string;
+  runtime_mode: string;
+  run_mode: string;
+  preset_order: string[];
+  run_index: Record<string, unknown>[];
+  aggregate_summary: Record<string, unknown>[];
+  realism_readiness: {
+    stage?: string;
+    backend_truth?: string;
+    not_real_chain_claims?: string[];
+    modules?: Record<string, unknown>[];
+  };
+  artifacts: V2Artifact[];
+};
 
 export async function runDefaultExperiment(): Promise<unknown> {
   return request(`${experimentPath}/run`, { method: "POST" });
@@ -534,6 +554,10 @@ export async function validateV3ComposerDraft(draft: V3ComposerDraftRequest): Pr
 
 export async function runV3ComposerDraftSmoke(draft: V3ComposerDraftRequest): Promise<V3DraftSmokeRunResponse> {
   return request<V3DraftSmokeRunResponse>("/api/v3/composer/run-draft-smoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
+}
+
+export async function runV3ControlledSmoke(): Promise<V3ControlledSmokeRunResponse> {
+  return request<V3ControlledSmokeRunResponse>("/api/v3/composer/run-controlled-smoke", { method: "POST" });
 }
 
 export async function fetchV3DraftRuns(limit = 20): Promise<V3DraftRunSummary[]> {

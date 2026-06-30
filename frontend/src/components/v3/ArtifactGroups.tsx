@@ -20,6 +20,7 @@ const groups = [
   { title: "Runtime commit logs", files: ["state_commit_log.csv"] },
   { title: "Chain runtime logs", files: ["runtime.log", "block_log.csv", "tx_results.csv"] },
   { title: "MetaTrack metrics", files: ["metatrack_latency.csv", "metatrack_mechanism_metrics.csv"] },
+  { title: "Controlled smoke outputs", files: ["run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"] },
   { title: "Used profiles", files: ["used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "used_chain_profile.json", "used_plugin_profile.json", "used_experiment_profile.json"] },
 ];
 

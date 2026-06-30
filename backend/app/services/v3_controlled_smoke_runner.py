@@ -1,0 +1,265 @@
+from __future__ import annotations
+
+import csv
+import json
+import re
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest
+from backend.app.services.artifact_manager import get_artifact_path
+from backend.app.services.job_manager import JobManager
+from backend.app.services.v3_composer_draft_runner import run_v3_composer_draft_smoke
+from backend.app.services.v3_experiment_templates import STANDARD_MODULE_ORDER, get_template
+from backend.app.services.v3_realism_readiness import write_realism_readiness
+
+
+ROOT = Path(__file__).resolve().parents[3]
+CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
+METATRACK_TEMPLATE_ID = "metatrack_ablation"
+CONTROLLED_PRESET_ORDER = [
+    "metatrack_baseline_smoke",
+    "metatrack_routing_only_smoke",
+    "metatrack_routing_execution_smoke",
+    "metatrack_routing_execution_state_access_smoke",
+    "metatrack_full_smoke",
+]
+AGGREGATE_FIELDS = [
+    "preset_id",
+    "ablation_stage",
+    "enabled_metatrack_components",
+    "cross_shard_ratio",
+    "fast_track_count",
+    "conservative_track_count",
+    "remote_state_access_ratio",
+    "cache_hit_rate",
+    "prefetch_hit_rate",
+    "aggregation_ratio",
+    "constraint_failed_count",
+    "avg_execution_latency_ms",
+    "avg_state_access_latency_ms",
+    "avg_commit_latency_ms",
+]
+CONTROLLED_ARTIFACTS = [
+    "run_index.csv",
+    "aggregate_summary.csv",
+    "ablation_report.md",
+    "realism_readiness.json",
+    "realism_readiness.md",
+]
+
+
+class ControlledSmokeError(ValueError):
+    """Raised when a controlled smoke run cannot be created safely."""
+
+
+def controlled_smoke_job_manager(root: Path = CONTROLLED_SMOKE_ROOT) -> JobManager:
+    return JobManager(root)
+
+
+def run_v3_4_10_controlled_smoke(root: Path = CONTROLLED_SMOKE_ROOT) -> dict[str, Any]:
+    template = get_template(METATRACK_TEMPLATE_ID)
+    presets_by_id = {str(preset["preset_id"]): preset for preset in template.get("presets", [])}
+    missing = [preset_id for preset_id in CONTROLLED_PRESET_ORDER if preset_id not in presets_by_id]
+    if missing:
+        raise ControlledSmokeError(f"missing MetaTrack controlled smoke presets: {', '.join(missing)}")
+
+    manager = controlled_smoke_job_manager(root)
+    metadata = manager.create_run(
+        source="v3_4_10_controlled_smoke",
+        experiment_name="metatrack_controlled_smoke",
+        data_truth_label="modular_runtime",
+        stage="V3.4.10",
+        extra_metadata={
+            "backend_type": "modular_research_chain",
+            "runtime_mode": "go_backed",
+            "run_mode": "controlled_smoke",
+            "experiment_template": METATRACK_TEMPLATE_ID,
+            "preset_order": CONTROLLED_PRESET_ORDER,
+        },
+    )
+    run_id = metadata["run_id"]
+    run_dir = manager.run_dir(run_id)
+    manager.mark_running(run_id)
+    preset_root = run_dir / "preset_runs"
+
+    try:
+        run_rows: list[dict[str, Any]] = []
+        aggregate_rows: list[dict[str, Any]] = []
+        child_results: list[dict[str, Any]] = []
+        for preset_id in CONTROLLED_PRESET_ORDER:
+            preset = presets_by_id[preset_id]
+            request = build_preset_draft_request(template, preset)
+            result = run_v3_composer_draft_smoke(request, root=preset_root)
+            summary = result.get("summary", {})
+            child_results.append(result)
+            child_run_id = str(result["run_id"])
+            child_output_dir = Path(str(result["output_dir"]))
+            run_rows.append({
+                "run_id": child_run_id,
+                "preset_id": preset_id,
+                "preset_name": str(preset.get("preset_name", "")),
+                "ablation_stage": str(preset.get("ablation_stage", "")),
+                "enabled_metatrack_components": _join(preset.get("enabled_metatrack_components", [])),
+                "run_status": str(result.get("status", "")),
+                "summary_path": str(child_output_dir / "summary.json"),
+                "artifact_dir": str(child_output_dir),
+            })
+            aggregate_rows.append(_aggregate_row(summary, preset))
+
+        _write_csv(run_dir / "run_index.csv", run_rows, [
+            "run_id",
+            "preset_id",
+            "preset_name",
+            "ablation_stage",
+            "enabled_metatrack_components",
+            "run_status",
+            "summary_path",
+            "artifact_dir",
+        ])
+        _write_csv(run_dir / "aggregate_summary.csv", aggregate_rows, AGGREGATE_FIELDS)
+        _write_report(run_dir / "ablation_report.md", run_id, aggregate_rows)
+        readiness = write_realism_readiness(run_dir)
+        _write_json(run_dir / "controlled_run.json", {
+            "run_id": run_id,
+            "stage": "V3.4.10",
+            "preset_order": CONTROLLED_PRESET_ORDER,
+            "run_index": run_rows,
+            "aggregate_summary": aggregate_rows,
+            "realism_readiness": readiness,
+        })
+        completed = manager.mark_completed(run_id, data_truth_label="modular_runtime")
+        return {
+            "run_id": run_id,
+            "status": "completed",
+            "stage": "V3.4.10",
+            "output_dir": str(run_dir),
+            "data_truth_label": "modular_runtime",
+            "backend_type": "modular_research_chain",
+            "runtime_mode": "go_backed",
+            "run_mode": "controlled_smoke",
+            "preset_order": CONTROLLED_PRESET_ORDER,
+            "run_index": run_rows,
+            "aggregate_summary": aggregate_rows,
+            "realism_readiness": readiness,
+            "artifacts": list_controlled_artifacts(run_dir, run_id),
+            "child_runs": child_results,
+            "run": completed,
+        }
+    except Exception as exc:
+        manager.mark_failed(run_id, str(exc))
+        raise
+
+
+def build_preset_draft_request(template: dict[str, Any], preset: dict[str, Any]) -> V3ComposerDraftRequest:
+    preset_id = str(preset["preset_id"])
+    selection = {
+        **{str(key): str(value) for key, value in (preset.get("locked_modules") or {}).items()},
+        **{str(key): str(value) for key, value in (preset.get("default_plugin_selection") or {}).items()},
+    }
+    controlled_modules = set(str(item) for item in (preset.get("controlled_modules") or template.get("controlled_modules") or []))
+    modules: dict[str, V3ComposerDraftModule] = {}
+    for module_id in STANDARD_MODULE_ORDER:
+        plugin = selection.get(module_id)
+        if not plugin:
+            raise ControlledSmokeError(f"preset {preset_id} does not define plugin for {module_id}")
+        if module_id == "MetricsReport":
+            status = "output"
+        elif module_id == "CommitteeEpoch" or plugin == "disabled":
+            status = "disabled"
+        elif module_id in controlled_modules:
+            status = "variable"
+        else:
+            status = "fixed"
+        modules[module_id] = V3ComposerDraftModule(module_id=module_id, status=status, plugin=plugin)
+    return V3ComposerDraftRequest(template_id=METATRACK_TEMPLATE_ID, preset_id=preset_id, modules=modules)
+
+
+def list_controlled_artifacts(run_dir: Path, run_id: str) -> list[dict[str, Any]]:
+    artifacts = []
+    for filename in CONTROLLED_ARTIFACTS:
+        path = run_dir / filename
+        if path.is_file():
+            artifacts.append({
+                "name": filename,
+                "download_url": f"/api/v3/composer/controlled-smoke/{run_id}/artifacts/{filename}",
+                "size_bytes": path.stat().st_size,
+            })
+    return artifacts
+
+
+def get_controlled_artifact_path(run_id: str, filename: str, root: Path = CONTROLLED_SMOKE_ROOT) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,120}", run_id) or run_id in {".", "..", "latest"}:
+        raise ValueError("invalid controlled smoke run id")
+    if filename not in CONTROLLED_ARTIFACTS:
+        raise ValueError("controlled smoke artifact is not downloadable")
+    return get_artifact_path(controlled_smoke_job_manager(root).run_dir(run_id), filename)
+
+
+def _aggregate_row(summary: dict[str, Any], preset: dict[str, Any]) -> dict[str, Any]:
+    row = {
+        "preset_id": str(preset.get("preset_id", "")),
+        "ablation_stage": str(preset.get("ablation_stage", "")),
+        "enabled_metatrack_components": _join(preset.get("enabled_metatrack_components", [])),
+    }
+    for field in AGGREGATE_FIELDS:
+        row.setdefault(field, summary.get(field, ""))
+    return row
+
+
+def _write_report(path: Path, run_id: str, rows: list[dict[str, Any]]) -> None:
+    lines = [
+        "# V3.4.10 Controlled MetaTrack Smoke",
+        "",
+        "This report summarizes five preset-controlled local Draft Smoke runs.",
+        "All presets keep workload, seed, TxPool, BlockProducer, Consensus, CommitteeEpoch, StateStorage, and MetricsReport fixed.",
+        "It is not a paper-ready benchmark, Fabric live execution, BlockEmulator backend, or multi-node emulator.",
+        "",
+        f"- controlled_run_id: {run_id}",
+        f"- preset_count: {len(rows)}",
+        "",
+        "| preset_id | ablation_stage | enabled_components | cross_shard_ratio | avg_execution_latency_ms | avg_state_access_latency_ms | avg_commit_latency_ms |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for row in rows:
+        lines.append(
+            "| {preset_id} | {ablation_stage} | {enabled} | {cross} | {exec_latency} | {state_latency} | {commit_latency} |".format(
+                preset_id=row.get("preset_id", ""),
+                ablation_stage=row.get("ablation_stage", ""),
+                enabled=row.get("enabled_metatrack_components", ""),
+                cross=row.get("cross_shard_ratio", ""),
+                exec_latency=row.get("avg_execution_latency_ms", ""),
+                state_latency=row.get("avg_state_access_latency_ms", ""),
+                commit_latency=row.get("avg_commit_latency_ms", ""),
+            )
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: _csv_value(row.get(field, "")) for field in fieldnames})
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _csv_value(value: Any) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return _join(value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def _join(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple, set)):
+        return "|".join(str(item) for item in value)
+    return str(value) if value is not None else ""

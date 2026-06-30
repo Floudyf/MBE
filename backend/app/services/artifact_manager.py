@@ -54,6 +54,11 @@ ARTIFACT_ALLOWLIST = frozenset({
     "metatrack_latency.csv",
     "metatrack_mechanism_metrics.csv",
     "metatrack_ablation_report.md",
+    "run_index.csv",
+    "aggregate_summary.csv",
+    "ablation_report.md",
+    "realism_readiness.json",
+    "realism_readiness.md",
 })
 
 

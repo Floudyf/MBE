@@ -30,6 +30,7 @@ from backend.app.services.trace_source_validator import validate_trace_source
 from backend.app.services.v3_experiment_templates import list_templates
 from backend.app.services.v3_composer_draft_runner import DraftSmokeNotRunnable, get_draft_artifact_path, run_v3_composer_draft_smoke
 from backend.app.services.v3_composer_draft_validator import model_dump, validate_v3_composer_draft
+from backend.app.services.v3_controlled_smoke_runner import ControlledSmokeError, get_controlled_artifact_path, run_v3_4_10_controlled_smoke
 from backend.app.services.v3_draft_run_history import DraftRunHistoryError, DraftRunNotFound, get_v3_draft_run_detail, list_v3_draft_runs
 from backend.app.services.v3_go_runtime_runner import run_metatrack_go_backed_ablation
 from backend.app.services.v3_profile_preview import preview_profile
@@ -820,6 +821,27 @@ def v3_composer_draft_artifact(run_id: str, filename: str) -> FileResponse:
     except ArtifactForbidden as exc:
         raise HTTPException(403, str(exc)) from exc
     except (ArtifactError, JobNotFound, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return FileResponse(path)
+
+
+@app.post("/api/v3/composer/run-controlled-smoke")
+def v3_composer_run_controlled_smoke() -> dict:
+    try:
+        return run_v3_4_10_controlled_smoke()
+    except ControlledSmokeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.get("/api/v3/composer/controlled-smoke/{run_id}/artifacts/{filename}")
+def v3_composer_controlled_smoke_artifact(run_id: str, filename: str) -> FileResponse:
+    try:
+        path = get_controlled_artifact_path(run_id, filename)
+    except ArtifactMissing as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ArtifactError, ArtifactForbidden, JobNotFound, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return FileResponse(path)
 
