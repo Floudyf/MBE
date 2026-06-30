@@ -15,6 +15,7 @@ from backend.app.services.job_manager import JobManager
 from backend.app.services.v3_composer_catalog import GO_RUNTIME_PLUGIN_CLASSES
 from backend.app.services.v3_composer_draft_validator import model_dump, validate_v3_composer_draft
 from backend.app.services.v3_go_runtime_runner import ROLE_SEPARATED_CHAIN_PROFILE, run_go_v3_runtime
+from backend.app.services.v3_runtime_topology import stage_metadata
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -43,11 +44,12 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
         source="v3_composer_draft",
         experiment_name="composer_draft_smoke",
         data_truth_label="modular_runtime",
-        stage="V3.3.5b",
+        stage="V3.5.1",
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
             "run_mode": "draft_smoke",
+            **stage_metadata(),
             "template_id": normalized.get("template_id", request.template_id),
             "experiment_template": normalized.get("experiment_template", normalized.get("template_id", request.template_id)),
             "preset_id": normalized.get("preset_id", ""),
@@ -63,6 +65,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "expected_artifacts": normalized.get("expected_artifacts", []),
             "result_guide": normalized.get("result_guide", ""),
             "truthfulness_note": normalized.get("truthfulness_note", ""),
+            "topology_summary": normalized.get("topology_summary", {}),
         },
     )
     run_id = metadata["run_id"]
@@ -91,7 +94,8 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "run_id": run_id,
             "job_id": run_id,
             "status": "completed",
-            "stage": "V3.3.5b",
+            "stage": "V3.5.1",
+            **stage_metadata(),
             "output_dir": str(run_dir),
             "data_truth_label": "modular_runtime",
             "backend_type": "modular_research_chain",
@@ -99,6 +103,8 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "run_mode": "draft_smoke",
             "validation": model_dump(validation),
             "summary": summary,
+            "topology": normalized.get("topology", {}),
+            "topology_summary": normalized.get("topology_summary", {}),
             "artifacts": list_draft_artifacts(run_dir, run_id),
             "run": completed,
         }
@@ -136,11 +142,16 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "profile_id": f"draft_smoke_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-        "stage": "v3.3.5b",
+        "stage": "V3.5.1",
         "type": "draft_smoke",
         "truth_label": "modular_runtime",
         "backend_type": "modular_research_chain",
-        "runtime_mode": "go_backed",
+        "runtime_mode": "logical_single_process",
+        "node_runtime_mode": normalized.get("topology", {}).get("node_runtime_mode", "logical_single_process"),
+        "network_mode": normalized.get("topology", {}).get("network_mode", "in_memory_message_bus"),
+        "topology": normalized.get("topology", {}),
+        "topology_summary": normalized.get("topology_summary", {}),
+        **{key: value for key, value in normalized.get("topology", {}).items()},
         "experiment_template": normalized.get("template_id", "metatrack_ablation"),
         "preset_id": normalized.get("preset_id", ""),
         "preset_name": normalized.get("preset_name", ""),
@@ -155,6 +166,7 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
         "expected_artifacts": normalized.get("expected_artifacts", []),
         "result_guide": normalized.get("result_guide", ""),
         "truthfulness_note": normalized.get("truthfulness_note", ""),
+        **stage_metadata(),
         "chain_profile": "single_chain_research_default",
         "run_level": "smoke",
         "tx_count": tx_count,
@@ -193,6 +205,9 @@ def merge_run_metadata(summary: dict[str, Any], normalized: dict[str, Any]) -> d
         "expected_artifacts": normalized.get("expected_artifacts", []),
         "result_guide": normalized.get("result_guide", ""),
         "truthfulness_note": normalized.get("truthfulness_note", ""),
+        "topology": normalized.get("topology", {}),
+        "topology_summary": normalized.get("topology_summary", {}),
+        **stage_metadata(),
     }
 
 
@@ -206,14 +221,14 @@ def build_plugin_profile(normalized: dict[str, Any]) -> dict[str, Any]:
     return {
         "profile_type": "plugin_profile_collection",
         "version": "v3",
-        "stage": "v3.3.5b",
+        "stage": "V3.5.1",
         "profiles": [
             {
                 "plugin_profile_id": DRAFT_PLUGIN_PROFILE_ID,
                 "label": "Composer Draft Single Smoke",
                 "domain": "metatrack",
                 "status": "runnable",
-                "min_stage": "v3.3.5b",
+                "min_stage": "V3.5.1",
                 "runnable": True,
                 "description": "Single Composer Draft Smoke plugin selection.",
                 "plugins": plugins,

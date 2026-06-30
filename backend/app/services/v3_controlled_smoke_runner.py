@@ -18,11 +18,11 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.4.11"
+CURRENT_STAGE = "V3.5.1"
 LATEST_RUNTIME_STAGE = "V3.4.10"
 CLOSURE_STAGE = "V3.4.11"
-RUNTIME_TRUTH = "local_go_backed_modular_research_chain_draft_smoke"
-NEXT_STAGE = "V3.5_node_level_emulator_skeleton"
+RUNTIME_TRUTH = "single_process_logical_node_topology_runtime"
+NEXT_STAGE = "V3.5.2 Local Multi-process Launcher Preview"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",

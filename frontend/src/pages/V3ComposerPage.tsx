@@ -21,8 +21,9 @@ import DraftRunResultPanel from "../components/v3/DraftRunResultPanel";
 import FairnessScopePanel from "../components/v3/FairnessScopePanel";
 import PluginMatrixTable from "../components/v3/PluginMatrixTable";
 import RunLevelPanel from "../components/v3/RunLevelPanel";
+import RuntimeTopologyPanel from "../components/v3/RuntimeTopologyPanel";
 import SingleChainComposer from "../components/v3/SingleChainComposer";
-import { createComposerDraft, summarizeDraft, toComposerDraftRequest, type ComposerDraft } from "../components/v3/composerDraft";
+import { createComposerDraft, summarizeDraft, toComposerDraftRequest, updateDraftTopology, type ComposerDraft } from "../components/v3/composerDraft";
 import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
 
 const metatrackPrimaryMetrics = ["cross_shard_ratio", "remote_state_access_ratio", "fast_track_count", "conservative_track_count", "cache_hit_rate", "prefetch_hit_rate", "aggregation_ratio", "constraint_failed_count", "avg_execution_latency_ms", "avg_state_access_latency_ms", "avg_commit_latency_ms"];
@@ -154,7 +155,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         return [moduleId, module];
       }),
     );
-    updateDraft(summarizeDraft({ templateId, presetId, modules: nextModules }));
+    updateDraft(summarizeDraft({ templateId, presetId, modules: nextModules, topology: draft.topology }));
   }
 
   function selectPreset(presetId: string) {
@@ -162,7 +163,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     const template = templates.find((item) => item.template_id === draft.templateId);
     const preset = template?.presets?.find((item) => item.preset_id === presetId);
     if (!template || !preset) {
-      updateDraft(summarizeDraft({ templateId: draft.templateId, presetId, modules: draft.modules }));
+      updateDraft(summarizeDraft({ templateId: draft.templateId, presetId, modules: draft.modules, topology: draft.topology }));
       return;
     }
     const lockedModules = preset.locked_modules || template.locked_modules || {};
@@ -180,7 +181,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         return [moduleId, module];
       }),
     );
-    updateDraft(summarizeDraft({ templateId: draft.templateId, presetId, modules: nextModules }));
+    updateDraft(summarizeDraft({ templateId: draft.templateId, presetId, modules: nextModules, topology: draft.topology }));
   }
 
   async function validateDraftOnServer(): Promise<V3DraftValidationResponse | null> {
@@ -378,6 +379,13 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
             </div>
           )}
         </section>
+      )}
+
+      {draft && (
+        <RuntimeTopologyPanel
+          topology={draft.topology}
+          onChange={(topology) => updateDraft(updateDraftTopology(draft, topology))}
+        />
       )}
 
       {loading && <p className="notice">正在加载 V3 Composer 预览...</p>}

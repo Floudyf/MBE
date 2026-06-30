@@ -1,0 +1,16 @@
+topology_id: logical_node_topology_default
+stage: V3.5.1
+node_runtime_mode: logical_single_process
+network_mode: in_memory_message_bus
+shard_count: 4
+validators_per_shard: 4
+executors_per_shard: 1
+storage_nodes_per_shard: 1
+supervisor_enabled: true
+truth:
+  node_truth: logical_nodes
+  network_truth: in_memory_message_bus
+  not_real_tcp: true
+  not_multi_process: true
+  not_real_pbft: true
+  not_blockemulator_backend: true

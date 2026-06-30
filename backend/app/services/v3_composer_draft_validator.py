@@ -14,6 +14,7 @@ from backend.app.services.v3_composer_catalog import (
     plugin_owner,
 )
 from backend.app.services.v3_experiment_templates import get_template
+from backend.app.services.v3_runtime_topology import normalize_topology, stage_metadata, topology_summary
 
 
 def model_dump(model: Any) -> dict[str, Any]:
@@ -34,6 +35,9 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     plugin_selection: dict[str, str] = {}
     has_preview_only = False
     template: dict[str, Any] = {}
+    topology, topology_errors = normalize_topology(request.topology)
+    errors.extend(topology_errors)
+    topo_summary = topology_summary(topology)
 
     try:
         template = get_template(request.template_id)
@@ -329,6 +333,9 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         "expected_artifacts": list(preset.get("expected_artifacts", [])) if preset else [],
         "result_guide": str(preset.get("result_guide", "")),
         "truthfulness_note": str(preset.get("truthfulness_note") or template.get("truthfulness_note", "")),
+        "topology": topology,
+        "topology_summary": topo_summary,
+        **stage_metadata(),
     }
 
     is_valid = not errors

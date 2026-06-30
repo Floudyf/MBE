@@ -16,11 +16,11 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
 
     assert result["status"] == "completed"
     assert result["stage"] == "V3.4.10"
-    assert result["current_stage"] == "V3.4.11"
+    assert result["current_stage"] == "V3.5.1"
     assert result["latest_runtime_stage"] == "V3.4.10"
     assert result["closure_stage"] == "V3.4.11"
-    assert result["runtime_truth"] == "local_go_backed_modular_research_chain_draft_smoke"
-    assert result["next_stage"] == "V3.5_node_level_emulator_skeleton"
+    assert result["runtime_truth"] == "single_process_logical_node_topology_runtime"
+    assert result["next_stage"] == "V3.5.2 Local Multi-process Launcher Preview"
     assert result["preset_order"] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["run_index"]] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["aggregate_summary"]] == CONTROLLED_PRESET_ORDER
@@ -43,7 +43,7 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     assert "avg_commit_latency_ms" in aggregate_rows[0]
 
     readiness = json.loads((run_dir / "realism_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["current_stage"] == "V3.4.11"
+    assert readiness["current_stage"] == "V3.5.1"
     assert readiness["latest_runtime_stage"] == "V3.4.10"
     assert len(readiness["modules"]) == 11
     assert "not BlockEmulator backend" in readiness["not_real_chain_claims"]

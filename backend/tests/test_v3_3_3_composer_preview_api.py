@@ -16,12 +16,11 @@ def test_v3_composer_preview_api_returns_additive_preview_fields() -> None:
     payload = response.json()
     composer = payload["composer_preview"]
     assert payload["experiment_profile_id"] == "metatrack_go_backed_ablation_smoke"
-    assert payload["stage"] == "V3.4.11"
-    assert payload["current_stage"] == "V3.4.11"
-    assert payload["latest_runtime_stage"] == "V3.4.10"
-    assert payload["closure_stage"] == "V3.4.11"
-    assert payload["runtime_truth"] == "local_go_backed_modular_research_chain_draft_smoke"
-    assert payload["next_stage"] == "V3.5_node_level_emulator_skeleton"
+    assert payload["stage"] == "V3.5.1"
+    assert payload["current_stage"] == "V3.5.1"
+    assert payload["latest_runtime_stage"] == "V3.5.1 logical node topology runtime"
+    assert payload["runtime_truth"] == "single_process_logical_node_topology_runtime"
+    assert payload["next_stage"] == "V3.5.2 Local Multi-process Launcher Preview"
     assert composer["view"] == "single_chain"
     assert composer["template_id"] == "metatrack_ablation"
     assert composer["runnable"] is True
@@ -42,9 +41,9 @@ def test_v3_composer_templates_api_keeps_planned_templates_non_runnable() -> Non
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["stage"] == "V3.4.11"
-    assert payload["current_stage"] == "V3.4.11"
-    assert payload["latest_runtime_stage"] == "V3.4.10"
+    assert payload["stage"] == "V3.5.1"
+    assert payload["current_stage"] == "V3.5.1"
+    assert payload["latest_runtime_stage"] == "V3.5.1 logical node topology runtime"
     templates = {item["template_id"]: item for item in payload["items"]}
     assert templates["metatrack_ablation"]["runnable"] is True
     assert templates["committee_lifecycle_planned"]["preview_only"] is True
@@ -68,10 +67,10 @@ def test_v3_composer_run_smoke_registers_downloadable_artifacts_without_fabric(m
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["stage"] == "V3.4.10"
-    assert payload["current_stage"] == "V3.4.11"
-    assert payload["latest_runtime_stage"] == "V3.4.10"
-    assert payload["runtime_truth"] == "local_go_backed_modular_research_chain_draft_smoke"
+    assert payload["stage"] == "V3.5.1"
+    assert payload["current_stage"] == "V3.5.1"
+    assert payload["latest_runtime_stage"] == "V3.5.1 logical node topology runtime"
+    assert payload["runtime_truth"] == "single_process_logical_node_topology_runtime"
     assert payload["runtime_mode"] == "go_backed"
     artifact_names = {artifact["name"] for artifact in payload["artifacts"]}
     assert {"metatrack_summary.csv", "metatrack_summary.json", "metatrack_ablation_report.md", "used_experiment_profile.yaml"} <= artifact_names

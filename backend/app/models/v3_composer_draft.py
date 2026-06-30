@@ -15,10 +15,21 @@ class V3ComposerDraftModule(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class V3RuntimeTopology(BaseModel):
+    shard_count: int = 4
+    validators_per_shard: int = 4
+    executors_per_shard: int = 1
+    storage_nodes_per_shard: int = 1
+    supervisor_enabled: bool = True
+    node_runtime_mode: str = "logical_single_process"
+    network_mode: str = "in_memory_message_bus"
+
+
 class V3ComposerDraftRequest(BaseModel):
     template_id: str
     preset_id: str | None = None
     modules: dict[str, V3ComposerDraftModule]
+    topology: V3RuntimeTopology | None = None
 
 
 class V3DraftValidationResponse(BaseModel):

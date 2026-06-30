@@ -122,11 +122,11 @@ MODULE_READINESS: list[dict[str, Any]] = [
 def build_realism_readiness() -> dict[str, Any]:
     return {
         "stage": "V3.4.10",
-        "current_stage": "V3.4.11",
+        "current_stage": "V3.5.1",
         "latest_runtime_stage": "V3.4.10",
         "closure_stage": "V3.4.11",
-        "runtime_truth": "local_go_backed_modular_research_chain_draft_smoke",
-        "next_stage": "V3.5_node_level_emulator_skeleton",
+        "runtime_truth": "single_process_logical_node_topology_runtime",
+        "next_stage": "V3.5.2 Local Multi-process Launcher Preview",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",

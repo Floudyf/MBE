@@ -2,9 +2,20 @@
 
 ## V3.4.11 Current Status
 
-Current stage is V3.4.11 closure. V3.4.9 introduced MetaTrack ablation templates, V3.4.10 introduced the controlled smoke runner, and V3.4.11 aligns stage/version/frontend/docs/skill wording and validation. Latest runtime capability is local Go-backed modular research chain Draft Smoke with five controlled MetaTrack presets. Next stage is V3.5 node-level emulator skeleton.
+V3.4.11 closure is complete. V3.4.9 introduced MetaTrack ablation templates, V3.4.10 introduced the controlled smoke runner, and V3.4.11 aligned stage/version/frontend/docs/skill wording and validation.
 
 This status does not claim paper-grade benchmark evidence, real chain execution, Fabric/EVM live backend, BlockEmulator backend, real multi-node networking, real PBFT/HotStuff/Raft, real cross-shard protocol, or real proof/witness/MPT/state root.
+
+## V3.5.1 Current Status
+
+Current stage is V3.5.1 Logical Node Topology Runtime. V3.5.1 adds frontend topology config, backend topology validation, single-process logical node generation, node/network/consensus message artifacts, and node topology summary metrics. It is not real TCP, not multi-process, not real PBFT, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
+
+V3.5 route:
+
+- V3.5.1 Logical Node Topology Runtime.
+- V3.5.2 Local Multi-process Launcher Preview.
+- V3.5.3 Local Node Process Runtime.
+- V3.5.4 V3.5 Closure.
 
 ## 0.1 V3.3 Go-backed MetaTrack Update
 

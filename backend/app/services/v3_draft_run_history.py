@@ -111,6 +111,7 @@ def artifact_groups(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         ("Runtime execution logs", {"execution_log.csv"}),
         ("Runtime state access logs", {"state_access_log.csv"}),
         ("Runtime commit logs", {"state_commit_log.csv"}),
+        ("Node-level runtime artifacts", {"node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv"}),
         ("Chain runtime logs", {"runtime.log", "block_log.csv", "tx_results.csv"}),
         ("MetaTrack metrics", {"metatrack_summary.csv", "metatrack_summary.json", "metatrack_latency.csv", "metatrack_mechanism_metrics.csv", "metatrack_ablation_report.md"}),
         ("Controlled smoke", {"run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"}),

@@ -2,9 +2,9 @@
 
 ## 0. Current V3 Scope Realignment
 
-As of V3.4.11 closure, current_stage is V3.4.11, latest_runtime_stage is V3.4.10 controlled smoke runner, runtime_truth is local Go-backed modular research chain Draft Smoke, and next_stage is V3.5 node-level emulator skeleton. V3.4.11 is closure only and does not add runtime mechanisms.
+As of V3.5.1, current_stage is V3.5.1 Logical Node Topology Runtime, latest_runtime_stage is configurable single-process logical node topology with node/network/message artifacts, runtime_truth is single_process_logical_node_topology_runtime, and next_stage is V3.5.2 Local Multi-process Launcher Preview. V3.4.11 closure is complete, and the V3.5 route is defined in `docs/v3_5_node_topology_and_local_launcher_plan.md`.
 
-When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_4_11_stage_version_frontend_docs_closure.md`, the frontend V3 Composer header, backend V3 composer stage fields, and controlled smoke tests. Do not enter V3.5, Fabric/EVM live backend work, real PBFT/HotStuff/Raft, real multi-node networking, or real cross-shard protocol work unless explicitly requested. Do not present smoke output as a paper-grade benchmark.
+When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, the frontend Runtime Topology panel, backend V3 composer topology validation, Go logical node tests, and controlled smoke tests. This round only allows logical node topology runtime. Do not implement real TCP, multi-process launch, real PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, or real cross-shard protocol work unless explicitly requested. Do not present smoke output as a paper-grade benchmark.
 
 As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 
@@ -30,6 +30,10 @@ As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 - `V3.4.10 Controlled Smoke Runner`.
 - `V3.4.11 Stage / Version / Frontend / Docs / Skill Closure`.
 - `V3.5 Node-level Emulator Skeleton`.
+- `V3.5.1 Logical Node Topology Runtime`.
+- `V3.5.2 Local Multi-process Launcher Preview`.
+- `V3.5.3 Local Node Process Runtime`.
+- `V3.5.4 V3.5 Closure`.
 - `V3-final Frontend Integration and Acceptance`.
 
 V3.4 series goal: harden critical foundation modules in the V3 Go-backed modular research chain runtime into observable runtime behavior, add controlled smoke comparison, and close stage/version/frontend/docs/skill wording before V3.5. V3.4 remains a local modular research chain runtime. It is not Fabric live execution.
@@ -106,7 +110,10 @@ V3 stages:
 - `V3.4.9 MetaTrack Ablation Templates`: only MetaTrack ablation template and preset metadata.
 - `V3.4.10 Controlled Smoke Runner`: only the controlled five-preset smoke runner, controlled artifacts, readiness report, API, frontend panel, and tests.
 - `V3.4.11 Stage / Version / Frontend / Docs / Skill Closure`: only closure alignment; no new runtime mechanism.
-- `V3.5 Node-level Emulator Skeleton`: next stage only when explicitly requested.
+- `V3.5.1 Logical Node Topology Runtime`: only frontend topology config, backend topology validation, single-process logical nodes, node/network/message logs, summary metrics, docs, and tests.
+- `V3.5.2 Local Multi-process Launcher Preview`: only launch script/address table preview; no real TCP or PBFT.
+- `V3.5.3 Local Node Process Runtime`: only local process role entry points after launcher preview.
+- `V3.5.4 V3.5 Closure`: only closure alignment and validation.
 - `V3-final Frontend Integration and Acceptance`: only current-scope frontend integration, acceptance report, artifact browsing, and boundary presentation.
 
 Stage constraints:
@@ -124,7 +131,10 @@ V3.4.4 only single-module experiment templates and frontend alignment.
 V3.4.9 only MetaTrack ablation templates.
 V3.4.10 only controlled smoke runner.
 V3.4.11 only stage/version/frontend/docs/skill closure.
-V3.5 only node-level emulator skeleton after explicit user request.
+V3.5.1 only logical node topology runtime.
+V3.5.2 only local multi-process launcher preview.
+V3.5.3 only local node process runtime.
+V3.5.4 only V3.5 closure.
 V3-final only frontend integration and acceptance report for current V3 scope.
 ```
 

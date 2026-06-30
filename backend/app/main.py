@@ -34,6 +34,7 @@ from backend.app.services.v3_controlled_smoke_runner import ControlledSmokeError
 from backend.app.services.v3_draft_run_history import DraftRunHistoryError, DraftRunNotFound, get_v3_draft_run_detail, list_v3_draft_runs
 from backend.app.services.v3_go_runtime_runner import run_metatrack_go_backed_ablation
 from backend.app.services.v3_profile_preview import preview_profile
+from backend.app.services.v3_runtime_topology import stage_metadata as v3_runtime_stage_metadata
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
@@ -52,11 +53,8 @@ V1_SWEEP_DOWNLOADABLE_FILES = frozenset({"report.md", "sweep_summary.csv", "swee
 V1_CUSTOM_DOWNLOADABLE_FILES = frozenset({"trace_meta.json", "summary.csv", "latency.csv", "runtime.log", "report.md", "used_config.yaml", "used_config.json", "config.yaml"})
 app = FastAPI(title="MBE V0")
 
-V3_CURRENT_STAGE = "V3.4.11"
-V3_CLOSURE_STAGE = "V3.4.11"
-V3_LATEST_RUNTIME_STAGE = "V3.4.10"
-V3_RUNTIME_TRUTH = "local_go_backed_modular_research_chain_draft_smoke"
-V3_NEXT_STAGE = "V3.5_node_level_emulator_skeleton"
+V3_CURRENT_STAGE = "V3.5.1"
+V3_LATEST_RUNTIME_STAGE = "V3.5.1 logical node topology runtime"
 
 ABLATION_PRESETS = {
     "baseline_hash_only": {"routing_policy": "hash", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},
@@ -129,13 +127,7 @@ def job_manager() -> JobManager:
 
 
 def v3_stage_metadata() -> dict[str, str]:
-    return {
-        "current_stage": V3_CURRENT_STAGE,
-        "latest_runtime_stage": V3_LATEST_RUNTIME_STAGE,
-        "closure_stage": V3_CLOSURE_STAGE,
-        "runtime_truth": V3_RUNTIME_TRUTH,
-        "next_stage": V3_NEXT_STAGE,
-    }
+    return v3_runtime_stage_metadata()
 
 
 def v2_artifacts_response(run_id: str) -> dict:
@@ -870,7 +862,7 @@ def v3_composer_run_smoke() -> dict:
         source="v3_composer_frontend",
         experiment_name="metatrack_go_backed_ablation_smoke",
         data_truth_label="modular_runtime",
-        stage=V3_LATEST_RUNTIME_STAGE,
+        stage=V3_CURRENT_STAGE,
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
@@ -887,7 +879,7 @@ def v3_composer_run_smoke() -> dict:
         return {
             "run_id": run_id,
             "status": "completed",
-            "stage": V3_LATEST_RUNTIME_STAGE,
+            "stage": V3_CURRENT_STAGE,
             **v3_stage_metadata(),
             "output_dir": str(result["output_dir"]),
             "data_truth_label": "modular_runtime",

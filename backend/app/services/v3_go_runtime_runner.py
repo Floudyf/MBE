@@ -120,6 +120,16 @@ MECHANISM_FIELDS = [
     "state_locality_ratio",
     "execution_shard_load_balance",
     "state_unit_load_balance",
+    "shard_count",
+    "validators_per_shard",
+    "logical_node_count",
+    "validator_node_count",
+    "executor_node_count",
+    "storage_node_count",
+    "supervisor_node_count",
+    "message_count",
+    "network_message_count",
+    "node_event_count",
 ]
 
 
@@ -235,7 +245,7 @@ def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
         if target.exists():
             target.unlink()
     representative = next((run for run in runs if run.summary.get("plugin_profile_id") == "full_MetaTrack"), runs[0])
-    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
+    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
         source = representative.output_dir / filename
         if source.is_file():
             shutil.copyfile(source, root / filename)

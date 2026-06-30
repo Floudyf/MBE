@@ -303,6 +303,16 @@ export type V3ComposerDraftRequest = {
   template_id: string;
   preset_id?: string;
   modules: Record<string, V3ComposerDraftModuleRequest>;
+  topology?: V3RuntimeTopology;
+};
+export type V3RuntimeTopology = {
+  shard_count: number;
+  validators_per_shard: number;
+  executors_per_shard: number;
+  storage_nodes_per_shard: number;
+  supervisor_enabled: boolean;
+  node_runtime_mode: "logical_single_process" | string;
+  network_mode: "in_memory_message_bus" | string;
 };
 export type V3DraftValidationResponse = {
   is_valid: boolean;

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest
+from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest, V3RuntimeTopology
 from backend.app.services.v3_composer_draft_validator import validate_v3_composer_draft
 
 
@@ -36,6 +36,28 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert set(result.variable_modules) == {"Routing", "Execution", "StateAccess", "Commit"}
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
+    assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
+    assert result.normalized_draft["current_stage"] == "V3.5.1"
+
+
+def test_valid_draft_accepts_custom_logical_topology() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(shard_count=2, validators_per_shard=3, executors_per_shard=2, storage_nodes_per_shard=1, supervisor_enabled=False)
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is True
+    assert result.normalized_draft is not None
+    assert result.normalized_draft["topology"]["shard_count"] == 2
+    assert result.normalized_draft["topology_summary"]["logical_node_count"] == 12
+
+
+def test_invalid_topology_is_rejected() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(shard_count=33)
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is False
+    assert any("topology.shard_count" in error for error in result.errors)
 
 
 def test_valid_baseline_draft_is_runnable() -> None:

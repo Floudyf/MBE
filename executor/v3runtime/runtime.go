@@ -80,6 +80,13 @@ type ExperimentProfile struct {
 	HotspotRatio                 float64
 	AccessListEnabled            bool
 	AggregationCandidatesEnabled bool
+	ShardCount                   int
+	ValidatorsPerShard           int
+	ExecutorsPerShard            int
+	StorageNodesPerShard         int
+	SupervisorEnabled            bool
+	NodeRuntimeMode              string
+	NetworkMode                  string
 }
 
 type Transaction struct {
@@ -488,6 +495,16 @@ type Summary struct {
 	StateLocalityRatio         float64 `json:"state_locality_ratio"`
 	ExecutionShardLoadBalance  float64 `json:"execution_shard_load_balance"`
 	StateUnitLoadBalance       float64 `json:"state_unit_load_balance"`
+	ShardCount                 int     `json:"shard_count"`
+	ValidatorsPerShard         int     `json:"validators_per_shard"`
+	LogicalNodeCount           int     `json:"logical_node_count"`
+	ValidatorNodeCount         int     `json:"validator_node_count"`
+	ExecutorNodeCount          int     `json:"executor_node_count"`
+	StorageNodeCount           int     `json:"storage_node_count"`
+	SupervisorNodeCount        int     `json:"supervisor_node_count"`
+	MessageCount               int     `json:"message_count"`
+	NetworkMessageCount        int     `json:"network_message_count"`
+	NodeEventCount             int     `json:"node_event_count"`
 }
 
 type Result struct {
@@ -501,6 +518,7 @@ type Result struct {
 	RoutingLog     []RoutingRecord
 	ExecutionLog   []ExecutionRecord
 	StateAccessLog []StateAccessRecord
+	NodeRuntime    NodeRuntimeArtifacts
 	FinalState     map[string]int
 }
 
@@ -661,10 +679,12 @@ func Run(input Input) (Result, error) {
 	applyExecutionMetrics(&summary, executionEngine, executionLog)
 	applyStateAccessMetrics(&summary, stateAccessEngine)
 	applyCommitMetrics(&summary, commitEngine)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, "V3.4.8 Go-backed Commit runtime hardening run"); err != nil {
+	nodeRuntime := BuildLogicalNodeArtifacts(topologyFromExperiment(experiment), blocks, consensusLog)
+	applyNodeRuntimeMetrics(&summary, nodeRuntime)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, nodeRuntime, "V3.5.1 Logical Node Topology Runtime run"); err != nil {
 		return Result{}, err
 	}
-	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, ExecutionLog: executionLog, StateAccessLog: stateAccessLog, FinalState: state}, nil
+	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, ExecutionLog: executionLog, StateAccessLog: stateAccessLog, NodeRuntime: nodeRuntime, FinalState: state}, nil
 }
 
 func parseChainProfile(text string) ChainProfile {
@@ -734,6 +754,13 @@ func parseExperimentProfile(text string) ExperimentProfile {
 		HotspotRatio:                 fieldFloat(text, "hotspot_ratio", 0.25),
 		AccessListEnabled:            fieldBool(text, "access_list_enabled", true),
 		AggregationCandidatesEnabled: fieldBool(text, "aggregation_candidates_enabled", false),
+		ShardCount:                   fieldInt(text, "shard_count", 4),
+		ValidatorsPerShard:           fieldInt(text, "validators_per_shard", 4),
+		ExecutorsPerShard:            fieldInt(text, "executors_per_shard", 1),
+		StorageNodesPerShard:         fieldInt(text, "storage_nodes_per_shard", 1),
+		SupervisorEnabled:            fieldBool(text, "supervisor_enabled", true),
+		NodeRuntimeMode:              fieldString(text, "node_runtime_mode", "logical_single_process"),
+		NetworkMode:                  fieldString(text, "network_mode", "in_memory_message_bus"),
 	}
 }
 
@@ -2141,7 +2168,21 @@ func applyCommitMetrics(summary *Summary, engine *CommitEngine) {
 	summary.BlockCommitLatencyMS = summary.AvgCommitLatencyMS
 }
 
-func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, executionLog []ExecutionRecord, stateAccessLog []StateAccessRecord, title string) error {
+func applyNodeRuntimeMetrics(summary *Summary, nodeRuntime NodeRuntimeArtifacts) {
+	summary.ShardCount = nodeRuntime.Config.ShardCount
+	summary.ValidatorsPerShard = nodeRuntime.Config.ValidatorsPerShard
+	summary.LogicalNodeCount = len(nodeRuntime.Nodes)
+	summary.ValidatorNodeCount = nodeRuntime.CountRole("validator")
+	summary.ExecutorNodeCount = nodeRuntime.CountRole("executor")
+	summary.StorageNodeCount = nodeRuntime.CountRole("storage")
+	summary.SupervisorNodeCount = nodeRuntime.CountRole("supervisor")
+	summary.NetworkMessageCount = len(nodeRuntime.NetworkMessages)
+	summary.ConsensusMessageCount = len(nodeRuntime.ConsensusMessages)
+	summary.MessageCount = summary.NetworkMessageCount + summary.ConsensusMessageCount
+	summary.NodeEventCount = len(nodeRuntime.NodeEvents)
+}
+
+func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, executionLog []ExecutionRecord, stateAccessLog []StateAccessRecord, nodeRuntime NodeRuntimeArtifacts, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
@@ -2185,11 +2226,23 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := writeStateAccessLog(filepath.Join(out, "state_access_log.csv"), stateAccessLog); err != nil {
 		return err
 	}
-	report := "# " + title + "\n\nThis is V3.4.7 role-separated Go-backed single-chain research runtime smoke output with FIFO TxPool, BlockProducer, Consensus-light, Routing/Sharding, Execution, and StateAccess hardening.\n\nIt separates ConsensusDomain, ExecutionShard, StateStorageUnit, StatePlacement, ExecutionRouting, local FIFO TxPool admission/selection behavior, local logical BlockProducer cut behavior, local virtual-time Consensus-light finality metrics, local Routing/Sharding decision records, local deterministic Execution scheduling records, and local StateAccess records.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement. Routing light models estimate touched shards, cross-shard ratio, co-access groups, and hotspot keys; they do not implement relay, broker, 2PC, CLPA, ShardCutter, state migration, or real shard-to-shard messages.\n\nExecution light models estimate serial order, logical worker assignment, dependency edges, blocking, and fast/conservative track assignment. They do not implement real concurrent execution, real rollback, Block-STM, Calvin, database lock management, or a real thread pool.\n\nStateAccess light models estimate local/remote access, deterministic cache/prefetch behavior, and proof/witness sizes. They do not implement real remote storage, real proof or witness generation, MPT, state root, persistent KV, snapshot, or state migration.\n\nConsensus-light models local stage, quorum, virtual message count, and finality observability. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, not MetaTrack final evidence, not a multi-node network emulator, and not final paper-scale performance evidence.\n"
+	if err := writeNodeTopologyCSV(filepath.Join(out, "node_topology.csv"), nodeRuntime.Nodes); err != nil {
+		return err
+	}
+	if err := writeNodeLogCSV(filepath.Join(out, "node_log.csv"), nodeRuntime.NodeEvents); err != nil {
+		return err
+	}
+	if err := writeNetworkLogCSV(filepath.Join(out, "network_log.csv"), nodeRuntime.NetworkMessages); err != nil {
+		return err
+	}
+	if err := writeConsensusMessageLogCSV(filepath.Join(out, "consensus_message_log.csv"), nodeRuntime.ConsensusMessages); err != nil {
+		return err
+	}
+	report := "# " + title + "\n\nThis is V3.5.1 single-process logical node topology runtime smoke output with FIFO TxPool, BlockProducer, Consensus-light, Routing/Sharding, Execution, StateAccess, Commit, and node-level logical artifacts.\n\nIt generates deterministic logical validators, executors, storage nodes, and an optional supervisor from the configured topology. It writes node_topology.csv, node_log.csv, network_log.csv, and consensus_message_log.csv using an in-memory message bus. These are logical artifacts only.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nIt is not real TCP, not multi-process, not real PBFT, not HotStuff, not Raft, not Fabric/EVM live execution, not a BlockEmulator backend, not a real cross-shard relay/broker/2PC protocol, and not final paper-scale performance evidence.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
-	log := "v3 go-backed runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nrouting_plugin=" + summary.RoutingPlugin + "\nexecution_plugin=" + summary.ExecutionPlugin + "\nstate_access_plugin=" + summary.StateAccessPlugin + "\nfabric_live=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nreal_cross_shard_protocol=false\nreal_concurrent_execution=false\nreal_rollback=false\nreal_remote_storage=false\nreal_proof_witness=false\nmpt=false\nstate_root=false\nsnapshot=false\nmulti_node_network=false\nv3 go-backed runtime done\n"
+	log := "v3 logical node topology runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\nnode_runtime_mode=" + nodeRuntime.Config.NodeRuntimeMode + "\nnetwork_mode=" + nodeRuntime.Config.NetworkMode + "\nlogical_node_count=" + strconv.Itoa(summary.LogicalNodeCount) + "\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nrouting_plugin=" + summary.RoutingPlugin + "\nexecution_plugin=" + summary.ExecutionPlugin + "\nstate_access_plugin=" + summary.StateAccessPlugin + "\nfabric_live=false\nevm_live=false\nblockemulator_backend=false\nreal_tcp=false\nmulti_process=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nreal_cross_shard_protocol=false\nreal_concurrent_execution=false\nreal_rollback=false\nreal_remote_storage=false\nreal_proof_witness=false\nmpt=false\nstate_root=false\nsnapshot=false\npaper_grade_benchmark=false\nv3 logical node topology runtime done\n"
 	return os.WriteFile(filepath.Join(out, "runtime.log"), []byte(log), 0o644)
 }
 
@@ -2205,11 +2258,12 @@ func writeSummaryCSV(path string, s Summary) error {
 		s.StateAccessPlugin, strconv.Itoa(s.StateAccessCount), strconv.Itoa(s.LocalStateAccessCount), strconv.Itoa(s.RemoteStateAccessCount), fmt.Sprint(s.RemoteStateAccessRatio), strconv.Itoa(s.CacheHitCount), strconv.Itoa(s.CacheMissCount), fmt.Sprint(s.CacheHitRate), strconv.Itoa(s.PrefetchHitCount), strconv.Itoa(s.PrefetchMissCount), fmt.Sprint(s.PrefetchHitRate), fmt.Sprint(s.AvgStateAccessLatencyMS), fmt.Sprint(s.P95StateAccessLatencyMS), strconv.Itoa(s.MaxStateAccessLatencyMS), fmt.Sprint(s.RemoteStateAccessLatencyMS), strconv.Itoa(s.WitnessEstimatedCount), strconv.Itoa(s.ProofEstimatedCount), strconv.Itoa(s.EstimatedWitnessBytes), strconv.Itoa(s.EstimatedProofBytes),
 		s.CommitPlugin, strconv.Itoa(s.CommitTxCount), strconv.Itoa(s.CommitUpdateCount), strconv.Itoa(s.NormalCommitCount), strconv.Itoa(s.ConservativeCommitCount), strconv.Itoa(s.HotspotUpdateCount), strconv.Itoa(s.RawUpdateCount), strconv.Itoa(s.AggregationGroupCount), strconv.Itoa(s.ConstraintCheckCount), strconv.Itoa(s.ConstraintPassedCount), strconv.Itoa(s.ConstraintFailedCount), fmt.Sprint(s.AvgCommitLatencyMS), fmt.Sprint(s.P95CommitLatencyMS), strconv.Itoa(s.MaxCommitLatencyMS),
 		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
+		strconv.Itoa(s.ShardCount), strconv.Itoa(s.ValidatorsPerShard), strconv.Itoa(s.LogicalNodeCount), strconv.Itoa(s.ValidatorNodeCount), strconv.Itoa(s.ExecutorNodeCount), strconv.Itoa(s.StorageNodeCount), strconv.Itoa(s.SupervisorNodeCount), strconv.Itoa(s.MessageCount), strconv.Itoa(s.NetworkMessageCount), strconv.Itoa(s.NodeEventCount),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "raw_update_count", "aggregation_group_count", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "raw_update_count", "aggregation_group_count", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance", "shard_count", "validators_per_shard", "logical_node_count", "validator_node_count", "executor_node_count", "storage_node_count", "supervisor_node_count", "message_count", "network_message_count", "node_event_count"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {

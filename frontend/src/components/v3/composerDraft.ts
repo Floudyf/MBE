@@ -1,4 +1,4 @@
-import type { V3ComposerDraftRequest, V3ComposerModule, V3ComposerPreview } from "../../api";
+import type { V3ComposerDraftRequest, V3ComposerModule, V3ComposerPreview, V3RuntimeTopology } from "../../api";
 import {
   type DraftModuleStatus,
   type DraftPluginOption,
@@ -31,6 +31,7 @@ export type ComposerDraft = {
   isRunnable: boolean;
   hasValidationErrors: boolean;
   validationMessages: string[];
+  topology: V3RuntimeTopology;
 };
 
 export type DraftModuleView = V3ComposerModule & {
@@ -64,7 +65,7 @@ export function createComposerDraft(preview: V3ComposerPreview): ComposerDraft {
   return summarizeDraft({ templateId: preview.template_id, modules });
 }
 
-export function summarizeDraft(input: Pick<ComposerDraft, "templateId" | "modules"> & { presetId?: string }): ComposerDraft {
+export function summarizeDraft(input: Pick<ComposerDraft, "templateId" | "modules"> & { presetId?: string; topology?: V3RuntimeTopology }): ComposerDraft {
   const modules = input.modules;
   const values = Object.values(modules);
   const validation = validateDraft(modules);
@@ -72,6 +73,7 @@ export function summarizeDraft(input: Pick<ComposerDraft, "templateId" | "module
     templateId: input.templateId,
     presetId: input.presetId,
     modules,
+    topology: input.topology || defaultRuntimeTopology(),
     variableModules: values.filter((module) => module.status === "variable").map((module) => module.moduleId),
     fixedModules: values.filter((module) => module.status === "fixed" || module.status === "default").map((module) => module.moduleId),
     disabledModules: values.filter((module) => module.status === "disabled").map((module) => module.moduleId),
@@ -104,13 +106,14 @@ export function updateDraftModule(
       params: patch.params ?? current.params,
     },
   };
-  return summarizeDraft({ templateId: draft.templateId, presetId: draft.presetId, modules: nextModules });
+  return summarizeDraft({ templateId: draft.templateId, presetId: draft.presetId, modules: nextModules, topology: draft.topology });
 }
 
 export function toComposerDraftRequest(draft: ComposerDraft): V3ComposerDraftRequest {
   return {
     template_id: draft.templateId,
     preset_id: draft.presetId,
+    topology: draft.topology,
     modules: Object.fromEntries(
       Object.values(draft.modules).map((module) => [module.moduleId, {
         module_id: module.moduleId,
@@ -120,6 +123,22 @@ export function toComposerDraftRequest(draft: ComposerDraft): V3ComposerDraftReq
       }]),
     ),
   };
+}
+
+export function defaultRuntimeTopology(): V3RuntimeTopology {
+  return {
+    shard_count: 4,
+    validators_per_shard: 4,
+    executors_per_shard: 1,
+    storage_nodes_per_shard: 1,
+    supervisor_enabled: true,
+    node_runtime_mode: "logical_single_process",
+    network_mode: "in_memory_message_bus",
+  };
+}
+
+export function updateDraftTopology(draft: ComposerDraft, topology: V3RuntimeTopology): ComposerDraft {
+  return summarizeDraft({ templateId: draft.templateId, presetId: draft.presetId, modules: draft.modules, topology });
 }
 
 export function moduleView(module: V3ComposerModule, draft?: ComposerDraft): DraftModuleView {
