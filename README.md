@@ -2,29 +2,29 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.5.2 Local Multi-process Launcher Preview.
-Latest completed runtime capability: V3.5.1 configurable single-process logical node topology with node/network/message artifacts.
-Current V3.5.2 capability: local multi-process launcher preview artifacts generated from topology.
-Next stage: V3.5.3 Local Node Process Runtime.
+Current stage: V3.5.4 V3.5 Closure.
+Latest runtime capability: V3.5 local node process preview runtime.
+Runtime truth: local node process preview only; not real TCP and not real PBFT.
+Next stage: V3.6 TCP Adapter and Consensus Hardening.
 
 ## Current Status
 
-Current stage: V3.5.2 Local Multi-process Launcher Preview.
-Latest completed runtime capability: V3.5.1 configurable single-process logical node topology with node/network/message artifacts.
-Current capability: launcher preview artifacts generated from logical node topology.
-Runtime truth: launcher preview generated from logical node topology.
+Current stage: V3.5.4 V3.5 Closure.
+Latest runtime capability: V3.5 local node process preview runtime.
+Current capability: configurable logical node topology, launcher preview artifacts, and local node process preview entry point.
+Runtime truth: local_node_process_preview_not_real_tcp_not_real_pbft.
 
-Not real TCP, not a real multi-process runtime, not real PBFT, not BlockEmulator backend, not Fabric/EVM live backend, not paper-grade benchmark.
-Next stage: V3.5.3 Local Node Process Runtime.
+V3.5 is closed. MBE now supports configurable logical node topology, launcher preview artifacts, and a local node process preview entry point. It remains not real TCP, not real PBFT, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
+Next stage: V3.6 TCP Adapter and Consensus Hardening.
 
 ## V3.5 Route
 
 - V3.5.1 Logical Node Topology Runtime: frontend topology config, backend validation, single-process logical nodes, and node/network/message artifacts.
 - V3.5.2 Local Multi-process Launcher Preview: generate launcher preview artifacts from topology.
 - V3.5.3 Local Node Process Runtime: add local process role entry points.
-- V3.5.4 V3.5 Closure: align README/docs/skill/frontend/backend stage wording and validation.
+- V3.5.4 V3.5 Closure: align README/docs/skill/frontend/backend stage wording and validation. Complete.
 
-V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live backend work and does not claim full BlockEmulator compatibility.
+V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live backend work, not real TCP/PBFT, and does not claim full BlockEmulator compatibility.
 
 ## Historical V0 Scope
 
@@ -116,7 +116,7 @@ Run from the repository root:
 python scripts/v0_sanity.py
 ```
 
-The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.5.2.
+The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.5.4.
 
 ## Windows One-Click Startup
 
@@ -130,12 +130,15 @@ The script checks `.venv` and `frontend/node_modules`, starts backend/frontend P
 
 ## Artifact Downloads
 
-After a run completes, the frontend artifact panel shows available summary, log, profile, node-level, and launcher preview files. V3.5.2 launcher preview artifacts are:
+After a run completes, the frontend artifact panel shows available summary, log, profile, node-level, launcher preview, and local node process preview files. V3.5 artifacts include:
 
 - `node_address_table.csv`
 - `topology.json`
 - `launch_nodes_windows.bat`
 - `launch_nodes_linux.sh`
 - `launcher_readme.md`
+- `node_process_status.csv`
+- `node_process_manifest.json`
+- `node_process_log_sample.log`
 
-These launcher files are preview artifacts only. They do not prove real TCP networking, real PBFT, a real multi-process runtime, or BlockEmulator backend behavior.
+These launcher and node process files are preview artifacts only. They do not prove real TCP networking, real PBFT, a real multi-process network runtime, real node-to-node communication, or BlockEmulator backend behavior.

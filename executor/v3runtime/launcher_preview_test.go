@@ -44,7 +44,7 @@ func TestLauncherPreviewArtifactsAndTruthBoundary(t *testing.T) {
 	if err := json.Unmarshal(topologyBytes, &topology); err != nil {
 		t.Fatal(err)
 	}
-	if topology["runtime_truth"] != "launcher_preview_only" {
+	if topology["runtime_truth"] != "local_node_process_preview_not_real_tcp_not_real_pbft" {
 		t.Fatalf("unexpected topology runtime truth: %v", topology["runtime_truth"])
 	}
 	windowsBytes, _ := os.ReadFile(filepath.Join(dir, "launch_nodes_windows.bat"))
@@ -52,11 +52,11 @@ func TestLauncherPreviewArtifactsAndTruthBoundary(t *testing.T) {
 		t.Fatalf("windows launcher missing preview command or warning")
 	}
 	linuxBytes, _ := os.ReadFile(filepath.Join(dir, "launch_nodes_linux.sh"))
-	if !strings.Contains(string(linuxBytes), "go run ./executor") || !strings.Contains(string(linuxBytes), "--preview-only") {
+	if !strings.Contains(string(linuxBytes), "go run ./cmd/replay --mode node-preview") || !strings.Contains(string(linuxBytes), "--preview-only") {
 		t.Fatalf("linux launcher missing preview command")
 	}
 	readmeBytes, _ := os.ReadFile(filepath.Join(dir, "launcher_readme.md"))
-	if !strings.Contains(string(readmeBytes), "launcher-preview artifacts only") || !strings.Contains(string(readmeBytes), "not BlockEmulator backend") {
+	if !strings.Contains(string(readmeBytes), "go run ./cmd/replay --mode node-preview") || !strings.Contains(string(readmeBytes), "not BlockEmulator backend") {
 		t.Fatalf("launcher readme missing preview-only boundary")
 	}
 }

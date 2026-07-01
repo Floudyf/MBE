@@ -13,19 +13,19 @@ type LauncherPreview struct {
 }
 
 type NodeAddressEntry struct {
-	NodeID               string
-	ShardID              int
-	NodeIndex            int
-	Role                 string
-	LogicalAddress       string
-	PreviewHost          string
-	PreviewPort          int
-	ProcessName          string
-	LaunchCommandWindows string
-	LaunchCommandLinux   string
-	RuntimeMode          string
-	NetworkMode          string
-	Status               string
+	NodeID               string `json:"node_id"`
+	ShardID              int    `json:"shard_id"`
+	NodeIndex            int    `json:"node_index"`
+	Role                 string `json:"role"`
+	LogicalAddress       string `json:"logical_address"`
+	PreviewHost          string `json:"preview_host"`
+	PreviewPort          int    `json:"preview_port"`
+	ProcessName          string `json:"process_name"`
+	LaunchCommandWindows string `json:"launch_command_windows"`
+	LaunchCommandLinux   string `json:"launch_command_linux"`
+	RuntimeMode          string `json:"runtime_mode"`
+	NetworkMode          string `json:"network_mode"`
+	Status               string `json:"status"`
 }
 
 func BuildLauncherPreview(nodeRuntime NodeRuntimeArtifacts) LauncherPreview {
@@ -33,8 +33,8 @@ func BuildLauncherPreview(nodeRuntime NodeRuntimeArtifacts) LauncherPreview {
 	for i, node := range nodeRuntime.Nodes {
 		port := 9100 + i
 		processName := "mbe_" + node.NodeID
-		windowsCommand := fmt.Sprintf("start cmd /k go run ./executor --node-id %s --shard-id %d --role %s --topology-file topology.json --preview-only", node.NodeID, node.ShardID, node.Role)
-		linuxCommand := fmt.Sprintf("go run ./executor --node-id %s --shard-id %d --role %s --topology-file topology.json --preview-only &", node.NodeID, node.ShardID, node.Role)
+		windowsCommand := fmt.Sprintf("start cmd /k go run ./cmd/replay --mode node-preview --node-id %s --shard-id %d --role %s --topology-file topology.json --output-dir . --preview-only", node.NodeID, node.ShardID, node.Role)
+		linuxCommand := fmt.Sprintf("go run ./cmd/replay --mode node-preview --node-id %s --shard-id %d --role %s --topology-file topology.json --output-dir . --preview-only &", node.NodeID, node.ShardID, node.Role)
 		addresses = append(addresses, NodeAddressEntry{
 			NodeID:               node.NodeID,
 			ShardID:              node.ShardID,
@@ -95,8 +95,8 @@ func writeNodeAddressTableCSV(path string, addresses []NodeAddressEntry) error {
 
 func writeTopologyJSON(path string, nodeRuntime NodeRuntimeArtifacts, launcher LauncherPreview) error {
 	payload := map[string]any{
-		"stage":         "V3.5.2",
-		"runtime_truth": "launcher_preview_only",
+		"stage":         "V3.5.4",
+		"runtime_truth": "local_node_process_preview_not_real_tcp_not_real_pbft",
 		"topology": map[string]any{
 			"shard_count":             nodeRuntime.Config.ShardCount,
 			"validators_per_shard":    nodeRuntime.Config.ValidatorsPerShard,
@@ -120,6 +120,7 @@ func writeTopologyJSON(path string, nodeRuntime NodeRuntimeArtifacts, launcher L
 			"not_real_pbft":                  true,
 			"not_blockemulator_backend":      true,
 			"not_real_multi_process_runtime": true,
+			"no_real_node_to_node_messages":  true,
 		},
 	}
 	bytes, err := json.MarshalIndent(payload, "", "  ")
@@ -132,8 +133,8 @@ func writeTopologyJSON(path string, nodeRuntime NodeRuntimeArtifacts, launcher L
 func windowsLauncherScript(launcher LauncherPreview) string {
 	lines := []string{
 		"@echo off",
-		"REM V3.5.2 launcher preview only. Not real TCP/PBFT.",
-		"REM Generated from logical node topology; commands are preview-only.",
+		"REM V3.5.3 local node process preview only. Not real TCP/PBFT.",
+		"REM Generated from logical node topology; commands start preview entry points only.",
 	}
 	for _, address := range launcher.Addresses {
 		lines = append(lines, address.LaunchCommandWindows)
@@ -145,8 +146,8 @@ func linuxLauncherScript(launcher LauncherPreview) string {
 	lines := []string{
 		"#!/usr/bin/env bash",
 		"set -euo pipefail",
-		"# V3.5.2 launcher preview only. Not real TCP/PBFT.",
-		"# Generated from logical node topology; commands are preview-only.",
+		"# V3.5.3 local node process preview only. Not real TCP/PBFT.",
+		"# Generated from logical node topology; commands start preview entry points only.",
 	}
 	for _, address := range launcher.Addresses {
 		lines = append(lines, address.LaunchCommandLinux)
@@ -156,7 +157,7 @@ func linuxLauncherScript(launcher LauncherPreview) string {
 }
 
 func launcherReadme() string {
-	return "# V3.5.2 Local Multi-process Launcher Preview\n\nThis is V3.5.2 Local Multi-process Launcher Preview.\nThe scripts are generated from logical node topology.\nThey are launcher-preview artifacts only.\nThey do not prove real TCP networking.\nThey do not implement real PBFT/HotStuff/Raft.\nThey are not BlockEmulator backend.\nThe next stage V3.5.3 will add local node process runtime entry points.\n"
+	return "# V3.5.3 Local Node Process Preview\n\nThis launcher package is generated from logical node topology.\nThe commands target the local node process preview entry point: `go run ./cmd/replay --mode node-preview --node-id <node_id> --role <role> --topology-file topology.json --preview-only`.\nRun that command from the `executor/` module directory, or adjust the topology path to the generated artifact directory.\nThe scripts are launcher-preview artifacts only.\nThey do not prove real TCP networking.\nThey do not implement real PBFT/HotStuff/Raft.\nThey do not implement real node-to-node communication.\nThey are not BlockEmulator backend.\nThe next major stage is V3.6 TCP Adapter and Consensus Hardening.\n"
 }
 
 func joinLines(lines []string) string {

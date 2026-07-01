@@ -6,18 +6,18 @@ V3.4.11 closure is complete. V3.4.9 introduced MetaTrack ablation templates, V3.
 
 This status does not claim paper-grade benchmark evidence, real chain execution, Fabric/EVM live backend, BlockEmulator backend, real multi-node networking, real PBFT/HotStuff/Raft, real cross-shard protocol, or real proof/witness/MPT/state root.
 
-## V3.5.2 Current Status
+## V3.5.4 Current Status
 
-Current stage is V3.5.2 Local Multi-process Launcher Preview. V3.5.1 added frontend topology config, backend topology validation, single-process logical node generation, node/network/consensus message artifacts, and node topology summary metrics. V3.5.2 generates launcher preview artifacts from that topology: node address table, topology JSON, Windows/Linux launch script previews, and launcher README. It is not real TCP, not a real multi-process runtime, not real PBFT, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
+Current stage is V3.5.4 V3.5 Closure. V3.5.1 added frontend topology config, backend topology validation, single-process logical node generation, node/network/consensus message artifacts, and node topology summary metrics. V3.5.2 added launcher preview artifacts from topology. V3.5.3 added a local node process preview entry point that can load topology, identify a node by `node_id`, validate role/shard, and write node-local status/log artifacts. V3.5.4 closes README/docs/skill/frontend/backend stage wording and validation. It is not real TCP, not a real multi-process network runtime, not real PBFT, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
 
 V3.5 route:
 
 - V3.5.1 Logical Node Topology Runtime.
 - V3.5.2 Local Multi-process Launcher Preview.
 - V3.5.3 Local Node Process Runtime.
-- V3.5.4 V3.5 Closure.
+- V3.5.4 V3.5 Closure. Complete.
 
-V3.5 enters node topology and local launcher foundations. Fabric-backed validation is deferred to a later stage unless explicitly reopened. V3.6 is reserved for TCP adapter and consensus hardening.
+V3.5 node topology and local launcher foundations are closed. Fabric-backed validation is deferred to a later stage unless explicitly reopened. The next major stage is V3.6 TCP Adapter and Consensus Hardening.
 
 ## 0.1 V3.3 Go-backed MetaTrack Update
 

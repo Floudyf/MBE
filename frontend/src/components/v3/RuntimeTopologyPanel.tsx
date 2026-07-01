@@ -25,7 +25,7 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           <h3>Runtime Topology / Node Topology</h3>
         </div>
       </div>
-      <p className="muted">Configures single-process logical nodes for V3.5.2 launcher preview artifacts. This is not real TCP, not a real multi-process runtime, not real PBFT, and not a BlockEmulator backend.</p>
+      <p className="muted">Configures single-process logical nodes for V3.5 launcher and local node process preview artifacts. This is not real TCP, not a real multi-process network runtime, not real PBFT, and not a BlockEmulator backend.</p>
       <div className="v3-identity-grid">
         {numericFields.map((field) => (
           <label key={field}>

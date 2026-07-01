@@ -100,6 +100,9 @@ expected_artifacts:
   - launch_nodes_windows.bat
   - launch_nodes_linux.sh
   - launcher_readme.md
+  - node_process_status.csv
+  - node_process_manifest.json
+  - node_process_log_sample.log
   - summary.csv
   - summary.json
   - block_log.csv
@@ -155,6 +158,9 @@ presets:
       - launch_nodes_windows.bat
       - launch_nodes_linux.sh
       - launcher_readme.md
+      - node_process_status.csv
+      - node_process_manifest.json
+      - node_process_log_sample.log
       - summary.csv
       - summary.json
       - block_log.csv

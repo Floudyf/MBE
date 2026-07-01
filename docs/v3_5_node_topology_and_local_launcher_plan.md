@@ -4,7 +4,7 @@
 
 V3.5 moves MBE from the local Go-backed modular runtime toward a configurable node-topology emulator-like runtime. The goal is to make shard/node topology, node logs, message logs, and local launcher preparation explicit before any real networking or consensus hardening.
 
-Current V3.5 substage: V3.5.2 Local Multi-process Launcher Preview. V3.5.1 logical node topology runtime is complete.
+Current V3.5 substage: V3.5.4 V3.5 Closure. V3.5.1 logical node topology runtime, V3.5.2 launcher preview, and V3.5.3 local node process preview are complete.
 
 ## 2. Why V3.5 Follows V3.4.11
 
@@ -30,9 +30,13 @@ This stage is launcher preview only. It generates node address and script artifa
 
 Add local node process entry points so each node process can load topology, identify its role, and write node logs.
 
+This stage is local node process preview only. It does not implement real TCP, PBFT, or node-to-node communication.
+
 ### V3.5.4 V3.5 Closure
 
 Close README/docs/skill/frontend/backend stage fields, validation, and truth boundary wording.
+
+V3.5 closure is complete after V3.5.4. Do not continue adding V3.5 features after closure.
 
 ## 5. Truth Boundary
 
@@ -40,7 +44,7 @@ V3.5 is not real TCP networking, not real PBFT, not HotStuff/Raft, not Fabric/EV
 
 ## 6. Expected V3.5 Final State
 
-Frontend can configure shard/node topology. The backend can validate topology. The runtime can output node/network/consensus message logs. A later V3.5 stage can generate local launch scripts and start local node processes. Real TCP/PBFT hardening remains for V3.6.
+Frontend can configure shard/node topology. The backend can validate topology. The runtime can output node/network/consensus message logs, generate local launch scripts, and provide a local node process preview entry point. Real TCP/PBFT hardening remains for V3.6.
 
 ## 7. Next Major Stage
 

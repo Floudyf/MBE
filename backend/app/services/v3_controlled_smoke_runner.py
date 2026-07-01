@@ -19,13 +19,13 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.5.2"
+CURRENT_STAGE = "V3.5.4"
 LATEST_RUNTIME_STAGE = "V3.4.10"
 CLOSURE_STAGE = "V3.4.11"
-LATEST_COMPLETED_RUNTIME_STAGE = "V3.5.1 Logical Node Topology Runtime"
-CURRENT_CAPABILITY = "launcher preview artifacts generated from logical node topology"
-RUNTIME_TRUTH = "launcher_preview_only_not_real_tcp_not_real_pbft"
-NEXT_STAGE = "V3.5.3 Local Node Process Runtime"
+LATEST_COMPLETED_RUNTIME_STAGE = "V3.5 local node process preview runtime"
+CURRENT_CAPABILITY = "configurable logical node topology, launcher preview artifacts, and local node process preview entry point"
+RUNTIME_TRUTH = "local_node_process_preview_not_real_tcp_not_real_pbft"
+NEXT_STAGE = "V3.6 TCP Adapter and Consensus Hardening"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -60,6 +60,9 @@ CONTROLLED_ARTIFACTS = [
     "launch_nodes_windows.bat",
     "launch_nodes_linux.sh",
     "launcher_readme.md",
+    "node_process_status.csv",
+    "node_process_manifest.json",
+    "node_process_log_sample.log",
 ]
 
 
@@ -230,7 +233,7 @@ def _copy_representative_launcher_artifacts(run_dir: Path, child_results: list[d
     if not representative:
         return
     child_dir = Path(str(representative.get("output_dir", "")))
-    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md"):
+    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log"):
         source = child_dir / filename
         if source.is_file():
             shutil.copyfile(source, run_dir / filename)

@@ -137,6 +137,11 @@ MECHANISM_FIELDS = [
     "windows_launcher_available",
     "linux_launcher_available",
     "launcher_preview_only",
+    "node_process_entrypoint_available",
+    "node_process_preview_available",
+    "node_process_status_available",
+    "node_process_manifest_available",
+    "node_process_preview_only",
 ]
 
 
@@ -252,7 +257,7 @@ def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
         if target.exists():
             target.unlink()
     representative = next((run for run in runs if run.summary.get("plugin_profile_id") == "full_MetaTrack"), runs[0])
-    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
+    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
         source = representative.output_dir / filename
         if source.is_file():
             shutil.copyfile(source, root / filename)

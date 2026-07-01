@@ -80,7 +80,10 @@ func TestRunWritesNodeTopologySummaryAndArtifacts(t *testing.T) {
 	if result.Summary.LaunchableNodeCount != 25 || result.Summary.NodeAddressCount != 25 || !result.Summary.LauncherPreviewOnly {
 		t.Fatalf("unexpected launcher metrics: %+v", result.Summary)
 	}
-	for _, name := range []string{"node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md"} {
+	if !result.Summary.NodeProcessEntrypointAvailable || !result.Summary.NodeProcessPreviewOnly {
+		t.Fatalf("unexpected node process metrics: %+v", result.Summary)
+	}
+	for _, name := range []string{"node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log"} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Fatalf("missing %s: %v", name, err)
 		}

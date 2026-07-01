@@ -309,6 +309,11 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   windows_launcher_available?: boolean | string;
   linux_launcher_available?: boolean | string;
   launcher_preview_only?: boolean | string;
+  node_process_entrypoint_available?: boolean | string;
+  node_process_preview_available?: boolean | string;
+  node_process_status_available?: boolean | string;
+  node_process_manifest_available?: boolean | string;
+  node_process_preview_only?: boolean | string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";

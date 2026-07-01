@@ -53,8 +53,8 @@ V1_SWEEP_DOWNLOADABLE_FILES = frozenset({"report.md", "sweep_summary.csv", "swee
 V1_CUSTOM_DOWNLOADABLE_FILES = frozenset({"trace_meta.json", "summary.csv", "latency.csv", "runtime.log", "report.md", "used_config.yaml", "used_config.json", "config.yaml"})
 app = FastAPI(title="MBE V0")
 
-V3_CURRENT_STAGE = "V3.5.2"
-V3_LATEST_RUNTIME_STAGE = "V3.5.1 Logical Node Topology Runtime"
+V3_CURRENT_STAGE = "V3.5.4"
+V3_LATEST_RUNTIME_STAGE = "V3.5 local node process preview runtime"
 
 ABLATION_PRESETS = {
     "baseline_hash_only": {"routing_policy": "hash", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},

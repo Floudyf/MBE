@@ -16,13 +16,13 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
 
     assert result["status"] == "completed"
     assert result["stage"] == "V3.4.10"
-    assert result["current_stage"] == "V3.5.2"
+    assert result["current_stage"] == "V3.5.4"
     assert result["latest_runtime_stage"] == "V3.4.10"
-    assert result["latest_completed_runtime_stage"] == "V3.5.1 Logical Node Topology Runtime"
+    assert result["latest_completed_runtime_stage"] == "V3.5 local node process preview runtime"
     assert result["closure_stage"] == "V3.4.11"
-    assert result["current_capability"] == "launcher preview artifacts generated from logical node topology"
-    assert result["runtime_truth"] == "launcher_preview_only_not_real_tcp_not_real_pbft"
-    assert result["next_stage"] == "V3.5.3 Local Node Process Runtime"
+    assert result["current_capability"] == "configurable logical node topology, launcher preview artifacts, and local node process preview entry point"
+    assert result["runtime_truth"] == "local_node_process_preview_not_real_tcp_not_real_pbft"
+    assert result["next_stage"] == "V3.6 TCP Adapter and Consensus Hardening"
     assert result["preset_order"] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["run_index"]] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["aggregate_summary"]] == CONTROLLED_PRESET_ORDER
@@ -37,6 +37,9 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
         "launch_nodes_windows.bat",
         "launch_nodes_linux.sh",
         "launcher_readme.md",
+        "node_process_status.csv",
+        "node_process_manifest.json",
+        "node_process_log_sample.log",
     }
 
     with (run_dir / "run_index.csv").open(encoding="utf-8", newline="") as stream:
@@ -50,9 +53,9 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     assert "avg_commit_latency_ms" in aggregate_rows[0]
 
     readiness = json.loads((run_dir / "realism_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["current_stage"] == "V3.5.2"
+    assert readiness["current_stage"] == "V3.5.4"
     assert readiness["latest_runtime_stage"] == "V3.4.10"
-    assert readiness["latest_completed_runtime_stage"] == "V3.5.1 Logical Node Topology Runtime"
+    assert readiness["latest_completed_runtime_stage"] == "V3.5 local node process preview runtime"
     assert len(readiness["modules"]) == 11
     assert "not BlockEmulator backend" in readiness["not_real_chain_claims"]
     assert "not Fabric/EVM live backend" in readiness["not_real_chain_claims"]

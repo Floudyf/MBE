@@ -2,9 +2,9 @@
 
 ## 0. Current V3 Scope Realignment
 
-As of V3.5.2, current_stage is V3.5.2 Local Multi-process Launcher Preview, latest_completed_runtime_stage is V3.5.1 Logical Node Topology Runtime, current_capability is launcher preview artifacts generated from logical node topology, runtime_truth is launcher_preview_only_not_real_tcp_not_real_pbft, and next_stage is V3.5.3 Local Node Process Runtime. V3.4.11 closure is complete, V3.5.1 logical node topology runtime is complete, and the V3.5 route is defined in `docs/v3_5_node_topology_and_local_launcher_plan.md`.
+As of V3.5.4, current_stage is V3.5.4 V3.5 Closure, latest_runtime_stage is V3.5 local node process preview runtime, runtime_truth is local_node_process_preview_not_real_tcp_not_real_pbft, and next_stage is V3.6 TCP Adapter and Consensus Hardening. V3.4.11 closure is complete and V3.5.4 closure is complete. Do not continue adding V3.5 features after closure.
 
-When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, the frontend Runtime Topology panel, backend V3 composer topology validation, Go logical node and launcher preview tests, and controlled smoke tests. V3.5.2 only allows local multi-process launcher preview artifacts. Do not implement real TCP, real multi-process runtime, real PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, or real cross-shard protocol work unless explicitly requested. Do not present smoke output as a paper-grade benchmark.
+When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, `docs/v3_5_3_local_node_process_runtime.md`, `docs/v3_5_4_v3_5_closure.md`, the frontend Runtime Topology / Node Process Preview panels, backend V3 composer topology validation, Go logical node / launcher preview / node process preview tests, and controlled smoke tests. Do not enter V3.6 unless the user explicitly asks for it. Before V3.6 is explicitly opened, do not implement real TCP, real PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, or real cross-shard protocol work. Do not present smoke output as a paper-grade benchmark.
 
 As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 
@@ -40,7 +40,7 @@ V3.4 series goal: harden critical foundation modules in the V3 Go-backed modular
 
 Every V3.4.x runtime hardening substage must include corresponding frontend alignment. When runtime adds an artifact, summary metric, or module truth boundary, frontend artifact grouping, result summary, history detail, and module detail must align in the same implementation stage. Runtime must not output a new artifact that the frontend cannot download or explain.
 
-V3.5 is already active. Do not jump beyond the current V3.5 substage unless the user explicitly asks for it.
+V3.5 is closed. Do not continue adding V3.5 features after closure. Do not enter V3.6 unless the user explicitly asks for it.
 
 Deferred / future scope:
 
@@ -63,7 +63,7 @@ V3 = Modular Plugin Chain Runtime with node topology and local launcher foundati
 V3 = 面向 MetaTrack 的模块化插件链实验平台；V3.5 聚焦节点拓扑与本地 launcher 基础；Fabric/EVM live validation 和 MetaFlow 保留为 planned preview / future roadmap。
 ```
 
-Fabric/EVM live backend work is not part of V3.5.2. V3.5.2 prepares launcher preview artifacts only, not an automatic Fabric/EVM live implementation.
+Fabric/EVM live backend work is not part of V3.5.4. V3.5 closes local topology, launcher preview, and node process preview only, not an automatic Fabric/EVM live implementation.
 
 ## 2. V3 Non-goals
 

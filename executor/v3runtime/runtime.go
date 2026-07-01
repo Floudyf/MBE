@@ -387,131 +387,136 @@ type StateCommit struct {
 }
 
 type Summary struct {
-	RunID                      string  `json:"run_id"`
-	Stage                      string  `json:"stage"`
-	BackendType                string  `json:"backend_type"`
-	TruthLabel                 string  `json:"truth_label"`
-	ChainProfileID             string  `json:"chain_profile_id"`
-	PluginProfileID            string  `json:"plugin_profile_id"`
-	ExperimentProfileID        string  `json:"experiment_profile_id"`
-	TxCount                    int     `json:"tx_count"`
-	SuccessCount               int     `json:"success_count"`
-	FailureCount               int     `json:"failure_count"`
-	BlockCount                 int     `json:"block_count"`
-	ThroughputTPS              float64 `json:"throughput_tps"`
-	AvgLatencyMS               float64 `json:"avg_latency_ms"`
-	P95LatencyMS               float64 `json:"p95_latency_ms"`
-	P99LatencyMS               float64 `json:"p99_latency_ms"`
-	RuntimeMode                string  `json:"runtime_mode"`
-	RemoteFetchCount           int     `json:"remote_fetch_count"`
-	CrossShardRatio            float64 `json:"cross_shard_ratio"`
-	FastTrackCount             int     `json:"fast_track_count"`
-	ConservativeTrackCount     int     `json:"conservative_track_count"`
-	AggregatedUpdateCount      int     `json:"aggregated_update_count"`
-	AggregationRatio           float64 `json:"aggregation_ratio"`
-	ConflictCount              int     `json:"conflict_count"`
-	QueueWaitMS                float64 `json:"queue_wait_ms"`
-	TxPoolAdmittedCount        int     `json:"txpool_admitted_count"`
-	TxPoolRejectedCount        int     `json:"txpool_rejected_count"`
-	TxPoolPeakSize             int     `json:"txpool_peak_size"`
-	TxPoolAvgWaitMS            float64 `json:"txpool_avg_wait_ms"`
-	TxPoolP95WaitMS            float64 `json:"txpool_p95_wait_ms"`
-	EmptyBlockCount            int     `json:"empty_block_count"`
-	AvgBlockSize               float64 `json:"avg_block_size"`
-	MaxBlockSize               int     `json:"max_block_size"`
-	BlockIntervalMS            int     `json:"block_interval_ms"`
-	AvgBlockIntervalMS         float64 `json:"avg_block_interval_ms"`
-	BlockProducerCountCut      int     `json:"blockproducer_count_cut_count"`
-	BlockProducerTimeCut       int     `json:"blockproducer_time_cut_count"`
-	BlockProducerDrainCut      int     `json:"blockproducer_drain_cut_count"`
-	BlockProducerEmptyCut      int     `json:"blockproducer_empty_cut_count"`
-	BlockCommitLatencyMS       float64 `json:"block_commit_latency_ms"`
-	ConsensusLatencyMS         float64 `json:"consensus_latency_ms"`
-	AvgConsensusLatencyMS      float64 `json:"avg_consensus_latency_ms"`
-	P95ConsensusLatencyMS      float64 `json:"p95_consensus_latency_ms"`
-	ConsensusMessageCount      int     `json:"consensus_message_count"`
-	AvgConsensusMessageCount   float64 `json:"avg_consensus_message_count"`
-	ConsensusRoundCount        int     `json:"consensus_round_count"`
-	ViewChangeCount            int     `json:"view_change_count"`
-	FinalizedBlockCount        int     `json:"finalized_block_count"`
-	FailedBlockCount           int     `json:"failed_block_count"`
-	RoutingDecisionCount       int     `json:"routing_decision_count"`
-	CrossShardTxCount          int     `json:"cross_shard_tx_count"`
-	LocalTxCount               int     `json:"local_tx_count"`
-	RemoteStateAccessCount     int     `json:"remote_state_access_count"`
-	AvgTouchedShards           float64 `json:"avg_touched_shards"`
-	MaxTouchedShards           int     `json:"max_touched_shards"`
-	HotspotKeyCount            int     `json:"hotspot_key_count"`
-	CoaccessGroupCount         int     `json:"coaccess_group_count"`
-	AvgRoutingOverheadMS       float64 `json:"avg_routing_overhead_ms"`
-	RoutingPlugin              string  `json:"routing_plugin"`
-	ExecutionPlugin            string  `json:"execution_plugin"`
-	ExecutionTxCount           int     `json:"execution_tx_count"`
-	BlockedTxCount             int     `json:"blocked_tx_count"`
-	DependencyEdgeCount        int     `json:"dependency_edge_count"`
-	AvgDependencyEdgesPerTx    float64 `json:"avg_dependency_edges_per_tx"`
-	AvgExecutionLatencyMS      float64 `json:"avg_execution_latency_ms"`
-	P95ExecutionLatencyMS      float64 `json:"p95_execution_latency_ms"`
-	MaxExecutionLatencyMS      int     `json:"max_execution_latency_ms"`
-	LogicalWorkerCount         int     `json:"logical_worker_count"`
-	ParallelizableTxCount      int     `json:"parallelizable_tx_count"`
-	SerialTxCount              int     `json:"serial_tx_count"`
-	StateAccessPlugin          string  `json:"state_access_plugin"`
-	StateAccessCount           int     `json:"state_access_count"`
-	LocalStateAccessCount      int     `json:"local_state_access_count"`
-	RemoteStateAccessRatio     float64 `json:"remote_state_access_ratio"`
-	CacheHitCount              int     `json:"cache_hit_count"`
-	CacheMissCount             int     `json:"cache_miss_count"`
-	CacheHitRate               float64 `json:"cache_hit_rate"`
-	PrefetchHitCount           int     `json:"prefetch_hit_count"`
-	PrefetchMissCount          int     `json:"prefetch_miss_count"`
-	PrefetchHitRate            float64 `json:"prefetch_hit_rate"`
-	AvgStateAccessLatencyMS    float64 `json:"avg_state_access_latency_ms"`
-	P95StateAccessLatencyMS    float64 `json:"p95_state_access_latency_ms"`
-	MaxStateAccessLatencyMS    int     `json:"max_state_access_latency_ms"`
-	RemoteStateAccessLatencyMS float64 `json:"remote_state_access_latency_ms"`
-	WitnessEstimatedCount      int     `json:"witness_estimated_count"`
-	ProofEstimatedCount        int     `json:"proof_estimated_count"`
-	EstimatedWitnessBytes      int     `json:"estimated_witness_bytes"`
-	EstimatedProofBytes        int     `json:"estimated_proof_bytes"`
-	CommitPlugin               string  `json:"commit_plugin"`
-	CommitTxCount              int     `json:"commit_tx_count"`
-	CommitUpdateCount          int     `json:"commit_update_count"`
-	NormalCommitCount          int     `json:"normal_commit_count"`
-	ConservativeCommitCount    int     `json:"conservative_commit_count"`
-	HotspotUpdateCount         int     `json:"hotspot_update_count"`
-	RawUpdateCount             int     `json:"raw_update_count"`
-	AggregationGroupCount      int     `json:"aggregation_group_count"`
-	ConstraintCheckCount       int     `json:"constraint_check_count"`
-	ConstraintPassedCount      int     `json:"constraint_passed_count"`
-	ConstraintFailedCount      int     `json:"constraint_failed_count"`
-	AvgCommitLatencyMS         float64 `json:"avg_commit_latency_ms"`
-	P95CommitLatencyMS         float64 `json:"p95_commit_latency_ms"`
-	MaxCommitLatencyMS         int     `json:"max_commit_latency_ms"`
-	ExecutionShardCount        int     `json:"execution_shard_count"`
-	StateStorageUnitCount      int     `json:"state_storage_unit_count"`
-	CrossStateUnitAccessCount  int     `json:"cross_state_unit_access_count"`
-	RemoteStateFetchCount      int     `json:"remote_state_fetch_count"`
-	StateLocalityRatio         float64 `json:"state_locality_ratio"`
-	ExecutionShardLoadBalance  float64 `json:"execution_shard_load_balance"`
-	StateUnitLoadBalance       float64 `json:"state_unit_load_balance"`
-	ShardCount                 int     `json:"shard_count"`
-	ValidatorsPerShard         int     `json:"validators_per_shard"`
-	LogicalNodeCount           int     `json:"logical_node_count"`
-	ValidatorNodeCount         int     `json:"validator_node_count"`
-	ExecutorNodeCount          int     `json:"executor_node_count"`
-	StorageNodeCount           int     `json:"storage_node_count"`
-	SupervisorNodeCount        int     `json:"supervisor_node_count"`
-	MessageCount               int     `json:"message_count"`
-	NetworkMessageCount        int     `json:"network_message_count"`
-	NodeEventCount             int     `json:"node_event_count"`
-	LauncherMode               string  `json:"launcher_mode"`
-	LauncherScriptCount        int     `json:"launcher_script_count"`
-	LaunchableNodeCount        int     `json:"launchable_node_count"`
-	NodeAddressCount           int     `json:"node_address_count"`
-	WindowsLauncherAvailable   bool    `json:"windows_launcher_available"`
-	LinuxLauncherAvailable     bool    `json:"linux_launcher_available"`
-	LauncherPreviewOnly        bool    `json:"launcher_preview_only"`
+	RunID                          string  `json:"run_id"`
+	Stage                          string  `json:"stage"`
+	BackendType                    string  `json:"backend_type"`
+	TruthLabel                     string  `json:"truth_label"`
+	ChainProfileID                 string  `json:"chain_profile_id"`
+	PluginProfileID                string  `json:"plugin_profile_id"`
+	ExperimentProfileID            string  `json:"experiment_profile_id"`
+	TxCount                        int     `json:"tx_count"`
+	SuccessCount                   int     `json:"success_count"`
+	FailureCount                   int     `json:"failure_count"`
+	BlockCount                     int     `json:"block_count"`
+	ThroughputTPS                  float64 `json:"throughput_tps"`
+	AvgLatencyMS                   float64 `json:"avg_latency_ms"`
+	P95LatencyMS                   float64 `json:"p95_latency_ms"`
+	P99LatencyMS                   float64 `json:"p99_latency_ms"`
+	RuntimeMode                    string  `json:"runtime_mode"`
+	RemoteFetchCount               int     `json:"remote_fetch_count"`
+	CrossShardRatio                float64 `json:"cross_shard_ratio"`
+	FastTrackCount                 int     `json:"fast_track_count"`
+	ConservativeTrackCount         int     `json:"conservative_track_count"`
+	AggregatedUpdateCount          int     `json:"aggregated_update_count"`
+	AggregationRatio               float64 `json:"aggregation_ratio"`
+	ConflictCount                  int     `json:"conflict_count"`
+	QueueWaitMS                    float64 `json:"queue_wait_ms"`
+	TxPoolAdmittedCount            int     `json:"txpool_admitted_count"`
+	TxPoolRejectedCount            int     `json:"txpool_rejected_count"`
+	TxPoolPeakSize                 int     `json:"txpool_peak_size"`
+	TxPoolAvgWaitMS                float64 `json:"txpool_avg_wait_ms"`
+	TxPoolP95WaitMS                float64 `json:"txpool_p95_wait_ms"`
+	EmptyBlockCount                int     `json:"empty_block_count"`
+	AvgBlockSize                   float64 `json:"avg_block_size"`
+	MaxBlockSize                   int     `json:"max_block_size"`
+	BlockIntervalMS                int     `json:"block_interval_ms"`
+	AvgBlockIntervalMS             float64 `json:"avg_block_interval_ms"`
+	BlockProducerCountCut          int     `json:"blockproducer_count_cut_count"`
+	BlockProducerTimeCut           int     `json:"blockproducer_time_cut_count"`
+	BlockProducerDrainCut          int     `json:"blockproducer_drain_cut_count"`
+	BlockProducerEmptyCut          int     `json:"blockproducer_empty_cut_count"`
+	BlockCommitLatencyMS           float64 `json:"block_commit_latency_ms"`
+	ConsensusLatencyMS             float64 `json:"consensus_latency_ms"`
+	AvgConsensusLatencyMS          float64 `json:"avg_consensus_latency_ms"`
+	P95ConsensusLatencyMS          float64 `json:"p95_consensus_latency_ms"`
+	ConsensusMessageCount          int     `json:"consensus_message_count"`
+	AvgConsensusMessageCount       float64 `json:"avg_consensus_message_count"`
+	ConsensusRoundCount            int     `json:"consensus_round_count"`
+	ViewChangeCount                int     `json:"view_change_count"`
+	FinalizedBlockCount            int     `json:"finalized_block_count"`
+	FailedBlockCount               int     `json:"failed_block_count"`
+	RoutingDecisionCount           int     `json:"routing_decision_count"`
+	CrossShardTxCount              int     `json:"cross_shard_tx_count"`
+	LocalTxCount                   int     `json:"local_tx_count"`
+	RemoteStateAccessCount         int     `json:"remote_state_access_count"`
+	AvgTouchedShards               float64 `json:"avg_touched_shards"`
+	MaxTouchedShards               int     `json:"max_touched_shards"`
+	HotspotKeyCount                int     `json:"hotspot_key_count"`
+	CoaccessGroupCount             int     `json:"coaccess_group_count"`
+	AvgRoutingOverheadMS           float64 `json:"avg_routing_overhead_ms"`
+	RoutingPlugin                  string  `json:"routing_plugin"`
+	ExecutionPlugin                string  `json:"execution_plugin"`
+	ExecutionTxCount               int     `json:"execution_tx_count"`
+	BlockedTxCount                 int     `json:"blocked_tx_count"`
+	DependencyEdgeCount            int     `json:"dependency_edge_count"`
+	AvgDependencyEdgesPerTx        float64 `json:"avg_dependency_edges_per_tx"`
+	AvgExecutionLatencyMS          float64 `json:"avg_execution_latency_ms"`
+	P95ExecutionLatencyMS          float64 `json:"p95_execution_latency_ms"`
+	MaxExecutionLatencyMS          int     `json:"max_execution_latency_ms"`
+	LogicalWorkerCount             int     `json:"logical_worker_count"`
+	ParallelizableTxCount          int     `json:"parallelizable_tx_count"`
+	SerialTxCount                  int     `json:"serial_tx_count"`
+	StateAccessPlugin              string  `json:"state_access_plugin"`
+	StateAccessCount               int     `json:"state_access_count"`
+	LocalStateAccessCount          int     `json:"local_state_access_count"`
+	RemoteStateAccessRatio         float64 `json:"remote_state_access_ratio"`
+	CacheHitCount                  int     `json:"cache_hit_count"`
+	CacheMissCount                 int     `json:"cache_miss_count"`
+	CacheHitRate                   float64 `json:"cache_hit_rate"`
+	PrefetchHitCount               int     `json:"prefetch_hit_count"`
+	PrefetchMissCount              int     `json:"prefetch_miss_count"`
+	PrefetchHitRate                float64 `json:"prefetch_hit_rate"`
+	AvgStateAccessLatencyMS        float64 `json:"avg_state_access_latency_ms"`
+	P95StateAccessLatencyMS        float64 `json:"p95_state_access_latency_ms"`
+	MaxStateAccessLatencyMS        int     `json:"max_state_access_latency_ms"`
+	RemoteStateAccessLatencyMS     float64 `json:"remote_state_access_latency_ms"`
+	WitnessEstimatedCount          int     `json:"witness_estimated_count"`
+	ProofEstimatedCount            int     `json:"proof_estimated_count"`
+	EstimatedWitnessBytes          int     `json:"estimated_witness_bytes"`
+	EstimatedProofBytes            int     `json:"estimated_proof_bytes"`
+	CommitPlugin                   string  `json:"commit_plugin"`
+	CommitTxCount                  int     `json:"commit_tx_count"`
+	CommitUpdateCount              int     `json:"commit_update_count"`
+	NormalCommitCount              int     `json:"normal_commit_count"`
+	ConservativeCommitCount        int     `json:"conservative_commit_count"`
+	HotspotUpdateCount             int     `json:"hotspot_update_count"`
+	RawUpdateCount                 int     `json:"raw_update_count"`
+	AggregationGroupCount          int     `json:"aggregation_group_count"`
+	ConstraintCheckCount           int     `json:"constraint_check_count"`
+	ConstraintPassedCount          int     `json:"constraint_passed_count"`
+	ConstraintFailedCount          int     `json:"constraint_failed_count"`
+	AvgCommitLatencyMS             float64 `json:"avg_commit_latency_ms"`
+	P95CommitLatencyMS             float64 `json:"p95_commit_latency_ms"`
+	MaxCommitLatencyMS             int     `json:"max_commit_latency_ms"`
+	ExecutionShardCount            int     `json:"execution_shard_count"`
+	StateStorageUnitCount          int     `json:"state_storage_unit_count"`
+	CrossStateUnitAccessCount      int     `json:"cross_state_unit_access_count"`
+	RemoteStateFetchCount          int     `json:"remote_state_fetch_count"`
+	StateLocalityRatio             float64 `json:"state_locality_ratio"`
+	ExecutionShardLoadBalance      float64 `json:"execution_shard_load_balance"`
+	StateUnitLoadBalance           float64 `json:"state_unit_load_balance"`
+	ShardCount                     int     `json:"shard_count"`
+	ValidatorsPerShard             int     `json:"validators_per_shard"`
+	LogicalNodeCount               int     `json:"logical_node_count"`
+	ValidatorNodeCount             int     `json:"validator_node_count"`
+	ExecutorNodeCount              int     `json:"executor_node_count"`
+	StorageNodeCount               int     `json:"storage_node_count"`
+	SupervisorNodeCount            int     `json:"supervisor_node_count"`
+	MessageCount                   int     `json:"message_count"`
+	NetworkMessageCount            int     `json:"network_message_count"`
+	NodeEventCount                 int     `json:"node_event_count"`
+	LauncherMode                   string  `json:"launcher_mode"`
+	LauncherScriptCount            int     `json:"launcher_script_count"`
+	LaunchableNodeCount            int     `json:"launchable_node_count"`
+	NodeAddressCount               int     `json:"node_address_count"`
+	WindowsLauncherAvailable       bool    `json:"windows_launcher_available"`
+	LinuxLauncherAvailable         bool    `json:"linux_launcher_available"`
+	LauncherPreviewOnly            bool    `json:"launcher_preview_only"`
+	NodeProcessEntrypointAvailable bool    `json:"node_process_entrypoint_available"`
+	NodeProcessPreviewAvailable    bool    `json:"node_process_preview_available"`
+	NodeProcessStatusAvailable     bool    `json:"node_process_status_available"`
+	NodeProcessManifestAvailable   bool    `json:"node_process_manifest_available"`
+	NodeProcessPreviewOnly         bool    `json:"node_process_preview_only"`
 }
 
 type Result struct {
@@ -691,7 +696,8 @@ func Run(input Input) (Result, error) {
 	launcher := BuildLauncherPreview(nodeRuntime)
 	applyNodeRuntimeMetrics(&summary, nodeRuntime)
 	applyLauncherPreviewMetrics(&summary, launcher)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, nodeRuntime, launcher, "V3.5.2 Local Multi-process Launcher Preview run"); err != nil {
+	applyNodeProcessPreviewMetrics(&summary)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, nodeRuntime, launcher, "V3.5.4 V3.5 Closure run"); err != nil {
 		return Result{}, err
 	}
 	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, ExecutionLog: executionLog, StateAccessLog: stateAccessLog, NodeRuntime: nodeRuntime, Launcher: launcher, FinalState: state}, nil
@@ -2202,6 +2208,14 @@ func applyLauncherPreviewMetrics(summary *Summary, launcher LauncherPreview) {
 	summary.LauncherPreviewOnly = true
 }
 
+func applyNodeProcessPreviewMetrics(summary *Summary) {
+	summary.NodeProcessEntrypointAvailable = true
+	summary.NodeProcessPreviewAvailable = true
+	summary.NodeProcessStatusAvailable = true
+	summary.NodeProcessManifestAvailable = true
+	summary.NodeProcessPreviewOnly = true
+}
+
 func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, executionLog []ExecutionRecord, stateAccessLog []StateAccessRecord, nodeRuntime NodeRuntimeArtifacts, launcher LauncherPreview, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
@@ -2261,11 +2275,25 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := writeLauncherPreviewArtifacts(out, nodeRuntime, launcher); err != nil {
 		return err
 	}
-	report := "# " + title + "\n\nThis is V3.5.2 launcher preview output generated from the V3.5.1 single-process logical node topology runtime. It keeps FIFO TxPool, BlockProducer, Consensus-light, Routing/Sharding, Execution, StateAccess, Commit, and node-level logical artifacts.\n\nIt generates deterministic logical validators, executors, storage nodes, and an optional supervisor from the configured topology. It writes node_topology.csv, node_log.csv, network_log.csv, consensus_message_log.csv, node_address_table.csv, topology.json, launch_nodes_windows.bat, launch_nodes_linux.sh, and launcher_readme.md. The launcher scripts are preview artifacts only.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nIt is not real TCP, not a real multi-process runtime, not real PBFT, not HotStuff, not Raft, not Fabric/EVM live execution, not a BlockEmulator backend, not a real cross-shard relay/broker/2PC protocol, and not final paper-scale performance evidence.\n"
+	if len(launcher.Addresses) > 0 {
+		_, err := RunNodeProcessPreview(NodeProcessPreviewInput{
+			NodeID:       launcher.Addresses[0].NodeID,
+			Role:         launcher.Addresses[0].Role,
+			ShardID:      launcher.Addresses[0].ShardID,
+			HasShardID:   true,
+			TopologyFile: filepath.Join(out, "topology.json"),
+			OutputDir:    out,
+			PreviewOnly:  true,
+		})
+		if err != nil {
+			return err
+		}
+	}
+	report := "# " + title + "\n\nThis is V3.5 closure output generated from the V3.5.1 single-process logical node topology runtime, V3.5.2 launcher preview artifacts, and V3.5.3 local node process preview entry point. It keeps FIFO TxPool, BlockProducer, Consensus-light, Routing/Sharding, Execution, StateAccess, Commit, and node-level logical artifacts.\n\nIt generates deterministic logical validators, executors, storage nodes, and an optional supervisor from the configured topology. It writes node_topology.csv, node_log.csv, network_log.csv, consensus_message_log.csv, node_address_table.csv, topology.json, launch_nodes_windows.bat, launch_nodes_linux.sh, launcher_readme.md, node_process_status.csv, node_process_manifest.json, and node_process_log_sample.log. The launcher scripts and node process are preview artifacts only.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nIt is not real TCP, not a real multi-process network runtime, not real PBFT, not HotStuff, not Raft, not Fabric/EVM live execution, not a BlockEmulator backend, not a real cross-shard relay/broker/2PC protocol, and not final paper-scale performance evidence.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
-	log := "v3 launcher preview runtime start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\nnode_runtime_mode=" + nodeRuntime.Config.NodeRuntimeMode + "\nnetwork_mode=" + nodeRuntime.Config.NetworkMode + "\nlogical_node_count=" + strconv.Itoa(summary.LogicalNodeCount) + "\nlauncher_mode=" + summary.LauncherMode + "\nlaunchable_node_count=" + strconv.Itoa(summary.LaunchableNodeCount) + "\nlauncher_preview_only=true\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nrouting_plugin=" + summary.RoutingPlugin + "\nexecution_plugin=" + summary.ExecutionPlugin + "\nstate_access_plugin=" + summary.StateAccessPlugin + "\nfabric_live=false\nevm_live=false\nblockemulator_backend=false\nreal_tcp=false\nreal_multi_process_runtime=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nreal_cross_shard_protocol=false\nreal_concurrent_execution=false\nreal_rollback=false\nreal_remote_storage=false\nreal_proof_witness=false\nmpt=false\nstate_root=false\nsnapshot=false\npaper_grade_benchmark=false\nv3 launcher preview runtime done\n"
+	log := "v3 local node process preview closure start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\nnode_runtime_mode=" + nodeRuntime.Config.NodeRuntimeMode + "\nnetwork_mode=" + nodeRuntime.Config.NetworkMode + "\nlogical_node_count=" + strconv.Itoa(summary.LogicalNodeCount) + "\nlauncher_mode=" + summary.LauncherMode + "\nlaunchable_node_count=" + strconv.Itoa(summary.LaunchableNodeCount) + "\nlauncher_preview_only=true\nnode_process_entrypoint_available=true\nnode_process_preview_only=true\ntxpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_light=true\nrouting_plugin=" + summary.RoutingPlugin + "\nexecution_plugin=" + summary.ExecutionPlugin + "\nstate_access_plugin=" + summary.StateAccessPlugin + "\nfabric_live=false\nevm_live=false\nblockemulator_backend=false\nreal_tcp=false\nreal_multi_process_runtime=false\nreal_node_to_node_communication=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nreal_cross_shard_protocol=false\nreal_concurrent_execution=false\nreal_rollback=false\nreal_remote_storage=false\nreal_proof_witness=false\nmpt=false\nstate_root=false\nsnapshot=false\npaper_grade_benchmark=false\nv3 local node process preview closure done\n"
 	return os.WriteFile(filepath.Join(out, "runtime.log"), []byte(log), 0o644)
 }
 
@@ -2283,11 +2311,12 @@ func writeSummaryCSV(path string, s Summary) error {
 		strconv.Itoa(s.ExecutionShardCount), strconv.Itoa(s.StateStorageUnitCount), strconv.Itoa(s.CrossStateUnitAccessCount), strconv.Itoa(s.RemoteStateFetchCount), fmt.Sprint(s.StateLocalityRatio), fmt.Sprint(s.ExecutionShardLoadBalance), fmt.Sprint(s.StateUnitLoadBalance),
 		strconv.Itoa(s.ShardCount), strconv.Itoa(s.ValidatorsPerShard), strconv.Itoa(s.LogicalNodeCount), strconv.Itoa(s.ValidatorNodeCount), strconv.Itoa(s.ExecutorNodeCount), strconv.Itoa(s.StorageNodeCount), strconv.Itoa(s.SupervisorNodeCount), strconv.Itoa(s.MessageCount), strconv.Itoa(s.NetworkMessageCount), strconv.Itoa(s.NodeEventCount),
 		s.LauncherMode, strconv.Itoa(s.LauncherScriptCount), strconv.Itoa(s.LaunchableNodeCount), strconv.Itoa(s.NodeAddressCount), fmt.Sprint(s.WindowsLauncherAvailable), fmt.Sprint(s.LinuxLauncherAvailable), fmt.Sprint(s.LauncherPreviewOnly),
+		fmt.Sprint(s.NodeProcessEntrypointAvailable), fmt.Sprint(s.NodeProcessPreviewAvailable), fmt.Sprint(s.NodeProcessStatusAvailable), fmt.Sprint(s.NodeProcessManifestAvailable), fmt.Sprint(s.NodeProcessPreviewOnly),
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "raw_update_count", "aggregation_group_count", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance", "shard_count", "validators_per_shard", "logical_node_count", "validator_node_count", "executor_node_count", "storage_node_count", "supervisor_node_count", "message_count", "network_message_count", "node_event_count", "launcher_mode", "launcher_script_count", "launchable_node_count", "node_address_count", "windows_launcher_available", "linux_launcher_available", "launcher_preview_only"}
+	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "raw_update_count", "aggregation_group_count", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance", "shard_count", "validators_per_shard", "logical_node_count", "validator_node_count", "executor_node_count", "storage_node_count", "supervisor_node_count", "message_count", "network_message_count", "node_event_count", "launcher_mode", "launcher_script_count", "launchable_node_count", "node_address_count", "windows_launcher_available", "linux_launcher_available", "launcher_preview_only", "node_process_entrypoint_available", "node_process_preview_available", "node_process_status_available", "node_process_manifest_available", "node_process_preview_only"}
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {

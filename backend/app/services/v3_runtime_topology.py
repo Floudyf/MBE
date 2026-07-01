@@ -5,11 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.5.2"
-LATEST_RUNTIME_STAGE = "V3.5.1 Logical Node Topology Runtime"
-CURRENT_CAPABILITY = "launcher preview artifacts generated from logical node topology"
-RUNTIME_TRUTH = "launcher_preview_only_not_real_tcp_not_real_pbft"
-NEXT_STAGE = "V3.5.3 Local Node Process Runtime"
+CURRENT_STAGE = "V3.5.4"
+LATEST_RUNTIME_STAGE = "V3.5 local node process preview runtime"
+CURRENT_CAPABILITY = "configurable logical node topology, launcher preview artifacts, and local node process preview entry point"
+RUNTIME_TRUTH = "local_node_process_preview_not_real_tcp_not_real_pbft"
+NEXT_STAGE = "V3.6 TCP Adapter and Consensus Hardening"
 
 
 def default_topology() -> V3RuntimeTopology:
