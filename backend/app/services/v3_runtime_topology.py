@@ -5,10 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.5.1"
-LATEST_RUNTIME_STAGE = "V3.5.1 logical node topology runtime"
-RUNTIME_TRUTH = "single_process_logical_node_topology_runtime"
-NEXT_STAGE = "V3.5.2 Local Multi-process Launcher Preview"
+CURRENT_STAGE = "V3.5.2"
+LATEST_RUNTIME_STAGE = "V3.5.1 Logical Node Topology Runtime"
+CURRENT_CAPABILITY = "launcher preview artifacts generated from logical node topology"
+RUNTIME_TRUTH = "launcher_preview_only_not_real_tcp_not_real_pbft"
+NEXT_STAGE = "V3.5.3 Local Node Process Runtime"
 
 
 def default_topology() -> V3RuntimeTopology:
@@ -19,6 +20,8 @@ def stage_metadata() -> dict[str, str]:
     return {
         "current_stage": CURRENT_STAGE,
         "latest_runtime_stage": LATEST_RUNTIME_STAGE,
+        "latest_completed_runtime_stage": LATEST_RUNTIME_STAGE,
+        "current_capability": CURRENT_CAPABILITY,
         "runtime_truth": RUNTIME_TRUTH,
         "next_stage": NEXT_STAGE,
     }

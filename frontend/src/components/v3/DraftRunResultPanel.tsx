@@ -13,6 +13,7 @@ const executionSummaryKeys = ["execution_plugin", "execution_tx_count", "fast_tr
 const stateAccessSummaryKeys = ["state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes"];
 const commitSummaryKeys = ["commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "aggregated_update_count", "raw_update_count", "aggregation_group_count", "aggregation_ratio", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms"];
 const nodeTopologySummaryKeys = ["shard_count", "validators_per_shard", "logical_node_count", "validator_node_count", "executor_node_count", "storage_node_count", "supervisor_node_count", "message_count", "network_message_count", "consensus_message_count", "node_event_count"];
+const launcherPreviewSummaryKeys = ["launcher_mode", "launchable_node_count", "node_address_count", "launcher_script_count", "windows_launcher_available", "linux_launcher_available", "launcher_preview_only"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
@@ -144,6 +145,17 @@ export default function DraftRunResultPanel({ result }: Props) {
         <div><dt>node_log.csv</dt><dd>{artifactNames.has("node_log.csv") ? "available" : "missing"}</dd></div>
         <div><dt>network_log.csv</dt><dd>{artifactNames.has("network_log.csv") ? "available" : "missing"}</dd></div>
         <div><dt>consensus_message_log.csv</dt><dd>{artifactNames.has("consensus_message_log.csv") ? "available" : "missing"}</dd></div>
+      </div>
+      <div className="v3-summary-preview">
+        <div><dt>Launcher Preview</dt><dd>preview only · not real TCP · not real PBFT · not BlockEmulator backend</dd></div>
+        {launcherPreviewSummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>node_address_table.csv</dt><dd>{artifactNames.has("node_address_table.csv") ? "available" : "missing"}</dd></div>
+        <div><dt>topology.json</dt><dd>{artifactNames.has("topology.json") ? "available" : "missing"}</dd></div>
+        <div><dt>launch_nodes_windows.bat</dt><dd>{artifactNames.has("launch_nodes_windows.bat") ? "available" : "missing"}</dd></div>
+        <div><dt>launch_nodes_linux.sh</dt><dd>{artifactNames.has("launch_nodes_linux.sh") ? "available" : "missing"}</dd></div>
+        <div><dt>launcher_readme.md</dt><dd>{artifactNames.has("launcher_readme.md") ? "available" : "missing"}</dd></div>
       </div>
       <p className="muted">Draft Smoke history is a local debugging, demo, and configuration tracing record. It is not a formal paper experiment result.</p>
     </section>

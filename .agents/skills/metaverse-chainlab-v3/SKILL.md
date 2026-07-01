@@ -2,9 +2,9 @@
 
 ## 0. Current V3 Scope Realignment
 
-As of V3.5.1, current_stage is V3.5.1 Logical Node Topology Runtime, latest_runtime_stage is configurable single-process logical node topology with node/network/message artifacts, runtime_truth is single_process_logical_node_topology_runtime, and next_stage is V3.5.2 Local Multi-process Launcher Preview. V3.4.11 closure is complete, and the V3.5 route is defined in `docs/v3_5_node_topology_and_local_launcher_plan.md`.
+As of V3.5.2, current_stage is V3.5.2 Local Multi-process Launcher Preview, latest_completed_runtime_stage is V3.5.1 Logical Node Topology Runtime, current_capability is launcher preview artifacts generated from logical node topology, runtime_truth is launcher_preview_only_not_real_tcp_not_real_pbft, and next_stage is V3.5.3 Local Node Process Runtime. V3.4.11 closure is complete, V3.5.1 logical node topology runtime is complete, and the V3.5 route is defined in `docs/v3_5_node_topology_and_local_launcher_plan.md`.
 
-When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, the frontend Runtime Topology panel, backend V3 composer topology validation, Go logical node tests, and controlled smoke tests. This round only allows logical node topology runtime. Do not implement real TCP, multi-process launch, real PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, or real cross-shard protocol work unless explicitly requested. Do not present smoke output as a paper-grade benchmark.
+When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, the frontend Runtime Topology panel, backend V3 composer topology validation, Go logical node and launcher preview tests, and controlled smoke tests. V3.5.2 only allows local multi-process launcher preview artifacts. Do not implement real TCP, real multi-process runtime, real PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, or real cross-shard protocol work unless explicitly requested. Do not present smoke output as a paper-grade benchmark.
 
 As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 
@@ -40,7 +40,7 @@ V3.4 series goal: harden critical foundation modules in the V3 Go-backed modular
 
 Every V3.4.x runtime hardening substage must include corresponding frontend alignment. When runtime adds an artifact, summary metric, or module truth boundary, frontend artifact grouping, result summary, history detail, and module detail must align in the same implementation stage. Runtime must not output a new artifact that the frontend cannot download or explain.
 
-V3.5 is the next node-level emulator skeleton stage. Do not enter V3.5 unless the user explicitly asks for it.
+V3.5 is already active. Do not jump beyond the current V3.5 substage unless the user explicitly asks for it.
 
 Deferred / future scope:
 
@@ -54,16 +54,16 @@ Existing MetaFlow profiles remain planned preview profiles and must not become r
 
 This skill governs V3 work for MBE.
 
-V3 builds a MetaTrack-oriented modular plugin chain runtime with a later Fabric-backed validation layer and frontend acceptance. V3 reuses V2 experiment management, artifacts, sweeps, reports, calibration, and frontend shell. MetaFlow dual-chain protocol evaluation is retained only as planned preview / future roadmap material in the current V3 scope.
+V3 builds a MetaTrack-oriented modular plugin chain runtime and is currently in the V3.5 node topology / local launcher foundation series. Fabric/EVM live validation is deferred to a later stage unless explicitly reopened. V3 reuses V2 experiment management, artifacts, sweeps, reports, calibration, and frontend shell. MetaFlow dual-chain protocol evaluation is retained only as planned preview / future roadmap material in the current V3 scope.
 
 V3 positioning:
 
 ```text
-V3 = Modular Plugin Chain Runtime with Fabric-backed Validation
-V3 = 面向 MetaTrack 的模块化插件链实验平台，并带 Fabric 链支持验证；MetaFlow 保留为 planned preview / future roadmap。
+V3 = Modular Plugin Chain Runtime with node topology and local launcher foundations
+V3 = 面向 MetaTrack 的模块化插件链实验平台；V3.5 聚焦节点拓扑与本地 launcher 基础；Fabric/EVM live validation 和 MetaFlow 保留为 planned preview / future roadmap。
 ```
 
-Fabric/EVM live backend work is not part of V3.4.11. V3.4 closure prepares the project for the next explicit V3.5 node-level emulator skeleton stage, not for an automatic Fabric/EVM live implementation.
+Fabric/EVM live backend work is not part of V3.5.2. V3.5.2 prepares launcher preview artifacts only, not an automatic Fabric/EVM live implementation.
 
 ## 2. V3 Non-goals
 

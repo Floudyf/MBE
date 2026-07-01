@@ -37,7 +37,8 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.5.1"
+    assert result.normalized_draft["current_stage"] == "V3.5.2"
+    assert result.normalized_draft["current_capability"] == "launcher preview artifacts generated from logical node topology"
 
 
 def test_valid_draft_accepts_custom_logical_topology() -> None:

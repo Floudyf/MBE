@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,11 +19,13 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.5.1"
+CURRENT_STAGE = "V3.5.2"
 LATEST_RUNTIME_STAGE = "V3.4.10"
 CLOSURE_STAGE = "V3.4.11"
-RUNTIME_TRUTH = "single_process_logical_node_topology_runtime"
-NEXT_STAGE = "V3.5.2 Local Multi-process Launcher Preview"
+LATEST_COMPLETED_RUNTIME_STAGE = "V3.5.1 Logical Node Topology Runtime"
+CURRENT_CAPABILITY = "launcher preview artifacts generated from logical node topology"
+RUNTIME_TRUTH = "launcher_preview_only_not_real_tcp_not_real_pbft"
+NEXT_STAGE = "V3.5.3 Local Node Process Runtime"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -52,6 +55,11 @@ CONTROLLED_ARTIFACTS = [
     "ablation_report.md",
     "realism_readiness.json",
     "realism_readiness.md",
+    "node_address_table.csv",
+    "topology.json",
+    "launch_nodes_windows.bat",
+    "launch_nodes_linux.sh",
+    "launcher_readme.md",
 ]
 
 
@@ -125,13 +133,16 @@ def run_v3_4_10_controlled_smoke(root: Path = CONTROLLED_SMOKE_ROOT) -> dict[str
         ])
         _write_csv(run_dir / "aggregate_summary.csv", aggregate_rows, AGGREGATE_FIELDS)
         _write_report(run_dir / "ablation_report.md", run_id, aggregate_rows)
+        _copy_representative_launcher_artifacts(run_dir, child_results)
         readiness = write_realism_readiness(run_dir)
         _write_json(run_dir / "controlled_run.json", {
             "run_id": run_id,
             "stage": LATEST_RUNTIME_STAGE,
             "current_stage": CURRENT_STAGE,
             "latest_runtime_stage": LATEST_RUNTIME_STAGE,
+            "latest_completed_runtime_stage": LATEST_COMPLETED_RUNTIME_STAGE,
             "closure_stage": CLOSURE_STAGE,
+            "current_capability": CURRENT_CAPABILITY,
             "runtime_truth": RUNTIME_TRUTH,
             "next_stage": NEXT_STAGE,
             "preset_order": CONTROLLED_PRESET_ORDER,
@@ -146,7 +157,9 @@ def run_v3_4_10_controlled_smoke(root: Path = CONTROLLED_SMOKE_ROOT) -> dict[str
             "stage": LATEST_RUNTIME_STAGE,
             "current_stage": CURRENT_STAGE,
             "latest_runtime_stage": LATEST_RUNTIME_STAGE,
+            "latest_completed_runtime_stage": LATEST_COMPLETED_RUNTIME_STAGE,
             "closure_stage": CLOSURE_STAGE,
+            "current_capability": CURRENT_CAPABILITY,
             "runtime_truth": RUNTIME_TRUTH,
             "next_stage": NEXT_STAGE,
             "output_dir": str(run_dir),
@@ -210,6 +223,17 @@ def get_controlled_artifact_path(run_id: str, filename: str, root: Path = CONTRO
     if filename not in CONTROLLED_ARTIFACTS:
         raise ValueError("controlled smoke artifact is not downloadable")
     return get_artifact_path(controlled_smoke_job_manager(root).run_dir(run_id), filename)
+
+
+def _copy_representative_launcher_artifacts(run_dir: Path, child_results: list[dict[str, Any]]) -> None:
+    representative = next((result for result in child_results if str((result.get("summary") or {}).get("preset_id", "")) == "metatrack_full_smoke"), child_results[-1] if child_results else None)
+    if not representative:
+        return
+    child_dir = Path(str(representative.get("output_dir", "")))
+    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md"):
+        source = child_dir / filename
+        if source.is_file():
+            shutil.copyfile(source, run_dir / filename)
 
 
 def _aggregate_row(summary: dict[str, Any], preset: dict[str, Any]) -> dict[str, Any]:

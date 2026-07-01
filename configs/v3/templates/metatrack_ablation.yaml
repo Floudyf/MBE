@@ -91,6 +91,15 @@ expected_artifacts:
   - execution_log.csv
   - state_access_log.csv
   - state_commit_log.csv
+  - node_topology.csv
+  - node_log.csv
+  - network_log.csv
+  - consensus_message_log.csv
+  - node_address_table.csv
+  - topology.json
+  - launch_nodes_windows.bat
+  - launch_nodes_linux.sh
+  - launcher_readme.md
   - summary.csv
   - summary.json
   - block_log.csv
@@ -137,6 +146,15 @@ presets:
       - execution_log.csv
       - state_access_log.csv
       - state_commit_log.csv
+      - node_topology.csv
+      - node_log.csv
+      - network_log.csv
+      - consensus_message_log.csv
+      - node_address_table.csv
+      - topology.json
+      - launch_nodes_windows.bat
+      - launch_nodes_linux.sh
+      - launcher_readme.md
       - summary.csv
       - summary.json
       - block_log.csv

@@ -4,6 +4,8 @@
 
 V3.5 moves MBE from the local Go-backed modular runtime toward a configurable node-topology emulator-like runtime. The goal is to make shard/node topology, node logs, message logs, and local launcher preparation explicit before any real networking or consensus hardening.
 
+Current V3.5 substage: V3.5.2 Local Multi-process Launcher Preview. V3.5.1 logical node topology runtime is complete.
+
 ## 2. Why V3.5 Follows V3.4.11
 
 V3.4.11 closed stage/version/frontend/docs/skill alignment around the V3.4.10 controlled smoke runner. V3.5 starts the next foundation layer: node topology, node-level artifacts, and later local multi-process launch capability.
@@ -21,6 +23,8 @@ Frontend configures topology, backend validates topology, Go runtime generates l
 ### V3.5.2 Local Multi-process Launcher Preview
 
 Generate `launch_nodes_windows.bat`, `launch_nodes_linux.sh`, and a node address table from topology.
+
+This stage is launcher preview only. It generates node address and script artifacts; it does not start a real multi-process runtime.
 
 ### V3.5.3 Local Node Process Runtime
 

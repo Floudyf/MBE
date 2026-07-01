@@ -21,11 +21,11 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
     <section className="final-card wide v3-template-bar">
       <div className="v3-section-head">
         <div>
-          <p className="eyebrow">V3.5.1 Logical Node Topology</p>
+          <p className="eyebrow">V3.5 topology source</p>
           <h3>Runtime Topology / Node Topology</h3>
         </div>
       </div>
-      <p className="muted">Configures single-process logical nodes only. This is not real TCP, not multi-process, not real PBFT, and not a BlockEmulator backend.</p>
+      <p className="muted">Configures single-process logical nodes for V3.5.2 launcher preview artifacts. This is not real TCP, not a real multi-process runtime, not real PBFT, and not a BlockEmulator backend.</p>
       <div className="v3-identity-grid">
         {numericFields.map((field) => (
           <label key={field}>

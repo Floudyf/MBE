@@ -6,9 +6,9 @@ V3.4.11 closure is complete. V3.4.9 introduced MetaTrack ablation templates, V3.
 
 This status does not claim paper-grade benchmark evidence, real chain execution, Fabric/EVM live backend, BlockEmulator backend, real multi-node networking, real PBFT/HotStuff/Raft, real cross-shard protocol, or real proof/witness/MPT/state root.
 
-## V3.5.1 Current Status
+## V3.5.2 Current Status
 
-Current stage is V3.5.1 Logical Node Topology Runtime. V3.5.1 adds frontend topology config, backend topology validation, single-process logical node generation, node/network/consensus message artifacts, and node topology summary metrics. It is not real TCP, not multi-process, not real PBFT, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
+Current stage is V3.5.2 Local Multi-process Launcher Preview. V3.5.1 added frontend topology config, backend topology validation, single-process logical node generation, node/network/consensus message artifacts, and node topology summary metrics. V3.5.2 generates launcher preview artifacts from that topology: node address table, topology JSON, Windows/Linux launch script previews, and launcher README. It is not real TCP, not a real multi-process runtime, not real PBFT, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
 
 V3.5 route:
 
@@ -16,6 +16,8 @@ V3.5 route:
 - V3.5.2 Local Multi-process Launcher Preview.
 - V3.5.3 Local Node Process Runtime.
 - V3.5.4 V3.5 Closure.
+
+V3.5 enters node topology and local launcher foundations. Fabric-backed validation is deferred to a later stage unless explicitly reopened. V3.6 is reserved for TCP adapter and consensus hardening.
 
 ## 0.1 V3.3 Go-backed MetaTrack Update
 
@@ -103,7 +105,7 @@ Every V3.4.x runtime hardening substage must include corresponding frontend alig
 
 V2 已经形成 V3-ready local replay / sweep / calibration 实验平台。它能组织实验、管理 run/artifact、执行 V1 single-chain replay、执行 V2.5 dual-chain replay、执行 V2.6 protocol baseline、生成 V2.8 sweep/report，并通过 V2.9 做 chain-backed calibration。
 
-V3 的动机不是继续扩展本地 replay，而是在 V2 实验组织层之上建立自研的模块化研究链 runtime，让 MetaTrack 与 baseline 在同一条研究链环境中公平替换插件，并用后续 Fabric-backed observation / calibration / validation 防止实验被理解为纯模拟。V3.4 先把 runtime 基础模块做成可观测行为，V3.5 再进入 Fabric-backed validation。
+V3 的动机不是继续扩展本地 replay，而是在 V2 实验组织层之上建立自研的模块化研究链 runtime，让 MetaTrack 与 baseline 在同一条研究链环境中公平替换插件。V3.4 先把 runtime 基础模块做成可观测行为并完成 controlled smoke closure；V3.5 enters node topology and local launcher foundations. Fabric-backed validation is deferred to a later stage unless explicitly reopened.
 
 ## 2. V2 当前能力基础
 
@@ -215,7 +217,7 @@ Plugin Layer
         |
 Metrics / Artifact / Report Layer
         |
-Fabric-backed Validation Layer (V3.5, validation only)
+Future Fabric-backed Validation Layer (deferred; not part of V3.5 node topology / launcher work)
 ```
 
 V3 is designed to fairly replace module plugins inside one research-chain environment. Fabric is for observation, calibration, and small-scale validation after runtime hardening.
@@ -269,7 +271,7 @@ V3 is designed to fairly replace module plugins inside one research-chain enviro
 
 ### V3.4.0 Runtime Self-check and Scope Realignment
 
-目标：完成 runtime self-check，确认当前模块真实状态，把路线从直接 Fabric-backed validation 调整为 V3.4 runtime hardening series，并把 Fabric validation 顺延为 V3.5。
+目标：完成 runtime self-check，确认当前模块真实状态，把路线从直接 Fabric-backed validation 调整为 V3.4 runtime hardening series，并把 Fabric validation 延后到未来阶段，除非后续明确重新打开。
 
 产物：
 
@@ -353,7 +355,7 @@ The PBFT-light model may borrow BlockEmulator-style Propose / PrePrepare / Prepa
 
 It must not copy or implement BlockEmulator's TCP listener, `networks.Broadcast`, `TcpDial`, goroutine message handler, LevelDB / MPT / BlockChain coupling, CLPA / Broker / Relay coupling, real view-change safety, old request sync, or multi-process node lifecycle.
 
-V3.4.3 remains local Go-backed modular runtime hardening. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, and not multi-node networking. Fabric-backed validation remains V3.5 and must not be pulled forward.
+V3.4.3 remains local Go-backed modular runtime hardening. It is not real PBFT, not HotStuff, not Raft, not Fabric live execution, and not multi-node networking. Fabric-backed validation is deferred to a later stage unless explicitly reopened.
 
 ### V3.4.4 Single-module Experiment Templates
 
@@ -407,7 +409,7 @@ Consensus-light 单模块测试：
 
 Fabric 的定位是 validation backend，不是主实验内核。
 
-Fabric-backed validation 从 V3.5 开始，用于：
+Fabric-backed validation is deferred to a later stage unless explicitly reopened. When reopened, it may be used for:
 
 - 真实 tx submit / commit latency 观测。
 - 真实 block number / tx status 采集。
@@ -442,7 +444,7 @@ txpool_log.csv
 
 `txpool_log.csv` is a V3.4.1 local modular runtime / Draft Smoke artifact. It is not paper-grade evidence by itself. It must explain TxPool admit, select, reject, queue wait, and pool size changes.
 
-Fabric validation artifacts are deferred to V3.5:
+Fabric validation artifacts are deferred to a later stage unless explicitly reopened:
 
 ```text
 fabric_validation_summary.csv/json

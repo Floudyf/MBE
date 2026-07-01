@@ -1,27 +1,63 @@
-# MBE — Metaverse Blockchain Experiment Platform
+# MBE - Metaverse Blockchain Experiment Platform
 
-当前目标是 V0 平台骨架闭环：基础前端、FastAPI 后端、默认组件编排、`asset_hotspot` 合成负载、流式 `trace.jsonl.gz`、Go 虚拟时钟回放与基础指标。
+MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-## V0 范围
+Current stage: V3.5.2 Local Multi-process Launcher Preview.
+Latest completed runtime capability: V3.5.1 configurable single-process logical node topology with node/network/message artifacts.
+Current V3.5.2 capability: local multi-process launcher preview artifacts generated from topology.
+Next stage: V3.5.3 Local Node Process Runtime.
 
-V0 只使用默认 MockChain 单链组件包。它不包含 Fabric、EVM、PBFT、HotStuff、DAG、复杂路由或执行、跨链协议、Grafana、多用户权限或分布式部署。
+## Current Status
 
-运行时版本固定为 Python 3.12.x、Go 1.26.1、Node.js 22 LTS、React 18.x、TypeScript 5.x、FastAPI 0.115.x 与 Uvicorn 0.30.x。完整实施依据见 `AGENTS.md`、`docs/v0_implementation_plan.md` 和 `docs/platform_plan_full.md`。
+Current stage: V3.5.2 Local Multi-process Launcher Preview.
+Latest completed runtime capability: V3.5.1 configurable single-process logical node topology with node/network/message artifacts.
+Current capability: launcher preview artifacts generated from logical node topology.
+Runtime truth: launcher preview generated from logical node topology.
 
-## 当前目录
+Not real TCP, not a real multi-process runtime, not real PBFT, not BlockEmulator backend, not Fabric/EVM live backend, not paper-grade benchmark.
+Next stage: V3.5.3 Local Node Process Runtime.
 
-- `frontend/`：V0 最小 UI 的预留位置。
-- `backend/`：FastAPI API、Composer 与本地运行控制的预留位置。
-- `workload/`、`trace/`：合成负载与流式 trace 的预留位置。
-- `chain/mockchain/`：V0 唯一链后端的预留位置。
-- `executor/`：Go 回放执行器及虚拟时钟的预留位置。
-- `configs/`：默认实验、插件清单与未来 schema 的位置。
+## V3.5 Route
 
-运行 `make help` 查看当前骨架任务；尚未实现运行、回放或 sanity 测试。
+- V3.5.1 Logical Node Topology Runtime: frontend topology config, backend validation, single-process logical nodes, and node/network/message artifacts.
+- V3.5.2 Local Multi-process Launcher Preview: generate launcher preview artifacts from topology.
+- V3.5.3 Local Node Process Runtime: add local process role entry points.
+- V3.5.4 V3.5 Closure: align README/docs/skill/frontend/backend stage wording and validation.
 
-## Python 开发与测试
+V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live backend work and does not claim full BlockEmulator compatibility.
 
-在项目根目录使用 Python 3.12 创建并激活虚拟环境：
+## Historical V0 Scope
+
+V0 established the platform skeleton:
+
+- basic frontend
+- FastAPI backend
+- experiment composer
+- default plugin package
+- `asset_hotspot` synthetic workload
+- MockChain
+- streaming `trace.jsonl.gz`
+- Go executor with virtual clock replay
+- basic metrics
+- CI sanity test
+
+V0 uses the default MockChain single-chain component package. It does not include Fabric, EVM, PBFT, HotStuff, DAG consensus, complex routing/execution, cross-chain protocols, Grafana, multi-user permissions, or distributed deployment.
+
+Runtime versions remain aligned with the project instructions: Python 3.12.x, Go 1.26.1, Node.js 22 LTS, React 18.x, TypeScript 5.x, FastAPI 0.115.x, and Uvicorn 0.30.x.
+
+## Repository Layout
+
+- `frontend/`: React/Vite frontend.
+- `backend/`: FastAPI API, composer, run control, and artifact management.
+- `workload/` and `trace/`: synthetic workload and streaming trace support.
+- `chain/mockchain/`: V0 MockChain backend.
+- `executor/`: Go replay executor and V3 modular runtime.
+- `configs/`: experiment configs, plugin lists, profiles, and topology defaults.
+- `docs/`: implementation plans, stage docs, validation notes, and truth boundaries.
+
+## Python Development And Tests
+
+From the repository root:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -30,41 +66,39 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 ```
 
-运行 asset_hotspot workload 测试：
+Run the asset hotspot workload test:
 
 ```powershell
 python -m pytest tests/workload/test_asset_hotspot.py -q
 ```
 
-也可运行 `make test-workload`。
+## V0 Backend Control Plane
 
-## V0 后端控制层
-
-从仓库根目录安装后端依赖并启动 FastAPI 控制层：
+Install backend dependencies and start FastAPI:
 
 ```powershell
 python -m pip install -r backend/requirements.txt
 python -m uvicorn backend.app.main:app --reload
 ```
 
-健康检查：
+Health check:
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8000/health
 ```
 
-运行默认实验并查看指标：
+Run the default V0 experiment and view the summary:
 
 ```powershell
 Invoke-RestMethod -Method Post http://127.0.0.1:8000/api/v0/experiments/v0_default_asset_hotspot/run
 Invoke-RestMethod http://127.0.0.1:8000/api/v0/experiments/v0_default_asset_hotspot/summary
 ```
 
-运行产生的 `experiments/runs/` 产物仅供本地查看，已由 `.gitignore` 排除，不会提交。
+Generated `experiments/runs/` artifacts are local outputs and are ignored by Git.
 
-## V0 前端
+## Frontend
 
-前端使用 Node.js 22 LTS、React 18、TypeScript 5 和 Vite。在启动 FastAPI 后端后，从仓库根目录运行：
+The frontend uses Node.js 22 LTS, React 18, TypeScript 5, and Vite.
 
 ```powershell
 cd frontend
@@ -72,30 +106,36 @@ npm install
 npm run dev
 ```
 
-默认前端地址由 Vite 输出（通常为 `http://127.0.0.1:5173`），并连接本地后端 `http://127.0.0.1:8000`。页面提供默认实验运行、V0 Composer 插件预览、`runtime.log` 刷新和 summary 指标刷新。也可从根目录使用 `make frontend-dev` 或 `make frontend-build`。
+The default Vite URL is usually `http://127.0.0.1:5173`, connected to the local backend at `http://127.0.0.1:8000`.
 
-## V0 端到端 Sanity Check
+## V0 End-to-End Sanity Check
 
-从仓库根目录运行以下命令，可重新生成默认 `asset_hotspot` trace、执行 Go replay，并检查 trace、summary、latency 与 runtime log 的关键产物和指标：
+Run from the repository root:
 
 ```powershell
 python scripts/v0_sanity.py
-# 或
-make v0-sanity
 ```
 
-Sanity check 生成的 `experiments/runs/` 文件是本地实验产物，不会提交到 Git。
+The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.5.2.
 
-## Windows 一键启动
+## Windows One-Click Startup
 
-在仓库根目录双击 `start_mbe.bat`，或在 PowerShell 中运行 `./start_mbe.bat`。脚本会检查 `.venv` 和 `frontend/node_modules`，分别打开后端与前端 PowerShell 窗口，等待两个本地服务就绪后自动打开 `http://127.0.0.1:5173`。
+From the repository root, run:
 
-## 前端结果文件下载
+```powershell
+.\start_mbe.bat
+```
 
-运行完成后，在前端“结果文件”区域点击“刷新文件列表”。页面会标示 `config.yaml`、`trace_meta.json`、`summary.csv`、`latency.csv` 与 `runtime.log` 是否已生成，并为存在的文件提供下载链接。
+The script checks `.venv` and `frontend/node_modules`, starts backend/frontend PowerShell windows, and opens the local frontend when services are ready.
 
-## Current Status
+## Artifact Downloads
 
-Current stage: V3.5.1 Logical Node Topology Runtime. Latest runtime capability: configurable single-process logical node topology with node/network/message artifacts. Runtime truth: not real TCP, not multi-process, not real PBFT, not BlockEmulator backend.
+After a run completes, the frontend artifact panel shows available summary, log, profile, node-level, and launcher preview files. V3.5.2 launcher preview artifacts are:
 
-The project is not yet a real multi-node blockchain, not a Fabric/EVM live backend, not a real TCP network, not HotStuff/Raft, not a real cross-shard protocol implementation, and not a paper-grade benchmark. Next stage: V3.5.2 Local Multi-process Launcher Preview.
+- `node_address_table.csv`
+- `topology.json`
+- `launch_nodes_windows.bat`
+- `launch_nodes_linux.sh`
+- `launcher_readme.md`
+
+These launcher files are preview artifacts only. They do not prove real TCP networking, real PBFT, a real multi-process runtime, or BlockEmulator backend behavior.

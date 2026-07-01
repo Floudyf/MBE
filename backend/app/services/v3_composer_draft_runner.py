@@ -44,7 +44,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
         source="v3_composer_draft",
         experiment_name="composer_draft_smoke",
         data_truth_label="modular_runtime",
-        stage="V3.5.1",
+        stage="V3.5.2",
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
@@ -94,7 +94,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "run_id": run_id,
             "job_id": run_id,
             "status": "completed",
-            "stage": "V3.5.1",
+            "stage": "V3.5.2",
             **stage_metadata(),
             "output_dir": str(run_dir),
             "data_truth_label": "modular_runtime",
@@ -142,7 +142,7 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "profile_id": f"draft_smoke_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-        "stage": "V3.5.1",
+        "stage": "V3.5.2",
         "type": "draft_smoke",
         "truth_label": "modular_runtime",
         "backend_type": "modular_research_chain",
@@ -221,16 +221,16 @@ def build_plugin_profile(normalized: dict[str, Any]) -> dict[str, Any]:
     return {
         "profile_type": "plugin_profile_collection",
         "version": "v3",
-        "stage": "V3.5.1",
+        "stage": "V3.5.2",
         "profiles": [
             {
                 "plugin_profile_id": DRAFT_PLUGIN_PROFILE_ID,
                 "label": "Composer Draft Single Smoke",
                 "domain": "metatrack",
                 "status": "runnable",
-                "min_stage": "V3.5.1",
+                "min_stage": "V3.5.2",
                 "runnable": True,
-                "description": "Single Composer Draft Smoke plugin selection.",
+                "description": "Single Composer Draft Smoke plugin selection with launcher preview artifacts.",
                 "plugins": plugins,
                 "module_plugins": selection,
                 "tags": ["draft_smoke", "single_chain", "go_backed"],
