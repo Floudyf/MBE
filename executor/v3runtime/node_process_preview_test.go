@@ -56,12 +56,12 @@ func TestNodeProcessPreviewLoadsTopologyAndWritesArtifacts(t *testing.T) {
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest["runtime_truth"] != "local_node_process_preview_only" || manifest["not_real_tcp"] != true {
+	if manifest["runtime_truth"] != "localhost_tcp_typed_message_preview_not_real_pbft" || manifest["tcp_preview_only"] != true || manifest["not_production_network"] != true {
 		t.Fatalf("manifest missing truth boundary: %+v", manifest)
 	}
 	logBytes, _ := os.ReadFile(filepath.Join(dir, "node_process_log_sample.log"))
 	logText := string(logBytes)
-	if !strings.Contains(logText, "node_id=shard-0-validator-0") || !strings.Contains(logText, "not real TCP") {
+	if !strings.Contains(logText, "node_id=shard-0-validator-0") || !strings.Contains(logText, "not production networking") {
 		t.Fatalf("node process log missing identity or preview warning: %s", logText)
 	}
 }

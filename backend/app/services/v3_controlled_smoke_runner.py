@@ -19,13 +19,13 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.5.4"
+CURRENT_STAGE = "V3.6.1"
 LATEST_RUNTIME_STAGE = "V3.4.10"
 CLOSURE_STAGE = "V3.4.11"
-LATEST_COMPLETED_RUNTIME_STAGE = "V3.5 local node process preview runtime"
-CURRENT_CAPABILITY = "configurable logical node topology, launcher preview artifacts, and local node process preview entry point"
-RUNTIME_TRUTH = "local_node_process_preview_not_real_tcp_not_real_pbft"
-NEXT_STAGE = "V3.6 TCP Adapter and Consensus Hardening"
+LATEST_COMPLETED_RUNTIME_STAGE = "configurable network adapter with localhost TCP typed message preview"
+CURRENT_CAPABILITY = "configurable NetworkAdapter with in-memory compatibility and localhost TCP typed message preview"
+RUNTIME_TRUTH = "localhost_tcp_typed_message_preview_not_real_pbft"
+NEXT_STAGE = "V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -63,6 +63,10 @@ CONTROLLED_ARTIFACTS = [
     "node_process_status.csv",
     "node_process_manifest.json",
     "node_process_log_sample.log",
+    "tcp_adapter_status.csv",
+    "network_send_log.csv",
+    "network_receive_log.csv",
+    "typed_message_log.csv",
 ]
 
 
@@ -233,7 +237,7 @@ def _copy_representative_launcher_artifacts(run_dir: Path, child_results: list[d
     if not representative:
         return
     child_dir = Path(str(representative.get("output_dir", "")))
-    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log"):
+    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv"):
         source = child_dir / filename
         if source.is_file():
             shutil.copyfile(source, run_dir / filename)

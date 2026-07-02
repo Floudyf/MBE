@@ -314,6 +314,13 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   node_process_status_available?: boolean | string;
   node_process_manifest_available?: boolean | string;
   node_process_preview_only?: boolean | string;
+  network_adapter_selected?: string;
+  tcp_preview_enabled?: boolean | string;
+  tcp_listen_node_count?: number | string;
+  tcp_send_count?: number | string;
+  tcp_receive_count?: number | string;
+  typed_message_count?: number | string;
+  network_error_count?: number | string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
@@ -337,6 +344,7 @@ export type V3RuntimeTopology = {
   supervisor_enabled: boolean;
   node_runtime_mode: "logical_single_process" | string;
   network_mode: "in_memory_message_bus" | string;
+  network_adapter?: "in_memory_message_bus" | "localhost_tcp_preview" | string;
 };
 export type V3DraftValidationResponse = {
   is_valid: boolean;

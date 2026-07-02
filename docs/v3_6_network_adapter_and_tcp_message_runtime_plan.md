@@ -12,7 +12,7 @@ V3.6 does not implement full PBFT. PBFT is deferred to V3.7. V3.6 does not imple
 
 ### V3.6.1 NetworkAdapter + localhost TCP + typed messages
 
-Planned scope:
+Implemented scope:
 
 - Add a `NetworkAdapter` configuration concept.
 - Support selectable `network_adapter` values:
@@ -48,14 +48,14 @@ Initial planned `message_type` values:
 - `state_request_preview`
 - `commit_notice_preview`
 
-Expected artifacts:
+Implemented artifacts:
 
 - `tcp_adapter_status.csv`
 - `network_send_log.csv`
 - `network_receive_log.csv`
 - `typed_message_log.csv`
 
-Expected summary metrics:
+Implemented summary metrics:
 
 - `network_adapter_selected`
 - `tcp_preview_enabled`

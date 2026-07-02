@@ -30,7 +30,7 @@ func TestLauncherPreviewArtifactsAndTruthBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	header := readCSVHeader(t, filepath.Join(dir, "node_address_table.csv"))
-	expected := []string{"node_id", "shard_id", "node_index", "role", "logical_address", "preview_host", "preview_port", "process_name", "launch_command_windows", "launch_command_linux", "runtime_mode", "network_mode", "status"}
+	expected := []string{"node_id", "shard_id", "node_index", "role", "logical_address", "preview_host", "preview_port", "process_name", "launch_command_windows", "launch_command_linux", "runtime_mode", "network_mode", "network_adapter", "status"}
 	for i, field := range expected {
 		if header[i] != field {
 			t.Fatalf("node_address_table header[%d] = %s, want %s", i, header[i], field)
@@ -44,11 +44,11 @@ func TestLauncherPreviewArtifactsAndTruthBoundary(t *testing.T) {
 	if err := json.Unmarshal(topologyBytes, &topology); err != nil {
 		t.Fatal(err)
 	}
-	if topology["runtime_truth"] != "local_node_process_preview_not_real_tcp_not_real_pbft" {
+	if topology["runtime_truth"] != "localhost_tcp_typed_message_preview_not_real_pbft" {
 		t.Fatalf("unexpected topology runtime truth: %v", topology["runtime_truth"])
 	}
 	windowsBytes, _ := os.ReadFile(filepath.Join(dir, "launch_nodes_windows.bat"))
-	if !strings.Contains(string(windowsBytes), "start cmd /k") || !strings.Contains(string(windowsBytes), "Not real TCP/PBFT") {
+	if !strings.Contains(string(windowsBytes), "start cmd /k") || !strings.Contains(string(windowsBytes), "Not real PBFT") {
 		t.Fatalf("windows launcher missing preview command or warning")
 	}
 	linuxBytes, _ := os.ReadFile(filepath.Join(dir, "launch_nodes_linux.sh"))

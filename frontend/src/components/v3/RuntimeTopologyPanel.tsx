@@ -21,11 +21,11 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
     <section className="final-card wide v3-template-bar">
       <div className="v3-section-head">
         <div>
-          <p className="eyebrow">V3.5 topology source</p>
+          <p className="eyebrow">V3.6.1 runtime support layer</p>
           <h3>Runtime Topology / Node Topology</h3>
         </div>
       </div>
-      <p className="muted">Configures single-process logical nodes for V3.5 launcher and local node process preview artifacts. This is not real TCP, not a real multi-process network runtime, not real PBFT, and not a BlockEmulator backend.</p>
+      <p className="muted">Configures logical nodes and the runtime NetworkAdapter. localhost_tcp_preview is typed message preview only: not production networking, not real PBFT, and not a BlockEmulator backend.</p>
       <div className="v3-identity-grid">
         {numericFields.map((field) => (
           <label key={field}>
@@ -50,9 +50,10 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           </select>
         </label>
         <label>
-          <span>network_mode</span>
-          <select value={topology.network_mode} onChange={(event) => patch({ network_mode: event.target.value })}>
+          <span>network_adapter</span>
+          <select value={topology.network_adapter || topology.network_mode} onChange={(event) => patch({ network_adapter: event.target.value, network_mode: event.target.value })}>
             <option value="in_memory_message_bus">in_memory_message_bus</option>
+            <option value="localhost_tcp_preview">localhost_tcp_preview</option>
           </select>
         </label>
       </div>

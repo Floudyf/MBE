@@ -16,13 +16,13 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
 
     assert result["status"] == "completed"
     assert result["stage"] == "V3.4.10"
-    assert result["current_stage"] == "V3.5.4"
+    assert result["current_stage"] == "V3.6.1"
     assert result["latest_runtime_stage"] == "V3.4.10"
-    assert result["latest_completed_runtime_stage"] == "V3.5 local node process preview runtime"
+    assert result["latest_completed_runtime_stage"] == "configurable network adapter with localhost TCP typed message preview"
     assert result["closure_stage"] == "V3.4.11"
-    assert result["current_capability"] == "configurable logical node topology, launcher preview artifacts, and local node process preview entry point"
-    assert result["runtime_truth"] == "local_node_process_preview_not_real_tcp_not_real_pbft"
-    assert result["next_stage"] == "V3.6 TCP Adapter and Consensus Hardening"
+    assert result["current_capability"] == "configurable NetworkAdapter with in-memory compatibility and localhost TCP typed message preview"
+    assert result["runtime_truth"] == "localhost_tcp_typed_message_preview_not_real_pbft"
+    assert result["next_stage"] == "V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure"
     assert result["preset_order"] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["run_index"]] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["aggregate_summary"]] == CONTROLLED_PRESET_ORDER
@@ -40,6 +40,10 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
         "node_process_status.csv",
         "node_process_manifest.json",
         "node_process_log_sample.log",
+        "tcp_adapter_status.csv",
+        "network_send_log.csv",
+        "network_receive_log.csv",
+        "typed_message_log.csv",
     }
 
     with (run_dir / "run_index.csv").open(encoding="utf-8", newline="") as stream:
@@ -53,9 +57,9 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     assert "avg_commit_latency_ms" in aggregate_rows[0]
 
     readiness = json.loads((run_dir / "realism_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["current_stage"] == "V3.5.4"
+    assert readiness["current_stage"] == "V3.6.1"
     assert readiness["latest_runtime_stage"] == "V3.4.10"
-    assert readiness["latest_completed_runtime_stage"] == "V3.5 local node process preview runtime"
+    assert readiness["latest_completed_runtime_stage"] == "configurable network adapter with localhost TCP typed message preview"
     assert len(readiness["modules"]) == 11
     assert "not BlockEmulator backend" in readiness["not_real_chain_claims"]
     assert "not Fabric/EVM live backend" in readiness["not_real_chain_claims"]

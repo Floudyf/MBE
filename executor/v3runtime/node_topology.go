@@ -13,6 +13,7 @@ type NodeTopologyConfig struct {
 	SupervisorEnabled    bool
 	NodeRuntimeMode      string
 	NetworkMode          string
+	NetworkAdapter       string
 }
 
 type LogicalNode struct {
@@ -57,6 +58,7 @@ func DefaultNodeTopologyConfig() NodeTopologyConfig {
 		SupervisorEnabled:    true,
 		NodeRuntimeMode:      "logical_single_process",
 		NetworkMode:          "in_memory_message_bus",
+		NetworkAdapter:       "in_memory_message_bus",
 	}
 }
 
@@ -80,6 +82,10 @@ func topologyFromExperiment(exp ExperimentProfile) NodeTopologyConfig {
 	}
 	if exp.NetworkMode != "" {
 		cfg.NetworkMode = exp.NetworkMode
+	}
+	if exp.NetworkAdapter != "" {
+		cfg.NetworkAdapter = exp.NetworkAdapter
+		cfg.NetworkMode = exp.NetworkAdapter
 	}
 	return cfg
 }

@@ -25,6 +25,7 @@ type NodeAddressEntry struct {
 	LaunchCommandLinux   string `json:"launch_command_linux"`
 	RuntimeMode          string `json:"runtime_mode"`
 	NetworkMode          string `json:"network_mode"`
+	NetworkAdapter       string `json:"network_adapter"`
 	Status               string `json:"status"`
 }
 
@@ -48,6 +49,7 @@ func BuildLauncherPreview(nodeRuntime NodeRuntimeArtifacts) LauncherPreview {
 			LaunchCommandLinux:   linuxCommand,
 			RuntimeMode:          node.RuntimeMode,
 			NetworkMode:          node.NetworkMode,
+			NetworkAdapter:       node.NetworkMode,
 			Status:               "preview_only",
 		})
 	}
@@ -71,7 +73,7 @@ func writeLauncherPreviewArtifacts(out string, nodeRuntime NodeRuntimeArtifacts,
 }
 
 func writeNodeAddressTableCSV(path string, addresses []NodeAddressEntry) error {
-	fields := []string{"node_id", "shard_id", "node_index", "role", "logical_address", "preview_host", "preview_port", "process_name", "launch_command_windows", "launch_command_linux", "runtime_mode", "network_mode", "status"}
+	fields := []string{"node_id", "shard_id", "node_index", "role", "logical_address", "preview_host", "preview_port", "process_name", "launch_command_windows", "launch_command_linux", "runtime_mode", "network_mode", "network_adapter", "status"}
 	rows := [][]string{}
 	for _, address := range addresses {
 		rows = append(rows, []string{
@@ -87,6 +89,7 @@ func writeNodeAddressTableCSV(path string, addresses []NodeAddressEntry) error {
 			address.LaunchCommandLinux,
 			address.RuntimeMode,
 			address.NetworkMode,
+			address.NetworkAdapter,
 			address.Status,
 		})
 	}
@@ -95,8 +98,8 @@ func writeNodeAddressTableCSV(path string, addresses []NodeAddressEntry) error {
 
 func writeTopologyJSON(path string, nodeRuntime NodeRuntimeArtifacts, launcher LauncherPreview) error {
 	payload := map[string]any{
-		"stage":         "V3.5.4",
-		"runtime_truth": "local_node_process_preview_not_real_tcp_not_real_pbft",
+		"stage":         "V3.6.1",
+		"runtime_truth": "localhost_tcp_typed_message_preview_not_real_pbft",
 		"topology": map[string]any{
 			"shard_count":             nodeRuntime.Config.ShardCount,
 			"validators_per_shard":    nodeRuntime.Config.ValidatorsPerShard,
@@ -105,6 +108,7 @@ func writeTopologyJSON(path string, nodeRuntime NodeRuntimeArtifacts, launcher L
 			"supervisor_enabled":      nodeRuntime.Config.SupervisorEnabled,
 			"node_runtime_mode":       nodeRuntime.Config.NodeRuntimeMode,
 			"network_mode":            nodeRuntime.Config.NetworkMode,
+			"network_adapter":         nodeRuntime.Config.NetworkAdapter,
 		},
 		"derived": map[string]any{
 			"logical_node_count":    len(nodeRuntime.Nodes),
@@ -116,11 +120,12 @@ func writeTopologyJSON(path string, nodeRuntime NodeRuntimeArtifacts, launcher L
 		},
 		"nodes": launcher.Addresses,
 		"truth": map[string]bool{
-			"not_real_tcp":                   true,
+			"tcp_preview_only":               true,
+			"not_production_network":         true,
 			"not_real_pbft":                  true,
 			"not_blockemulator_backend":      true,
 			"not_real_multi_process_runtime": true,
-			"no_real_node_to_node_messages":  true,
+			"typed_message_preview_only":     true,
 		},
 	}
 	bytes, err := json.MarshalIndent(payload, "", "  ")
@@ -133,7 +138,7 @@ func writeTopologyJSON(path string, nodeRuntime NodeRuntimeArtifacts, launcher L
 func windowsLauncherScript(launcher LauncherPreview) string {
 	lines := []string{
 		"@echo off",
-		"REM V3.5.3 local node process preview only. Not real TCP/PBFT.",
+		"REM V3.6.1 local node process and NetworkAdapter preview only. Not real PBFT.",
 		"REM Generated from logical node topology; commands start preview entry points only.",
 	}
 	for _, address := range launcher.Addresses {
@@ -146,7 +151,7 @@ func linuxLauncherScript(launcher LauncherPreview) string {
 	lines := []string{
 		"#!/usr/bin/env bash",
 		"set -euo pipefail",
-		"# V3.5.3 local node process preview only. Not real TCP/PBFT.",
+		"# V3.6.1 local node process and NetworkAdapter preview only. Not real PBFT.",
 		"# Generated from logical node topology; commands start preview entry points only.",
 	}
 	for _, address := range launcher.Addresses {
@@ -157,7 +162,7 @@ func linuxLauncherScript(launcher LauncherPreview) string {
 }
 
 func launcherReadme() string {
-	return "# V3.5.3 Local Node Process Preview\n\nThis launcher package is generated from logical node topology.\nThe commands target the local node process preview entry point: `go run ./cmd/replay --mode node-preview --node-id <node_id> --role <role> --topology-file topology.json --preview-only`.\nRun that command from the `executor/` module directory, or adjust the topology path to the generated artifact directory.\nThe scripts are launcher-preview artifacts only.\nThey do not prove real TCP networking.\nThey do not implement real PBFT/HotStuff/Raft.\nThey do not implement real node-to-node communication.\nThey are not BlockEmulator backend.\nThe next major stage is V3.6 TCP Adapter and Consensus Hardening.\n"
+	return "# V3.6.1 NetworkAdapter Typed Message Preview\n\nThis launcher package is generated from logical node topology.\nThe commands target the local node process preview entry point: `go run ./cmd/replay --mode node-preview --node-id <node_id> --role <role> --topology-file topology.json --preview-only`.\nRun that command from the `executor/` module directory, or adjust the topology path to the generated artifact directory.\nThe scripts are preview artifacts only.\nThey may exercise localhost TCP typed message preview when `network_adapter=localhost_tcp_preview`.\nThey do not implement real PBFT/HotStuff/Raft.\nThey are not a production network.\nThey are not BlockEmulator backend.\nThe next stage is V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure.\n"
 }
 
 func joinLines(lines []string) string {

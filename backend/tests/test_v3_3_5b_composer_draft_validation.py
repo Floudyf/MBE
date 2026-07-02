@@ -37,8 +37,8 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.5.4"
-    assert result.normalized_draft["current_capability"] == "configurable logical node topology, launcher preview artifacts, and local node process preview entry point"
+    assert result.normalized_draft["current_stage"] == "V3.6.1"
+    assert result.normalized_draft["current_capability"] == "configurable NetworkAdapter with in-memory compatibility and localhost TCP typed message preview"
 
 
 def test_valid_draft_accepts_custom_logical_topology() -> None:
@@ -50,6 +50,26 @@ def test_valid_draft_accepts_custom_logical_topology() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["topology"]["shard_count"] == 2
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 12
+
+
+def test_valid_draft_accepts_localhost_tcp_network_adapter() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(network_adapter="localhost_tcp_preview", network_mode="localhost_tcp_preview")
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is True
+    assert result.normalized_draft is not None
+    assert result.normalized_draft["topology"]["network_adapter"] == "localhost_tcp_preview"
+    assert result.normalized_draft["topology_summary"]["network_adapter"] == "localhost_tcp_preview"
+
+
+def test_invalid_network_adapter_is_rejected() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(network_adapter="raw_tcp")
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is False
+    assert any("topology.network_adapter" in error for error in result.errors)
 
 
 def test_invalid_topology_is_rejected() -> None:

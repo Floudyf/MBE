@@ -44,7 +44,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
         source="v3_composer_draft",
         experiment_name="composer_draft_smoke",
         data_truth_label="modular_runtime",
-        stage="V3.5.4",
+        stage="V3.6.1",
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
@@ -94,7 +94,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "run_id": run_id,
             "job_id": run_id,
             "status": "completed",
-            "stage": "V3.5.4",
+            "stage": "V3.6.1",
             **stage_metadata(),
             "output_dir": str(run_dir),
             "data_truth_label": "modular_runtime",
@@ -142,13 +142,14 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "profile_id": f"draft_smoke_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-        "stage": "V3.5.4",
+        "stage": "V3.6.1",
         "type": "draft_smoke",
         "truth_label": "modular_runtime",
         "backend_type": "modular_research_chain",
         "runtime_mode": "logical_single_process",
         "node_runtime_mode": normalized.get("topology", {}).get("node_runtime_mode", "logical_single_process"),
         "network_mode": normalized.get("topology", {}).get("network_mode", "in_memory_message_bus"),
+        "network_adapter": normalized.get("topology", {}).get("network_adapter", normalized.get("topology", {}).get("network_mode", "in_memory_message_bus")),
         "topology": normalized.get("topology", {}),
         "topology_summary": normalized.get("topology_summary", {}),
         **{key: value for key, value in normalized.get("topology", {}).items()},
@@ -221,16 +222,16 @@ def build_plugin_profile(normalized: dict[str, Any]) -> dict[str, Any]:
     return {
         "profile_type": "plugin_profile_collection",
         "version": "v3",
-        "stage": "V3.5.4",
+        "stage": "V3.6.1",
         "profiles": [
             {
                 "plugin_profile_id": DRAFT_PLUGIN_PROFILE_ID,
                 "label": "Composer Draft Single Smoke",
                 "domain": "metatrack",
                 "status": "runnable",
-                "min_stage": "V3.5.4",
+                "min_stage": "V3.6.1",
                 "runnable": True,
-                "description": "Single Composer Draft Smoke plugin selection with launcher preview artifacts.",
+                "description": "Single Composer Draft Smoke plugin selection with NetworkAdapter typed message preview artifacts.",
                 "plugins": plugins,
                 "module_plugins": selection,
                 "tags": ["draft_smoke", "single_chain", "go_backed"],

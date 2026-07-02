@@ -103,6 +103,10 @@ expected_artifacts:
   - node_process_status.csv
   - node_process_manifest.json
   - node_process_log_sample.log
+  - tcp_adapter_status.csv
+  - network_send_log.csv
+  - network_receive_log.csv
+  - typed_message_log.csv
   - summary.csv
   - summary.json
   - block_log.csv
@@ -161,6 +165,10 @@ presets:
       - node_process_status.csv
       - node_process_manifest.json
       - node_process_log_sample.log
+      - tcp_adapter_status.csv
+      - network_send_log.csv
+      - network_receive_log.csv
+      - typed_message_log.csv
       - summary.csv
       - summary.json
       - block_log.csv

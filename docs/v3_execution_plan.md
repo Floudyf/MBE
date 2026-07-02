@@ -19,9 +19,15 @@ V3.5 route:
 
 V3.5 node topology and local launcher foundations are closed. Fabric-backed validation is deferred to a later stage unless explicitly reopened. The next major stage is V3.6 TCP Adapter and Consensus Hardening.
 
+## V3.6.1 Current Status
+
+Current stage is V3.6.1 NetworkAdapter + localhost TCP typed messages. V3.6.1 adds a configurable NetworkAdapter concept with `in_memory_message_bus` compatibility and `localhost_tcp_preview` typed message preview. It writes `tcp_adapter_status.csv`, `network_send_log.csv`, `network_receive_log.csv`, and `typed_message_log.csv`, and adds summary metrics for adapter selection, TCP preview status, listen/send/receive counts, typed message count, and network error count.
+
+V3.6.1 is not V3.6.2. It does not implement consensus-light over NetworkAdapter, real PBFT, HotStuff/Raft, BlockEmulator-aligned PBFT, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark evidence. The next stage is V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure.
+
 ## V3.6 / V3.7 Planning
 
-V3.6 is planned as NetworkAdapter and TCP Typed Message Runtime. It should start with a configurable `NetworkAdapter`, support `in_memory_message_bus` and `localhost_tcp_preview`, add typed `MessageEnvelope` logs, and keep TCP as preview only. V3.6 should not implement real PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark claims.
+V3.6 is NetworkAdapter and TCP Typed Message Runtime. V3.6.1 starts with a configurable `NetworkAdapter`, supports `in_memory_message_bus` and `localhost_tcp_preview`, adds typed `MessageEnvelope` logs, and keeps TCP as preview only. V3.6.2 remains planned for Consensus-light over NetworkAdapter + V3.6 Closure. V3.6 should not implement real PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark claims.
 
 V3.7 is planned as ConsensusRuntime and BlockEmulator-aligned PBFT Preview. It should make consensus runtime configurable, keep `simple_leader`, `poa_light`, and `pbft_light_model` as lightweight/model-based options, and add `blockemulator_aligned_pbft_preview` as one optional plugin. V3.7 should not hardcode PBFT as the only consensus, should not copy BlockEmulator code, and should not claim production PBFT.
 

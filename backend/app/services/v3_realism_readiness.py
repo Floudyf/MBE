@@ -122,13 +122,13 @@ MODULE_READINESS: list[dict[str, Any]] = [
 def build_realism_readiness() -> dict[str, Any]:
     return {
         "stage": "V3.4.10",
-        "current_stage": "V3.5.4",
+        "current_stage": "V3.6.1",
         "latest_runtime_stage": "V3.4.10",
-        "latest_completed_runtime_stage": "V3.5 local node process preview runtime",
+        "latest_completed_runtime_stage": "configurable network adapter with localhost TCP typed message preview",
         "closure_stage": "V3.4.11",
-        "current_capability": "configurable logical node topology, launcher preview artifacts, and local node process preview entry point",
-        "runtime_truth": "local_node_process_preview_not_real_tcp_not_real_pbft",
-        "next_stage": "V3.6 TCP Adapter and Consensus Hardening",
+        "current_capability": "configurable NetworkAdapter with in-memory compatibility and localhost TCP typed message preview",
+        "runtime_truth": "localhost_tcp_typed_message_preview_not_real_pbft",
+        "next_stage": "V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",

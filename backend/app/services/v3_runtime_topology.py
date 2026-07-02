@@ -5,11 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.5.4"
-LATEST_RUNTIME_STAGE = "V3.5 local node process preview runtime"
-CURRENT_CAPABILITY = "configurable logical node topology, launcher preview artifacts, and local node process preview entry point"
-RUNTIME_TRUTH = "local_node_process_preview_not_real_tcp_not_real_pbft"
-NEXT_STAGE = "V3.6 TCP Adapter and Consensus Hardening"
+CURRENT_STAGE = "V3.6.1"
+LATEST_RUNTIME_STAGE = "configurable network adapter with localhost TCP typed message preview"
+CURRENT_CAPABILITY = "configurable NetworkAdapter with in-memory compatibility and localhost TCP typed message preview"
+RUNTIME_TRUTH = "localhost_tcp_typed_message_preview_not_real_pbft"
+NEXT_STAGE = "V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure"
 
 
 def default_topology() -> V3RuntimeTopology:
@@ -39,8 +39,14 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
         errors.append("topology.supervisor_enabled must be bool")
     if data.get("node_runtime_mode") != "logical_single_process":
         errors.append("topology.node_runtime_mode currently only allows logical_single_process")
-    if data.get("network_mode") != "in_memory_message_bus":
-        errors.append("topology.network_mode currently only allows in_memory_message_bus")
+    mode = data.get("network_mode") or "in_memory_message_bus"
+    adapter = data.get("network_adapter") or mode
+    if adapter == "in_memory_message_bus" and mode != "in_memory_message_bus":
+        adapter = mode
+    data["network_adapter"] = adapter
+    data["network_mode"] = adapter
+    if adapter not in {"in_memory_message_bus", "localhost_tcp_preview"}:
+        errors.append("topology.network_adapter currently only allows in_memory_message_bus or localhost_tcp_preview")
     return data, errors
 
 

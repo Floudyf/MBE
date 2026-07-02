@@ -15,6 +15,7 @@ const commitSummaryKeys = ["commit_plugin", "commit_tx_count", "commit_update_co
 const nodeTopologySummaryKeys = ["shard_count", "validators_per_shard", "logical_node_count", "validator_node_count", "executor_node_count", "storage_node_count", "supervisor_node_count", "message_count", "network_message_count", "consensus_message_count", "node_event_count"];
 const launcherPreviewSummaryKeys = ["launcher_mode", "launchable_node_count", "node_address_count", "launcher_script_count", "windows_launcher_available", "linux_launcher_available", "launcher_preview_only"];
 const nodeProcessSummaryKeys = ["node_process_entrypoint_available", "node_process_preview_available", "node_process_status_available", "node_process_manifest_available", "node_process_preview_only"];
+const networkAdapterSummaryKeys = ["network_adapter_selected", "tcp_preview_enabled", "tcp_listen_node_count", "tcp_send_count", "tcp_receive_count", "typed_message_count", "network_error_count"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
@@ -159,13 +160,23 @@ export default function DraftRunResultPanel({ result }: Props) {
         <div><dt>launcher_readme.md</dt><dd>{artifactNames.has("launcher_readme.md") ? "available" : "missing"}</dd></div>
       </div>
       <div className="v3-summary-preview">
-        <div><dt>Node Process Preview</dt><dd>local preview only - not real TCP - not real PBFT - no real node-to-node communication</dd></div>
+        <div><dt>Node Process Preview</dt><dd>local preview only - not production networking - not real PBFT</dd></div>
         {nodeProcessSummaryKeys.filter((key) => key in summary).map((key) => (
           <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
         ))}
         <div><dt>node_process_status.csv</dt><dd>{artifactNames.has("node_process_status.csv") ? "available" : "missing"}</dd></div>
         <div><dt>node_process_manifest.json</dt><dd>{artifactNames.has("node_process_manifest.json") ? "available" : "missing"}</dd></div>
         <div><dt>node_process_log_sample.log</dt><dd>{artifactNames.has("node_process_log_sample.log") ? "available" : "missing"}</dd></div>
+      </div>
+      <div className="v3-summary-preview">
+        <div><dt>NetworkAdapter</dt><dd>localhost TCP typed message preview only - not real PBFT - not production network</dd></div>
+        {networkAdapterSummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>tcp_adapter_status.csv</dt><dd>{artifactNames.has("tcp_adapter_status.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>network_send_log.csv</dt><dd>{artifactNames.has("network_send_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>network_receive_log.csv</dt><dd>{artifactNames.has("network_receive_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>typed_message_log.csv</dt><dd>{artifactNames.has("typed_message_log.csv") ? "available" : "legacy missing"}</dd></div>
       </div>
       <p className="muted">Draft Smoke history is a local debugging, demo, and configuration tracing record. It is not a formal paper experiment result.</p>
     </section>

@@ -2,20 +2,20 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.5.4 V3.5 Closure.
-Latest runtime capability: V3.5 local node process preview runtime.
-Runtime truth: local node process preview only; not real TCP and not real PBFT.
-Next stage: V3.6 TCP Adapter and Consensus Hardening.
+Current stage: V3.6.1 NetworkAdapter + localhost TCP typed messages.
+Latest runtime capability: configurable network adapter with localhost TCP typed message preview.
+Runtime truth: localhost_tcp_typed_message_preview_not_real_pbft.
+Next stage: V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure.
 
 ## Current Status
 
-Current stage: V3.5.4 V3.5 Closure.
-Latest runtime capability: V3.5 local node process preview runtime.
-Current capability: configurable logical node topology, launcher preview artifacts, and local node process preview entry point.
-Runtime truth: local_node_process_preview_not_real_tcp_not_real_pbft.
+Current stage: V3.6.1 NetworkAdapter + localhost TCP typed messages.
+Latest runtime capability: configurable network adapter with localhost TCP typed message preview.
+Current capability: configurable NetworkAdapter with in-memory compatibility and localhost TCP typed message preview.
+Runtime truth: localhost_tcp_typed_message_preview_not_real_pbft.
 
-V3.5 is closed. MBE now supports configurable logical node topology, launcher preview artifacts, and a local node process preview entry point. It remains not real TCP, not real PBFT, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
-Next stage: V3.6 TCP Adapter and Consensus Hardening.
+V3.5 is closed. V3.6.1 adds a selectable NetworkAdapter surface with `in_memory_message_bus` compatibility and `localhost_tcp_preview` typed message preview artifacts. It remains not real PBFT, not HotStuff/Raft, not production networking, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
+Next stage: V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure.
 
 ## V3.5 Route
 
@@ -28,11 +28,12 @@ V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live 
 
 ## V3.6 / V3.7 Planning
 
-- V3.6 planned: configurable `NetworkAdapter` with localhost TCP typed message preview.
+- V3.6.1 implemented: configurable `NetworkAdapter` with localhost TCP typed message preview.
+- V3.6.2 planned: Consensus-light over NetworkAdapter + V3.6 Closure.
 - V3.7 planned: configurable `ConsensusRuntime`, with `blockemulator_aligned_pbft_preview` as one selectable consensus plugin rather than the only consensus path.
 - V3.8 planned: CrossShardProtocol skeleton.
 
-These stages are roadmap items only. Current stage remains V3.5.4 V3.5 Closure; V3.6 and V3.7 are not implemented yet.
+V3.6 is not fully closed yet. V3.7 and V3.8 remain roadmap items only.
 
 ## Historical V0 Scope
 
@@ -124,7 +125,7 @@ Run from the repository root:
 python scripts/v0_sanity.py
 ```
 
-The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.5.4.
+The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.6.1.
 
 ## Windows One-Click Startup
 
@@ -148,5 +149,9 @@ After a run completes, the frontend artifact panel shows available summary, log,
 - `node_process_status.csv`
 - `node_process_manifest.json`
 - `node_process_log_sample.log`
+- `tcp_adapter_status.csv`
+- `network_send_log.csv`
+- `network_receive_log.csv`
+- `typed_message_log.csv`
 
-These launcher and node process files are preview artifacts only. They do not prove real TCP networking, real PBFT, a real multi-process network runtime, real node-to-node communication, or BlockEmulator backend behavior.
+These launcher, node process, and NetworkAdapter files are preview artifacts only. They do not prove production networking, real PBFT, a real multi-process network runtime, BlockEmulator backend behavior, or paper-grade benchmark evidence.

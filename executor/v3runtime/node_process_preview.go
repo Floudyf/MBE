@@ -131,14 +131,15 @@ func writeNodeProcessStatusCSV(path string, topologyFile string, node NodeAddres
 
 func writeNodeProcessManifest(path string) error {
 	payload := map[string]any{
-		"stage":                         "V3.5.3",
-		"runtime_truth":                 "local_node_process_preview_only",
-		"preview_only":                  true,
-		"not_real_tcp":                  true,
-		"not_real_pbft":                 true,
-		"not_blockemulator_backend":     true,
-		"no_real_node_to_node_messages": true,
-		"node_process_entrypoint":       true,
+		"stage":                      "V3.6.1",
+		"runtime_truth":              "localhost_tcp_typed_message_preview_not_real_pbft",
+		"preview_only":               true,
+		"tcp_preview_only":           true,
+		"not_production_network":     true,
+		"not_real_pbft":              true,
+		"not_blockemulator_backend":  true,
+		"typed_message_preview_only": true,
+		"node_process_entrypoint":    true,
 	}
 	bytes, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -149,7 +150,7 @@ func writeNodeProcessManifest(path string) error {
 
 func writeNodeProcessLog(path string, topologyFile string, node NodeAddressEntry, previewOnly bool) error {
 	lines := []string{
-		"stage=V3.5.3 Local Node Process Runtime",
+		"stage=V3.6.1 NetworkAdapter TCP Typed Message Preview",
 		"node_id=" + node.NodeID,
 		"role=" + node.Role,
 		"shard_id=" + strconv.Itoa(node.ShardID),
@@ -157,9 +158,10 @@ func writeNodeProcessLog(path string, topologyFile string, node NodeAddressEntry
 		"logical_address=" + node.LogicalAddress,
 		"preview_host=" + node.PreviewHost,
 		"preview_port=" + strconv.Itoa(node.PreviewPort),
+		"network_adapter=" + firstNonEmpty(node.NetworkAdapter, node.NetworkMode),
 		"topology_file=" + topologyFile,
 		"preview_only=" + strconv.FormatBool(previewOnly),
-		"truth_boundary=local node process preview only; not real TCP; not real PBFT; not BlockEmulator backend; no real node-to-node communication",
+		"truth_boundary=localhost TCP typed message preview only; not production networking; not real PBFT; not BlockEmulator backend",
 		"status=preview_ready",
 	}
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
