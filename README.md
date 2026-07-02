@@ -26,6 +26,14 @@ Next stage: V3.6 TCP Adapter and Consensus Hardening.
 
 V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live backend work, not real TCP/PBFT, and does not claim full BlockEmulator compatibility.
 
+## V3.6 / V3.7 Planning
+
+- V3.6 planned: configurable `NetworkAdapter` with localhost TCP typed message preview.
+- V3.7 planned: configurable `ConsensusRuntime`, with `blockemulator_aligned_pbft_preview` as one selectable consensus plugin rather than the only consensus path.
+- V3.8 planned: CrossShardProtocol skeleton.
+
+These stages are roadmap items only. Current stage remains V3.5.4 V3.5 Closure; V3.6 and V3.7 are not implemented yet.
+
 ## Historical V0 Scope
 
 V0 established the platform skeleton:

@@ -19,6 +19,28 @@ V3.5 route:
 
 V3.5 node topology and local launcher foundations are closed. Fabric-backed validation is deferred to a later stage unless explicitly reopened. The next major stage is V3.6 TCP Adapter and Consensus Hardening.
 
+## V3.6 / V3.7 Planning
+
+V3.6 is planned as NetworkAdapter and TCP Typed Message Runtime. It should start with a configurable `NetworkAdapter`, support `in_memory_message_bus` and `localhost_tcp_preview`, add typed `MessageEnvelope` logs, and keep TCP as preview only. V3.6 should not implement real PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark claims.
+
+V3.7 is planned as ConsensusRuntime and BlockEmulator-aligned PBFT Preview. It should make consensus runtime configurable, keep `simple_leader`, `poa_light`, and `pbft_light_model` as lightweight/model-based options, and add `blockemulator_aligned_pbft_preview` as one optional plugin. V3.7 should not hardcode PBFT as the only consensus, should not copy BlockEmulator code, and should not claim production PBFT.
+
+V3.8 is planned as CrossShardProtocol Skeleton. It should stay separate from V3.6 networking and V3.7 PBFT preview work.
+
+Planned stage list extension:
+
+- V3.6 NetworkAdapter and TCP Typed Message Runtime.
+- V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview.
+- V3.8 CrossShardProtocol Skeleton.
+
+The main transaction flow should remain:
+
+```text
+Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
+```
+
+RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow.
+
 ## 0.1 V3.3 Go-backed MetaTrack Update
 
 V3.3 absorbs the earlier V3.2b / V3.2.5 Go-backed minimal runtime parity stage.
@@ -89,6 +111,9 @@ Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + V
 - V3.4.10 Controlled Smoke Runner.
 - V3.4.11 Stage / Version / Frontend / Docs Closure.
 - V3.5 Node-level Emulator Skeleton.
+- V3.6 NetworkAdapter and TCP Typed Message Runtime.
+- V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview.
+- V3.8 CrossShardProtocol Skeleton.
 - V3-final Frontend Integration and Acceptance.
 
 Deferred / future work:

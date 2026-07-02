@@ -49,3 +49,5 @@ Frontend can configure shard/node topology. The backend can validate topology. T
 ## 7. Next Major Stage
 
 V3.6 TCP adapter and consensus hardening.
+
+V3.6 will add configurable `NetworkAdapter` planning and implementation around localhost TCP typed message preview. V3.7 will add configurable `ConsensusRuntime` planning and implementation with `blockemulator_aligned_pbft_preview` as one optional consensus plugin, not a replacement for MBE's modular runtime model.
