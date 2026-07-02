@@ -42,7 +42,7 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
         (output_dir / "summary.csv").write_text("tx_count,success_count\n1,1\n", encoding="utf-8")
         (output_dir / "latency.csv").write_text("tx_id,latency_ms\n0,1\n", encoding="utf-8")
         (output_dir / "runtime.log").write_text("draft smoke complete\n", encoding="utf-8")
-        for name in ("node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json"):
+        for name in ("node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv"):
             (output_dir / name).write_text("id\n1\n", encoding="utf-8")
         summary = {
             "tx_count": 1,
@@ -84,6 +84,16 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
             "light_quorum_reached_count": 1,
             "consensus_network_error_count": 0,
             "consensus_network_path": "in_memory_typed_message_bus",
+            "pbft_view": 0,
+            "pbft_sequence": 1,
+            "pbft_preprepare_count": 0,
+            "pbft_prepare_count": 0,
+            "pbft_commit_count": 0,
+            "pbft_quorum_reached_count": 0,
+            "pbft_finalized_block_count": 0,
+            "pbft_consensus_latency_ms": 0,
+            "pbft_preview_enabled": False,
+            "pbft_quorum_threshold": 0,
         }
         (output_dir / "summary.json").write_text('{"tx_count": 1, "success_count": 1, "logical_node_count": 25}\n', encoding="utf-8")
         return SimpleNamespace(output_dir=output_dir, summary=summary)
@@ -93,12 +103,12 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
     result = draft_runner.run_v3_composer_draft_smoke(valid_draft(), root=tmp_path)
 
     assert result["status"] == "completed"
-    assert result["stage"] == "V3.6.2 V3.6 Closure"
-    assert result["current_stage"] == "V3.6.2 V3.6 Closure"
-    assert result["latest_runtime_stage"] == "configurable NetworkAdapter with consensus-light over typed message runtime"
-    assert result["latest_completed_runtime_stage"] == "configurable NetworkAdapter with consensus-light over typed message runtime"
-    assert result["current_capability"] == "configurable NetworkAdapter with consensus-light proposal/vote preview over typed messages"
-    assert result["runtime_truth"] == "network_adapter_consensus_light_preview_not_real_pbft"
+    assert result["stage"] == "V3.7.1"
+    assert result["current_stage"] == "V3.7.1"
+    assert result["latest_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
+    assert result["latest_completed_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
+    assert result["current_capability"] == "configurable ConsensusRuntime with optional blockemulator_aligned_pbft_preview state machine artifacts"
+    assert result["runtime_truth"] == "blockemulator_aligned_pbft_state_machine_preview_not_production_pbft"
     assert result["run_mode"] == "draft_smoke"
     assert result["topology_summary"]["logical_node_count"] == 25
     assert len(calls) == 1
@@ -132,10 +142,14 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
         "typed_message_log.csv",
         "consensus_network_light_log.csv",
         "network_consensus_summary.json",
+        "pbft_state_log.csv",
+        "pbft_message_log.csv",
+        "quorum_log.csv",
+        "finalized_block_log.csv",
     ):
         assert (run_dir / name).is_file()
     artifact_names = {artifact["name"] for artifact in result["artifacts"]}
-    assert {"composer_draft.json", "normalized_draft.json", "generated_experiment_profile.json", "summary.csv", "runtime.log", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json"} <= artifact_names
+    assert {"composer_draft.json", "normalized_draft.json", "generated_experiment_profile.json", "summary.csv", "runtime.log", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv"} <= artifact_names
 
 
 def test_run_draft_smoke_invalid_draft_does_not_start_runner(monkeypatch, tmp_path: Path) -> None:
@@ -154,3 +168,16 @@ def test_run_draft_smoke_invalid_draft_does_not_start_runner(monkeypatch, tmp_pa
         draft_runner.run_v3_composer_draft_smoke(invalid, root=tmp_path)
 
     assert started is False
+
+
+def test_build_plugin_profile_maps_pbft_preview_to_consensus_runtime() -> None:
+    validation = draft_runner.validate_v3_composer_draft(valid_draft())
+    assert validation.normalized_draft is not None
+    normalized = dict(validation.normalized_draft)
+    normalized["plugin_selection"] = dict(normalized["plugin_selection"]) | {"Consensus": "blockemulator_aligned_pbft_preview"}
+
+    profile = draft_runner.build_plugin_profile(normalized)
+    plugins = profile["profiles"][0]["plugins"]
+
+    assert plugins["ConsensusPlugin"] == "pbft_light_model"
+    assert plugins["ConsensusRuntimePlugin"] == "blockemulator_aligned_pbft_preview"

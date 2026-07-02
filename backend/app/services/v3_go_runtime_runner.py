@@ -156,6 +156,16 @@ MECHANISM_FIELDS = [
     "light_quorum_reached_count",
     "consensus_network_error_count",
     "consensus_network_path",
+    "pbft_view",
+    "pbft_sequence",
+    "pbft_preprepare_count",
+    "pbft_prepare_count",
+    "pbft_commit_count",
+    "pbft_quorum_reached_count",
+    "pbft_finalized_block_count",
+    "pbft_consensus_latency_ms",
+    "pbft_preview_enabled",
+    "pbft_quorum_threshold",
 ]
 
 
@@ -271,7 +281,7 @@ def _write_metatrack_artifacts(root: Path, runs: list[GoRuntimeRun]) -> None:
         if target.exists():
             target.unlink()
     representative = next((run for run in runs if run.summary.get("plugin_profile_id") == "full_MetaTrack"), runs[0])
-    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
+    for filename in ("block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "summary.csv", "summary.json", "runtime.log", "report.md", "used_chain_profile.yaml"):
         source = representative.output_dir / filename
         if source.is_file():
             shutil.copyfile(source, root / filename)

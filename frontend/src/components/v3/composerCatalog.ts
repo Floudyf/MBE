@@ -110,6 +110,7 @@ export const composerCatalog: Record<string, ModuleCatalogEntry> = {
       { id: "simple_leader", label: "简单 leader 排序", status: "runnable" },
       { id: "poa_light", label: "PoA-light authority model", status: "runnable" },
       { id: "pbft_light_model", label: "PBFT-light stage/quorum model", status: "runnable" },
+      { id: "blockemulator_aligned_pbft_preview", label: "BlockEmulator-aligned PBFT state machine preview", status: "runnable" },
       { id: "pbft_model", label: "PBFT 模型", status: "planned" },
       { id: "pbft", label: "Real PBFT unsupported", status: "planned" },
       { id: "real_pbft", label: "Real PBFT unsupported", status: "planned" },

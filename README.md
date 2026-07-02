@@ -2,20 +2,20 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.6.2 V3.6 Closure.
-Latest runtime capability: configurable NetworkAdapter with consensus-light over typed message runtime.
-Runtime truth: network_adapter_consensus_light_preview_not_real_pbft.
-Next stage: V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview.
+Current stage: V3.7.1.
+Latest runtime capability: configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview.
+Runtime truth: blockemulator_aligned_pbft_state_machine_preview_not_production_pbft.
+Next stage: V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure.
 
 ## Current Status
 
-Current stage: V3.6.2 V3.6 Closure.
-Latest runtime capability: configurable NetworkAdapter with consensus-light over typed message runtime.
-Current capability: consensus-light proposal/vote preview over the selected NetworkAdapter typed message path.
-Runtime truth: network_adapter_consensus_light_preview_not_real_pbft.
+Current stage: V3.7.1.
+Latest runtime capability: configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview.
+Current capability: optional `blockemulator_aligned_pbft_preview` state machine artifacts with PrePrepare, Prepare, Commit, Finalized, confirm-map counts, and 2f+1 quorum accounting.
+Runtime truth: blockemulator_aligned_pbft_state_machine_preview_not_production_pbft.
 
-V3.5 is closed. V3.6 is closed. V3.6.1 added a selectable NetworkAdapter surface with `in_memory_message_bus` compatibility and `localhost_tcp_preview` typed message preview artifacts. V3.6.2 adds consensus-light proposal/vote preview over the selected adapter and closes V3.6. It remains not real PBFT, not HotStuff/Raft, not production networking, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
-Next stage: V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7 has not started.
+V3.5 and V3.6 are closed. V3.7.1 adds a configurable `ConsensusRuntimePlugin` surface and `blockemulator_aligned_pbft_preview` as one selectable preview runtime. It remains not production PBFT, not full PBFT over TCP, not full Byzantine safety, not view-change/checkpoint/signature hardening, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
+Next stage: V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure. V3.7.2 has not started.
 
 ## V3.5 Route
 
@@ -30,10 +30,11 @@ V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live 
 
 - V3.6.1 implemented: configurable `NetworkAdapter` with localhost TCP typed message preview.
 - V3.6.2 implemented: consensus-light proposal/vote preview over NetworkAdapter typed messages and V3.6 closure.
-- V3.7 planned: configurable `ConsensusRuntime`, with `blockemulator_aligned_pbft_preview` as one selectable consensus plugin rather than the only consensus path.
+- V3.7.1 implemented: configurable `ConsensusRuntimePlugin`, with `blockemulator_aligned_pbft_preview` as one selectable PBFT state machine preview rather than the only consensus path.
+- V3.7.2 planned: run the PBFT preview over NetworkAdapter and close V3.7.
 - V3.8 planned: CrossShardProtocol skeleton.
 
-V3.6 is closed. V3.7 and V3.8 remain roadmap items only.
+V3.6 is closed. V3.7.1 is implemented. V3.7.2 and V3.8 remain roadmap items only.
 
 ## Historical V0 Scope
 

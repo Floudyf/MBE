@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
@@ -16,13 +16,13 @@ def test_v3_composer_preview_api_returns_additive_preview_fields() -> None:
     payload = response.json()
     composer = payload["composer_preview"]
     assert payload["experiment_profile_id"] == "metatrack_go_backed_ablation_smoke"
-    assert payload["stage"] == "V3.6.2 V3.6 Closure"
-    assert payload["current_stage"] == "V3.6.2 V3.6 Closure"
-    assert payload["latest_runtime_stage"] == "configurable NetworkAdapter with consensus-light over typed message runtime"
-    assert payload["latest_completed_runtime_stage"] == "configurable NetworkAdapter with consensus-light over typed message runtime"
-    assert payload["current_capability"] == "configurable NetworkAdapter with consensus-light proposal/vote preview over typed messages"
-    assert payload["runtime_truth"] == "network_adapter_consensus_light_preview_not_real_pbft"
-    assert payload["next_stage"] == "V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview"
+    assert payload["stage"] == "V3.7.1"
+    assert payload["current_stage"] == "V3.7.1"
+    assert payload["latest_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
+    assert payload["latest_completed_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
+    assert payload["current_capability"] == "configurable ConsensusRuntime with optional blockemulator_aligned_pbft_preview state machine artifacts"
+    assert payload["runtime_truth"] == "blockemulator_aligned_pbft_state_machine_preview_not_production_pbft"
+    assert payload["next_stage"] == "V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure"
     assert composer["view"] == "single_chain"
     assert composer["template_id"] == "metatrack_ablation"
     assert composer["runnable"] is True
@@ -43,9 +43,9 @@ def test_v3_composer_templates_api_keeps_planned_templates_non_runnable() -> Non
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["stage"] == "V3.6.2 V3.6 Closure"
-    assert payload["current_stage"] == "V3.6.2 V3.6 Closure"
-    assert payload["latest_runtime_stage"] == "configurable NetworkAdapter with consensus-light over typed message runtime"
+    assert payload["stage"] == "V3.7.1"
+    assert payload["current_stage"] == "V3.7.1"
+    assert payload["latest_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
     templates = {item["template_id"]: item for item in payload["items"]}
     assert templates["metatrack_ablation"]["runnable"] is True
     assert templates["committee_lifecycle_planned"]["preview_only"] is True
@@ -69,10 +69,10 @@ def test_v3_composer_run_smoke_registers_downloadable_artifacts_without_fabric(m
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["stage"] == "V3.6.2 V3.6 Closure"
-    assert payload["current_stage"] == "V3.6.2 V3.6 Closure"
-    assert payload["latest_runtime_stage"] == "configurable NetworkAdapter with consensus-light over typed message runtime"
-    assert payload["runtime_truth"] == "network_adapter_consensus_light_preview_not_real_pbft"
+    assert payload["stage"] == "V3.7.1"
+    assert payload["current_stage"] == "V3.7.1"
+    assert payload["latest_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
+    assert payload["runtime_truth"] == "blockemulator_aligned_pbft_state_machine_preview_not_production_pbft"
     assert payload["runtime_mode"] == "go_backed"
     artifact_names = {artifact["name"] for artifact in payload["artifacts"]}
     assert {"metatrack_summary.csv", "metatrack_summary.json", "metatrack_ablation_report.md", "used_experiment_profile.yaml"} <= artifact_names

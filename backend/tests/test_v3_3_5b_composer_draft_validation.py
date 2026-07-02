@@ -37,8 +37,8 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.6.2 V3.6 Closure"
-    assert result.normalized_draft["current_capability"] == "configurable NetworkAdapter with consensus-light proposal/vote preview over typed messages"
+    assert result.normalized_draft["current_stage"] == "V3.7.1"
+    assert result.normalized_draft["current_capability"] == "configurable ConsensusRuntime with optional blockemulator_aligned_pbft_preview state machine artifacts"
 
 
 def test_valid_draft_accepts_custom_logical_topology() -> None:
@@ -95,8 +95,8 @@ def test_valid_baseline_draft_is_runnable() -> None:
     assert result.is_runnable is True
 
 
-def test_consensus_light_plugins_are_runnable_when_fixed() -> None:
-    for plugin_id in ("simple_leader", "poa_light", "pbft_light_model"):
+def test_consensus_runtime_plugins_are_runnable_when_fixed() -> None:
+    for plugin_id in ("simple_leader", "poa_light", "pbft_light_model", "blockemulator_aligned_pbft_preview"):
         result = validate_v3_composer_draft(valid_draft(Consensus=("fixed", plugin_id)))
 
         assert result.is_valid is True
@@ -135,7 +135,7 @@ def test_planned_plugin_is_not_valid_or_runnable() -> None:
 
 
 def test_real_pbft_hotstuff_and_raft_remain_unsupported() -> None:
-    for plugin_id in ("pbft", "real_pbft", "hotstuff", "raft"):
+    for plugin_id in ("pbft", "real_pbft", "hotstuff", "raft", "future_hotstuff_preview", "future_raft_preview"):
         result = validate_v3_composer_draft(valid_draft(Consensus=("fixed", plugin_id)))
 
         assert result.is_valid is False

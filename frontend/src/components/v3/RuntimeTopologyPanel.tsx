@@ -21,11 +21,11 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
     <section className="final-card wide v3-template-bar">
       <div className="v3-section-head">
         <div>
-          <p className="eyebrow">V3.6.2 runtime support layer</p>
+          <p className="eyebrow">V3.7.1 runtime support layer</p>
           <h3>Runtime Topology / Node Topology</h3>
         </div>
       </div>
-      <p className="muted">Configures logical nodes and the runtime NetworkAdapter. V3.6.2 can report consensus-light proposal/vote preview over the selected adapter; it is not production networking, not real PBFT, and not a BlockEmulator backend.</p>
+      <p className="muted">Configures logical nodes and the runtime NetworkAdapter. V3.7.1 also supports optional ConsensusRuntime PBFT state machine preview artifacts; it is not production networking, not production PBFT, and not a BlockEmulator backend.</p>
       <div className="v3-identity-grid">
         {numericFields.map((field) => (
           <label key={field}>

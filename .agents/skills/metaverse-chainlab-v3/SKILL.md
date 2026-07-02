@@ -2,15 +2,16 @@
 
 ## 0. Current V3 Scope Realignment
 
-As of V3.6.2, current_stage is V3.6.2 V3.6 Closure, latest_runtime_stage is configurable NetworkAdapter with consensus-light over typed message runtime, runtime_truth is network_adapter_consensus_light_preview_not_real_pbft, and next_stage is V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.4.11 closure, V3.5.4 closure, and V3.6 closure are complete. Do not continue adding V3.5 or V3.6 features after closure.
+As of V3.7.1, current_stage is V3.7.1, latest_runtime_stage is configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview, runtime_truth is blockemulator_aligned_pbft_state_machine_preview_not_production_pbft, and next_stage is V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure. V3.4.11 closure, V3.5.4 closure, and V3.6 closure are complete. Do not continue adding V3.5 or V3.6 features after closure.
 
-When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, `docs/v3_5_3_local_node_process_runtime.md`, `docs/v3_5_4_v3_5_closure.md`, `docs/v3_6_network_adapter_and_tcp_message_runtime_plan.md`, `docs/v3_7_consensus_runtime_and_blockemulator_aligned_pbft_plan.md`, the frontend Runtime Topology / NetworkAdapter / Node Process Preview panels, backend V3 composer topology validation, Go logical node / launcher preview / node process preview / network adapter / consensus-light-over-network tests, and controlled smoke tests. V3.6 is closed. Do not enter V3.7 unless the user explicitly asks for it. Do not implement real PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, or real cross-shard protocol work. Do not present smoke output as a paper-grade benchmark.
+When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, `docs/v3_5_3_local_node_process_runtime.md`, `docs/v3_5_4_v3_5_closure.md`, `docs/v3_6_network_adapter_and_tcp_message_runtime_plan.md`, `docs/v3_7_consensus_runtime_and_blockemulator_aligned_pbft_plan.md`, the frontend Runtime Topology / NetworkAdapter / Node Process Preview / PBFT preview panels, backend V3 composer topology validation, Go logical node / launcher preview / node process preview / network adapter / consensus-light-over-network / PBFT-preview tests, and controlled smoke tests. V3.6 is closed and V3.7.1 is implemented. Do not enter V3.7.2 unless the user explicitly asks for it. Do not implement production PBFT, PBFT over TCP, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, or real cross-shard protocol work. Do not present smoke output as a paper-grade benchmark.
 
 Roadmap after V3.5 closure:
 
 - V3.6.1 is implemented as configurable `NetworkAdapter` plus localhost TCP typed message runtime preview. It keeps `in_memory_message_bus` and `localhost_tcp_preview` as selectable adapter concepts.
 - V3.6.2 is implemented as consensus-light proposal/vote preview over NetworkAdapter plus V3.6 closure.
-- V3.7 is the next implementation stage only when explicitly opened. It must make `ConsensusRuntime` configurable and add `blockemulator_aligned_pbft_preview` as one optional consensus plugin. Do not hardcode PBFT as the only consensus.
+- V3.7.1 is implemented as configurable `ConsensusRuntimePlugin` plus `blockemulator_aligned_pbft_preview` state machine artifacts. It does not implement PBFT over TCP or production PBFT.
+- V3.7.2 is the next implementation stage only when explicitly opened. It should run the PBFT preview over NetworkAdapter and close V3.7. Do not hardcode PBFT as the only consensus.
 - V3.8 is planned for CrossShardProtocol skeleton work after V3.6/V3.7 are complete.
 - In docs-only planning rounds, do not implement V3.6/V3.7 code, schemas, tests, configs, frontend, backend, or Go runtime.
 - Do not claim production networking or real PBFT from V3.6 NetworkAdapter / consensus-light preview. Do not claim production PBFT even after V3.7 preview.
@@ -61,7 +62,7 @@ V3.4 series goal: harden critical foundation modules in the V3 Go-backed modular
 
 Every V3.4.x runtime hardening substage must include corresponding frontend alignment. When runtime adds an artifact, summary metric, or module truth boundary, frontend artifact grouping, result summary, history detail, and module detail must align in the same implementation stage. Runtime must not output a new artifact that the frontend cannot download or explain.
 
-V3.5 and V3.6 are closed. Do not continue adding V3.5 or V3.6 features after closure. V3.7 must not start unless the user explicitly asks for it.
+V3.5 and V3.6 are closed. V3.7.1 is implemented. Do not continue adding V3.5/V3.6 features or jump to V3.7.2 unless the user explicitly asks for it.
 
 Deferred / future scope:
 
@@ -137,7 +138,8 @@ V3 stages:
 - `V3.5.4 V3.5 Closure`: only closure alignment and validation.
 - `V3.6.1 NetworkAdapter + localhost TCP + typed messages`: configurable NetworkAdapter, in-memory compatibility, localhost TCP typed message preview, and typed message artifacts. Not consensus-light over network, not real PBFT, and not production networking.
 - `V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure`: implemented; consensus-light proposal/vote preview over selected adapter and closure wording. Not PBFT PrePrepare/Prepare/Commit.
-- `V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview`: only when explicitly opened after V3.6; configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview as one optional plugin. Not production PBFT and not a BlockEmulator code copy.
+- `V3.7.1 ConsensusRuntime Plugin Schema + PBFT State Machine Preview`: implemented; configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview as one optional plugin. Not production PBFT, not PBFT over TCP, and not a BlockEmulator code copy.
+- `V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure`: future only unless explicitly opened; connect PBFT preview to NetworkAdapter and close V3.7. Not production PBFT.
 - `V3.8 CrossShardProtocol Skeleton`: future skeleton only; not part of V3.6/V3.7.
 - `V3-final Frontend Integration and Acceptance`: only current-scope frontend integration, acceptance report, artifact browsing, and boundary presentation.
 
@@ -162,7 +164,7 @@ V3.5.3 only local node process runtime.
 V3.5.4 only V3.5 closure.
 V3.6.1 only NetworkAdapter and TCP typed message preview.
 V3.6.2 implemented consensus-light over NetworkAdapter plus V3.6 closure.
-V3.7 only configurable ConsensusRuntime and PBFT preview when explicitly opened.
+V3.7.1 implemented configurable ConsensusRuntime and PBFT state machine preview. V3.7.2 only when explicitly opened.
 V3.8 only CrossShardProtocol skeleton when explicitly opened.
 V3-final only frontend integration and acceptance report for current V3 scope.
 ```

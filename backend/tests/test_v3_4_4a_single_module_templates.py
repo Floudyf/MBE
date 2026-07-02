@@ -54,6 +54,7 @@ def test_catalog_returns_single_module_templates() -> None:
         "simple_leader",
         "poa_light",
         "pbft_light_model",
+        "blockemulator_aligned_pbft_preview",
     ]
     assert templates["single_module_routing"]["variable_module"] == "Routing"
     assert templates["single_module_routing"]["allowed_variable_plugins"] == [

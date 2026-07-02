@@ -207,7 +207,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     for module_id, expected in fixed_runtime_requirements.items():
         if module_id in plugin_selection and plugin_selection[module_id] != expected:
             errors.append(f"当前 Go-backed Draft Smoke 要求 {module_label(module_id)} 使用 {expected}。")
-    allowed_consensus_plugins = {"simple_leader", "poa_light", "pbft_light_model"}
+    allowed_consensus_plugins = {"simple_leader", "poa_light", "pbft_light_model", "blockemulator_aligned_pbft_preview"}
     consensus_plugin = plugin_selection.get("Consensus")
     if consensus_plugin and consensus_plugin not in allowed_consensus_plugins:
         errors.append("当前 Go-backed Draft Smoke 仅支持 Consensus 使用 simple_leader、poa_light 或 pbft_light_model；PBFT / HotStuff / Raft 仍为 planned / unsupported。")

@@ -25,12 +25,13 @@ Planned selectable `ConsensusRuntime` values:
 
 ### V3.7.1 ConsensusRuntime Plugin Schema + PBFT State Machine Preview
 
-Planned scope:
+Implemented scope:
 
 - Add a `ConsensusRuntimePlugin` concept.
 - Keep `ConsensusPlugin` as the algorithm selection concept.
 - Use `ConsensusRuntimePlugin` to describe how that algorithm runs under topology + selected `NetworkAdapter`.
 - Introduce `blockemulator_aligned_pbft_preview` as an optional runtime plugin.
+- Keep `simple_leader`, `poa_light`, and `pbft_light_model` available; PBFT preview is not hardcoded as the only consensus path.
 
 The BlockEmulator-aligned PBFT preview should align with these core structures:
 
@@ -79,6 +80,10 @@ Expected summary metrics:
 - `pbft_quorum_reached_count`
 - `pbft_finalized_block_count`
 - `pbft_consensus_latency_ms`
+- `pbft_preview_enabled`
+- `pbft_quorum_threshold`
+
+V3.7.1 is implemented as a deterministic state machine preview path. It is not full PBFT over TCP and does not implement production view-change, checkpoint, or signature hardening.
 
 ### V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure
 
@@ -94,6 +99,8 @@ Planned scope:
 - Let validators mark finalized after enough `Commit` messages.
 - Output `consensus_network_log.csv`.
 - Update the frontend with a small result summary only; do not refactor the main V3 Composer page.
+
+V3.7.2 has not started.
 
 ## 4. BlockEmulator Alignment Without Code Copy
 

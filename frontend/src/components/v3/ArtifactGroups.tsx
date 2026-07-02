@@ -23,6 +23,7 @@ const groups = [
   { title: "Local node process preview artifacts", files: ["node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log"] },
   { title: "NetworkAdapter typed message artifacts", files: ["tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv"] },
   { title: "Consensus-light over NetworkAdapter artifacts", files: ["consensus_network_light_log.csv", "network_consensus_summary.json"] },
+  { title: "PBFT state machine preview artifacts", files: ["pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv"] },
   { title: "Chain runtime logs", files: ["runtime.log", "block_log.csv", "tx_results.csv"] },
   { title: "MetaTrack metrics", files: ["metatrack_latency.csv", "metatrack_mechanism_metrics.csv"] },
   { title: "Controlled smoke outputs", files: ["run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"] },

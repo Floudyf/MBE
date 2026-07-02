@@ -29,13 +29,21 @@ V3.6.1 does not implement real PBFT, HotStuff/Raft, BlockEmulator-aligned PBFT, 
 
 Current stage is V3.6.2 V3.6 Closure. V3.6.2 connects consensus-light to the selected NetworkAdapter typed message path. With `in_memory_message_bus`, it records proposal/vote typed messages on the in-memory path. With `localhost_tcp_preview`, it records the same consensus-light proposal/vote preview over the localhost TCP typed message preview path. It writes `consensus_network_light_log.csv` and `network_consensus_summary.json`, appends `proposal_preview` and `vote_preview` to typed message/send/receive logs, and adds summary metrics for `consensus_over_network_enabled`, `consensus_runtime_selected`, `proposal_preview_count`, `vote_preview_count`, `light_quorum_reached_count`, `consensus_network_error_count`, and `consensus_network_path`.
 
-V3.6 is closed after V3.6.2. This closure does not implement PBFT PrePrepare/Prepare/Commit, BlockEmulator-aligned PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, production networking, or paper-grade benchmark evidence. The next stage is V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview, which has not started.
+V3.6 is closed after V3.6.2. This closure does not implement PBFT PrePrepare/Prepare/Commit, BlockEmulator-aligned PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, production networking, or paper-grade benchmark evidence.
+
+## V3.7.1 Current Status
+
+Current stage is V3.7.1. V3.7.1 introduces a configurable `ConsensusRuntimePlugin` concept while keeping consensus selectable. `simple_leader`, `poa_light`, and `pbft_light_model` remain lightweight/model-based paths. `blockemulator_aligned_pbft_preview` is added as one optional runtime that writes deterministic PBFT state machine preview artifacts.
+
+V3.7.1 writes `pbft_state_log.csv`, `pbft_message_log.csv`, `quorum_log.csv`, and `finalized_block_log.csv`. It adds summary metrics for `consensus_runtime_selected`, `pbft_view`, `pbft_sequence`, `pbft_preprepare_count`, `pbft_prepare_count`, `pbft_commit_count`, `pbft_quorum_reached_count`, `pbft_finalized_block_count`, `pbft_consensus_latency_ms`, `pbft_preview_enabled`, and `pbft_quorum_threshold`.
+
+V3.7.1 is not production PBFT, not full PBFT over localhost TCP, not full Byzantine safety, not view-change hardening, not stable checkpointing, not signature/verification hardening, not HotStuff/Raft, not a real cross-shard protocol, not Fabric/EVM live backend, not a BlockEmulator backend, and not paper-grade benchmark evidence. The next stage is V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure, which has not started.
 
 ## V3.6 / V3.7 Planning
 
 V3.6 is NetworkAdapter and TCP Typed Message Runtime. V3.6.1 starts with a configurable `NetworkAdapter`, supports `in_memory_message_bus` and `localhost_tcp_preview`, adds typed `MessageEnvelope` logs, and keeps TCP as preview only. V3.6.2 adds Consensus-light over NetworkAdapter and closes V3.6. V3.6 does not implement real PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark claims.
 
-V3.7 is planned as ConsensusRuntime and BlockEmulator-aligned PBFT Preview. It should make consensus runtime configurable, keep `simple_leader`, `poa_light`, and `pbft_light_model` as lightweight/model-based options, and add `blockemulator_aligned_pbft_preview` as one optional plugin. V3.7 should not hardcode PBFT as the only consensus, should not copy BlockEmulator code, and should not claim production PBFT.
+V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is implemented as configurable ConsensusRuntime with optional PBFT state machine preview artifacts. V3.7.2 remains planned for PBFT preview over NetworkAdapter and V3.7 closure. V3.7 should not hardcode PBFT as the only consensus, should not copy BlockEmulator code, and should not claim production PBFT.
 
 V3.8 is planned as CrossShardProtocol Skeleton. It should stay separate from V3.6 networking and V3.7 PBFT preview work.
 

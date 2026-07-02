@@ -94,7 +94,7 @@ Implemented summary metrics:
 - `consensus_network_error_count`
 - `consensus_network_path`
 
-V3.6 is closed after V3.6.2. V3.7 is the next planned stage and has not started in this closure.
+V3.6 is closed after V3.6.2. V3.7.1 has since implemented configurable `ConsensusRuntimePlugin` plus a PBFT state machine preview. V3.7.2 has not started in this closure.
 
 ## 3. Frontend Layout Principles
 
@@ -135,4 +135,4 @@ Smoke output from V3.6 remains local controlled preview output unless a later st
 
 ## 5. Next Stage
 
-V3.7 should introduce configurable `ConsensusRuntime` and a BlockEmulator-aligned PBFT preview as one optional consensus runtime plugin, not as the only consensus path.
+V3.7.1 introduces configurable `ConsensusRuntime` and a BlockEmulator-aligned PBFT state machine preview as one optional consensus runtime plugin, not as the only consensus path. V3.7.2 should connect that PBFT preview over NetworkAdapter and close V3.7.
