@@ -44,7 +44,7 @@ func TestLauncherPreviewArtifactsAndTruthBoundary(t *testing.T) {
 	if err := json.Unmarshal(topologyBytes, &topology); err != nil {
 		t.Fatal(err)
 	}
-	if topology["runtime_truth"] != "localhost_tcp_typed_message_preview_not_real_pbft" {
+	if topology["runtime_truth"] != "network_adapter_consensus_light_preview_not_real_pbft" {
 		t.Fatalf("unexpected topology runtime truth: %v", topology["runtime_truth"])
 	}
 	windowsBytes, _ := os.ReadFile(filepath.Join(dir, "launch_nodes_windows.bat"))

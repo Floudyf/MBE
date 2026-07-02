@@ -67,7 +67,7 @@ Implemented summary metrics:
 
 ### V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure
 
-Planned scope:
+Implemented scope:
 
 - Connect consensus-light to the selected `NetworkAdapter`.
 - If `network_adapter = in_memory_message_bus`, use the existing in-memory typed message path.
@@ -78,19 +78,23 @@ Planned scope:
 - Let validators return `vote_preview`.
 - Let the leader count a lightweight quorum.
 
-Expected artifacts:
+Implemented artifacts:
 
 - `consensus_network_light_log.csv`
 - `consensus_message_log.csv`
 - `network_consensus_summary.json`
 
-Expected summary metrics:
+Implemented summary metrics:
 
 - `consensus_over_network_enabled`
 - `consensus_runtime_selected`
 - `proposal_preview_count`
 - `vote_preview_count`
 - `light_quorum_reached_count`
+- `consensus_network_error_count`
+- `consensus_network_path`
+
+V3.6 is closed after V3.6.2. V3.7 is the next planned stage and has not started in this closure.
 
 ## 3. Frontend Layout Principles
 

@@ -5,11 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.6.1"
-LATEST_RUNTIME_STAGE = "configurable network adapter with localhost TCP typed message preview"
-CURRENT_CAPABILITY = "configurable NetworkAdapter with in-memory compatibility and localhost TCP typed message preview"
-RUNTIME_TRUTH = "localhost_tcp_typed_message_preview_not_real_pbft"
-NEXT_STAGE = "V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure"
+CURRENT_STAGE = "V3.6.2 V3.6 Closure"
+LATEST_RUNTIME_STAGE = "configurable NetworkAdapter with consensus-light over typed message runtime"
+CURRENT_CAPABILITY = "configurable NetworkAdapter with consensus-light proposal/vote preview over typed messages"
+RUNTIME_TRUTH = "network_adapter_consensus_light_preview_not_real_pbft"
+NEXT_STAGE = "V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview"
 
 
 def default_topology() -> V3RuntimeTopology:

@@ -25,7 +25,7 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	if result.Summary.TxCount != 24 || result.Summary.SuccessCount != 24 || result.Summary.FailureCount != 0 {
 		t.Fatalf("unexpected summary: %+v", result.Summary)
 	}
-	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv"} {
+	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json"} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Fatalf("missing artifact %s: %v", name, err)
 		}
@@ -38,7 +38,9 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	assertCSVFields(t, filepath.Join(out, "routing_log.csv"), routingLogFields())
 	assertCSVFields(t, filepath.Join(out, "execution_log.csv"), executionLogFields())
 	assertCSVFields(t, filepath.Join(out, "state_access_log.csv"), stateAccessLogFields())
+	assertCSVFields(t, filepath.Join(out, "consensus_network_light_log.csv"), []string{"event_id", "time_ms", "network_adapter", "consensus_network_path", "consensus_runtime", "consensus_domain_id", "shard_id", "leader_node_id", "validator_node_id", "message_type", "block_height", "sequence_id", "quorum_target", "vote_count", "light_quorum_reached", "status", "details"})
 	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_plugin", "routing_decision_count", "cross_shard_tx_count", "cross_shard_ratio", "remote_state_access_count", "avg_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "execution_plugin", "execution_tx_count", "fast_track_count", "conservative_track_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance"})
+	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"consensus_over_network_enabled", "consensus_runtime_selected", "proposal_preview_count", "vote_preview_count", "light_quorum_reached_count", "consensus_network_error_count", "consensus_network_path"})
 	if result.Summary.QueueWaitMS <= 0 || result.Summary.TxPoolAvgWaitMS <= 0 {
 		t.Fatalf("queue wait should be derived from txpool and non-zero in smoke profile: %+v", result.Summary)
 	}
@@ -47,6 +49,9 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	}
 	if result.Summary.ConsensusRoundCount != result.Summary.BlockCount || result.Summary.FinalizedBlockCount != result.Summary.BlockCount || result.Summary.FailedBlockCount != 0 {
 		t.Fatalf("unexpected simple leader consensus summary: %+v", result.Summary)
+	}
+	if !result.Summary.ConsensusOverNetworkEnabled || result.Summary.ProposalPreviewCount == 0 || result.Summary.VotePreviewCount == 0 || result.Summary.LightQuorumReachedCount == 0 {
+		t.Fatalf("missing consensus-light over network metrics: %+v", result.Summary)
 	}
 }
 

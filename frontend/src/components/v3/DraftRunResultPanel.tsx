@@ -16,6 +16,7 @@ const nodeTopologySummaryKeys = ["shard_count", "validators_per_shard", "logical
 const launcherPreviewSummaryKeys = ["launcher_mode", "launchable_node_count", "node_address_count", "launcher_script_count", "windows_launcher_available", "linux_launcher_available", "launcher_preview_only"];
 const nodeProcessSummaryKeys = ["node_process_entrypoint_available", "node_process_preview_available", "node_process_status_available", "node_process_manifest_available", "node_process_preview_only"];
 const networkAdapterSummaryKeys = ["network_adapter_selected", "tcp_preview_enabled", "tcp_listen_node_count", "tcp_send_count", "tcp_receive_count", "typed_message_count", "network_error_count"];
+const consensusNetworkSummaryKeys = ["consensus_over_network_enabled", "consensus_runtime_selected", "proposal_preview_count", "vote_preview_count", "light_quorum_reached_count", "consensus_network_error_count", "consensus_network_path"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
@@ -177,6 +178,14 @@ export default function DraftRunResultPanel({ result }: Props) {
         <div><dt>network_send_log.csv</dt><dd>{artifactNames.has("network_send_log.csv") ? "available" : "legacy missing"}</dd></div>
         <div><dt>network_receive_log.csv</dt><dd>{artifactNames.has("network_receive_log.csv") ? "available" : "legacy missing"}</dd></div>
         <div><dt>typed_message_log.csv</dt><dd>{artifactNames.has("typed_message_log.csv") ? "available" : "legacy missing"}</dd></div>
+      </div>
+      <div className="v3-summary-preview">
+        <div><dt>Consensus-light over NetworkAdapter</dt><dd>proposal/vote preview only - not PBFT - not BlockEmulator-aligned PBFT</dd></div>
+        {consensusNetworkSummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>consensus_network_light_log.csv</dt><dd>{artifactNames.has("consensus_network_light_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>network_consensus_summary.json</dt><dd>{artifactNames.has("network_consensus_summary.json") ? "available" : "legacy missing"}</dd></div>
       </div>
       <p className="muted">Draft Smoke history is a local debugging, demo, and configuration tracing record. It is not a formal paper experiment result.</p>
     </section>

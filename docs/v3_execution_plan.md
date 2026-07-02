@@ -21,13 +21,19 @@ V3.5 node topology and local launcher foundations are closed. Fabric-backed vali
 
 ## V3.6.1 Current Status
 
-Current stage is V3.6.1 NetworkAdapter + localhost TCP typed messages. V3.6.1 adds a configurable NetworkAdapter concept with `in_memory_message_bus` compatibility and `localhost_tcp_preview` typed message preview. It writes `tcp_adapter_status.csv`, `network_send_log.csv`, `network_receive_log.csv`, and `typed_message_log.csv`, and adds summary metrics for adapter selection, TCP preview status, listen/send/receive counts, typed message count, and network error count.
+V3.6.1 is complete. V3.6.1 adds a configurable NetworkAdapter concept with `in_memory_message_bus` compatibility and `localhost_tcp_preview` typed message preview. It writes `tcp_adapter_status.csv`, `network_send_log.csv`, `network_receive_log.csv`, and `typed_message_log.csv`, and adds summary metrics for adapter selection, TCP preview status, listen/send/receive counts, typed message count, and network error count.
 
-V3.6.1 is not V3.6.2. It does not implement consensus-light over NetworkAdapter, real PBFT, HotStuff/Raft, BlockEmulator-aligned PBFT, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark evidence. The next stage is V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure.
+V3.6.1 does not implement real PBFT, HotStuff/Raft, BlockEmulator-aligned PBFT, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark evidence.
+
+## V3.6.2 Current Status
+
+Current stage is V3.6.2 V3.6 Closure. V3.6.2 connects consensus-light to the selected NetworkAdapter typed message path. With `in_memory_message_bus`, it records proposal/vote typed messages on the in-memory path. With `localhost_tcp_preview`, it records the same consensus-light proposal/vote preview over the localhost TCP typed message preview path. It writes `consensus_network_light_log.csv` and `network_consensus_summary.json`, appends `proposal_preview` and `vote_preview` to typed message/send/receive logs, and adds summary metrics for `consensus_over_network_enabled`, `consensus_runtime_selected`, `proposal_preview_count`, `vote_preview_count`, `light_quorum_reached_count`, `consensus_network_error_count`, and `consensus_network_path`.
+
+V3.6 is closed after V3.6.2. This closure does not implement PBFT PrePrepare/Prepare/Commit, BlockEmulator-aligned PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, production networking, or paper-grade benchmark evidence. The next stage is V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview, which has not started.
 
 ## V3.6 / V3.7 Planning
 
-V3.6 is NetworkAdapter and TCP Typed Message Runtime. V3.6.1 starts with a configurable `NetworkAdapter`, supports `in_memory_message_bus` and `localhost_tcp_preview`, adds typed `MessageEnvelope` logs, and keeps TCP as preview only. V3.6.2 remains planned for Consensus-light over NetworkAdapter + V3.6 Closure. V3.6 should not implement real PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark claims.
+V3.6 is NetworkAdapter and TCP Typed Message Runtime. V3.6.1 starts with a configurable `NetworkAdapter`, supports `in_memory_message_bus` and `localhost_tcp_preview`, adds typed `MessageEnvelope` logs, and keeps TCP as preview only. V3.6.2 adds Consensus-light over NetworkAdapter and closes V3.6. V3.6 does not implement real PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark claims.
 
 V3.7 is planned as ConsensusRuntime and BlockEmulator-aligned PBFT Preview. It should make consensus runtime configurable, keep `simple_leader`, `poa_light`, and `pbft_light_model` as lightweight/model-based options, and add `blockemulator_aligned_pbft_preview` as one optional plugin. V3.7 should not hardcode PBFT as the only consensus, should not copy BlockEmulator code, and should not claim production PBFT.
 

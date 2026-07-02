@@ -131,8 +131,8 @@ func writeNodeProcessStatusCSV(path string, topologyFile string, node NodeAddres
 
 func writeNodeProcessManifest(path string) error {
 	payload := map[string]any{
-		"stage":                      "V3.6.1",
-		"runtime_truth":              "localhost_tcp_typed_message_preview_not_real_pbft",
+		"stage":                      "V3.6.2",
+		"runtime_truth":              "network_adapter_consensus_light_preview_not_real_pbft",
 		"preview_only":               true,
 		"tcp_preview_only":           true,
 		"not_production_network":     true,
@@ -150,7 +150,7 @@ func writeNodeProcessManifest(path string) error {
 
 func writeNodeProcessLog(path string, topologyFile string, node NodeAddressEntry, previewOnly bool) error {
 	lines := []string{
-		"stage=V3.6.1 NetworkAdapter TCP Typed Message Preview",
+		"stage=V3.6.2 Consensus-light over NetworkAdapter Preview",
 		"node_id=" + node.NodeID,
 		"role=" + node.Role,
 		"shard_id=" + strconv.Itoa(node.ShardID),
@@ -161,7 +161,7 @@ func writeNodeProcessLog(path string, topologyFile string, node NodeAddressEntry
 		"network_adapter=" + firstNonEmpty(node.NetworkAdapter, node.NetworkMode),
 		"topology_file=" + topologyFile,
 		"preview_only=" + strconv.FormatBool(previewOnly),
-		"truth_boundary=localhost TCP typed message preview only; not production networking; not real PBFT; not BlockEmulator backend",
+		"truth_boundary=consensus-light over NetworkAdapter preview only; not production networking; not real PBFT; not BlockEmulator backend",
 		"status=preview_ready",
 	}
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)

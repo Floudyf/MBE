@@ -52,6 +52,8 @@ ARTIFACT_ALLOWLIST = frozenset({
     "network_send_log.csv",
     "network_receive_log.csv",
     "typed_message_log.csv",
+    "consensus_network_light_log.csv",
+    "network_consensus_summary.json",
     "used_chain_profile.yaml",
     "used_chain_profile.json",
     "used_plugin_profile.yaml",

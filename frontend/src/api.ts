@@ -321,6 +321,13 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   tcp_receive_count?: number | string;
   typed_message_count?: number | string;
   network_error_count?: number | string;
+  consensus_over_network_enabled?: boolean | string;
+  consensus_runtime_selected?: string;
+  proposal_preview_count?: number | string;
+  vote_preview_count?: number | string;
+  light_quorum_reached_count?: number | string;
+  consensus_network_error_count?: number | string;
+  consensus_network_path?: string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";

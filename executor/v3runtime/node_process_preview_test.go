@@ -56,7 +56,7 @@ func TestNodeProcessPreviewLoadsTopologyAndWritesArtifacts(t *testing.T) {
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if manifest["runtime_truth"] != "localhost_tcp_typed_message_preview_not_real_pbft" || manifest["tcp_preview_only"] != true || manifest["not_production_network"] != true {
+	if manifest["runtime_truth"] != "network_adapter_consensus_light_preview_not_real_pbft" || manifest["tcp_preview_only"] != true || manifest["not_production_network"] != true {
 		t.Fatalf("manifest missing truth boundary: %+v", manifest)
 	}
 	logBytes, _ := os.ReadFile(filepath.Join(dir, "node_process_log_sample.log"))
