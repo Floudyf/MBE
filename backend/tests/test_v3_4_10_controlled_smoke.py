@@ -16,13 +16,13 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
 
     assert result["status"] == "completed"
     assert result["stage"] == "V3.4.10"
-    assert result["current_stage"] == "V3.7.1"
+    assert result["current_stage"] == "V3.7.2 V3.7 Closure"
     assert result["latest_runtime_stage"] == "V3.4.10"
-    assert result["latest_completed_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
+    assert result["latest_completed_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter"
     assert result["closure_stage"] == "V3.4.11"
-    assert result["current_capability"] == "configurable ConsensusRuntime with optional blockemulator_aligned_pbft_preview state machine artifacts"
-    assert result["runtime_truth"] == "blockemulator_aligned_pbft_state_machine_preview_not_production_pbft"
-    assert result["next_stage"] == "V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure"
+    assert result["current_capability"] == "BlockEmulator-aligned PBFT preview over selected NetworkAdapter typed message path"
+    assert result["runtime_truth"] == "blockemulator_aligned_pbft_preview_over_network_not_production_pbft"
+    assert result["next_stage"] == "V3.8 CrossShardProtocol Skeleton"
     assert result["preset_order"] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["run_index"]] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["aggregate_summary"]] == CONTROLLED_PRESET_ORDER
@@ -50,6 +50,8 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
         "pbft_message_log.csv",
         "quorum_log.csv",
         "finalized_block_log.csv",
+        "consensus_network_log.csv",
+        "pbft_network_summary.json",
     }
 
     with (run_dir / "run_index.csv").open(encoding="utf-8", newline="") as stream:
@@ -63,9 +65,9 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     assert "avg_commit_latency_ms" in aggregate_rows[0]
 
     readiness = json.loads((run_dir / "realism_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["current_stage"] == "V3.7.1"
+    assert readiness["current_stage"] == "V3.7.2 V3.7 Closure"
     assert readiness["latest_runtime_stage"] == "V3.4.10"
-    assert readiness["latest_completed_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
+    assert readiness["latest_completed_runtime_stage"] == "configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter"
     assert len(readiness["modules"]) == 11
     assert "not BlockEmulator backend" in readiness["not_real_chain_claims"]
     assert "not Fabric/EVM live backend" in readiness["not_real_chain_claims"]

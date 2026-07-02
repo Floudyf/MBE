@@ -122,13 +122,13 @@ MODULE_READINESS: list[dict[str, Any]] = [
 def build_realism_readiness() -> dict[str, Any]:
     return {
         "stage": "V3.4.10",
-        "current_stage": "V3.7.1",
+        "current_stage": "V3.7.2 V3.7 Closure",
         "latest_runtime_stage": "V3.4.10",
-        "latest_completed_runtime_stage": "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview",
+        "latest_completed_runtime_stage": "configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter",
         "closure_stage": "V3.4.11",
-        "current_capability": "configurable ConsensusRuntime with optional blockemulator_aligned_pbft_preview state machine artifacts",
-        "runtime_truth": "blockemulator_aligned_pbft_state_machine_preview_not_production_pbft",
-        "next_stage": "V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure",
+        "current_capability": "BlockEmulator-aligned PBFT preview over selected NetworkAdapter typed message path",
+        "runtime_truth": "blockemulator_aligned_pbft_preview_over_network_not_production_pbft",
+        "next_stage": "V3.8 CrossShardProtocol Skeleton",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",

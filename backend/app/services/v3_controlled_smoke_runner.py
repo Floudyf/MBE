@@ -19,13 +19,13 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.7.1"
+CURRENT_STAGE = "V3.7.2 V3.7 Closure"
 LATEST_RUNTIME_STAGE = "V3.4.10"
 CLOSURE_STAGE = "V3.4.11"
-LATEST_COMPLETED_RUNTIME_STAGE = "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
-CURRENT_CAPABILITY = "configurable ConsensusRuntime with optional blockemulator_aligned_pbft_preview state machine artifacts"
-RUNTIME_TRUTH = "blockemulator_aligned_pbft_state_machine_preview_not_production_pbft"
-NEXT_STAGE = "V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure"
+LATEST_COMPLETED_RUNTIME_STAGE = "configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter"
+CURRENT_CAPABILITY = "BlockEmulator-aligned PBFT preview over selected NetworkAdapter typed message path"
+RUNTIME_TRUTH = "blockemulator_aligned_pbft_preview_over_network_not_production_pbft"
+NEXT_STAGE = "V3.8 CrossShardProtocol Skeleton"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -73,6 +73,8 @@ CONTROLLED_ARTIFACTS = [
     "pbft_message_log.csv",
     "quorum_log.csv",
     "finalized_block_log.csv",
+    "consensus_network_log.csv",
+    "pbft_network_summary.json",
 ]
 
 
@@ -243,7 +245,7 @@ def _copy_representative_launcher_artifacts(run_dir: Path, child_results: list[d
     if not representative:
         return
     child_dir = Path(str(representative.get("output_dir", "")))
-    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv"):
+    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json"):
         source = child_dir / filename
         if source.is_file():
             shutil.copyfile(source, run_dir / filename)

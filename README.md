@@ -2,20 +2,20 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.7.1.
-Latest runtime capability: configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview.
-Runtime truth: blockemulator_aligned_pbft_state_machine_preview_not_production_pbft.
-Next stage: V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure.
+Current stage: V3.7.2 V3.7 Closure.
+Latest runtime capability: configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter.
+Runtime truth: blockemulator_aligned_pbft_preview_over_network_not_production_pbft.
+Next stage: V3.8 CrossShardProtocol Skeleton.
 
 ## Current Status
 
-Current stage: V3.7.1.
-Latest runtime capability: configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview.
-Current capability: optional `blockemulator_aligned_pbft_preview` state machine artifacts with PrePrepare, Prepare, Commit, Finalized, confirm-map counts, and 2f+1 quorum accounting.
-Runtime truth: blockemulator_aligned_pbft_state_machine_preview_not_production_pbft.
+Current stage: V3.7.2 V3.7 Closure.
+Latest runtime capability: configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter.
+Current capability: optional `blockemulator_aligned_pbft_preview` artifacts with PrePrepare, Prepare, Commit, Finalized, typed PBFT messages over the selected NetworkAdapter path, confirm-map counts, and 2f+1 quorum accounting.
+Runtime truth: blockemulator_aligned_pbft_preview_over_network_not_production_pbft.
 
-V3.5 and V3.6 are closed. V3.7.1 adds a configurable `ConsensusRuntimePlugin` surface and `blockemulator_aligned_pbft_preview` as one selectable preview runtime. It remains not production PBFT, not full PBFT over TCP, not full Byzantine safety, not view-change/checkpoint/signature hardening, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
-Next stage: V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure. V3.7.2 has not started.
+V3.5, V3.6, and V3.7 are closed. V3.7 adds a configurable `ConsensusRuntimePlugin` surface and `blockemulator_aligned_pbft_preview` as one selectable preview runtime over the selected NetworkAdapter path. It remains not production PBFT, not full Byzantine safety, not view-change/checkpoint/signature hardening, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
+Next stage: V3.8 CrossShardProtocol Skeleton. V3.8 has not started.
 
 ## V3.5 Route
 
@@ -31,10 +31,10 @@ V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live 
 - V3.6.1 implemented: configurable `NetworkAdapter` with localhost TCP typed message preview.
 - V3.6.2 implemented: consensus-light proposal/vote preview over NetworkAdapter typed messages and V3.6 closure.
 - V3.7.1 implemented: configurable `ConsensusRuntimePlugin`, with `blockemulator_aligned_pbft_preview` as one selectable PBFT state machine preview rather than the only consensus path.
-- V3.7.2 planned: run the PBFT preview over NetworkAdapter and close V3.7.
+- V3.7.2 implemented: PBFT preview over the selected NetworkAdapter path plus V3.7 closure.
 - V3.8 planned: CrossShardProtocol skeleton.
 
-V3.6 is closed. V3.7.1 is implemented. V3.7.2 and V3.8 remain roadmap items only.
+V3.6 and V3.7 are closed. V3.8 remains a roadmap item only.
 
 ## Historical V0 Scope
 
@@ -126,7 +126,7 @@ Run from the repository root:
 python scripts/v0_sanity.py
 ```
 
-The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.6.2.
+The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.7.2 V3.7 Closure.
 
 ## Windows One-Click Startup
 
@@ -154,5 +154,7 @@ After a run completes, the frontend artifact panel shows available summary, log,
 - `network_send_log.csv`
 - `network_receive_log.csv`
 - `typed_message_log.csv`
+- `consensus_network_log.csv`
+- `pbft_network_summary.json`
 
-These launcher, node process, and NetworkAdapter files are preview artifacts only. They do not prove production networking, real PBFT, a real multi-process network runtime, BlockEmulator backend behavior, or paper-grade benchmark evidence.
+These launcher, node process, NetworkAdapter, and PBFT-over-network files are preview artifacts only. They do not prove production networking, production PBFT, full Byzantine safety, a real multi-process network runtime, BlockEmulator backend behavior, real cross-shard protocol behavior, or paper-grade benchmark evidence.

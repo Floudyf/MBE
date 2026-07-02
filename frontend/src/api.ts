@@ -338,6 +338,15 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   pbft_consensus_latency_ms?: number | string;
   pbft_preview_enabled?: boolean | string;
   pbft_quorum_threshold?: number | string;
+  pbft_over_network_enabled?: boolean | string;
+  pbft_network_path?: string;
+  pbft_network_message_count?: number | string;
+  pbft_network_error_count?: number | string;
+  pbft_preprepare_network_count?: number | string;
+  pbft_prepare_network_count?: number | string;
+  pbft_commit_network_count?: number | string;
+  pbft_finalized_network_count?: number | string;
+  pbft_network_quorum_reached_count?: number | string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";

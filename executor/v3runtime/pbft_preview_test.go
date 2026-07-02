@@ -93,7 +93,7 @@ plugins:
 		t.Fatal(err)
 	}
 	log := string(logBytes)
-	if !strings.Contains(log, "production_pbft=false") || !strings.Contains(log, "pbft_over_tcp=false") {
+	if !strings.Contains(log, "production_pbft=false") || !strings.Contains(log, "pbft_over_network_enabled=true") {
 		t.Fatalf("runtime log missing PBFT truth boundary:\n%s", log)
 	}
 }

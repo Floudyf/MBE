@@ -37,13 +37,21 @@ Current stage is V3.7.1. V3.7.1 introduces a configurable `ConsensusRuntimePlugi
 
 V3.7.1 writes `pbft_state_log.csv`, `pbft_message_log.csv`, `quorum_log.csv`, and `finalized_block_log.csv`. It adds summary metrics for `consensus_runtime_selected`, `pbft_view`, `pbft_sequence`, `pbft_preprepare_count`, `pbft_prepare_count`, `pbft_commit_count`, `pbft_quorum_reached_count`, `pbft_finalized_block_count`, `pbft_consensus_latency_ms`, `pbft_preview_enabled`, and `pbft_quorum_threshold`.
 
-V3.7.1 is not production PBFT, not full PBFT over localhost TCP, not full Byzantine safety, not view-change hardening, not stable checkpointing, not signature/verification hardening, not HotStuff/Raft, not a real cross-shard protocol, not Fabric/EVM live backend, not a BlockEmulator backend, and not paper-grade benchmark evidence. The next stage is V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure, which has not started.
+V3.7.1 is not production PBFT, not full PBFT over localhost TCP, not full Byzantine safety, not view-change hardening, not stable checkpointing, not signature/verification hardening, not HotStuff/Raft, not a real cross-shard protocol, not Fabric/EVM live backend, not a BlockEmulator backend, and not paper-grade benchmark evidence. It is followed by V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure.
+
+## V3.7.2 Current Status
+
+Current stage is V3.7.2 V3.7 Closure. V3.7.2 connects the optional `blockemulator_aligned_pbft_preview` runtime to the selected V3.6 `NetworkAdapter` typed message path. With `in_memory_message_bus`, PBFT preview messages are logged on the deterministic in-memory typed message path. With `localhost_tcp_preview`, PBFT preview messages are logged on the localhost TCP typed message preview path.
+
+V3.7.2 writes `consensus_network_log.csv` and `pbft_network_summary.json`, while preserving `pbft_state_log.csv`, `pbft_message_log.csv`, `quorum_log.csv`, `finalized_block_log.csv`, `typed_message_log.csv`, `network_send_log.csv`, and `network_receive_log.csv`. It adds summary metrics for `pbft_over_network_enabled`, `pbft_network_path`, `pbft_network_message_count`, `pbft_network_error_count`, `pbft_preprepare_network_count`, `pbft_prepare_network_count`, `pbft_commit_network_count`, `pbft_finalized_network_count`, and `pbft_network_quorum_reached_count`.
+
+V3.7 is closed after V3.7.2. This closure does not implement production PBFT, full Byzantine safety, full view-change hardening, stable checkpointing, signature/verification hardening, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, BlockEmulator backend, or paper-grade benchmark evidence. The next stage is V3.8 CrossShardProtocol Skeleton, which has not started.
 
 ## V3.6 / V3.7 Planning
 
 V3.6 is NetworkAdapter and TCP Typed Message Runtime. V3.6.1 starts with a configurable `NetworkAdapter`, supports `in_memory_message_bus` and `localhost_tcp_preview`, adds typed `MessageEnvelope` logs, and keeps TCP as preview only. V3.6.2 adds Consensus-light over NetworkAdapter and closes V3.6. V3.6 does not implement real PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark claims.
 
-V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is implemented as configurable ConsensusRuntime with optional PBFT state machine preview artifacts. V3.7.2 remains planned for PBFT preview over NetworkAdapter and V3.7 closure. V3.7 should not hardcode PBFT as the only consensus, should not copy BlockEmulator code, and should not claim production PBFT.
+V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is implemented as configurable ConsensusRuntime with optional PBFT state machine preview artifacts. V3.7.2 is implemented as PBFT preview over NetworkAdapter plus V3.7 closure. V3.7 does not hardcode PBFT as the only consensus, does not copy BlockEmulator code, and does not claim production PBFT.
 
 V3.8 is planned as CrossShardProtocol Skeleton. It should stay separate from V3.6 networking and V3.7 PBFT preview work.
 

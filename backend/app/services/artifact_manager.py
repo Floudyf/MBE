@@ -58,6 +58,8 @@ ARTIFACT_ALLOWLIST = frozenset({
     "pbft_message_log.csv",
     "quorum_log.csv",
     "finalized_block_log.csv",
+    "consensus_network_log.csv",
+    "pbft_network_summary.json",
     "used_chain_profile.yaml",
     "used_chain_profile.json",
     "used_plugin_profile.yaml",

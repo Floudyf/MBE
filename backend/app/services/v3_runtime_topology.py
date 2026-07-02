@@ -5,11 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.7.1"
-LATEST_RUNTIME_STAGE = "configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview"
-CURRENT_CAPABILITY = "configurable ConsensusRuntime with optional blockemulator_aligned_pbft_preview state machine artifacts"
-RUNTIME_TRUTH = "blockemulator_aligned_pbft_state_machine_preview_not_production_pbft"
-NEXT_STAGE = "V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure"
+CURRENT_STAGE = "V3.7.2 V3.7 Closure"
+LATEST_RUNTIME_STAGE = "configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter"
+CURRENT_CAPABILITY = "BlockEmulator-aligned PBFT preview over selected NetworkAdapter typed message path"
+RUNTIME_TRUTH = "blockemulator_aligned_pbft_preview_over_network_not_production_pbft"
+NEXT_STAGE = "V3.8 CrossShardProtocol Skeleton"
 
 
 def default_topology() -> V3RuntimeTopology:

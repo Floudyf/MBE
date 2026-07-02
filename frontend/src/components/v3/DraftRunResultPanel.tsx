@@ -18,6 +18,7 @@ const nodeProcessSummaryKeys = ["node_process_entrypoint_available", "node_proce
 const networkAdapterSummaryKeys = ["network_adapter_selected", "tcp_preview_enabled", "tcp_listen_node_count", "tcp_send_count", "tcp_receive_count", "typed_message_count", "network_error_count"];
 const consensusNetworkSummaryKeys = ["consensus_over_network_enabled", "consensus_runtime_selected", "proposal_preview_count", "vote_preview_count", "light_quorum_reached_count", "consensus_network_error_count", "consensus_network_path"];
 const pbftPreviewSummaryKeys = ["consensus_runtime_selected", "pbft_preview_enabled", "pbft_view", "pbft_sequence", "pbft_preprepare_count", "pbft_prepare_count", "pbft_commit_count", "pbft_quorum_reached_count", "pbft_finalized_block_count", "pbft_consensus_latency_ms", "pbft_quorum_threshold"];
+const pbftNetworkSummaryKeys = ["consensus_runtime_selected", "network_adapter_selected", "pbft_over_network_enabled", "pbft_network_path", "pbft_network_message_count", "pbft_network_error_count", "pbft_preprepare_network_count", "pbft_prepare_network_count", "pbft_commit_network_count", "pbft_finalized_network_count", "pbft_network_quorum_reached_count"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
@@ -189,7 +190,7 @@ export default function DraftRunResultPanel({ result }: Props) {
         <div><dt>network_consensus_summary.json</dt><dd>{artifactNames.has("network_consensus_summary.json") ? "available" : "legacy missing"}</dd></div>
       </div>
       <div className="v3-summary-preview">
-        <div><dt>PBFT state machine preview</dt><dd>optional ConsensusRuntime preview only - not production PBFT - not PBFT over TCP</dd></div>
+        <div><dt>PBFT state machine preview</dt><dd>optional ConsensusRuntime preview only - not production PBFT - network path shown below</dd></div>
         {pbftPreviewSummaryKeys.filter((key) => key in summary).map((key) => (
           <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
         ))}
@@ -197,6 +198,14 @@ export default function DraftRunResultPanel({ result }: Props) {
         <div><dt>pbft_message_log.csv</dt><dd>{artifactNames.has("pbft_message_log.csv") ? "available" : "legacy missing"}</dd></div>
         <div><dt>quorum_log.csv</dt><dd>{artifactNames.has("quorum_log.csv") ? "available" : "legacy missing"}</dd></div>
         <div><dt>finalized_block_log.csv</dt><dd>{artifactNames.has("finalized_block_log.csv") ? "available" : "legacy missing"}</dd></div>
+      </div>
+      <div className="v3-summary-preview">
+        <div><dt>PBFT over NetworkAdapter</dt><dd>BlockEmulator-aligned preview only - not production PBFT - not BlockEmulator backend</dd></div>
+        {pbftNetworkSummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>consensus_network_log.csv</dt><dd>{artifactNames.has("consensus_network_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>pbft_network_summary.json</dt><dd>{artifactNames.has("pbft_network_summary.json") ? "available" : "legacy missing"}</dd></div>
       </div>
       <p className="muted">Draft Smoke history is a local debugging, demo, and configuration tracing record. It is not a formal paper experiment result.</p>
     </section>

@@ -87,20 +87,37 @@ V3.7.1 is implemented as a deterministic state machine preview path. It is not f
 
 ### V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure
 
-Planned scope:
+Implemented scope:
 
 - Run `blockemulator_aligned_pbft_preview` over:
   - `in_memory_message_bus`
   - `localhost_tcp_preview`
 - Reuse the V3.6 `MessageEnvelope` and `NetworkAdapter`.
-- Let the leader send `PrePrepare`.
-- Let validators validate digest / sequence after `PrePrepare`, then broadcast `Prepare`.
-- Let validators broadcast `Commit` after enough `Prepare` messages.
-- Let validators mark finalized after enough `Commit` messages.
-- Output `consensus_network_log.csv`.
+- Let the leader send `pbft_preprepare`.
+- Let validators validate digest / sequence after `pbft_preprepare`, then emit `pbft_prepare`.
+- Let validators emit `pbft_commit` after enough `pbft_prepare` messages.
+- Let validators mark `pbft_finalized` after enough `pbft_commit` messages.
+- Output `consensus_network_log.csv` and `pbft_network_summary.json`.
 - Update the frontend with a small result summary only; do not refactor the main V3 Composer page.
 
-V3.7.2 has not started.
+Implemented artifacts:
+
+- `consensus_network_log.csv`
+- `pbft_network_summary.json`
+
+Implemented summary metrics:
+
+- `pbft_over_network_enabled`
+- `pbft_network_path`
+- `pbft_network_message_count`
+- `pbft_network_error_count`
+- `pbft_preprepare_network_count`
+- `pbft_prepare_network_count`
+- `pbft_commit_network_count`
+- `pbft_finalized_network_count`
+- `pbft_network_quorum_reached_count`
+
+V3.7 is closed after V3.7.2. The next stage is V3.8 CrossShardProtocol Skeleton, which has not started.
 
 ## 4. BlockEmulator Alignment Without Code Copy
 
