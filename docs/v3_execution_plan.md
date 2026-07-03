@@ -111,9 +111,27 @@ The main transaction flow must remain:
 Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
 ```
 
+## V3.10.1 Current Status
+
+Current stage is V3.10.1 Frontend UX and Chinese Console Cleanup Closure. V3.10.1 follows V3.10 benchmark hardening and reorganizes the frontend into a Chinese V3 experiment console with simplified navigation, progressive HelpTip explanations, run progress feedback, and lightweight result chart preview.
+
+V3.10.1 is an interface cleanup stage. It does not add new chain/runtime protocol semantics, does not modify Go runtime behavior, does not change V3.10 benchmark truth, and does not start V3.11.
+
+## V3.10.1 Frontend UX and Chinese Console Cleanup
+
+Frontend navigation, HelpTip, chart preview, Chinese labels, and visual cleanup belong to the UI presentation layer. They must not become new runtime modules.
+
+The main transaction flow remains:
+
+```text
+Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
+```
+
+V3.10.1 keeps Benchmark in the experiment control / result layer, CrossShardProtocol under Routing/Sharding, and StateProof / Witness under StateAccess / StateStorage / Commit. It does not add new main-flow cards.
+
 ## V3.11 Planned
 
-V3.11 is planned as CrossShard Protocol Hardening. It has not started. V3.11 should not be entered unless explicitly requested, and V3.10 benchmark artifacts must not be treated as paper-grade evidence.
+V3.11 is planned as CrossShard Protocol Hardening. It has not started. V3.11 should not be entered unless explicitly requested. V3.10.1 frontend cleanup does not change runtime semantics, and V3.10 benchmark artifacts must not be treated as paper-grade evidence.
 
 ## V3.6 / V3.7 Planning
 
@@ -123,7 +141,7 @@ V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is imple
 
 V3.8 is implemented as CrossShardProtocol Skeleton Closure. It stays separate from V3.6 networking and V3.7 PBFT preview work.
 V3.9 is implemented as State Authenticity Layer MVP Closure. It strengthens StateAccess / StateStorage / Commit with persistent state backend MVP, Merkle/MPT-like roots, proof verification, and witness artifacts.
-V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.11 is planned as CrossShard Protocol Hardening.
+V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is planned as CrossShard Protocol Hardening.
 
 Planned stage list extension:
 
@@ -132,6 +150,7 @@ Planned stage list extension:
 - V3.8 CrossShardProtocol Skeleton Closure.
 - V3.9 State Authenticity Layer MVP Closure.
 - V3.10 Benchmark / Experiment Template Hardening Closure.
+- V3.10.1 Frontend UX and Chinese Console Cleanup Closure.
 - V3.11 CrossShard Protocol Hardening.
 
 The main transaction flow should remain:
@@ -140,7 +159,7 @@ The main transaction flow should remain:
 Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
 ```
 
-RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow. CrossShardProtocol belongs under Routing/Sharding as a sub-capability and must not become a new main-flow card. StateProof and Witness belong under StateAccess / StateStorage / Commit as sub-capabilities and must not become new main-flow cards. Benchmark templates, baselines, sweeps, and reproducibility manifest belong to the experiment control layer / result layer and must not become new main-flow cards.
+RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow. CrossShardProtocol belongs under Routing/Sharding as a sub-capability and must not become a new main-flow card. StateProof and Witness belong under StateAccess / StateStorage / Commit as sub-capabilities and must not become new main-flow cards. Benchmark templates, baselines, sweeps, and reproducibility manifest belong to the experiment control layer / result layer and must not become new main-flow cards. Frontend navigation, HelpTip, chart preview, and Chinese labels belong to the UI presentation layer and must not become runtime modules.
 
 ## 0.1 V3.3 Go-backed MetaTrack Update
 

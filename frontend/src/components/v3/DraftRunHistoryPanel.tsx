@@ -40,17 +40,17 @@ export default function DraftRunHistoryPanel() {
   return (
     <details className="final-card wide v3-foldout v3-draft-history">
       <summary className="v3-foldout-summary">
-        <span>Recent Draft Smoke runs</span>
-        <small>Local .cache history only, not a formal result database</small>
+        <span>最近配置草稿试运行</span>
+        <small>仅为本地 .cache 历史，不是正式结果数据库</small>
       </summary>
       <div className="v3-history-toolbar">
-        <p className="muted">Draft Smoke history is for local debugging, demos, and configuration tracing. It does not represent paper experiment evidence.</p>
+        <p className="muted">配置草稿试运行历史用于本地调试、演示和配置追踪，不代表论文级正式实验依据。</p>
         <button type="button" className="v3-secondary-button" disabled={loading} onClick={refresh}>
-          {loading ? "Loading..." : "Refresh history"}
+          {loading ? "加载中..." : "刷新历史"}
         </button>
       </div>
       {error && <p className="file-error">{error}</p>}
-      {runs.length === 0 && <p className="muted">No Draft Smoke runs loaded yet. Click refresh after running a Draft Smoke.</p>}
+      {runs.length === 0 && <p className="muted">暂无配置草稿试运行记录。运行后可点击刷新。</p>}
       {runs.length > 0 && (
         <div className="v3-history-list">
           {runs.map((run) => (
@@ -60,15 +60,15 @@ export default function DraftRunHistoryPanel() {
                 <small>{run.created_at}</small>
               </span>
               <span>{run.template_id}</span>
-              <span>{run.preset_id || String(run.summary_preview?.preset_id || "legacy/default smoke")}</span>
-              <span>{String(run.summary_preview?.ablation_stage || "ablation legacy")}</span>
-              <span>{run.variable_module || String(run.summary_preview?.variable_module || "template legacy")}</span>
-              <span>{String(run.summary_preview?.routing_plugin || run.summary_preview?.cross_shard_ratio || "routing legacy")}</span>
-              <span>{String(run.summary_preview?.execution_plugin || run.summary_preview?.fast_track_count || "execution legacy")}</span>
-              <span>{String(run.summary_preview?.state_access_plugin || run.summary_preview?.remote_state_access_ratio || "state access legacy")}</span>
-              <span>{String(run.summary_preview?.commit_plugin || run.summary_preview?.aggregation_ratio || "commit legacy")}</span>
+              <span>{run.preset_id || String(run.summary_preview?.preset_id || "历史默认预设")}</span>
+              <span>{String(run.summary_preview?.ablation_stage || "历史消融")}</span>
+              <span>{run.variable_module || String(run.summary_preview?.variable_module || "历史模板")}</span>
+              <span>{String(run.summary_preview?.routing_plugin || run.summary_preview?.cross_shard_ratio || "历史路由")}</span>
+              <span>{String(run.summary_preview?.execution_plugin || run.summary_preview?.fast_track_count || "历史执行")}</span>
+              <span>{String(run.summary_preview?.state_access_plugin || run.summary_preview?.remote_state_access_ratio || "历史状态访问")}</span>
+              <span>{String(run.summary_preview?.commit_plugin || run.summary_preview?.aggregation_ratio || "历史提交")}</span>
               <span>{pluginSummary(run.selected_plugins)}</span>
-              <b>{run.artifact_count} artifacts</b>
+              <b>{run.artifact_count} 个产物</b>
             </button>
           ))}
         </div>
@@ -77,11 +77,11 @@ export default function DraftRunHistoryPanel() {
         <div className="v3-history-detail">
           <div className="v3-section-head">
             <div>
-              <p className="eyebrow">Draft run detail</p>
+              <p className="eyebrow">草稿试运行详情</p>
               <h3>{selected.run_id}</h3>
             </div>
             <span className={`v3-status-badge status-${selected.validation?.is_runnable ? "variable" : "planned"}`}>
-              {selected.validation?.is_runnable ? "runnable" : "not runnable"}
+              {selected.validation?.is_runnable ? "可运行" : "不可运行"}
             </span>
           </div>
           <div className="v3-summary-preview">
@@ -90,12 +90,12 @@ export default function DraftRunHistoryPanel() {
             ))}
           </div>
           {selected.missing_files.length > 0 && (
-            <p className="file-error">Missing files: {selected.missing_files.join(", ")}</p>
+            <p className="file-error">缺少文件：{selected.missing_files.join(", ")}</p>
           )}
           <ArtifactGroups
             artifacts={selected.artifacts}
-            title="Selected Draft run artifacts"
-            emptyMessage="This historical run has no downloadable artifacts."
+            title="所选草稿试运行产物"
+            emptyMessage="该历史运行没有可下载产物。"
             expectedArtifacts={readStringArray(selected.summary_preview.expected_artifacts)}
             defaultOpen
             embedded
@@ -115,5 +115,5 @@ function readStringArray(value: unknown): string[] {
 function pluginSummary(plugins: Record<string, string>): string {
   const keys = ["Consensus", "Routing", "Execution", "StateAccess", "Commit"];
   const pairs = keys.filter((key) => plugins[key]).map((key) => `${key}:${plugins[key]}`);
-  return pairs.length ? pairs.join(" / ") : "no plugin summary";
+  return pairs.length ? pairs.join(" / ") : "暂无插件摘要";
 }

@@ -1353,3 +1353,344 @@ details summary {
   .final-sidebar { height: auto; position: static; }
   .final-topbar { align-items: stretch; flex-direction: column; }
 }
+
+.console-hero {
+  background: #ffffff;
+  border-left: 4px solid var(--blue);
+}
+
+.console-section-title {
+  background: #ffffff;
+  padding-block: 0.9rem;
+}
+
+.console-section-title p {
+  margin-bottom: 0;
+}
+
+.help-tip {
+  display: inline-flex;
+  margin-left: 0.25rem;
+  position: relative;
+  vertical-align: middle;
+}
+
+.help-tip-button {
+  align-items: center;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  box-shadow: none;
+  color: var(--blue);
+  display: inline-flex;
+  font-size: 0.72rem;
+  height: 1.25rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.25rem;
+}
+
+.help-tip-popover {
+  background: #0f172a;
+  border-radius: 8px;
+  bottom: calc(100% + 0.45rem);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.18);
+  color: #e5eefc;
+  display: grid;
+  font-size: 0.82rem;
+  gap: 0.25rem;
+  left: 50%;
+  line-height: 1.55;
+  max-width: min(300px, 78vw);
+  min-width: 220px;
+  padding: 0.7rem 0.8rem;
+  position: absolute;
+  transform: translateX(-50%);
+  z-index: 20;
+}
+
+.topology-console {
+  gap: 0.9rem;
+}
+
+.topology-groups {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.topology-group {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.8rem;
+}
+
+.topology-group h4 {
+  margin: 0 0 0.65rem;
+}
+
+.topology-field-grid {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.field-card {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.65rem;
+}
+
+.field-card span {
+  align-items: center;
+  color: var(--ink);
+  display: flex;
+  font-weight: 800;
+  gap: 0.2rem;
+}
+
+.field-card small {
+  color: var(--muted);
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.checkbox-card {
+  align-items: center;
+  grid-template-columns: 1fr auto;
+}
+
+.checkbox-card small {
+  grid-column: 1 / -1;
+}
+
+.topology-summary-grid,
+.metric-card-grid,
+.chart-grid,
+.artifact-pill-grid {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.topology-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.topology-summary-grid div {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.65rem;
+}
+
+.flow-stage-legend {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 0.9rem;
+}
+
+.flow-stage-legend div {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem;
+}
+
+.flow-stage-legend strong,
+.flow-stage-legend small {
+  display: block;
+}
+
+.flow-stage-legend small {
+  color: var(--muted);
+  margin-top: 0.2rem;
+}
+
+.run-progress-panel {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 0.75rem;
+  grid-column: 1 / -1;
+  padding: 1rem;
+}
+
+.run-progress-panel ol {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-progress-panel li {
+  align-items: center;
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  display: flex;
+  gap: 0.45rem;
+  padding: 0.55rem;
+}
+
+.run-progress-panel li i {
+  align-items: center;
+  background: #e2e8f0;
+  border-radius: 999px;
+  color: #475569;
+  display: inline-flex;
+  font-style: normal;
+  font-weight: 900;
+  height: 1.35rem;
+  justify-content: center;
+  width: 1.35rem;
+}
+
+.run-progress-panel li.active {
+  border-color: #bfdbfe;
+  color: var(--blue);
+}
+
+.run-progress-panel li.active i,
+.run-progress-panel li.complete i {
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.run-progress-panel.done {
+  border-color: #bbf7d0;
+}
+
+.run-progress-panel.failed {
+  border-color: #fecaca;
+}
+
+.result-overview {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.metric-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.metric-card {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.25rem;
+  min-height: 96px;
+  padding: 0.8rem;
+}
+
+.metric-card span,
+.metric-card small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.metric-card strong {
+  color: var(--ink);
+  font-size: 1.35rem;
+}
+
+.chart-grid {
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+}
+
+.mini-chart {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.8rem;
+}
+
+.mini-chart h4 {
+  margin: 0 0 0.6rem;
+}
+
+.mini-chart-bars {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.mini-chart-row {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: 4.5rem minmax(0, 1fr) 3.5rem;
+}
+
+.mini-chart-row span,
+.mini-chart-row b {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.mini-chart-track {
+  background: #e2e8f0;
+  border-radius: 999px;
+  height: 0.55rem;
+  overflow: hidden;
+}
+
+.mini-chart-track i {
+  background: var(--blue);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+}
+
+.artifact-pill-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.artifact-pill {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  padding: 0.45rem 0.65rem;
+}
+
+.artifact-pill.ok {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: var(--green);
+}
+
+.artifact-pill.missing {
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.raw-metric-groups {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.raw-metric-group h4 {
+  margin: 0 0 0.5rem;
+}
+
+.v3-result-grid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+@media (max-width: 980px) {
+  .topology-groups,
+  .flow-stage-legend {
+    grid-template-columns: 1fr;
+  }
+}

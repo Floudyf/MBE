@@ -60,8 +60,10 @@ type PageId =
   | "calibration"
   | "v3composer"
   | "runs"
+  | "artifacts"
   | "boundaries"
-  | "developer";
+  | "developer"
+  | "advanced";
 
 const defaultCustomForm: V1CustomRunRequest = {
   workload: "asset_hotspot_v1",
@@ -83,25 +85,20 @@ const defaultCustomForm: V1CustomRunRequest = {
 };
 
 const navGroups: { title: string; items: { id: PageId; label: string }[] }[] = [
-  { title: "V3", items: [{ id: "v3composer", label: "V3 单链 Composer" }] },
-  { title: "平台", items: [{ id: "overview", label: "平台总览" }] },
   {
-    title: "实验中心",
+    title: "MBE",
     items: [
-      { id: "single", label: "单链机制实验" },
-      { id: "ablation", label: "单链消融对比" },
-      { id: "dual", label: "双链回放实验" },
-      { id: "protocol", label: "跨链协议基线" },
-      { id: "sweep", label: "批量对比与报告" },
-      { id: "calibration", label: "真实链轨迹校准" },
+      { id: "v3composer", label: "实验控制台" },
+      { id: "runs", label: "运行记录" },
+      { id: "artifacts", label: "产物下载" },
+      { id: "boundaries", label: "系统边界" },
+      { id: "advanced", label: "高级功能" },
     ],
   },
-  { title: "结果", items: [{ id: "runs", label: "运行记录与产物" }] },
-  { title: "说明", items: [{ id: "boundaries", label: "系统边界" }, { id: "developer", label: "开发者模式" }] },
 ];
 
 function App() {
-  const [activePage, setActivePage] = useState<PageId>("overview");
+  const [activePage, setActivePage] = useState<PageId>("v3composer");
   const [v1Stages, setV1Stages] = useState<V1StageStatus[]>([]);
   const [workloads, setWorkloads] = useState<V1WorkloadOption[]>([]);
   const [presets, setPresets] = useState<V1AblationPreset[]>([]);
@@ -300,7 +297,7 @@ function App() {
 
   return <div className="final-shell">
     <aside className="final-sidebar">
-      <div className="brand-block"><span>MBE</span><strong>V2 实验平台</strong><small>V3-ready local replay</small></div>
+      <div className="brand-block"><span>MBE</span><strong>元宇宙区块链实验平台</strong><small>V3.10 实验控制台</small></div>
       {navGroups.map((group) => <nav key={group.title} aria-label={group.title}>
         <p>{group.title}</p>
         {group.items.map((item) => <button key={item.id} type="button" className={activePage === item.id ? "nav-active" : ""} onClick={() => setActivePage(item.id)}>{item.label}</button>)}
@@ -321,9 +318,10 @@ function App() {
       {activePage === "sweep" && <SweepPage sweeps={sweeps} sweepId={sweepId} setSweepId={setSweepId} result={v2Result as V2SweepRunResponse | null} artifacts={v2Artifacts} runSweepExperiment={runSweepExperiment} />}
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
       {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} />}
-      {activePage === "runs" && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
+      {(activePage === "runs" || activePage === "artifacts") && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
       {activePage === "boundaries" && <BoundariesPage />}
       {activePage === "developer" && <DeveloperPage traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
+      {activePage === "advanced" && <AdvancedPage setActivePage={setActivePage} traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
     </main>
   </div>;
 }
@@ -429,7 +427,7 @@ function CalibrationPage({ calibrations, calibrationId, setCalibrationId, fabric
       <article className="final-card"><h3>Fabric 轨迹校准</h3><p>使用已有 Fabric smoke trace。网页不启动 Docker/Fabric/network.sh，不是 FabricLiveBackend。</p></article>
     </div>
     <article className="final-card wide"><label><span>calibration config</span><select value={calibrationId} onChange={(e) => setCalibrationId(e.target.value)}>{calibrations.map((item) => <option key={item.id} value={item.id}>{item.name}（{item.id}）</option>)}</select></label><div className="button-row"><button type="button" onClick={refreshFabricSmoke}>检查 Fabric 轨迹状态</button><button type="button" onClick={() => runCalibrationExperiment("v2_synthetic_calibration_sample")}>运行合成样例校准</button><button type="button" onClick={() => runCalibrationExperiment("v2_fabric_smoke_calibration")}>运行 Fabric 轨迹校准</button></div></article>
-    <article className="final-card wide"><h3>Fabric smoke status</h3><StatusBadge status={fabricSmokeStatus?.status ?? "unknown"} /><p>{fabricSmokeStatus?.status === "missing" ? "Fabric smoke trace missing." : "Fabric smoke trace ready 状态取决于本机已有文件。"}</p><pre>{fabricSmokeStatus?.cli_command ?? "python scripts/v1_fabric_smoke.py --strict --channel mbechannel --out .cache/fabric_smoke/latest"}</pre><p className="muted">网页不会启动 Fabric / Docker / network.sh。</p></article>
+    <article className="final-card wide"><h3>Fabric 轨迹状态</h3><StatusBadge status={fabricSmokeStatus?.status ?? "unknown"} /><p>{fabricSmokeStatus?.status === "missing" ? "Fabric 轨迹文件缺失。" : "Fabric 轨迹文件状态取决于本机已有文件。"}</p><pre>{fabricSmokeStatus?.cli_command ?? "python scripts/v1_fabric_smoke.py --strict --channel mbechannel --out .cache/fabric_smoke/latest"}</pre><p className="muted">网页不会启动 Fabric / Docker / network.sh。</p></article>
     <MetricsCard title="校准结果" row={result?.summary as V1SweepRow | undefined ?? null} keys={["calibration_id", "matched_record_count", "unmatched_observed_count", "avg_abs_latency_error_ms", "data_truth_label", "calibration_truth"]} />
     <ArtifactList artifacts={artifacts} />
   </section>;
@@ -454,6 +452,37 @@ function DeveloperPage(props: { traceSources: V2TraceSource[]; backends: V2Chain
     <article className="final-card wide"><details><summary>V2 调试控制台（旧 Dashboard）</summary><V2Dashboard /></details></article>
     <article className="final-card wide"><details><summary>Raw API / JSON</summary><pre>{JSON.stringify(props, null, 2)}</pre></details></article>
   </section>;
+}
+
+function AdvancedPage(props: { setActivePage: (page: PageId) => void; traceSources: V2TraceSource[]; backends: V2ChainBackend[]; protocols: V2ProtocolInfo[]; sweeps: V2SweepInfo[]; calibrations: V2CalibrationInfo[]; v1Stages: V1StageStatus[] }) {
+  const entries: Array<[PageId, string, string]> = [
+    ["overview", "平台总览", "历史 V1/V2 总览入口"],
+    ["single", "V1 单链机制实验", "MetaTrack 早期单链机制实验"],
+    ["ablation", "V1 单链消融对比", "早期单链 sweep / report"],
+    ["dual", "V2 双链回放实验", "本地虚拟双链回放"],
+    ["protocol", "V2 跨链协议基线", "本地协议基线回放"],
+    ["sweep", "V2 批量对比与报告", "V2 sweep / report"],
+    ["calibration", "V2 真实链轨迹校准", "已有 trace 的校准回放"],
+    ["developer", "开发者模式", "Raw JSON 与旧调试面板"],
+  ];
+  return (
+    <section className="page-grid">
+      <InfoPanel title="高级功能" note="旧 V1/V2/开发者入口仍然保留，但默认不铺在左侧导航，避免干扰 V3 实验控制台主流程。" />
+      <div className="final-card-grid">
+        {entries.map(([page, title, note]) => (
+          <article key={page} className="final-card">
+            <h3>{title}</h3>
+            <p>{note}</p>
+            <button type="button" onClick={() => props.setActivePage(page)}>进入</button>
+          </article>
+        ))}
+      </div>
+      <details className="final-card wide v3-foldout">
+        <summary className="v3-foldout-summary">开发者调试详情</summary>
+        <DeveloperPage traceSources={props.traceSources} backends={props.backends} protocols={props.protocols} sweeps={props.sweeps} calibrations={props.calibrations} v1Stages={props.v1Stages} />
+      </details>
+    </section>
+  );
 }
 
 function InfoPanel({ title, note }: { title: string; note: string }) {

@@ -2,19 +2,19 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.10 Benchmark / Experiment Template Hardening Closure.
-Latest runtime capability: benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts.
-Runtime truth: benchmark_template_hardening_not_paper_grade_benchmark.
+Current stage: V3.10.1 Frontend UX and Chinese Console Cleanup Closure.
+Latest runtime capability: Chinese V3 experiment console with simplified navigation, progressive help tips, run progress feedback, and lightweight result chart preview.
+Runtime truth: frontend_ux_cleanup_no_runtime_semantics_change.
 Next stage: V3.11 CrossShard Protocol Hardening.
 
 ## Current Status
 
-Current stage: V3.10 Benchmark / Experiment Template Hardening Closure.
-Latest runtime capability: benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts.
-Current capability: V3.10 adds benchmark template catalog, baseline profile catalog, local sweep runner MVP, multi-seed repeatability, reproducibility manifest, baseline comparison, and benchmark report artifacts.
-Runtime truth: benchmark_template_hardening_not_paper_grade_benchmark.
+Current stage: V3.10.1 Frontend UX and Chinese Console Cleanup Closure.
+Latest runtime capability: Chinese V3 experiment console with simplified navigation, progressive help tips, run progress feedback, and lightweight result chart preview.
+Current capability: V3.10.1 reorganizes the existing V3.10 experiment capability into a Chinese, cleaner, more explainable frontend console.
+Runtime truth: frontend_ux_cleanup_no_runtime_semantics_change.
 
-V3.5, V3.6, V3.7, V3.8, V3.9, and V3.10 are closed. V3.10 adds benchmark template catalog, baseline profile catalog, local sweep runner, multi-seed repeatability, reproducibility manifest, and benchmark report artifacts. It does not claim paper-grade benchmark evidence, large-scale distributed benchmark, production network, BlockEmulator backend, Fabric/EVM live backend, or performance superiority.
+V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, and V3.10.1 are closed. V3.10.1 only reorganizes frontend UX and Chinese console presentation. It does not change Go runtime semantics, benchmark truth, cross-shard protocol semantics, state authenticity semantics, or backend experiment semantics.
 Next stage: V3.11 CrossShard Protocol Hardening. V3.11 has not started.
 
 ## V3.5 Route
@@ -35,8 +35,9 @@ V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live 
 - V3.8 implemented: CrossShardProtocol skeleton and closure with relay_preview artifacts.
 - V3.9 implemented: State Authenticity Layer MVP with persistent state backend, Merkle/MPT-like roots, proof verification, and witness artifacts.
 - V3.10 implemented: Benchmark / Experiment Template Hardening with benchmark templates, baseline profiles, local sweep runner, reproducibility manifest, and benchmark report artifacts.
+- V3.10.1 implemented: Frontend UX and Chinese Console Cleanup with simplified navigation, HelpTip explanations, run progress feedback, and lightweight result chart preview.
 
-V3.6, V3.7, V3.8, V3.9, and V3.10 are closed. V3.11 has not started.
+V3.6, V3.7, V3.8, V3.9, V3.10, and V3.10.1 are closed. V3.11 has not started.
 
 ## Historical V0 Scope
 

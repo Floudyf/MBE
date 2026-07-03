@@ -35,6 +35,13 @@ const snakeSlots: SnakeSlot[] = [
   { moduleId: "MetricsReport", row: 3, column: 3 },
 ];
 
+const stageGroups = [
+  { title: "输入阶段", modules: "负载生成 / 交易池 / 区块生成" },
+  { title: "排序阶段", modules: "共识排序 / 委员会" },
+  { title: "执行阶段", modules: "分片路由 / 交易执行 / 状态访问" },
+  { title: "提交阶段", modules: "状态存储 / 状态提交 / 指标报告" },
+];
+
 export default function SingleChainComposer({ preview, draft, onDraftChange, variableModule = "", variableModules = [], lockedModules = {} }: Props) {
   const modules = preview.modules || [];
   const [selectedId, setSelectedId] = useState(modules[0]?.module_id || "");
@@ -64,6 +71,14 @@ export default function SingleChainComposer({ preview, draft, onDraftChange, var
   return (
     <section className="v3-composer-layout v3-workbench">
       <div className="v3-chain-band">
+        <div className="flow-stage-legend" aria-label="实验流程阶段说明">
+          {stageGroups.map((group) => (
+            <div key={group.title}>
+              <strong>{group.title}</strong>
+              <small>{group.modules}</small>
+            </div>
+          ))}
+        </div>
         <div className="v3-flow-grid" aria-label="单链模块化流程图">
           {snakeModules.map(({ module, slot }) => (
             <div

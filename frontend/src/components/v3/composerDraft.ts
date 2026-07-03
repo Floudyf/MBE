@@ -221,7 +221,7 @@ export function validateDraft(modules: Record<string, ComposerDraftModule>): Dra
   if (errors.length === 0) {
     messages.unshift("当前 Draft 可预览。");
   }
-  messages.push("当前 Draft 暂不支持自定义运行，运行区只保留已有 Smoke 实验。");
+  messages.push("当前草稿配置使用快速验证链路运行；快速验证不代表论文级正式实验。");
 
   return { isRunnable: errors.length === 0 && !hasPreviewOnlyPlugin, messages: [...messages, ...errors], errors };
 }

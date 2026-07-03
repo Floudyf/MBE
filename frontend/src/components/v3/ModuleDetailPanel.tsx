@@ -1,6 +1,7 @@
 import type { V3ComposerModule } from "../../api";
 import {
   type DraftModuleStatus,
+  type DraftPluginOption,
   moduleCatalogEntry,
   pluginStatusLabels,
   requiredModuleIds,
@@ -11,6 +12,7 @@ import {
   type ComposerDraftModule,
   pluginOptionsForModule,
 } from "./composerDraft";
+import HelpTip from "./HelpTip";
 
 type Props = {
   module?: V3ComposerModule | null;
@@ -28,7 +30,7 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
       <aside className="v3-detail-panel">
         <p className="eyebrow">模块配置</p>
         <h3>请选择模块</h3>
-        <p>选择一个模块后，可以配置插件、实验变量状态和 Draft 参数。</p>
+        <p>选择一个流程模块后，可以配置插件、实验变量状态和草稿参数。</p>
       </aside>
     );
   }
@@ -36,16 +38,18 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
   const selectedModule = module;
   const catalog = moduleCatalogEntry(selectedModule.module_id);
   const draftModule = draft.modules[selectedModule.module_id];
-  const pluginOptions = pluginOptionsForModule(selectedModule);
+  const pluginOptions = dedupePlugins(pluginOptionsForModule(selectedModule));
+  const primaryPlugins = pluginOptions.filter((plugin) => plugin.status !== "planned");
+  const plannedPlugins = pluginOptions.filter((plugin) => plugin.status === "planned");
   const currentPlugin = draftModule?.plugin || catalog.defaultPlugin;
   const currentStatus = draftModule?.status || "fixed";
-  const moduleStatusChoices: DraftModuleStatus[] = selectedModule.module_id === "MetricsReport" ? ["output"] : statusChoices;
+  const moduleStatusChoices: DraftModuleStatus[] = module.module_id === "MetricsReport" ? ["output"] : statusChoices;
   const selectedPlugin = pluginOptions.find((plugin) => plugin.id === currentPlugin);
-  const isRequired = requiredModuleIds.has(selectedModule.module_id);
   const lockedPlugin = lockedModules[selectedModule.module_id];
   const templateRole = selectedModule.module_id === variableModule ? "variable" : lockedPlugin ? "locked" : "";
-  const moduleMessages = draft.validationMessages.filter((message) => message.includes(catalog.label) || message.includes(selectedModule.module_id));
-  const visibleMessages = (moduleMessages.length ? moduleMessages : draft.validationMessages).slice(0, 3);
+  const visibleMessages = draft.validationMessages
+    .filter((message) => message.includes(catalog.label) || message.includes(selectedModule.module_id))
+    .slice(0, 3);
 
   function changeStatus(status: DraftModuleStatus) {
     onDraftModuleChange(selectedModule.module_id, { status });
@@ -74,40 +78,16 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
         <div><dt>当前插件</dt><dd title={currentPlugin}>{selectedPlugin?.label || currentPlugin}<small>{currentPlugin}</small></dd></div>
         {templateRole && (
           <div>
-            <dt>template role</dt>
-            <dd>{templateRole === "variable" ? "variable module" : `locked by template (${lockedPlugin})`}</dd>
+            <dt>模板角色</dt>
+            <dd>{templateRole === "variable" ? "实验变量" : `模板固定：${lockedPlugin}`}</dd>
           </div>
         )}
       </dl>
 
       <section className="v3-config-section">
-        <h4>模块说明</h4>
+        <h4>模块说明 <HelpTip title={catalog.label}>{moduleHint(selectedModule.module_id)}</HelpTip></h4>
         <p>{catalog.description}</p>
-        {catalog.notes?.slice(0, 1).map((note) => <p key={note} className="muted">{note}</p>)}
-        {selectedModule.module_id === "TxPool" && (
-          <p className="muted">V3.4.1 realizes FIFO pool runtime behavior for Draft Smoke. Priority, hotspot-aware, and fee-based pools remain planned and are not real runtime implementations.</p>
-        )}
-        {selectedModule.module_id === "BlockProducer" && (
-          <p className="muted">V3.4.2 realizes the time-or-count BlockProducer for Draft Smoke. Fixed-size and adaptive block cut plugins remain planned and are not real runtime implementations.</p>
-        )}
-        {selectedModule.module_id === "Consensus" && (
-          <p className="muted">V3.4.3 realizes simple_leader, poa_light, and pbft_light_model as local virtual-time consensus-light models. pbft_light_model models PBFT stages and quorum accounting; it is not production PBFT or real network PBFT.</p>
-        )}
-        {selectedModule.module_id === "Routing" && (
-          <p className="muted">V3.8 keeps CrossShardProtocol as a Routing/Sharding sub-capability. cross_shard_protocol supports none and relay_preview skeleton artifacts; broker_preview and two_phase_commit_preview remain planned. This is not full Relay, Broker, 2PC, atomic cross-shard commit, state proof, rollback, timeout recovery, CLPA, ShardCutter, or state migration.</p>
-        )}
-        {selectedModule.module_id === "Execution" && (
-          <p className="muted">V3.4.6 realizes Execution records for serial_execution, parallel_light_execution, and metatrack_dual_track_execution. Execution estimates scheduling order, dependency edges, logical workers, blocking, and fast/conservative tracks; it does not implement real concurrent execution, rollback, Block-STM, Calvin, or database lock management.</p>
-        )}
-        {selectedModule.module_id === "StateAccess" && (
-          <p className="muted">V3.9 keeps StateProof and Witness under StateAccess / StateStorage / Commit as sub-capabilities. It generates and verifies deterministic proof/witness MVP artifacts, but it is not Ethereum-compatible MPT, not full stateless execution, not full cross-shard proof protocol, and not remote storage IO.</p>
-        )}
-        {selectedModule.module_id === "StateStorage" && (
-          <p className="muted">V3.9 supports selectable state_backend values: memory_kv, persistent_kv, and merkle_trie_mvp are runnable MVP paths; ethereum_mpt_compatible remains planned only. It is not production database durability and not Ethereum-compatible MPT.</p>
-        )}
-        {selectedModule.module_id === "Commit" && (
-          <p className="muted">V3.9 writes state version/root/proof/witness artifacts alongside local commit logs. These remain MVP artifacts and do not implement production database durability, atomic cross-shard verified commit, rollback, or Ethereum-compatible MPT.</p>
-        )}
+        <p className="muted">{boundaryHint(selectedModule.module_id)}</p>
       </section>
 
       <section className="v3-config-section">
@@ -117,66 +97,28 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
             const disabled = templateRole === "locked" || statusDisabled(selectedModule.module_id, status);
             return (
               <label key={status} className={disabled ? "disabled" : ""}>
-                <input
-                  type="radio"
-                  checked={currentStatus === status}
-                disabled={disabled}
-                  onChange={() => changeStatus(status)}
-                />
+                <input type="radio" checked={currentStatus === status} disabled={disabled} onChange={() => changeStatus(status)} />
                 <span>{statusLabels[status]}</span>
               </label>
             );
           })}
         </div>
-        {selectedModule.module_id === "MetricsReport" && <p className="muted">指标 / 报告固定为输出模块，不能作为普通实验变量。</p>}
-        {isRequired && selectedModule.module_id !== "MetricsReport" && <p className="muted">必需模块不能关闭；不选表示使用默认配置或固定环境。</p>}
+        {requiredModuleIds.has(selectedModule.module_id) && selectedModule.module_id !== "MetricsReport" && <p className="muted">必需模块不能关闭；模板固定项不能在当前模板中改为实验变量。</p>}
       </section>
 
       <section className="v3-config-section">
-        <h4>插件选择</h4>
-        <div className="v3-plugin-option-list">
-          {pluginOptions.map((plugin) => (
-            <label key={plugin.id} className={plugin.status === "planned" ? "disabled" : ""}>
-              <input
-                type="radio"
-                checked={currentPlugin === plugin.id}
-                disabled={templateRole === "locked" || plugin.status === "planned"}
-                onChange={() => changePlugin(plugin.id)}
-              />
-              <span>
-                <strong>{plugin.label}</strong>
-                <small title={plugin.id}>{plugin.id}</small>
-                {selectedModule.module_id === "TxPool" && (
-                  <small>{plugin.id === "fifo_pool" ? "runtime-supported FIFO hardening" : "planned only"}</small>
-                )}
-                {selectedModule.module_id === "BlockProducer" && (
-                  <small>{plugin.id === "time_or_count_block_producer" ? "runtime-supported time/count hardening" : "planned only"}</small>
-                )}
-                {selectedModule.module_id === "Consensus" && (
-                  <small>{consensusPluginHint(plugin.id)}</small>
-                )}
-                {selectedModule.module_id === "Routing" && (
-                  <small>{routingPluginHint(plugin.id)}</small>
-                )}
-                {selectedModule.module_id === "Execution" && (
-                  <small>{executionPluginHint(plugin.id)}</small>
-                )}
-                {selectedModule.module_id === "StateAccess" && (
-                  <small>{stateAccessPluginHint(plugin.id)}</small>
-                )}
-                {selectedModule.module_id === "Commit" && (
-                  <small>{commitPluginHint(plugin.id)}</small>
-                )}
-              </span>
-              <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
-            </label>
-          ))}
-        </div>
+        <h4>插件选择 <HelpTip title="插件选择">主列表只显示可运行或有展示意义的预览项；规划中插件折叠在下方，不干扰本轮试运行。</HelpTip></h4>
+        <PluginList plugins={primaryPlugins} currentPlugin={currentPlugin} locked={templateRole === "locked"} onChange={changePlugin} />
+        {plannedPlugins.length > 0 && (
+          <details className="v3-foldout">
+            <summary className="v3-foldout-summary">规划中插件</summary>
+            <PluginList plugins={plannedPlugins} currentPlugin={currentPlugin} locked onChange={changePlugin} />
+          </details>
+        )}
       </section>
 
       <details className="v3-config-section v3-foldout">
         <summary className="v3-foldout-summary">参数配置</summary>
-        <p className="muted">当前仅用于 Draft 预览，正式自定义运行将在后续阶段支持。</p>
         {(catalog.params && catalog.params.length > 0) ? (
           <div className="v3-param-grid">
             {catalog.params.map((param) => (
@@ -192,58 +134,60 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
       </details>
 
       <section className="v3-config-section">
-        <h4>Draft Validation</h4>
+        <h4>草稿校验</h4>
         <ul className="v3-check-list compact">
-          {visibleMessages.map((message) => <li key={message}>{message}</li>)}
+          {(visibleMessages.length ? visibleMessages : draft.validationMessages.slice(0, 3)).map((message) => <li key={message}>{message}</li>)}
         </ul>
-        {draft.validationMessages.length > visibleMessages.length && (
-          <details className="v3-foldout">
-            <summary className="v3-foldout-summary">更多校验信息</summary>
-            <ul className="v3-check-list">
-              {draft.validationMessages.map((message) => <li key={message}>{message}</li>)}
-            </ul>
-          </details>
-        )}
       </section>
     </aside>
   );
 }
 
-function consensusPluginHint(pluginId: string): string {
-  if (pluginId === "simple_leader") return "runtime-supported simple leader";
-  if (pluginId === "poa_light") return "runtime-supported PoA-light model";
-  if (pluginId === "pbft_light_model") return "PBFT-style light model only";
-  return "planned or unsupported";
+function PluginList({ plugins, currentPlugin, locked, onChange }: { plugins: DraftPluginOption[]; currentPlugin: string; locked: boolean; onChange: (plugin: string) => void }) {
+  return (
+    <div className="v3-plugin-option-list">
+      {plugins.map((plugin) => (
+        <label key={plugin.id} className={plugin.status === "planned" ? "disabled" : ""}>
+          <input type="radio" checked={currentPlugin === plugin.id} disabled={locked || plugin.status === "planned"} onChange={() => onChange(plugin.id)} />
+          <span>
+            <strong>{plugin.label}</strong>
+            <small title={plugin.id}>{plugin.id}</small>
+          </span>
+          <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
+        </label>
+      ))}
+    </div>
+  );
 }
 
-function routingPluginHint(pluginId: string): string {
-  if (pluginId === "hash_sharding") return "runtime-supported hash routing";
-  if (pluginId === "metatrack_coaccess_routing" || pluginId === "co_access_sharding") return "runtime-supported co-access light routing";
-  if (pluginId === "hotspot_aware_routing") return "runtime-supported hotspot-aware light routing";
-  return "planned/future strategy, not a real cross-shard protocol";
+function dedupePlugins(plugins: DraftPluginOption[]): DraftPluginOption[] {
+  const seen = new Set<string>();
+  return plugins.filter((plugin) => {
+    const normalized = plugin.id
+      .replace("_planned", "")
+      .replace("_model", "")
+      .replace("_commit", "");
+    if (seen.has(normalized)) return false;
+    seen.add(normalized);
+    return true;
+  });
 }
 
-function executionPluginHint(pluginId: string): string {
-  if (pluginId === "serial_execution") return "runtime-supported serial execution";
-  if (pluginId === "parallel_light_execution") return "runtime-supported deterministic logical parallel model";
-  if (pluginId === "metatrack_dual_track_execution" || pluginId === "dual_track_execution") return "runtime-supported dual-track light model";
-  return "planned/future execution strategy, not real concurrency or rollback";
+function moduleHint(moduleId: string): string {
+  if (moduleId === "Routing") return "跨片协议是 Routing/Sharding 的子能力，不新增主流程卡片。";
+  if (moduleId === "StateAccess") return "状态证明和 witness 是 MVP 产物，不是完整无状态执行。";
+  if (moduleId === "StateStorage") return "状态后端通过运行拓扑面板选择，Ethereum MPT 仍是规划项。";
+  if (moduleId === "Consensus") return "PBFT 网络预览是可选 runtime，不是唯一共识，也不是生产 PBFT。";
+  if (moduleId === "MetricsReport") return "Benchmark 属于实验控制 / 结果层，不是新的主流程模块。";
+  return "当前模块用于本地 V3 快速验证和受控实验配置。";
 }
 
-function stateAccessPluginHint(pluginId: string): string {
-  if (pluginId === "direct_fetch") return "runtime-supported direct fetch";
-  if (pluginId === "remote_state_access_model") return "runtime-supported remote access light model";
-  if (pluginId === "cached_state_access") return "runtime-supported cache light model";
-  if (pluginId === "access_list_prefetch") return "runtime-supported prefetch light model";
-  return "planned/future state access strategy, not real proof, witness, MPT, or remote storage";
-}
-
-function commitPluginHint(pluginId: string): string {
-  if (pluginId === "normal_commit") return "runtime-supported default commit path";
-  if (pluginId === "conservative_commit") return "runtime-supported conservative commit light model";
-  if (pluginId === "hot_update_aggregation" || pluginId === "hot_update_aggregation_commit") return "runtime-supported hot-update aggregation light model";
-  if (pluginId === "constraint_checked_aggregation") return "runtime-supported constraint-check aggregation light model";
-  return "planned/future commit strategy, not real DB lock, rollback, MPT/state root, or persistent KV";
+function boundaryHint(moduleId: string): string {
+  if (moduleId === "Routing") return "不实现完整 Relay / Broker / 2PC，不声称原子跨片提交。";
+  if (moduleId === "Commit") return "不实现真实 DB 锁、回滚或跨片原子验证提交。";
+  if (moduleId === "StateAccess" || moduleId === "StateStorage") return "Proof / Witness 为 MVP，Merkle/MPT-like root 为 MVP；非 Ethereum MPT，非完整无状态执行。";
+  if (moduleId === "Consensus") return "不声称 real PBFT、HotStuff、Raft 或生产网络。";
+  return "本轮 V3.10.1 只整理前端表达，不改变 runtime 语义。";
 }
 
 function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {
