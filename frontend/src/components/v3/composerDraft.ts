@@ -134,10 +134,13 @@ export function defaultRuntimeTopology(): V3RuntimeTopology {
     supervisor_enabled: true,
     node_runtime_mode: "logical_single_process",
     network_mode: "in_memory_message_bus",
-    network_adapter: "in_memory_message_bus",
-    cross_shard_protocol: "none",
-    state_backend: "memory_kv",
-  };
+  network_adapter: "in_memory_message_bus",
+  cross_shard_protocol: "none",
+  state_backend: "memory_kv",
+  benchmark_template: "full_stack_v3_template",
+  baseline_profile: "baseline_simple_chain",
+  repeat_count: 1,
+};
 }
 
 export function updateDraftTopology(draft: ComposerDraft, topology: V3RuntimeTopology): ComposerDraft {

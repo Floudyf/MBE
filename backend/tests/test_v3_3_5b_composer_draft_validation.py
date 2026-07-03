@@ -37,10 +37,13 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.9 State Authenticity Layer MVP Closure"
-    assert result.normalized_draft["current_capability"] == "persistent state backend, deterministic state roots, proof verification, and stateless witness artifacts under StateAccess / StateStorage / Commit"
+    assert result.normalized_draft["current_stage"] == "V3.10 Benchmark / Experiment Template Hardening Closure"
+    assert result.normalized_draft["current_capability"] == "benchmark template catalog, baseline profile catalog, local controlled sweep runner, repeatability manifest, and benchmark report artifacts"
     assert result.normalized_draft["topology"]["cross_shard_protocol"] == "none"
     assert result.normalized_draft["topology"]["state_backend"] == "memory_kv"
+    assert result.normalized_draft["topology"]["benchmark_template"] == "full_stack_v3_template"
+    assert result.normalized_draft["topology"]["baseline_profile"] == "baseline_simple_chain"
+    assert result.normalized_draft["topology"]["repeat_count"] == 1
 
 
 def test_valid_draft_accepts_state_backend_mvp_options() -> None:
@@ -62,6 +65,31 @@ def test_ethereum_mpt_compatible_is_planned_only() -> None:
 
     assert result.is_valid is False
     assert any("planned only" in error for error in result.errors)
+
+
+def test_valid_draft_accepts_benchmark_template_and_baseline_profile() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(
+        benchmark_template="state_authenticity_template",
+        baseline_profile="baseline_memory_kv",
+        repeat_count=3,
+    )
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is True
+    assert result.normalized_draft is not None
+    assert result.normalized_draft["topology"]["benchmark_template"] == "state_authenticity_template"
+    assert result.normalized_draft["topology"]["baseline_profile"] == "baseline_memory_kv"
+    assert result.normalized_draft["topology"]["repeat_count"] == 3
+
+
+def test_invalid_benchmark_template_is_rejected() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(benchmark_template="paper_grade_claim")
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is False
+    assert any("topology.benchmark_template" in error for error in result.errors)
 
 
 def test_valid_draft_accepts_custom_logical_topology() -> None:

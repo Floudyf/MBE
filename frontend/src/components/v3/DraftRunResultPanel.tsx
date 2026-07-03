@@ -21,6 +21,7 @@ const pbftPreviewSummaryKeys = ["consensus_runtime_selected", "pbft_preview_enab
 const pbftNetworkSummaryKeys = ["consensus_runtime_selected", "network_adapter_selected", "pbft_over_network_enabled", "pbft_network_path", "pbft_network_message_count", "pbft_network_error_count", "pbft_preprepare_network_count", "pbft_prepare_network_count", "pbft_commit_network_count", "pbft_finalized_network_count", "pbft_network_quorum_reached_count"];
 const crossShardSummaryKeys = ["cross_shard_protocol_selected", "cross_shard_tx_count", "cross_shard_ratio", "cross_shard_message_count", "relay_preview_count", "cross_shard_completed_count", "cross_shard_failed_count", "cross_shard_avg_latency_ms"];
 const stateAuthenticitySummaryKeys = ["state_backend_selected", "persistent_state_enabled", "state_root_enabled", "state_root_count", "state_key_count", "state_update_count", "state_proof_generated_count", "state_proof_verified_count", "state_proof_failed_count", "witness_generated_count", "witness_verified_count", "witness_failed_count", "state_authenticity_error_count"];
+const benchmarkSummaryKeys = ["benchmark_template_selected", "baseline_profile_selected", "benchmark_run_count", "sweep_parameter_count", "repeat_count", "benchmark_artifact_count", "baseline_comparison_count", "reproducibility_manifest_available", "benchmark_report_available", "paper_grade_benchmark"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
@@ -161,6 +162,20 @@ export default function DraftRunResultPanel({ result }: Props) {
         <div><dt>witness_log.csv</dt><dd>{artifactNames.has("witness_log.csv") ? "available" : "legacy missing"}</dd></div>
         <div><dt>witness_verification_log.csv</dt><dd>{artifactNames.has("witness_verification_log.csv") ? "available" : "legacy missing"}</dd></div>
         <div><dt>state_authenticity_summary.json</dt><dd>{artifactNames.has("state_authenticity_summary.json") ? "available" : "legacy missing"}</dd></div>
+      </div>
+      <div className="v3-summary-preview">
+        <div><dt>Benchmark summary</dt><dd>local controlled template output - not paper-grade benchmark evidence - not large-scale distributed benchmark</dd></div>
+        {benchmarkSummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>benchmark_template_catalog.json</dt><dd>{artifactNames.has("benchmark_template_catalog.json") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>baseline_profile_catalog.json</dt><dd>{artifactNames.has("baseline_profile_catalog.json") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>benchmark_run_index.csv</dt><dd>{artifactNames.has("benchmark_run_index.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>sweep_summary.csv</dt><dd>{artifactNames.has("sweep_summary.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>baseline_comparison.csv</dt><dd>{artifactNames.has("baseline_comparison.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>reproducibility_manifest.json</dt><dd>{artifactNames.has("reproducibility_manifest.json") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>benchmark_report.md</dt><dd>{artifactNames.has("benchmark_report.md") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>benchmark_summary.json</dt><dd>{artifactNames.has("benchmark_summary.json") ? "available" : "legacy missing"}</dd></div>
       </div>
       <div className="v3-summary-preview">
         {commitSummaryKeys.filter((key) => key in summary).map((key) => (

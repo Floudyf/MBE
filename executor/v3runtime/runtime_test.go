@@ -25,7 +25,7 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	if result.Summary.TxCount != 24 || result.Summary.SuccessCount != 24 || result.Summary.FailureCount != 0 {
 		t.Fatalf("unexpected summary: %+v", result.Summary)
 	}
-	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json"} {
+	for _, name := range []string{"used_chain_profile.yaml", "used_plugin_profile.yaml", "used_experiment_profile.yaml", "runtime.log", "summary.csv", "summary.json", "report.md", "block_log.csv", "tx_results.csv", "state_commit_log.csv", "txpool_log.csv", "consensus_log.csv", "routing_log.csv", "execution_log.csv", "state_access_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "aggregate_summary.csv", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Fatalf("missing artifact %s: %v", name, err)
 		}
@@ -45,6 +45,9 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"pbft_view", "pbft_sequence", "pbft_preprepare_count", "pbft_prepare_count", "pbft_commit_count", "pbft_quorum_reached_count", "pbft_finalized_block_count", "pbft_consensus_latency_ms", "pbft_preview_enabled", "pbft_quorum_threshold"})
 	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"pbft_over_network_enabled", "pbft_network_path", "pbft_network_message_count", "pbft_network_error_count", "pbft_preprepare_network_count", "pbft_prepare_network_count", "pbft_commit_network_count", "pbft_finalized_network_count", "pbft_network_quorum_reached_count"})
 	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"state_backend_selected", "persistent_state_enabled", "state_root_enabled", "state_root_count", "state_key_count", "state_update_count", "state_proof_generated_count", "state_proof_verified_count", "state_proof_failed_count", "witness_generated_count", "witness_verified_count", "witness_failed_count", "state_authenticity_error_count"})
+	assertCSVFields(t, filepath.Join(out, "summary.csv"), []string{"benchmark_template_selected", "baseline_profile_selected", "benchmark_run_count", "sweep_parameter_count", "repeat_count", "benchmark_artifact_count", "baseline_comparison_count", "reproducibility_manifest_available", "benchmark_report_available", "paper_grade_benchmark"})
+	assertCSVFields(t, filepath.Join(out, "benchmark_run_index.csv"), []string{"benchmark_id", "run_id", "template_id", "baseline_id", "repeat_index", "seed", "tx_count", "shard_count", "hotspot_ratio", "network_adapter", "consensus_runtime", "cross_shard_protocol", "state_backend", "summary_path", "status", "runtime_truth"})
+	assertCSVFields(t, filepath.Join(out, "baseline_comparison.csv"), []string{"template_id", "baseline_id", "comparison_target", "metric_name", "baseline_value", "target_value", "delta", "delta_ratio", "interpretation", "truth_boundary"})
 	if result.Summary.QueueWaitMS <= 0 || result.Summary.TxPoolAvgWaitMS <= 0 {
 		t.Fatalf("queue wait should be derived from txpool and non-zero in smoke profile: %+v", result.Summary)
 	}
@@ -59,6 +62,49 @@ func TestGateAMinimalRuntimeWritesV3Artifacts(t *testing.T) {
 	}
 	if result.Summary.StateRootCount == 0 || result.Summary.StateProofVerifiedCount == 0 || result.Summary.WitnessVerifiedCount == 0 {
 		t.Fatalf("missing state authenticity metrics: %+v", result.Summary)
+	}
+	if result.Summary.BenchmarkRunCount == 0 || !result.Summary.ReproducibilityManifestAvailable || !result.Summary.BenchmarkReportAvailable || result.Summary.PaperGradeBenchmark {
+		t.Fatalf("missing V3.10 benchmark hardening metrics: %+v", result.Summary)
+	}
+}
+
+func TestBenchmarkHardeningPreviewWritesArtifactsAndMetrics(t *testing.T) {
+	summary := Summary{
+		TxCount:                    24,
+		ThroughputTPS:              12,
+		P95LatencyMS:               7,
+		ShardCount:                 4,
+		NetworkAdapterSelected:     "in_memory_message_bus",
+		ConsensusRuntimeSelected:   "simple_leader",
+		CrossShardProtocolSelected: "relay_preview",
+		StateBackendSelected:       "merkle_trie_mvp",
+		StateRootCount:             4,
+		CrossShardTxCount:          2,
+		TypedMessageCount:          3,
+	}
+	experiment := ExperimentProfile{
+		ProfileID:         "benchmark_test",
+		BenchmarkTemplate: "state_authenticity_template",
+		BaselineProfile:   "baseline_memory_kv",
+		RepeatCount:       2,
+		Seed:              41,
+	}
+	preview := RunBenchmarkHardeningPreview(experiment, summary)
+	if len(preview.Templates) < 5 || len(preview.Baselines) < 6 || preview.BenchmarkRunCount != 2 || preview.PaperGradeBenchmark {
+		t.Fatalf("unexpected benchmark preview: %+v", preview)
+	}
+	ApplyBenchmarkMetrics(&summary, preview)
+	if summary.BenchmarkTemplateSelected != "state_authenticity_template" || summary.BaselineProfileSelected != "baseline_memory_kv" || !summary.BenchmarkReportAvailable {
+		t.Fatalf("benchmark metrics not applied: %+v", summary)
+	}
+	out := t.TempDir()
+	if err := WriteBenchmarkArtifacts(out, preview, experiment, summary); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "aggregate_summary.csv", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Fatalf("missing benchmark artifact %s: %v", name, err)
+		}
 	}
 }
 

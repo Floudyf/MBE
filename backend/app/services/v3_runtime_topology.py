@@ -5,11 +5,27 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.9 State Authenticity Layer MVP Closure"
-LATEST_RUNTIME_STAGE = "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts"
-CURRENT_CAPABILITY = "persistent state backend, deterministic state roots, proof verification, and stateless witness artifacts under StateAccess / StateStorage / Commit"
-RUNTIME_TRUTH = "state_authenticity_mvp_not_ethereum_compatible_mpt_or_full_stateless_execution"
-NEXT_STAGE = "V3.10 Benchmark / Experiment Template Hardening"
+CURRENT_STAGE = "V3.10 Benchmark / Experiment Template Hardening Closure"
+LATEST_RUNTIME_STAGE = "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
+CURRENT_CAPABILITY = "benchmark template catalog, baseline profile catalog, local controlled sweep runner, repeatability manifest, and benchmark report artifacts"
+RUNTIME_TRUTH = "benchmark_template_hardening_not_paper_grade_benchmark"
+NEXT_STAGE = "V3.11 CrossShard Protocol Hardening"
+
+BENCHMARK_TEMPLATES = {
+    "metatrack_hotspot_template",
+    "pbft_network_template",
+    "cross_shard_relay_preview_template",
+    "state_authenticity_template",
+    "full_stack_v3_template",
+}
+BASELINE_PROFILES = {
+    "baseline_simple_chain",
+    "baseline_hash_sharding",
+    "baseline_no_prefetch",
+    "baseline_no_cross_shard_protocol",
+    "baseline_memory_kv",
+    "baseline_no_state_authenticity",
+}
 
 
 def default_topology() -> V3RuntimeTopology:
@@ -58,7 +74,16 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     if state_backend not in {"memory_kv", "persistent_kv", "merkle_trie_mvp", "ethereum_mpt_compatible"}:
         errors.append("topology.state_backend currently allows memory_kv, persistent_kv, merkle_trie_mvp, or ethereum_mpt_compatible")
     if state_backend == "ethereum_mpt_compatible":
-        errors.append("topology.state_backend=ethereum_mpt_compatible is planned only and not runnable in V3.9")
+        errors.append("topology.state_backend=ethereum_mpt_compatible is planned only and not runnable in V3.10")
+    benchmark_template = data.get("benchmark_template") or "full_stack_v3_template"
+    data["benchmark_template"] = benchmark_template
+    if benchmark_template not in BENCHMARK_TEMPLATES:
+        errors.append("topology.benchmark_template must be one of the V3.10 benchmark templates")
+    baseline_profile = data.get("baseline_profile") or "baseline_simple_chain"
+    data["baseline_profile"] = baseline_profile
+    if baseline_profile not in BASELINE_PROFILES:
+        errors.append("topology.baseline_profile must be one of the V3.10 baseline profiles")
+    _range(errors, data, "repeat_count", 1, 20)
     return data, errors
 
 

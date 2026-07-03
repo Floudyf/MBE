@@ -27,6 +27,7 @@ const groups = [
   { title: "PBFT over NetworkAdapter artifacts", files: ["consensus_network_log.csv", "pbft_network_summary.json"] },
   { title: "Cross-shard skeleton artifacts", files: ["cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json"] },
   { title: "State authenticity artifacts", files: ["state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json"] },
+  { title: "Benchmark artifacts", files: ["benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "aggregate_summary.csv", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"] },
   { title: "Chain runtime logs", files: ["runtime.log", "block_log.csv", "tx_results.csv"] },
   { title: "MetaTrack metrics", files: ["metatrack_latency.csv", "metatrack_mechanism_metrics.csv"] },
   { title: "Controlled smoke outputs", files: ["run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"] },

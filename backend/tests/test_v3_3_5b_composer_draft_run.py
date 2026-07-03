@@ -42,7 +42,7 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
         (output_dir / "summary.csv").write_text("tx_count,success_count\n1,1\n", encoding="utf-8")
         (output_dir / "latency.csv").write_text("tx_id,latency_ms\n0,1\n", encoding="utf-8")
         (output_dir / "runtime.log").write_text("draft smoke complete\n", encoding="utf-8")
-        for name in ("node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json"):
+        for name in ("node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "aggregate_summary.csv", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"):
             (output_dir / name).write_text("id\n1\n", encoding="utf-8")
         summary = {
             "tx_count": 1,
@@ -122,6 +122,16 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
             "witness_verified_count": 1,
             "witness_failed_count": 0,
             "state_authenticity_error_count": 0,
+            "benchmark_template_selected": "full_stack_v3_template",
+            "baseline_profile_selected": "baseline_simple_chain",
+            "benchmark_run_count": 1,
+            "sweep_parameter_count": 7,
+            "repeat_count": 1,
+            "benchmark_artifact_count": 12,
+            "baseline_comparison_count": 7,
+            "reproducibility_manifest_available": True,
+            "benchmark_report_available": True,
+            "paper_grade_benchmark": False,
         }
         (output_dir / "summary.json").write_text('{"tx_count": 1, "success_count": 1, "logical_node_count": 25}\n', encoding="utf-8")
         return SimpleNamespace(output_dir=output_dir, summary=summary)
@@ -131,12 +141,12 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
     result = draft_runner.run_v3_composer_draft_smoke(valid_draft(), root=tmp_path)
 
     assert result["status"] == "completed"
-    assert result["stage"] == "V3.9 State Authenticity Layer MVP Closure"
-    assert result["current_stage"] == "V3.9 State Authenticity Layer MVP Closure"
-    assert result["latest_runtime_stage"] == "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts"
-    assert result["latest_completed_runtime_stage"] == "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts"
-    assert result["current_capability"] == "persistent state backend, deterministic state roots, proof verification, and stateless witness artifacts under StateAccess / StateStorage / Commit"
-    assert result["runtime_truth"] == "state_authenticity_mvp_not_ethereum_compatible_mpt_or_full_stateless_execution"
+    assert result["stage"] == "V3.10 Benchmark / Experiment Template Hardening Closure"
+    assert result["current_stage"] == "V3.10 Benchmark / Experiment Template Hardening Closure"
+    assert result["latest_runtime_stage"] == "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
+    assert result["latest_completed_runtime_stage"] == "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
+    assert result["current_capability"] == "benchmark template catalog, baseline profile catalog, local controlled sweep runner, repeatability manifest, and benchmark report artifacts"
+    assert result["runtime_truth"] == "benchmark_template_hardening_not_paper_grade_benchmark"
     assert result["run_mode"] == "draft_smoke"
     assert result["topology_summary"]["logical_node_count"] == 25
     assert len(calls) == 1
@@ -187,15 +197,29 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
         "witness_log.csv",
         "witness_verification_log.csv",
         "state_authenticity_summary.json",
+        "benchmark_template_catalog.json",
+        "baseline_profile_catalog.json",
+        "benchmark_plan.json",
+        "benchmark_run_index.csv",
+        "sweep_matrix.csv",
+        "sweep_summary.csv",
+        "sweep_summary.json",
+        "aggregate_summary.csv",
+        "baseline_comparison.csv",
+        "reproducibility_manifest.json",
+        "benchmark_report.md",
+        "benchmark_summary.json",
         "quorum_log.csv",
         "finalized_block_log.csv",
     ):
         assert (run_dir / name).is_file()
     artifact_names = {artifact["name"] for artifact in result["artifacts"]}
-    assert {"composer_draft.json", "normalized_draft.json", "generated_experiment_profile.json", "summary.csv", "runtime.log", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json"} <= artifact_names
+    assert {"composer_draft.json", "normalized_draft.json", "generated_experiment_profile.json", "summary.csv", "runtime.log", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "aggregate_summary.csv", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"} <= artifact_names
     generated = (run_dir / "generated_experiment_profile.json").read_text(encoding="utf-8")
     assert '"cross_shard_protocol": "none"' in generated
     assert '"state_backend": "memory_kv"' in generated
+    assert '"benchmark_template": "full_stack_v3_template"' in generated
+    assert '"baseline_profile": "baseline_simple_chain"' in generated
 
 
 def test_run_draft_smoke_invalid_draft_does_not_start_runner(monkeypatch, tmp_path: Path) -> None:

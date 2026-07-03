@@ -93,9 +93,27 @@ The main transaction flow must remain:
 Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
 ```
 
-## V3.10 Planned
+## V3.10 Current Status
 
-V3.10 is planned as Benchmark / Experiment Template Hardening. It has not started. V3.10 should begin by tightening benchmark/template naming, controlled-run reproducibility, and paper-readiness boundaries without rebranding V3.9 MVP proof/witness artifacts as Ethereum MPT or paper-grade evidence.
+Current stage is V3.10 Benchmark / Experiment Template Hardening Closure. V3.10 adds a benchmark template catalog, baseline profile catalog, local controlled sweep runner MVP, multi-seed repeatability, reproducibility manifest, benchmark run index, sweep summaries, baseline comparison output, and benchmark report artifacts.
+
+V3.10 writes `benchmark_template_catalog.json`, `baseline_profile_catalog.json`, `benchmark_plan.json`, `benchmark_run_index.csv`, `sweep_matrix.csv`, `sweep_summary.csv`, `sweep_summary.json`, `aggregate_summary.csv`, `baseline_comparison.csv`, `reproducibility_manifest.json`, `benchmark_report.md`, and `benchmark_summary.json`. It adds summary metrics for `benchmark_template_selected`, `baseline_profile_selected`, `benchmark_run_count`, `sweep_parameter_count`, `repeat_count`, `benchmark_artifact_count`, `baseline_comparison_count`, `reproducibility_manifest_available`, `benchmark_report_available`, and `paper_grade_benchmark`.
+
+V3.10 is closed after this hardening round. It does not implement complete Relay / Broker / 2PC, production PBFT / HotStuff / Raft, Ethereum-compatible MPT, Fabric/EVM live backend, BlockEmulator backend, real large-scale distributed benchmark, performance superiority over BlockEmulator, or paper-grade benchmark evidence.
+
+## V3.10 Benchmark / Experiment Template Hardening and Closure
+
+Benchmark templates, baselines, sweeps, and reproducibility manifest belong to the experiment control layer / result layer and must not become new main-flow cards.
+
+The main transaction flow must remain:
+
+```text
+Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
+```
+
+## V3.11 Planned
+
+V3.11 is planned as CrossShard Protocol Hardening. It has not started. V3.11 should not be entered unless explicitly requested, and V3.10 benchmark artifacts must not be treated as paper-grade evidence.
 
 ## V3.6 / V3.7 Planning
 
@@ -105,7 +123,7 @@ V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is imple
 
 V3.8 is implemented as CrossShardProtocol Skeleton Closure. It stays separate from V3.6 networking and V3.7 PBFT preview work.
 V3.9 is implemented as State Authenticity Layer MVP Closure. It strengthens StateAccess / StateStorage / Commit with persistent state backend MVP, Merkle/MPT-like roots, proof verification, and witness artifacts.
-V3.10 is planned as Benchmark / Experiment Template Hardening.
+V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.11 is planned as CrossShard Protocol Hardening.
 
 Planned stage list extension:
 
@@ -113,7 +131,8 @@ Planned stage list extension:
 - V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview.
 - V3.8 CrossShardProtocol Skeleton Closure.
 - V3.9 State Authenticity Layer MVP Closure.
-- V3.10 Benchmark / Experiment Template Hardening.
+- V3.10 Benchmark / Experiment Template Hardening Closure.
+- V3.11 CrossShard Protocol Hardening.
 
 The main transaction flow should remain:
 
@@ -121,7 +140,7 @@ The main transaction flow should remain:
 Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
 ```
 
-RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow. CrossShardProtocol belongs under Routing/Sharding as a sub-capability and must not become a new main-flow card. StateProof and Witness belong under StateAccess / StateStorage / Commit as sub-capabilities and must not become new main-flow cards.
+RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow. CrossShardProtocol belongs under Routing/Sharding as a sub-capability and must not become a new main-flow card. StateProof and Witness belong under StateAccess / StateStorage / Commit as sub-capabilities and must not become new main-flow cards. Benchmark templates, baselines, sweeps, and reproducibility manifest belong to the experiment control layer / result layer and must not become new main-flow cards.
 
 ## 0.1 V3.3 Go-backed MetaTrack Update
 

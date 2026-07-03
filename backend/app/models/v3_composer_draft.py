@@ -26,6 +26,9 @@ class V3RuntimeTopology(BaseModel):
     network_adapter: str = "in_memory_message_bus"
     cross_shard_protocol: str = "none"
     state_backend: str = "memory_kv"
+    benchmark_template: str = "full_stack_v3_template"
+    baseline_profile: str = "baseline_simple_chain"
+    repeat_count: int = 1
 
 
 class V3ComposerDraftRequest(BaseModel):

@@ -16,13 +16,13 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
 
     assert result["status"] == "completed"
     assert result["stage"] == "V3.4.10"
-    assert result["current_stage"] == "V3.9 State Authenticity Layer MVP Closure"
+    assert result["current_stage"] == "V3.10 Benchmark / Experiment Template Hardening Closure"
     assert result["latest_runtime_stage"] == "V3.4.10"
-    assert result["latest_completed_runtime_stage"] == "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts"
+    assert result["latest_completed_runtime_stage"] == "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
     assert result["closure_stage"] == "V3.4.11"
-    assert result["current_capability"] == "state authenticity MVP artifacts under StateAccess / StateStorage / Commit"
-    assert result["runtime_truth"] == "state_authenticity_mvp_not_ethereum_compatible_mpt_or_full_stateless_execution"
-    assert result["next_stage"] == "V3.10 Benchmark / Experiment Template Hardening"
+    assert result["current_capability"] == "benchmark template catalog, baseline profiles, local controlled sweep MVP, manifest, and benchmark report artifacts"
+    assert result["runtime_truth"] == "benchmark_template_hardening_not_paper_grade_benchmark"
+    assert result["next_stage"] == "V3.11 CrossShard Protocol Hardening"
     assert result["preset_order"] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["run_index"]] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["aggregate_summary"]] == CONTROLLED_PRESET_ORDER
@@ -65,6 +65,17 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
         "witness_log.csv",
         "witness_verification_log.csv",
         "state_authenticity_summary.json",
+        "benchmark_template_catalog.json",
+        "baseline_profile_catalog.json",
+        "benchmark_plan.json",
+        "benchmark_run_index.csv",
+        "sweep_matrix.csv",
+        "sweep_summary.csv",
+        "sweep_summary.json",
+        "baseline_comparison.csv",
+        "reproducibility_manifest.json",
+        "benchmark_report.md",
+        "benchmark_summary.json",
     }
 
     with (run_dir / "run_index.csv").open(encoding="utf-8", newline="") as stream:
@@ -77,14 +88,17 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     assert "cross_shard_ratio" in aggregate_rows[0]
     assert "avg_commit_latency_ms" in aggregate_rows[0]
     assert "state_root_count" in aggregate_rows[0]
+    assert "benchmark_template_selected" in aggregate_rows[0]
+    assert "paper_grade_benchmark" in aggregate_rows[0]
 
     readiness = json.loads((run_dir / "realism_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["current_stage"] == "V3.9 State Authenticity Layer MVP Closure"
+    assert readiness["current_stage"] == "V3.10 Benchmark / Experiment Template Hardening Closure"
     assert readiness["latest_runtime_stage"] == "V3.4.10"
-    assert readiness["latest_completed_runtime_stage"] == "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts"
-    assert len(readiness["modules"]) == 11
+    assert readiness["latest_completed_runtime_stage"] == "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
+    assert len(readiness["modules"]) == 12
     assert "not BlockEmulator backend" in readiness["not_real_chain_claims"]
     assert "not Fabric/EVM live backend" in readiness["not_real_chain_claims"]
+    assert "not paper-grade benchmark evidence" in readiness["not_real_chain_claims"]
 
     artifact_path = get_controlled_artifact_path(result["run_id"], "aggregate_summary.csv", root=tmp_path)
     assert artifact_path == run_dir / "aggregate_summary.csv"

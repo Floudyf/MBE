@@ -111,10 +111,20 @@ MODULE_READINESS: list[dict[str, Any]] = [
         "runtime_status": "runnable",
         "realism_level": "runtime_realized",
         "implemented_plugins": ["basic_metrics"],
-        "artifact_logs": ["summary.csv", "summary.json", "aggregate_summary.csv"],
-        "light_model_limitations": ["Smoke-level summaries, not paper-ready evidence."],
-        "missing_for_real_emulator": ["Long-run experiment database", "statistical sweeps"],
-        "next_step": "Use aggregate smoke metrics for readiness inspection only.",
+        "artifact_logs": ["summary.csv", "summary.json", "aggregate_summary.csv", "sweep_summary.csv", "benchmark_summary.json", "benchmark_report.md"],
+        "light_model_limitations": ["Local controlled benchmark template summaries, not paper-grade benchmark evidence."],
+        "missing_for_real_emulator": ["Large-scale distributed benchmark", "formal statistical experiment campaign", "production network measurement"],
+        "next_step": "Use V3.10 benchmark artifacts as reproducibility scaffolding only.",
+    },
+    {
+        "module_id": "ExperimentControl",
+        "runtime_status": "runnable",
+        "realism_level": "local_controlled_benchmark_mvp",
+        "implemented_plugins": ["benchmark_template_catalog", "baseline_profile_catalog", "local_controlled_sweep_runner"],
+        "artifact_logs": ["benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "baseline_comparison.csv", "reproducibility_manifest.json"],
+        "light_model_limitations": ["V3.10 creates controlled local benchmark scaffolding, not paper-grade evidence."],
+        "missing_for_real_emulator": ["Large-scale distributed execution", "independent benchmark harness", "formal experiment database"],
+        "next_step": "Do not enter V3.11 CrossShard Protocol Hardening unless explicitly requested.",
     },
 ]
 
@@ -122,13 +132,13 @@ MODULE_READINESS: list[dict[str, Any]] = [
 def build_realism_readiness() -> dict[str, Any]:
     return {
         "stage": "V3.4.10",
-        "current_stage": "V3.9 State Authenticity Layer MVP Closure",
+        "current_stage": "V3.10 Benchmark / Experiment Template Hardening Closure",
         "latest_runtime_stage": "V3.4.10",
-        "latest_completed_runtime_stage": "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts",
+        "latest_completed_runtime_stage": "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts",
         "closure_stage": "V3.4.11",
-        "current_capability": "persistent state backend, deterministic state root, proof verification, and stateless witness artifacts under StateAccess / StateStorage / Commit",
-        "runtime_truth": "state_authenticity_mvp_not_ethereum_compatible_mpt_or_full_stateless_execution",
-        "next_stage": "V3.10 Benchmark / Experiment Template Hardening",
+        "current_capability": "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts",
+        "runtime_truth": "benchmark_template_hardening_not_paper_grade_benchmark",
+        "next_stage": "V3.11 CrossShard Protocol Hardening",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",
@@ -142,6 +152,10 @@ def build_realism_readiness() -> dict[str, Any]:
             "not full cross-shard proof protocol",
             "not BlockEmulator backend",
             "not Fabric/EVM live backend",
+            "not paper-grade benchmark evidence",
+            "not large-scale distributed benchmark",
+            "not production network",
+            "not performance superiority claim",
         ],
         "modules": MODULE_READINESS,
     }
@@ -157,7 +171,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         "# V3.4.10 Realism Readiness Check",
         "",
         "This is an internal readiness check for the local Go-backed Draft Smoke runtime.",
-        "Current repository closure stage is V3.9; the latest controlled smoke runner remains V3.4.10 but representative runs now include V3.9 state authenticity MVP artifacts.",
+        "Current repository closure stage is V3.10; the latest controlled smoke runner remains V3.4.10 but representative runs now include V3.10 benchmark template hardening artifacts.",
         "It is not a real-chain, Fabric/EVM live, BlockEmulator-backed, or multi-node emulator claim.",
         "",
         "| module_id | runtime_status | realism_level | implemented_plugins | next_step |",
@@ -175,7 +189,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         )
     lines.extend([
         "",
-        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, complete relay/broker/2PC, atomic cross-shard commit, full cross-shard state proof protocol, rollback/timeout recovery, Ethereum-compatible MPT, production database durability, full stateless execution, Fabric/EVM live backend, and BlockEmulator adapter.",
+        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, complete relay/broker/2PC, atomic cross-shard commit, full cross-shard state proof protocol, rollback/timeout recovery, Ethereum-compatible MPT, production database durability, full stateless execution, Fabric/EVM live backend, BlockEmulator adapter, large-scale distributed benchmark, and paper-grade benchmark evidence.",
     ])
     (output_dir / "realism_readiness.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return payload

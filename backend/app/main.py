@@ -53,8 +53,8 @@ V1_SWEEP_DOWNLOADABLE_FILES = frozenset({"report.md", "sweep_summary.csv", "swee
 V1_CUSTOM_DOWNLOADABLE_FILES = frozenset({"trace_meta.json", "summary.csv", "latency.csv", "runtime.log", "report.md", "used_config.yaml", "used_config.json", "config.yaml"})
 app = FastAPI(title="MBE V0")
 
-V3_CURRENT_STAGE = "V3.9 State Authenticity Layer MVP Closure"
-V3_LATEST_RUNTIME_STAGE = "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts"
+V3_CURRENT_STAGE = "V3.10 Benchmark / Experiment Template Hardening Closure"
+V3_LATEST_RUNTIME_STAGE = "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
 
 ABLATION_PRESETS = {
     "baseline_hash_only": {"routing_policy": "hash", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},

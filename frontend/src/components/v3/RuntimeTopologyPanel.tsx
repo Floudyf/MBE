@@ -21,11 +21,11 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
     <section className="final-card wide v3-template-bar">
       <div className="v3-section-head">
         <div>
-          <p className="eyebrow">V3.9 runtime support / state authenticity</p>
+          <p className="eyebrow">V3.10 experiment control / benchmark hardening</p>
           <h3>Runtime Topology / Node Topology</h3>
         </div>
       </div>
-      <p className="muted">Configures logical nodes, NetworkAdapter, Routing/Sharding cross_shard_protocol, and StateAccess / StateStorage / Commit state_backend. V3.9 adds State Authenticity MVP artifacts only; it is not Ethereum-compatible MPT, not production database durability, and not full stateless execution.</p>
+      <p className="muted">Configures logical nodes, NetworkAdapter, Routing/Sharding cross_shard_protocol, StateAccess / StateStorage / Commit state_backend, and V3.10 benchmark template controls. Benchmark is experiment control / result layer only; it is not paper-grade evidence or a large-scale distributed benchmark.</p>
       <div className="v3-identity-grid">
         {numericFields.map((field) => (
           <label key={field}>
@@ -73,6 +73,31 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
             <option value="merkle_trie_mvp">merkle_trie_mvp</option>
             <option value="ethereum_mpt_compatible" disabled>ethereum_mpt_compatible planned</option>
           </select>
+        </label>
+        <label>
+          <span>benchmark_template</span>
+          <select value={topology.benchmark_template || "full_stack_v3_template"} onChange={(event) => patch({ benchmark_template: event.target.value })}>
+            <option value="metatrack_hotspot_template">metatrack_hotspot_template</option>
+            <option value="pbft_network_template">pbft_network_template</option>
+            <option value="cross_shard_relay_preview_template">cross_shard_relay_preview_template</option>
+            <option value="state_authenticity_template">state_authenticity_template</option>
+            <option value="full_stack_v3_template">full_stack_v3_template</option>
+          </select>
+        </label>
+        <label>
+          <span>baseline_profile</span>
+          <select value={topology.baseline_profile || "baseline_simple_chain"} onChange={(event) => patch({ baseline_profile: event.target.value })}>
+            <option value="baseline_simple_chain">baseline_simple_chain</option>
+            <option value="baseline_hash_sharding">baseline_hash_sharding</option>
+            <option value="baseline_no_prefetch">baseline_no_prefetch</option>
+            <option value="baseline_no_cross_shard_protocol">baseline_no_cross_shard_protocol</option>
+            <option value="baseline_memory_kv">baseline_memory_kv</option>
+            <option value="baseline_no_state_authenticity">baseline_no_state_authenticity</option>
+          </select>
+        </label>
+        <label>
+          <span>repeat_count</span>
+          <input type="number" min={1} max={20} value={topology.repeat_count || 1} onChange={(event) => patch({ repeat_count: Number(event.target.value) })} />
         </label>
       </div>
       <dl className="v3-result-grid">

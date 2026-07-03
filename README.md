@@ -2,20 +2,20 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.9 State Authenticity Layer MVP Closure.
-Latest runtime capability: persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts.
-Runtime truth: state_authenticity_mvp_not_ethereum_compatible_mpt_or_full_stateless_execution.
-Next stage: V3.10 Benchmark / Experiment Template Hardening.
+Current stage: V3.10 Benchmark / Experiment Template Hardening Closure.
+Latest runtime capability: benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts.
+Runtime truth: benchmark_template_hardening_not_paper_grade_benchmark.
+Next stage: V3.11 CrossShard Protocol Hardening.
 
 ## Current Status
 
-Current stage: V3.9 State Authenticity Layer MVP Closure.
-Latest runtime capability: persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts.
-Current capability: selectable `state_backend` with runnable `memory_kv`, `persistent_kv`, and `merkle_trie_mvp`, plus deterministic state roots, proof generation, proof verification, and witness artifacts under StateAccess / StateStorage / Commit.
-Runtime truth: state_authenticity_mvp_not_ethereum_compatible_mpt_or_full_stateless_execution.
+Current stage: V3.10 Benchmark / Experiment Template Hardening Closure.
+Latest runtime capability: benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts.
+Current capability: V3.10 adds benchmark template catalog, baseline profile catalog, local sweep runner MVP, multi-seed repeatability, reproducibility manifest, baseline comparison, and benchmark report artifacts.
+Runtime truth: benchmark_template_hardening_not_paper_grade_benchmark.
 
-V3.5, V3.6, V3.7, V3.8, and V3.9 are closed. V3.9 adds persistent state backend, deterministic state root, proof generation, proof verification, and witness artifacts. It does not claim Ethereum-compatible MPT, production database durability, full stateless execution, full stateless blockchain, complete cross-shard state proof protocol, Fabric/EVM live backend, BlockEmulator backend, or paper-grade benchmark evidence.
-Next stage: V3.10 Benchmark / Experiment Template Hardening. V3.10 has not started.
+V3.5, V3.6, V3.7, V3.8, V3.9, and V3.10 are closed. V3.10 adds benchmark template catalog, baseline profile catalog, local sweep runner, multi-seed repeatability, reproducibility manifest, and benchmark report artifacts. It does not claim paper-grade benchmark evidence, large-scale distributed benchmark, production network, BlockEmulator backend, Fabric/EVM live backend, or performance superiority.
+Next stage: V3.11 CrossShard Protocol Hardening. V3.11 has not started.
 
 ## V3.5 Route
 
@@ -34,8 +34,9 @@ V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live 
 - V3.7.2 implemented: PBFT preview over the selected NetworkAdapter path plus V3.7 closure.
 - V3.8 implemented: CrossShardProtocol skeleton and closure with relay_preview artifacts.
 - V3.9 implemented: State Authenticity Layer MVP with persistent state backend, Merkle/MPT-like roots, proof verification, and witness artifacts.
+- V3.10 implemented: Benchmark / Experiment Template Hardening with benchmark templates, baseline profiles, local sweep runner, reproducibility manifest, and benchmark report artifacts.
 
-V3.6, V3.7, V3.8, and V3.9 are closed. V3.10 remains a roadmap item only.
+V3.6, V3.7, V3.8, V3.9, and V3.10 are closed. V3.11 has not started.
 
 ## Historical V0 Scope
 
@@ -127,7 +128,7 @@ Run from the repository root:
 python scripts/v0_sanity.py
 ```
 
-The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.9 State Authenticity Layer MVP Closure.
+The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.10 Benchmark / Experiment Template Hardening Closure.
 
 ## Windows One-Click Startup
 
@@ -170,5 +171,17 @@ After a run completes, the frontend artifact panel shows available summary, log,
 - `witness_log.csv`
 - `witness_verification_log.csv`
 - `state_authenticity_summary.json`
+- `benchmark_template_catalog.json`
+- `baseline_profile_catalog.json`
+- `benchmark_plan.json`
+- `benchmark_run_index.csv`
+- `sweep_matrix.csv`
+- `sweep_summary.csv`
+- `sweep_summary.json`
+- `aggregate_summary.csv`
+- `baseline_comparison.csv`
+- `reproducibility_manifest.json`
+- `benchmark_report.md`
+- `benchmark_summary.json`
 
-These launcher, node process, NetworkAdapter, PBFT-over-network, cross-shard skeleton, and state authenticity files are preview / MVP artifacts only. They do not prove production networking, production PBFT, full Byzantine safety, a real multi-process network runtime, BlockEmulator backend behavior, complete Relay/Broker/2PC, atomic cross-shard commit, Ethereum-compatible MPT, production database durability, full stateless execution, complete cross-shard state proof protocol, or paper-grade benchmark evidence.
+These launcher, node process, NetworkAdapter, PBFT-over-network, cross-shard skeleton, state authenticity, and benchmark hardening files are preview / MVP artifacts only. They do not prove production networking, production PBFT, full Byzantine safety, a real multi-process network runtime, BlockEmulator backend behavior, complete Relay/Broker/2PC, atomic cross-shard commit, Ethereum-compatible MPT, production database durability, full stateless execution, complete cross-shard state proof protocol, large-scale distributed benchmark, performance superiority, or paper-grade benchmark evidence.
