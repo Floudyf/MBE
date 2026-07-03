@@ -21,11 +21,11 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
     <section className="final-card wide v3-template-bar">
       <div className="v3-section-head">
         <div>
-          <p className="eyebrow">V3.8 runtime support / routing sub-capability</p>
+          <p className="eyebrow">V3.9 runtime support / state authenticity</p>
           <h3>Runtime Topology / Node Topology</h3>
         </div>
       </div>
-      <p className="muted">Configures logical nodes, NetworkAdapter, and the Routing/Sharding cross_shard_protocol selector. V3.8 adds relay_preview skeleton artifacts only; it is not atomic cross-shard commit, not full Relay/Broker/2PC, and not a BlockEmulator backend.</p>
+      <p className="muted">Configures logical nodes, NetworkAdapter, Routing/Sharding cross_shard_protocol, and StateAccess / StateStorage / Commit state_backend. V3.9 adds State Authenticity MVP artifacts only; it is not Ethereum-compatible MPT, not production database durability, and not full stateless execution.</p>
       <div className="v3-identity-grid">
         {numericFields.map((field) => (
           <label key={field}>
@@ -63,6 +63,15 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
             <option value="relay_preview">relay_preview</option>
             <option value="broker_preview" disabled>broker_preview planned</option>
             <option value="two_phase_commit_preview" disabled>two_phase_commit_preview planned</option>
+          </select>
+        </label>
+        <label>
+          <span>state_backend</span>
+          <select value={topology.state_backend || "memory_kv"} onChange={(event) => patch({ state_backend: event.target.value })}>
+            <option value="memory_kv">memory_kv</option>
+            <option value="persistent_kv">persistent_kv</option>
+            <option value="merkle_trie_mvp">merkle_trie_mvp</option>
+            <option value="ethereum_mpt_compatible" disabled>ethereum_mpt_compatible planned</option>
           </select>
         </label>
       </div>

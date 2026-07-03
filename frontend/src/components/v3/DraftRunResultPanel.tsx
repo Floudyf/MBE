@@ -20,6 +20,7 @@ const consensusNetworkSummaryKeys = ["consensus_over_network_enabled", "consensu
 const pbftPreviewSummaryKeys = ["consensus_runtime_selected", "pbft_preview_enabled", "pbft_view", "pbft_sequence", "pbft_preprepare_count", "pbft_prepare_count", "pbft_commit_count", "pbft_quorum_reached_count", "pbft_finalized_block_count", "pbft_consensus_latency_ms", "pbft_quorum_threshold"];
 const pbftNetworkSummaryKeys = ["consensus_runtime_selected", "network_adapter_selected", "pbft_over_network_enabled", "pbft_network_path", "pbft_network_message_count", "pbft_network_error_count", "pbft_preprepare_network_count", "pbft_prepare_network_count", "pbft_commit_network_count", "pbft_finalized_network_count", "pbft_network_quorum_reached_count"];
 const crossShardSummaryKeys = ["cross_shard_protocol_selected", "cross_shard_tx_count", "cross_shard_ratio", "cross_shard_message_count", "relay_preview_count", "cross_shard_completed_count", "cross_shard_failed_count", "cross_shard_avg_latency_ms"];
+const stateAuthenticitySummaryKeys = ["state_backend_selected", "persistent_state_enabled", "state_root_enabled", "state_root_count", "state_key_count", "state_update_count", "state_proof_generated_count", "state_proof_verified_count", "state_proof_failed_count", "witness_generated_count", "witness_verified_count", "witness_failed_count", "state_authenticity_error_count"];
 
 export default function DraftRunResultPanel({ result }: Props) {
   if (!result) return null;
@@ -146,6 +147,20 @@ export default function DraftRunResultPanel({ result }: Props) {
           <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
         ))}
         <div><dt>state_access_log.csv</dt><dd>{artifactNames.has("state_access_log.csv") ? "available" : "missing"}</dd></div>
+      </div>
+      <div className="v3-summary-preview">
+        <div><dt>State Authenticity</dt><dd>MVP proof/witness artifacts only - not Ethereum-compatible MPT - not full stateless execution</dd></div>
+        {stateAuthenticitySummaryKeys.filter((key) => key in summary).map((key) => (
+          <div key={key}><dt>{key}</dt><dd>{String(summary[key])}</dd></div>
+        ))}
+        <div><dt>state_storage_log.csv</dt><dd>{artifactNames.has("state_storage_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>state_version_log.csv</dt><dd>{artifactNames.has("state_version_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>state_root_log.csv</dt><dd>{artifactNames.has("state_root_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>state_proof_log.csv</dt><dd>{artifactNames.has("state_proof_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>state_proof_verification_log.csv</dt><dd>{artifactNames.has("state_proof_verification_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>witness_log.csv</dt><dd>{artifactNames.has("witness_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>witness_verification_log.csv</dt><dd>{artifactNames.has("witness_verification_log.csv") ? "available" : "legacy missing"}</dd></div>
+        <div><dt>state_authenticity_summary.json</dt><dd>{artifactNames.has("state_authenticity_summary.json") ? "available" : "legacy missing"}</dd></div>
       </div>
       <div className="v3-summary-preview">
         {commitSummaryKeys.filter((key) => key in summary).map((key) => (

@@ -353,6 +353,19 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   cross_shard_completed_count?: number | string;
   cross_shard_failed_count?: number | string;
   cross_shard_avg_latency_ms?: number | string;
+  state_backend_selected?: string;
+  persistent_state_enabled?: boolean | string;
+  state_root_enabled?: boolean | string;
+  state_root_count?: number | string;
+  state_key_count?: number | string;
+  state_update_count?: number | string;
+  state_proof_generated_count?: number | string;
+  state_proof_verified_count?: number | string;
+  state_proof_failed_count?: number | string;
+  witness_generated_count?: number | string;
+  witness_verified_count?: number | string;
+  witness_failed_count?: number | string;
+  state_authenticity_error_count?: number | string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
@@ -378,6 +391,7 @@ export type V3RuntimeTopology = {
   network_mode: "in_memory_message_bus" | string;
   network_adapter?: "in_memory_message_bus" | "localhost_tcp_preview" | string;
   cross_shard_protocol?: "none" | "relay_preview" | "broker_preview" | "two_phase_commit_preview" | string;
+  state_backend?: "memory_kv" | "persistent_kv" | "merkle_trie_mvp" | "ethereum_mpt_compatible" | string;
 };
 export type V3DraftValidationResponse = {
   is_valid: boolean;

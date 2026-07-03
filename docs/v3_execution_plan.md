@@ -71,9 +71,31 @@ Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Rou
 
 CrossShardProtocol must not become a new main-flow card, and V3.8 must not refactor the V3 Composer page or left navigation.
 
-## V3.9 Planned
+## V3.9 Planning Entry
 
-V3.9 is planned as StateStorage / StateProof Hardening. It has not started. V3.9 should begin by clarifying the boundary between current in-memory logical storage, future persistent KV, and any state proof / witness / root preview work before implementation.
+V3.9 was originally planned as StateStorage / StateProof Hardening. It is now closed as V3.9 State Authenticity Layer MVP Closure, with the scope and truth boundary recorded below.
+
+## V3.9 Current Status
+
+Current stage is V3.9 State Authenticity Layer MVP Closure. V3.9 adds selectable `state_backend` support for `memory_kv`, runnable `persistent_kv`, runnable `merkle_trie_mvp`, and planned-only `ethereum_mpt_compatible`. It writes deterministic state roots, generates and verifies state proofs, produces stateless witness artifacts, and records state authenticity summary metrics.
+
+V3.9 writes `state_storage_log.csv`, `state_version_log.csv`, `state_root_log.csv`, `state_proof_log.csv`, `state_proof_verification_log.csv`, `witness_log.csv`, `witness_verification_log.csv`, and `state_authenticity_summary.json`. It adds summary metrics for `state_backend_selected`, `persistent_state_enabled`, `state_root_enabled`, `state_root_count`, `state_key_count`, `state_update_count`, `state_proof_generated_count`, `state_proof_verified_count`, `state_proof_failed_count`, `witness_generated_count`, `witness_verified_count`, `witness_failed_count`, and `state_authenticity_error_count`.
+
+V3.9 is closed after this MVP. It does not implement Ethereum-compatible MPT, production database durability, full stateless execution, full stateless blockchain, complete cross-shard state proof protocol, fraud proof / validity proof, atomic cross-shard verified commit, Fabric/EVM live backend, BlockEmulator backend, or paper-grade benchmark evidence.
+
+## V3.9 State Authenticity Layer MVP and Closure
+
+StateProof and Witness belong under StateAccess / StateStorage / Commit as sub-capabilities. They must not become new main-flow cards.
+
+The main transaction flow must remain:
+
+```text
+Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
+```
+
+## V3.10 Planned
+
+V3.10 is planned as Benchmark / Experiment Template Hardening. It has not started. V3.10 should begin by tightening benchmark/template naming, controlled-run reproducibility, and paper-readiness boundaries without rebranding V3.9 MVP proof/witness artifacts as Ethereum MPT or paper-grade evidence.
 
 ## V3.6 / V3.7 Planning
 
@@ -82,14 +104,16 @@ V3.6 is NetworkAdapter and TCP Typed Message Runtime. V3.6.1 starts with a confi
 V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is implemented as configurable ConsensusRuntime with optional PBFT state machine preview artifacts. V3.7.2 is implemented as PBFT preview over NetworkAdapter plus V3.7 closure. V3.7 does not hardcode PBFT as the only consensus, does not copy BlockEmulator code, and does not claim production PBFT.
 
 V3.8 is implemented as CrossShardProtocol Skeleton Closure. It stays separate from V3.6 networking and V3.7 PBFT preview work.
-V3.9 is planned as StateStorage / StateProof Hardening.
+V3.9 is implemented as State Authenticity Layer MVP Closure. It strengthens StateAccess / StateStorage / Commit with persistent state backend MVP, Merkle/MPT-like roots, proof verification, and witness artifacts.
+V3.10 is planned as Benchmark / Experiment Template Hardening.
 
 Planned stage list extension:
 
 - V3.6 NetworkAdapter and TCP Typed Message Runtime.
 - V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview.
 - V3.8 CrossShardProtocol Skeleton Closure.
-- V3.9 StateStorage / StateProof Hardening.
+- V3.9 State Authenticity Layer MVP Closure.
+- V3.10 Benchmark / Experiment Template Hardening.
 
 The main transaction flow should remain:
 
@@ -97,7 +121,7 @@ The main transaction flow should remain:
 Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
 ```
 
-RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow. CrossShardProtocol belongs under Routing/Sharding as a sub-capability and must not become a new main-flow card.
+RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow. CrossShardProtocol belongs under Routing/Sharding as a sub-capability and must not become a new main-flow card. StateProof and Witness belong under StateAccess / StateStorage / Commit as sub-capabilities and must not become new main-flow cards.
 
 ## 0.1 V3.3 Go-backed MetaTrack Update
 
@@ -172,7 +196,8 @@ Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + V
 - V3.6 NetworkAdapter and TCP Typed Message Runtime.
 - V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview.
 - V3.8 CrossShardProtocol Skeleton Closure.
-- V3.9 StateStorage / StateProof Hardening.
+- V3.9 State Authenticity Layer MVP Closure.
+- V3.10 Benchmark / Experiment Template Hardening.
 - V3-final Frontend Integration and Acceptance.
 
 Deferred / future work:

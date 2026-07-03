@@ -5,11 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.8 CrossShardProtocol Skeleton Closure"
-LATEST_RUNTIME_STAGE = "configurable CrossShardProtocol skeleton with relay_preview artifacts"
-CURRENT_CAPABILITY = "cross-shard transaction detection preview plus relay_preview skeleton artifacts under Routing/Sharding"
-RUNTIME_TRUTH = "cross_shard_protocol_skeleton_not_atomic_cross_shard_commit"
-NEXT_STAGE = "V3.9 StateStorage / StateProof Hardening"
+CURRENT_STAGE = "V3.9 State Authenticity Layer MVP Closure"
+LATEST_RUNTIME_STAGE = "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts"
+CURRENT_CAPABILITY = "persistent state backend, deterministic state roots, proof verification, and stateless witness artifacts under StateAccess / StateStorage / Commit"
+RUNTIME_TRUTH = "state_authenticity_mvp_not_ethereum_compatible_mpt_or_full_stateless_execution"
+NEXT_STAGE = "V3.10 Benchmark / Experiment Template Hardening"
 
 
 def default_topology() -> V3RuntimeTopology:
@@ -52,7 +52,13 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     if protocol not in {"none", "relay_preview", "broker_preview", "two_phase_commit_preview"}:
         errors.append("topology.cross_shard_protocol currently allows none, relay_preview, broker_preview, or two_phase_commit_preview")
     if protocol in {"broker_preview", "two_phase_commit_preview"}:
-        errors.append(f"topology.cross_shard_protocol={protocol} is planned only and not runnable in V3.8")
+        errors.append(f"topology.cross_shard_protocol={protocol} is planned only and not runnable in V3.9")
+    state_backend = data.get("state_backend") or "memory_kv"
+    data["state_backend"] = state_backend
+    if state_backend not in {"memory_kv", "persistent_kv", "merkle_trie_mvp", "ethereum_mpt_compatible"}:
+        errors.append("topology.state_backend currently allows memory_kv, persistent_kv, merkle_trie_mvp, or ethereum_mpt_compatible")
+    if state_backend == "ethereum_mpt_compatible":
+        errors.append("topology.state_backend=ethereum_mpt_compatible is planned only and not runnable in V3.9")
     return data, errors
 
 

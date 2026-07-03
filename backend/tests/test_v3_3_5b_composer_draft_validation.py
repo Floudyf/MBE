@@ -37,9 +37,31 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.8 CrossShardProtocol Skeleton Closure"
-    assert result.normalized_draft["current_capability"] == "cross-shard transaction detection preview plus relay_preview skeleton artifacts under Routing/Sharding"
+    assert result.normalized_draft["current_stage"] == "V3.9 State Authenticity Layer MVP Closure"
+    assert result.normalized_draft["current_capability"] == "persistent state backend, deterministic state roots, proof verification, and stateless witness artifacts under StateAccess / StateStorage / Commit"
     assert result.normalized_draft["topology"]["cross_shard_protocol"] == "none"
+    assert result.normalized_draft["topology"]["state_backend"] == "memory_kv"
+
+
+def test_valid_draft_accepts_state_backend_mvp_options() -> None:
+    for backend in ("memory_kv", "persistent_kv", "merkle_trie_mvp"):
+        draft = valid_draft()
+        draft.topology = V3RuntimeTopology(state_backend=backend)
+        result = validate_v3_composer_draft(draft)
+
+        assert result.is_valid is True
+        assert result.normalized_draft is not None
+        assert result.normalized_draft["topology"]["state_backend"] == backend
+        assert result.normalized_draft["topology_summary"]["state_backend"] == backend
+
+
+def test_ethereum_mpt_compatible_is_planned_only() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(state_backend="ethereum_mpt_compatible")
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is False
+    assert any("planned only" in error for error in result.errors)
 
 
 def test_valid_draft_accepts_custom_logical_topology() -> None:

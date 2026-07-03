@@ -25,6 +25,7 @@ class V3RuntimeTopology(BaseModel):
     network_mode: str = "in_memory_message_bus"
     network_adapter: str = "in_memory_message_bus"
     cross_shard_protocol: str = "none"
+    state_backend: str = "memory_kv"
 
 
 class V3ComposerDraftRequest(BaseModel):

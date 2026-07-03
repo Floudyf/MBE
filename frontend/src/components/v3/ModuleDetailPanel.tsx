@@ -100,10 +100,13 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
           <p className="muted">V3.4.6 realizes Execution records for serial_execution, parallel_light_execution, and metatrack_dual_track_execution. Execution estimates scheduling order, dependency edges, logical workers, blocking, and fast/conservative tracks; it does not implement real concurrent execution, rollback, Block-STM, Calvin, or database lock management.</p>
         )}
         {selectedModule.module_id === "StateAccess" && (
-          <p className="muted">V3.4.7 realizes StateAccess records for direct_fetch, remote_state_access_model, cached_state_access, and access_list_prefetch. StateAccess estimates local/remote access, cache/prefetch hits, latency, and proof/witness sizes; it does not implement real remote storage, real proofs, witnesses, MPT, state root, persistent KV, snapshot, or state migration.</p>
+          <p className="muted">V3.9 keeps StateProof and Witness under StateAccess / StateStorage / Commit as sub-capabilities. It generates and verifies deterministic proof/witness MVP artifacts, but it is not Ethereum-compatible MPT, not full stateless execution, not full cross-shard proof protocol, and not remote storage IO.</p>
+        )}
+        {selectedModule.module_id === "StateStorage" && (
+          <p className="muted">V3.9 supports selectable state_backend values: memory_kv, persistent_kv, and merkle_trie_mvp are runnable MVP paths; ethereum_mpt_compatible remains planned only. It is not production database durability and not Ethereum-compatible MPT.</p>
         )}
         {selectedModule.module_id === "Commit" && (
-          <p className="muted">V3.4.8 realizes Commit records for normal_commit, conservative_commit, hot_update_aggregation, and constraint_checked_aggregation. These are deterministic local commit light models; they do not implement real database locking, real concurrent commit, rollback, MPT/state root, persistent KV, or snapshots.</p>
+          <p className="muted">V3.9 writes state version/root/proof/witness artifacts alongside local commit logs. These remain MVP artifacts and do not implement production database durability, atomic cross-shard verified commit, rollback, or Ethereum-compatible MPT.</p>
         )}
       </section>
 

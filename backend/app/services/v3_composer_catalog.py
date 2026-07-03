@@ -508,13 +508,13 @@ SINGLE_MODULE_TEMPLATE_CATALOG: dict[str, dict[str, Any]] = {
         "allowed_variable_plugins": ["direct_fetch", "remote_state_access_model", "cached_state_access", "access_list_prefetch"],
         "locked_plugin_values": {key: value for key, value in SINGLE_MODULE_LOCKED_PLUGIN_VALUES.items() if key != "StateAccess"},
         "fairness_rule": "Only StateAccessPlugin / StateAccess may vary; all other modules, workload, seed, submit rate, routing config, execution config, consensus config, and network profile stay fixed.",
-        "truthfulness_note": "StateAccess light models estimate local/remote access, deterministic cache/prefetch, and proof/witness sizes only. They do not implement real remote storage, proofs, witnesses, MPT, state root, persistent KV, or snapshots.",
+        "truthfulness_note": "StateAccess light models estimate local/remote access and cache/prefetch behavior. V3.9 adds deterministic state proof and witness MVP artifacts under StateAccess / StateStorage / Commit, but not Ethereum-compatible MPT, full stateless execution, or cross-shard proof protocol.",
         "default_preset_id": "state_access_remote_prefetch_smoke",
         "presets": [
             {
                 "preset_id": "state_access_remote_prefetch_smoke",
                 "preset_name": "StateAccess remote/prefetch smoke",
-                "description": "Runs a local Draft Smoke that focuses on state access records, local/remote access, cache/prefetch hits, latency, and proof/witness estimates.",
+                "description": "Runs a local Draft Smoke that focuses on state access records, local/remote access, cache/prefetch hits, latency, and V3.9 proof/witness MVP artifacts.",
                 "default_chain_profile": "single_chain_research_default",
                 "default_plugin_selection": dict(SINGLE_MODULE_LOCKED_PLUGIN_VALUES) | {"StateAccess": "access_list_prefetch"},
                 "variable_module": "StateAccess",
@@ -534,9 +534,9 @@ SINGLE_MODULE_TEMPLATE_CATALOG: dict[str, dict[str, Any]] = {
                     "proof_estimated_count",
                 ],
                 "secondary_metrics": ["state_access_plugin", "state_access_count", "local_state_access_count", "estimated_witness_bytes", "estimated_proof_bytes"],
-                "expected_artifacts": ["state_access_log.csv", "execution_log.csv", "routing_log.csv", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"],
-                "result_guide": "Focus on local/remote state access, cache/prefetch hit rates, state access latency, proof/witness estimates, and state_access_log.csv.",
-                "truthfulness_note": "This preset validates deterministic state access behavior in the local Go-backed runtime. It models local/remote state access, cache, prefetch, and proof/witness estimates, but does not generate real proofs, witnesses, MPTs, or remote storage IO.",
+                "expected_artifacts": ["state_access_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "execution_log.csv", "routing_log.csv", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"],
+                "result_guide": "Focus on local/remote state access, cache/prefetch hit rates, state access latency, proof verification counts, witness verification counts, and state authenticity artifacts.",
+                "truthfulness_note": "This preset validates deterministic state access behavior and V3.9 proof/witness MVP artifacts in the local Go-backed runtime. It is not real proofs in the Ethereum-compatible MPT sense, not full stateless execution, not full cross-shard proof protocol, and not remote storage IO.",
             }
         ],
     },

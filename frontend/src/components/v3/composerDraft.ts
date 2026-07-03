@@ -136,6 +136,7 @@ export function defaultRuntimeTopology(): V3RuntimeTopology {
     network_mode: "in_memory_message_bus",
     network_adapter: "in_memory_message_bus",
     cross_shard_protocol: "none",
+    state_backend: "memory_kv",
   };
 }
 

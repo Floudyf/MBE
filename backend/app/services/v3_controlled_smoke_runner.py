@@ -19,13 +19,13 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.8 CrossShardProtocol Skeleton Closure"
+CURRENT_STAGE = "V3.9 State Authenticity Layer MVP Closure"
 LATEST_RUNTIME_STAGE = "V3.4.10"
 CLOSURE_STAGE = "V3.4.11"
-LATEST_COMPLETED_RUNTIME_STAGE = "configurable CrossShardProtocol skeleton with relay_preview artifacts"
-CURRENT_CAPABILITY = "cross-shard transaction detection preview plus relay_preview skeleton artifacts under Routing/Sharding"
-RUNTIME_TRUTH = "cross_shard_protocol_skeleton_not_atomic_cross_shard_commit"
-NEXT_STAGE = "V3.9 StateStorage / StateProof Hardening"
+LATEST_COMPLETED_RUNTIME_STAGE = "persistent state backend with Merkle/MPT-like state root, proof verification, and stateless witness artifacts"
+CURRENT_CAPABILITY = "state authenticity MVP artifacts under StateAccess / StateStorage / Commit"
+RUNTIME_TRUTH = "state_authenticity_mvp_not_ethereum_compatible_mpt_or_full_stateless_execution"
+NEXT_STAGE = "V3.10 Benchmark / Experiment Template Hardening"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -48,6 +48,10 @@ AGGREGATE_FIELDS = [
     "avg_execution_latency_ms",
     "avg_state_access_latency_ms",
     "avg_commit_latency_ms",
+    "state_backend_selected",
+    "state_root_count",
+    "state_proof_verified_count",
+    "witness_verified_count",
 ]
 CONTROLLED_ARTIFACTS = [
     "run_index.csv",
@@ -80,6 +84,14 @@ CONTROLLED_ARTIFACTS = [
     "relay_preview_log.csv",
     "cross_shard_status.csv",
     "cross_shard_summary.json",
+    "state_storage_log.csv",
+    "state_version_log.csv",
+    "state_root_log.csv",
+    "state_proof_log.csv",
+    "state_proof_verification_log.csv",
+    "witness_log.csv",
+    "witness_verification_log.csv",
+    "state_authenticity_summary.json",
 ]
 
 
@@ -250,7 +262,7 @@ def _copy_representative_launcher_artifacts(run_dir: Path, child_results: list[d
     if not representative:
         return
     child_dir = Path(str(representative.get("output_dir", "")))
-    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json"):
+    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json"):
         source = child_dir / filename
         if source.is_file():
             shutil.copyfile(source, run_dir / filename)
