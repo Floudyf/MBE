@@ -5,11 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.7.2 V3.7 Closure"
-LATEST_RUNTIME_STAGE = "configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter"
-CURRENT_CAPABILITY = "BlockEmulator-aligned PBFT preview over selected NetworkAdapter typed message path"
-RUNTIME_TRUTH = "blockemulator_aligned_pbft_preview_over_network_not_production_pbft"
-NEXT_STAGE = "V3.8 CrossShardProtocol Skeleton"
+CURRENT_STAGE = "V3.8 CrossShardProtocol Skeleton Closure"
+LATEST_RUNTIME_STAGE = "configurable CrossShardProtocol skeleton with relay_preview artifacts"
+CURRENT_CAPABILITY = "cross-shard transaction detection preview plus relay_preview skeleton artifacts under Routing/Sharding"
+RUNTIME_TRUTH = "cross_shard_protocol_skeleton_not_atomic_cross_shard_commit"
+NEXT_STAGE = "V3.9 StateStorage / StateProof Hardening"
 
 
 def default_topology() -> V3RuntimeTopology:
@@ -47,6 +47,12 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     data["network_mode"] = adapter
     if adapter not in {"in_memory_message_bus", "localhost_tcp_preview"}:
         errors.append("topology.network_adapter currently only allows in_memory_message_bus or localhost_tcp_preview")
+    protocol = data.get("cross_shard_protocol") or "none"
+    data["cross_shard_protocol"] = protocol
+    if protocol not in {"none", "relay_preview", "broker_preview", "two_phase_commit_preview"}:
+        errors.append("topology.cross_shard_protocol currently allows none, relay_preview, broker_preview, or two_phase_commit_preview")
+    if protocol in {"broker_preview", "two_phase_commit_preview"}:
+        errors.append(f"topology.cross_shard_protocol={protocol} is planned only and not runnable in V3.8")
     return data, errors
 
 

@@ -37,8 +37,9 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.7.2 V3.7 Closure"
-    assert result.normalized_draft["current_capability"] == "BlockEmulator-aligned PBFT preview over selected NetworkAdapter typed message path"
+    assert result.normalized_draft["current_stage"] == "V3.8 CrossShardProtocol Skeleton Closure"
+    assert result.normalized_draft["current_capability"] == "cross-shard transaction detection preview plus relay_preview skeleton artifacts under Routing/Sharding"
+    assert result.normalized_draft["topology"]["cross_shard_protocol"] == "none"
 
 
 def test_valid_draft_accepts_custom_logical_topology() -> None:
@@ -70,6 +71,27 @@ def test_invalid_network_adapter_is_rejected() -> None:
 
     assert result.is_valid is False
     assert any("topology.network_adapter" in error for error in result.errors)
+
+
+def test_valid_draft_accepts_relay_preview_cross_shard_protocol() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(cross_shard_protocol="relay_preview")
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is True
+    assert result.normalized_draft is not None
+    assert result.normalized_draft["topology"]["cross_shard_protocol"] == "relay_preview"
+    assert result.normalized_draft["topology_summary"]["cross_shard_protocol"] == "relay_preview"
+
+
+def test_planned_cross_shard_protocols_are_rejected() -> None:
+    for protocol in ("broker_preview", "two_phase_commit_preview"):
+        draft = valid_draft()
+        draft.topology = V3RuntimeTopology(cross_shard_protocol=protocol)
+        result = validate_v3_composer_draft(draft)
+
+        assert result.is_valid is False
+        assert any("planned only" in error for error in result.errors)
 
 
 def test_invalid_topology_is_rejected() -> None:

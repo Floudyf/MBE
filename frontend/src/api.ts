@@ -347,6 +347,12 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   pbft_commit_network_count?: number | string;
   pbft_finalized_network_count?: number | string;
   pbft_network_quorum_reached_count?: number | string;
+  cross_shard_protocol_selected?: string;
+  cross_shard_message_count?: number | string;
+  relay_preview_count?: number | string;
+  cross_shard_completed_count?: number | string;
+  cross_shard_failed_count?: number | string;
+  cross_shard_avg_latency_ms?: number | string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
@@ -371,6 +377,7 @@ export type V3RuntimeTopology = {
   node_runtime_mode: "logical_single_process" | string;
   network_mode: "in_memory_message_bus" | string;
   network_adapter?: "in_memory_message_bus" | "localhost_tcp_preview" | string;
+  cross_shard_protocol?: "none" | "relay_preview" | "broker_preview" | "two_phase_commit_preview" | string;
 };
 export type V3DraftValidationResponse = {
   is_valid: boolean;

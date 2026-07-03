@@ -94,7 +94,7 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
           <p className="muted">V3.4.3 realizes simple_leader, poa_light, and pbft_light_model as local virtual-time consensus-light models. pbft_light_model models PBFT stages and quorum accounting; it is not production PBFT or real network PBFT.</p>
         )}
         {selectedModule.module_id === "Routing" && (
-          <p className="muted">V3.4.5 realizes Routing/Sharding decision records for hash_sharding, metatrack_coaccess_routing, and hotspot_aware_routing. Routing estimates shard assignment, touched shards, hotspots, and co-access groups; it does not implement relay, broker, 2PC, CLPA, ShardCutter, state migration, or real cross-shard protocols.</p>
+          <p className="muted">V3.8 keeps CrossShardProtocol as a Routing/Sharding sub-capability. cross_shard_protocol supports none and relay_preview skeleton artifacts; broker_preview and two_phase_commit_preview remain planned. This is not full Relay, Broker, 2PC, atomic cross-shard commit, state proof, rollback, timeout recovery, CLPA, ShardCutter, or state migration.</p>
         )}
         {selectedModule.module_id === "Execution" && (
           <p className="muted">V3.4.6 realizes Execution records for serial_execution, parallel_light_execution, and metatrack_dual_track_execution. Execution estimates scheduling order, dependency edges, logical workers, blocking, and fast/conservative tracks; it does not implement real concurrent execution, rollback, Block-STM, Calvin, or database lock management.</p>

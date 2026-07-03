@@ -423,7 +423,7 @@ SINGLE_MODULE_TEMPLATE_CATALOG: dict[str, dict[str, Any]] = {
         "allowed_variable_plugins": ["hash_sharding", "metatrack_coaccess_routing", "hotspot_aware_routing"],
         "locked_plugin_values": {key: value for key, value in SINGLE_MODULE_LOCKED_PLUGIN_VALUES.items() if key != "Routing"},
         "fairness_rule": "Only ShardingPlugin / Routing may vary; all other modules, workload, seed, submit rate, block config, consensus config, and network profile stay fixed.",
-        "truthfulness_note": "Routing light models estimate shard assignment and routing decisions only. They do not implement relay, broker, 2PC, CLPA, ShardCutter, state migration, or real cross-shard protocols.",
+        "truthfulness_note": "Routing light models estimate shard assignment and routing decisions. V3.8 adds cross_shard_protocol as a Routing/Sharding sub-capability with relay_preview skeleton artifacts only; it does not implement complete Relay, Broker, 2PC, atomic cross-shard commit, CLPA, ShardCutter, state proof, rollback, timeout recovery, or state migration.",
         "default_preset_id": "routing_coaccess_smoke",
         "presets": [
             {
@@ -442,11 +442,15 @@ SINGLE_MODULE_TEMPLATE_CATALOG: dict[str, dict[str, Any]] = {
                     "hotspot_key_count",
                     "coaccess_group_count",
                     "avg_routing_overhead_ms",
+                    "cross_shard_protocol_selected",
+                    "cross_shard_message_count",
+                    "relay_preview_count",
+                    "cross_shard_completed_count",
                 ],
                 "secondary_metrics": ["routing_decision_count", "local_tx_count", "max_touched_shards", "routing_plugin"],
-                "expected_artifacts": ["routing_log.csv", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"],
-                "result_guide": "Focus on routing_plugin, cross_shard_ratio, touched shard counts, hotspot/co-access counts, and routing_log.csv.",
-                "truthfulness_note": "This preset validates routing/sharding decision behavior in the local Go-backed runtime. It does not implement real cross-shard transaction protocols, relay, broker, or state migration.",
+                "expected_artifacts": ["routing_log.csv", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "summary.csv", "summary.json", "block_log.csv", "tx_results.csv"],
+                "result_guide": "Focus on routing_plugin, cross_shard_ratio, touched shard counts, hotspot/co-access counts, cross_shard_protocol_selected, and V3.8 cross-shard skeleton artifacts.",
+                "truthfulness_note": "This preset validates routing/sharding decision behavior and optional relay_preview skeleton artifacts. It is not a real cross-shard protocol and does not implement complete Relay, Broker, 2PC, atomic cross-shard commit, state proof, rollback, timeout recovery, or state migration.",
             }
         ],
     },

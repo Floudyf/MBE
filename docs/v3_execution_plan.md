@@ -41,11 +41,39 @@ V3.7.1 is not production PBFT, not full PBFT over localhost TCP, not full Byzant
 
 ## V3.7.2 Current Status
 
-Current stage is V3.7.2 V3.7 Closure. V3.7.2 connects the optional `blockemulator_aligned_pbft_preview` runtime to the selected V3.6 `NetworkAdapter` typed message path. With `in_memory_message_bus`, PBFT preview messages are logged on the deterministic in-memory typed message path. With `localhost_tcp_preview`, PBFT preview messages are logged on the localhost TCP typed message preview path.
+V3.7.2 is complete as V3.7 Closure. It connects the optional `blockemulator_aligned_pbft_preview` runtime to the selected V3.6 `NetworkAdapter` typed message path. With `in_memory_message_bus`, PBFT preview messages are logged on the deterministic in-memory typed message path. With `localhost_tcp_preview`, PBFT preview messages are logged on the localhost TCP typed message preview path.
 
 V3.7.2 writes `consensus_network_log.csv` and `pbft_network_summary.json`, while preserving `pbft_state_log.csv`, `pbft_message_log.csv`, `quorum_log.csv`, `finalized_block_log.csv`, `typed_message_log.csv`, `network_send_log.csv`, and `network_receive_log.csv`. It adds summary metrics for `pbft_over_network_enabled`, `pbft_network_path`, `pbft_network_message_count`, `pbft_network_error_count`, `pbft_preprepare_network_count`, `pbft_prepare_network_count`, `pbft_commit_network_count`, `pbft_finalized_network_count`, and `pbft_network_quorum_reached_count`.
 
-V3.7 is closed after V3.7.2. This closure does not implement production PBFT, full Byzantine safety, full view-change hardening, stable checkpointing, signature/verification hardening, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, BlockEmulator backend, or paper-grade benchmark evidence. The next stage is V3.8 CrossShardProtocol Skeleton, which has not started.
+V3.7 is closed after V3.7.2. This closure does not implement production PBFT, full Byzantine safety, full view-change hardening, stable checkpointing, signature/verification hardening, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, BlockEmulator backend, or paper-grade benchmark evidence.
+
+## V3.8 Current Status
+
+Current stage is V3.8 CrossShardProtocol Skeleton Closure. V3.8 adds a configurable `cross_shard_protocol` entry under Routing/Sharding, supports runnable `none` and `relay_preview`, keeps `broker_preview` and `two_phase_commit_preview` as planned-only options, detects cross-shard transactions from Routing/Sharding preview records, emits `cross_shard_relay` skeleton messages for relay preview, and writes cross-shard artifacts.
+
+V3.8 writes `cross_shard_tx_log.csv`, `cross_shard_message_log.csv`, `relay_preview_log.csv`, `cross_shard_status.csv`, and `cross_shard_summary.json`. It adds summary metrics for `cross_shard_protocol_selected`, `cross_shard_tx_count`, `cross_shard_ratio`, `cross_shard_message_count`, `relay_preview_count`, `cross_shard_completed_count`, `cross_shard_failed_count`, and `cross_shard_avg_latency_ms`.
+
+V3.8 is closed after this skeleton. It does not implement complete Relay, Broker, 2PC, atomic cross-shard commit, cross-shard locking, rollback, timeout recovery, cross-shard state proof, Merkle proof/witness, Fabric/EVM live backend, BlockEmulator full cross-shard mechanism, production sharding, or paper-grade benchmark evidence.
+
+## V3.8 CrossShardProtocol Skeleton and Closure
+
+CrossShardProtocol belongs under Routing/Sharding as a sub-capability:
+
+```text
+routing_policy / shard_mapping / cross_shard_detection / cross_shard_protocol
+```
+
+The main transaction flow must remain:
+
+```text
+Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
+```
+
+CrossShardProtocol must not become a new main-flow card, and V3.8 must not refactor the V3 Composer page or left navigation.
+
+## V3.9 Planned
+
+V3.9 is planned as StateStorage / StateProof Hardening. It has not started. V3.9 should begin by clarifying the boundary between current in-memory logical storage, future persistent KV, and any state proof / witness / root preview work before implementation.
 
 ## V3.6 / V3.7 Planning
 
@@ -53,13 +81,15 @@ V3.6 is NetworkAdapter and TCP Typed Message Runtime. V3.6.1 starts with a confi
 
 V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is implemented as configurable ConsensusRuntime with optional PBFT state machine preview artifacts. V3.7.2 is implemented as PBFT preview over NetworkAdapter plus V3.7 closure. V3.7 does not hardcode PBFT as the only consensus, does not copy BlockEmulator code, and does not claim production PBFT.
 
-V3.8 is planned as CrossShardProtocol Skeleton. It should stay separate from V3.6 networking and V3.7 PBFT preview work.
+V3.8 is implemented as CrossShardProtocol Skeleton Closure. It stays separate from V3.6 networking and V3.7 PBFT preview work.
+V3.9 is planned as StateStorage / StateProof Hardening.
 
 Planned stage list extension:
 
 - V3.6 NetworkAdapter and TCP Typed Message Runtime.
 - V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview.
-- V3.8 CrossShardProtocol Skeleton.
+- V3.8 CrossShardProtocol Skeleton Closure.
+- V3.9 StateStorage / StateProof Hardening.
 
 The main transaction flow should remain:
 
@@ -67,7 +97,7 @@ The main transaction flow should remain:
 Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport
 ```
 
-RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow.
+RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and should not be inserted into the main transaction flow. CrossShardProtocol belongs under Routing/Sharding as a sub-capability and must not become a new main-flow card.
 
 ## 0.1 V3.3 Go-backed MetaTrack Update
 
@@ -141,7 +171,8 @@ Current V3 acceptance is now MetaTrack-oriented single-chain modular runtime + V
 - V3.5 Node-level Emulator Skeleton.
 - V3.6 NetworkAdapter and TCP Typed Message Runtime.
 - V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview.
-- V3.8 CrossShardProtocol Skeleton.
+- V3.8 CrossShardProtocol Skeleton Closure.
+- V3.9 StateStorage / StateProof Hardening.
 - V3-final Frontend Integration and Acceptance.
 
 Deferred / future work:

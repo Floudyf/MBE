@@ -2,20 +2,20 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.7.2 V3.7 Closure.
-Latest runtime capability: configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter.
-Runtime truth: blockemulator_aligned_pbft_preview_over_network_not_production_pbft.
-Next stage: V3.8 CrossShardProtocol Skeleton.
+Current stage: V3.8 CrossShardProtocol Skeleton Closure.
+Latest runtime capability: configurable CrossShardProtocol skeleton with relay_preview artifacts.
+Runtime truth: cross_shard_protocol_skeleton_not_atomic_cross_shard_commit.
+Next stage: V3.9 StateStorage / StateProof Hardening.
 
 ## Current Status
 
-Current stage: V3.7.2 V3.7 Closure.
-Latest runtime capability: configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter.
-Current capability: optional `blockemulator_aligned_pbft_preview` artifacts with PrePrepare, Prepare, Commit, Finalized, typed PBFT messages over the selected NetworkAdapter path, confirm-map counts, and 2f+1 quorum accounting.
-Runtime truth: blockemulator_aligned_pbft_preview_over_network_not_production_pbft.
+Current stage: V3.8 CrossShardProtocol Skeleton Closure.
+Latest runtime capability: configurable CrossShardProtocol skeleton with relay_preview artifacts.
+Current capability: `cross_shard_protocol` configuration with `none` and runnable `relay_preview` skeleton, cross-shard transaction detection preview, relay preview messages, cross-shard artifacts, and summary metrics under Routing/Sharding.
+Runtime truth: cross_shard_protocol_skeleton_not_atomic_cross_shard_commit.
 
-V3.5, V3.6, and V3.7 are closed. V3.7 adds a configurable `ConsensusRuntimePlugin` surface and `blockemulator_aligned_pbft_preview` as one selectable preview runtime over the selected NetworkAdapter path. It remains not production PBFT, not full Byzantine safety, not view-change/checkpoint/signature hardening, not HotStuff/Raft, not Fabric/EVM live backend, not BlockEmulator backend, not a real cross-shard protocol, and not a paper-grade benchmark.
-Next stage: V3.8 CrossShardProtocol Skeleton. V3.8 has not started.
+V3.5, V3.6, V3.7, and V3.8 are closed. V3.8 adds a configurable CrossShardProtocol entry and `relay_preview` skeleton artifacts while keeping CrossShardProtocol under Routing/Sharding. It remains not complete Relay, not Broker, not 2PC, not atomic cross-shard commit, not cross-shard state proof, not rollback/timeout recovery, not Fabric/EVM live backend, not BlockEmulator backend, and not a paper-grade benchmark.
+Next stage: V3.9 StateStorage / StateProof Hardening. V3.9 has not started.
 
 ## V3.5 Route
 
@@ -32,9 +32,10 @@ V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live 
 - V3.6.2 implemented: consensus-light proposal/vote preview over NetworkAdapter typed messages and V3.6 closure.
 - V3.7.1 implemented: configurable `ConsensusRuntimePlugin`, with `blockemulator_aligned_pbft_preview` as one selectable PBFT state machine preview rather than the only consensus path.
 - V3.7.2 implemented: PBFT preview over the selected NetworkAdapter path plus V3.7 closure.
-- V3.8 planned: CrossShardProtocol skeleton.
+- V3.8 implemented: CrossShardProtocol skeleton and closure with relay_preview artifacts.
+- V3.9 planned: StateStorage / StateProof Hardening.
 
-V3.6 and V3.7 are closed. V3.8 remains a roadmap item only.
+V3.6, V3.7, and V3.8 are closed. V3.9 remains a roadmap item only.
 
 ## Historical V0 Scope
 
@@ -126,7 +127,7 @@ Run from the repository root:
 python scripts/v0_sanity.py
 ```
 
-The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.7.2 V3.7 Closure.
+The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.8 CrossShardProtocol Skeleton Closure.
 
 ## Windows One-Click Startup
 
@@ -156,5 +157,10 @@ After a run completes, the frontend artifact panel shows available summary, log,
 - `typed_message_log.csv`
 - `consensus_network_log.csv`
 - `pbft_network_summary.json`
+- `cross_shard_tx_log.csv`
+- `cross_shard_message_log.csv`
+- `relay_preview_log.csv`
+- `cross_shard_status.csv`
+- `cross_shard_summary.json`
 
-These launcher, node process, NetworkAdapter, and PBFT-over-network files are preview artifacts only. They do not prove production networking, production PBFT, full Byzantine safety, a real multi-process network runtime, BlockEmulator backend behavior, real cross-shard protocol behavior, or paper-grade benchmark evidence.
+These launcher, node process, NetworkAdapter, PBFT-over-network, and cross-shard skeleton files are preview artifacts only. They do not prove production networking, production PBFT, full Byzantine safety, a real multi-process network runtime, BlockEmulator backend behavior, complete Relay/Broker/2PC, atomic cross-shard commit, cross-shard state proof, or paper-grade benchmark evidence.

@@ -21,11 +21,11 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
     <section className="final-card wide v3-template-bar">
       <div className="v3-section-head">
         <div>
-          <p className="eyebrow">V3.7.2 runtime support layer</p>
+          <p className="eyebrow">V3.8 runtime support / routing sub-capability</p>
           <h3>Runtime Topology / Node Topology</h3>
         </div>
       </div>
-      <p className="muted">Configures logical nodes and the runtime NetworkAdapter. V3.7.2 supports optional ConsensusRuntime PBFT preview over the selected NetworkAdapter path; it is not production networking, not production PBFT, and not a BlockEmulator backend.</p>
+      <p className="muted">Configures logical nodes, NetworkAdapter, and the Routing/Sharding cross_shard_protocol selector. V3.8 adds relay_preview skeleton artifacts only; it is not atomic cross-shard commit, not full Relay/Broker/2PC, and not a BlockEmulator backend.</p>
       <div className="v3-identity-grid">
         {numericFields.map((field) => (
           <label key={field}>
@@ -54,6 +54,15 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           <select value={topology.network_adapter || topology.network_mode} onChange={(event) => patch({ network_adapter: event.target.value, network_mode: event.target.value })}>
             <option value="in_memory_message_bus">in_memory_message_bus</option>
             <option value="localhost_tcp_preview">localhost_tcp_preview</option>
+          </select>
+        </label>
+        <label>
+          <span>cross_shard_protocol</span>
+          <select value={topology.cross_shard_protocol || "none"} onChange={(event) => patch({ cross_shard_protocol: event.target.value })}>
+            <option value="none">none</option>
+            <option value="relay_preview">relay_preview</option>
+            <option value="broker_preview" disabled>broker_preview planned</option>
+            <option value="two_phase_commit_preview" disabled>two_phase_commit_preview planned</option>
           </select>
         </label>
       </div>

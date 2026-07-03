@@ -2,9 +2,9 @@
 
 ## 0. Current V3 Scope Realignment
 
-As of V3.7.2, current_stage is V3.7.2 V3.7 Closure, latest_runtime_stage is configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter, runtime_truth is blockemulator_aligned_pbft_preview_over_network_not_production_pbft, and next_stage is V3.8 CrossShardProtocol Skeleton. V3.4.11 closure, V3.5.4 closure, V3.6 closure, and V3.7 closure are complete. Do not continue adding V3.5, V3.6, or V3.7 features after closure.
+As of V3.8, current_stage is V3.8 CrossShardProtocol Skeleton Closure, latest_runtime_stage is configurable CrossShardProtocol skeleton with relay_preview artifacts, runtime_truth is cross_shard_protocol_skeleton_not_atomic_cross_shard_commit, and next_stage is V3.9 StateStorage / StateProof Hardening. V3.4.11 closure, V3.5.4 closure, V3.6 closure, V3.7 closure, and V3.8 closure are complete. Do not continue adding V3.5, V3.6, V3.7, or V3.8 features after closure.
 
-When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, `docs/v3_5_3_local_node_process_runtime.md`, `docs/v3_5_4_v3_5_closure.md`, `docs/v3_6_network_adapter_and_tcp_message_runtime_plan.md`, `docs/v3_7_consensus_runtime_and_blockemulator_aligned_pbft_plan.md`, the frontend Runtime Topology / NetworkAdapter / Node Process Preview / PBFT preview panels, backend V3 composer topology validation, Go logical node / launcher preview / node process preview / network adapter / consensus-light-over-network / PBFT-preview tests, and controlled smoke tests. V3.6 and V3.7 are closed. Do not enter V3.8 unless the user explicitly asks for it. Do not implement production PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, or real cross-shard protocol work. Do not present smoke output as a paper-grade benchmark.
+When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, `docs/v3_5_3_local_node_process_runtime.md`, `docs/v3_5_4_v3_5_closure.md`, `docs/v3_6_network_adapter_and_tcp_message_runtime_plan.md`, `docs/v3_7_consensus_runtime_and_blockemulator_aligned_pbft_plan.md`, `docs/v3_8_cross_shard_protocol_skeleton_plan.md`, the frontend Runtime Topology / NetworkAdapter / Node Process Preview / PBFT preview / Cross-shard summary panels, backend V3 composer topology validation, Go logical node / launcher preview / node process preview / network adapter / consensus-light-over-network / PBFT-preview / cross-shard skeleton tests, and controlled smoke tests. V3.6, V3.7, and V3.8 are closed. Do not enter V3.9 unless the user explicitly asks for it. Do not implement production PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, complete Relay/Broker/2PC, atomic cross-shard commit, cross-shard proof, rollback/timeout recovery, or paper-grade benchmark claims.
 
 Roadmap after V3.5 closure:
 
@@ -12,7 +12,8 @@ Roadmap after V3.5 closure:
 - V3.6.2 is implemented as consensus-light proposal/vote preview over NetworkAdapter plus V3.6 closure.
 - V3.7.1 is implemented as configurable `ConsensusRuntimePlugin` plus `blockemulator_aligned_pbft_preview` state machine artifacts.
 - V3.7.2 is implemented as PBFT preview over the selected NetworkAdapter typed message path plus V3.7 closure. It does not implement production PBFT and must not hardcode PBFT as the only consensus.
-- V3.8 is planned for CrossShardProtocol skeleton work after V3.7 closure. Do not enter V3.8 unless the user explicitly asks for it.
+- V3.8 is implemented as CrossShardProtocol skeleton and closure. It keeps CrossShardProtocol under Routing/Sharding, supports `none` and runnable `relay_preview`, keeps `broker_preview` and `two_phase_commit_preview` planned-only, and does not implement atomic cross-shard commit.
+- V3.9 is planned for StateStorage / StateProof Hardening. Do not enter V3.9 unless the user explicitly asks for it.
 - In docs-only planning rounds, do not implement V3.6/V3.7 code, schemas, tests, configs, frontend, backend, or Go runtime.
 - Do not claim production networking or real PBFT from V3.6 NetworkAdapter / consensus-light preview. Do not claim production PBFT even after V3.7 preview.
 
@@ -23,6 +24,25 @@ Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Rou
 ```
 
 RuntimeTopology / NodeProcessRuntime / NetworkAdapter belong to the runtime support layer and must not be inserted into the transaction main flow.
+
+CrossShardProtocol belongs under Routing/Sharding as a sub-capability. V3.8 UI rules:
+
+- no new CrossShardProtocol main-flow card
+- CrossShardProtocol is Routing/Sharding sub-capability
+- no frontend layout refactor
+- no left navigation change
+
+V3.8 forbids:
+
+- no full Relay
+- no full Broker
+- no full 2PC
+- no atomic cross-shard commit
+- no cross-shard proof
+- no rollback/timeout recovery
+- no Fabric/EVM live
+- no BlockEmulator cross-shard backend
+- no paper-grade benchmark claim
 
 As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 
@@ -55,7 +75,8 @@ As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 - `V3.6 NetworkAdapter and TCP Typed Message Runtime`.
 - `V3.6.1 NetworkAdapter + localhost TCP + typed messages`.
 - `V3.7 ConsensusRuntime and BlockEmulator-aligned PBFT Preview`.
-- `V3.8 CrossShardProtocol Skeleton`.
+- `V3.8 CrossShardProtocol Skeleton Closure`.
+- `V3.9 StateStorage / StateProof Hardening`.
 - `V3-final Frontend Integration and Acceptance`.
 
 V3.4 series goal: harden critical foundation modules in the V3 Go-backed modular research chain runtime into observable runtime behavior, add controlled smoke comparison, and close stage/version/frontend/docs/skill wording before V3.5. V3.4 remains a local modular research chain runtime. It is not Fabric live execution.
@@ -76,13 +97,13 @@ Existing MetaFlow profiles remain planned preview profiles and must not become r
 
 This skill governs V3 work for MBE.
 
-V3 builds a MetaTrack-oriented modular plugin chain runtime and is currently in the V3.5 node topology / local launcher foundation series. Fabric/EVM live validation is deferred to a later stage unless explicitly reopened. V3 reuses V2 experiment management, artifacts, sweeps, reports, calibration, and frontend shell. MetaFlow dual-chain protocol evaluation is retained only as planned preview / future roadmap material in the current V3 scope.
+V3 builds a MetaTrack-oriented modular plugin chain runtime and is currently closed through V3.8 CrossShardProtocol Skeleton Closure. Fabric/EVM live validation is deferred to a later stage unless explicitly reopened. V3 reuses V2 experiment management, artifacts, sweeps, reports, calibration, and frontend shell. MetaFlow dual-chain protocol evaluation is retained only as planned preview / future roadmap material in the current V3 scope.
 
 V3 positioning:
 
 ```text
-V3 = Modular Plugin Chain Runtime with node topology and local launcher foundations
-V3 = 面向 MetaTrack 的模块化插件链实验平台；V3.5 聚焦节点拓扑与本地 launcher 基础；Fabric/EVM live validation 和 MetaFlow 保留为 planned preview / future roadmap。
+V3 = Modular Plugin Chain Runtime with node topology, NetworkAdapter, ConsensusRuntime, and CrossShardProtocol skeleton foundations
+V3 = 面向 MetaTrack 的模块化插件链实验平台；V3.8 已完成跨片协议 skeleton 收口；Fabric/EVM live validation 和 MetaFlow 保留为 planned preview / future roadmap。
 ```
 
 Fabric/EVM live backend work is not part of V3.5.4. V3.5 closes local topology, launcher preview, and node process preview only, not an automatic Fabric/EVM live implementation.
@@ -140,7 +161,8 @@ V3 stages:
 - `V3.6.2 Consensus-light over NetworkAdapter + V3.6 Closure`: implemented; consensus-light proposal/vote preview over selected adapter and closure wording. Not PBFT PrePrepare/Prepare/Commit.
 - `V3.7.1 ConsensusRuntime Plugin Schema + PBFT State Machine Preview`: implemented; configurable ConsensusRuntime with BlockEmulator-aligned PBFT state machine preview as one optional plugin. Not production PBFT and not a BlockEmulator code copy.
 - `V3.7.2 BlockEmulator-aligned PBFT over NetworkAdapter + V3.7 Closure`: implemented; connects PBFT preview to NetworkAdapter and closes V3.7. Not production PBFT.
-- `V3.8 CrossShardProtocol Skeleton`: future skeleton only; not part of V3.6/V3.7.
+- `V3.8 CrossShardProtocol Skeleton Closure`: implemented; adds CrossShardProtocol config, cross-shard detection preview, relay_preview skeleton artifacts, frontend summary, and closure. It is not complete Relay, Broker, 2PC, atomic cross-shard commit, state proof, rollback, timeout recovery, or BlockEmulator full cross-shard backend.
+- `V3.9 StateStorage / StateProof Hardening`: future stage only; do not enter unless explicitly opened.
 - `V3-final Frontend Integration and Acceptance`: only current-scope frontend integration, acceptance report, artifact browsing, and boundary presentation.
 
 Stage constraints:
@@ -164,8 +186,8 @@ V3.5.3 only local node process runtime.
 V3.5.4 only V3.5 closure.
 V3.6.1 only NetworkAdapter and TCP typed message preview.
 V3.6.2 implemented consensus-light over NetworkAdapter plus V3.6 closure.
-V3.7.1 implemented configurable ConsensusRuntime and PBFT state machine preview. V3.7.2 implemented PBFT preview over NetworkAdapter and closed V3.7. V3.8 only when explicitly opened.
-V3.8 only CrossShardProtocol skeleton when explicitly opened.
+V3.7.1 implemented configurable ConsensusRuntime and PBFT state machine preview. V3.7.2 implemented PBFT preview over NetworkAdapter and closed V3.7. V3.8 implemented CrossShardProtocol skeleton and closed V3.8. V3.9 only when explicitly opened.
+V3.8 is closed; do not continue adding V3.8 features after closure.
 V3-final only frontend integration and acceptance report for current V3 scope.
 ```
 

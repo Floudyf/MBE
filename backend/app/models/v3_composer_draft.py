@@ -24,6 +24,7 @@ class V3RuntimeTopology(BaseModel):
     node_runtime_mode: str = "logical_single_process"
     network_mode: str = "in_memory_message_bus"
     network_adapter: str = "in_memory_message_bus"
+    cross_shard_protocol: str = "none"
 
 
 class V3ComposerDraftRequest(BaseModel):

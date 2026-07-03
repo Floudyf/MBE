@@ -61,10 +61,10 @@ MODULE_READINESS: list[dict[str, Any]] = [
         "runtime_status": "runnable",
         "realism_level": "deterministic_light_model",
         "implemented_plugins": ["hash_sharding", "metatrack_coaccess_routing", "hotspot_aware_routing"],
-        "artifact_logs": ["routing_log.csv"],
-        "light_model_limitations": ["Routing/sharding decision model only; no cross-shard protocol."],
-        "missing_for_real_emulator": ["Relay", "broker", "2PC", "shard-to-shard messages"],
-        "next_step": "Use MetaTrack co-access routing as preset-controlled variable.",
+        "artifact_logs": ["routing_log.csv", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json"],
+        "light_model_limitations": ["Routing/sharding decision model plus V3.8 relay_preview skeleton only; no atomic cross-shard commit."],
+        "missing_for_real_emulator": ["Complete Relay", "broker", "2PC", "atomic commit", "state proof", "rollback", "timeout recovery"],
+        "next_step": "Keep CrossShardProtocol under Routing/Sharding and defer state proof hardening to V3.9.",
     },
     {
         "module_id": "Execution",
@@ -122,19 +122,20 @@ MODULE_READINESS: list[dict[str, Any]] = [
 def build_realism_readiness() -> dict[str, Any]:
     return {
         "stage": "V3.4.10",
-        "current_stage": "V3.7.2 V3.7 Closure",
+        "current_stage": "V3.8 CrossShardProtocol Skeleton Closure",
         "latest_runtime_stage": "V3.4.10",
-        "latest_completed_runtime_stage": "configurable ConsensusRuntime with BlockEmulator-aligned PBFT preview over NetworkAdapter",
+        "latest_completed_runtime_stage": "configurable CrossShardProtocol skeleton with relay_preview artifacts",
         "closure_stage": "V3.4.11",
-        "current_capability": "BlockEmulator-aligned PBFT preview over selected NetworkAdapter typed message path",
-        "runtime_truth": "blockemulator_aligned_pbft_preview_over_network_not_production_pbft",
-        "next_stage": "V3.8 CrossShardProtocol Skeleton",
+        "current_capability": "cross-shard transaction detection preview plus relay_preview skeleton artifacts under Routing/Sharding",
+        "runtime_truth": "cross_shard_protocol_skeleton_not_atomic_cross_shard_commit",
+        "next_stage": "V3.9 StateStorage / StateProof Hardening",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",
             "not a real multi-node network",
             "not real PBFT/HotStuff/Raft",
             "not a real cross-shard protocol",
+            "not atomic cross-shard commit",
             "not real proof/witness generation",
             "not MPT/state root",
             "not persistent KV",
@@ -155,7 +156,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         "# V3.4.10 Realism Readiness Check",
         "",
         "This is an internal readiness check for the local Go-backed Draft Smoke runtime.",
-        "Current repository closure stage is V3.4.11; the latest runtime capability remains the V3.4.10 controlled smoke runner.",
+        "Current repository closure stage is V3.8; the latest controlled smoke runner remains V3.4.10 but representative runs now include V3.8 cross-shard skeleton artifacts.",
         "It is not a real-chain, Fabric/EVM live, BlockEmulator-backed, or multi-node emulator claim.",
         "",
         "| module_id | runtime_status | realism_level | implemented_plugins | next_step |",
@@ -173,7 +174,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         )
     lines.extend([
         "",
-        "Still missing for real emulator scope: real multi-node networking, real BFT/Raft consensus, real cross-shard relay/broker/2PC, real proof/witness/MPT/state root, persistent KV, Fabric/EVM live backend, and BlockEmulator adapter.",
+        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, complete relay/broker/2PC, atomic cross-shard commit, cross-shard state proof, rollback/timeout recovery, real proof/witness/MPT/state root, persistent KV, Fabric/EVM live backend, and BlockEmulator adapter.",
     ])
     (output_dir / "realism_readiness.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return payload
