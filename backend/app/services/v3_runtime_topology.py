@@ -5,16 +5,17 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.10 Benchmark / Experiment Template Hardening Closure"
-LATEST_RUNTIME_STAGE = "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
-CURRENT_CAPABILITY = "benchmark template catalog, baseline profile catalog, local controlled sweep runner, repeatability manifest, and benchmark report artifacts"
-RUNTIME_TRUTH = "benchmark_template_hardening_not_paper_grade_benchmark"
-NEXT_STAGE = "V3.11 CrossShard Protocol Hardening"
+CURRENT_STAGE = "V3.11 CrossShard Protocol Closure"
+LATEST_RUNTIME_STAGE = "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
+CURRENT_CAPABILITY = "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
+RUNTIME_TRUTH = "relay_mvp_not_production_atomic_commit"
+NEXT_STAGE = "V3.12 Runtime Realism Closure"
 
 BENCHMARK_TEMPLATES = {
     "metatrack_hotspot_template",
     "pbft_network_template",
     "cross_shard_relay_preview_template",
+    "cross_shard_relay_mvp_template",
     "state_authenticity_template",
     "full_stack_v3_template",
 }
@@ -65,10 +66,17 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
         errors.append("topology.network_adapter currently only allows in_memory_message_bus or localhost_tcp_preview")
     protocol = data.get("cross_shard_protocol") or "none"
     data["cross_shard_protocol"] = protocol
-    if protocol not in {"none", "relay_preview", "broker_preview", "two_phase_commit_preview"}:
-        errors.append("topology.cross_shard_protocol currently allows none, relay_preview, broker_preview, or two_phase_commit_preview")
+    if protocol not in {"none", "relay_preview", "relay_mvp", "broker_preview", "two_phase_commit_preview"}:
+        errors.append("topology.cross_shard_protocol currently allows none, relay_preview, relay_mvp, broker_preview, or two_phase_commit_preview")
     if protocol in {"broker_preview", "two_phase_commit_preview"}:
-        errors.append(f"topology.cross_shard_protocol={protocol} is planned only and not runnable in V3.9")
+        errors.append(f"topology.cross_shard_protocol={protocol} is planned only and not runnable in V3.11")
+    relay_failure_mode = data.get("relay_failure_mode") or "none"
+    data["relay_failure_mode"] = relay_failure_mode
+    if relay_failure_mode not in {"none", "proof_fail", "timeout", "target_reject"}:
+        errors.append("topology.relay_failure_mode currently allows none, proof_fail, timeout, or target_reject")
+    _range(errors, data, "relay_force_proof_fail_every_n", 0, 1000000)
+    _range(errors, data, "relay_force_timeout_every_n", 0, 1000000)
+    _range(errors, data, "relay_timeout_ms", 0, 1000000)
     state_backend = data.get("state_backend") or "memory_kv"
     data["state_backend"] = state_backend
     if state_backend not in {"memory_kv", "persistent_kv", "merkle_trie_mvp", "ethereum_mpt_compatible"}:
@@ -78,7 +86,7 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     benchmark_template = data.get("benchmark_template") or "full_stack_v3_template"
     data["benchmark_template"] = benchmark_template
     if benchmark_template not in BENCHMARK_TEMPLATES:
-        errors.append("topology.benchmark_template must be one of the V3.10 benchmark templates")
+        errors.append("topology.benchmark_template must be one of the V3.11 benchmark templates")
     baseline_profile = data.get("baseline_profile") or "baseline_simple_chain"
     data["baseline_profile"] = baseline_profile
     if baseline_profile not in BASELINE_PROFILES:

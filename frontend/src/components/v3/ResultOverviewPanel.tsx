@@ -18,6 +18,10 @@ export default function ResultOverviewPanel({ summary }: Props) {
         <MetricCard label="P99 延迟" value={summary.p99_latency_ms} hint="ms" />
         <MetricCard label="吞吐 TPS" value={summary.throughput_tps} />
         <MetricCard label="跨片交易数" value={summary.cross_shard_tx_count} />
+        <MetricCard label="Relay 锁定数" value={summary.relay_source_lock_count} />
+        <MetricCard label="Relay 证书数" value={summary.relay_certificate_count} />
+        <MetricCard label="目标提交数" value={summary.relay_target_commit_count} />
+        <MetricCard label="Relay 退款数" value={summary.relay_refund_count} />
         <MetricCard label="状态证明验证数" value={summary.state_proof_verified_count} />
         <MetricCard label="Benchmark 运行次数" value={summary.benchmark_run_count} />
       </div>
@@ -34,6 +38,8 @@ export default function ResultOverviewPanel({ summary }: Props) {
           title="关键计数预览"
           data={[
             { label: "跨片交易", value: summary.cross_shard_tx_count },
+            { label: "Relay 成功", value: summary.relay_success_count },
+            { label: "Relay 失败", value: summary.relay_failed_count },
             { label: "证明验证", value: summary.state_proof_verified_count },
             { label: "Witness 验证", value: summary.witness_verified_count },
             { label: "Benchmark", value: summary.benchmark_run_count },

@@ -4,7 +4,7 @@
 
 V3.10.1 is complete. It only cleaned up the Chinese frontend console, simplified navigation, added HelpTip explanations, added run progress feedback, added lightweight result chart previews, and improved UX presentation.
 
-V3.10.1 does not change Go runtime semantics, does not add cross-shard protocol capability, and does not make benchmark output paper-grade evidence. The next implementation stage remains V3.11 CrossShard Protocol Closure.
+V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol capability, and did not make benchmark output paper-grade evidence. V3.11 is now closed; the next implementation stage is V3.12 Runtime Realism Closure.
 
 ## 2. Existing Foundations
 
@@ -22,8 +22,8 @@ V3.12 should not redo topology configuration. It should harden the V3.5 launcher
 
 ## 3. Compressed Remaining Route
 
-1. V3.11 CrossShard Protocol Closure.
-2. V3.12 Runtime Realism Closure.
+1. V3.11 CrossShard Protocol Closure. Complete.
+2. V3.12 Runtime Realism Closure. Next.
 3. V3.13 Metaverse Experiment Suite Closure.
 4. V3-final Fault, Observability, and Reproducibility Closure.
 
@@ -46,6 +46,8 @@ Combined scope:
 - ArtifactGroups integration
 
 After V3.11, MBE has a runnable cross-shard Relay MVP with success and failure paths.
+
+Status: complete.
 
 Boundary: not production atomic commit, not complete Broker / 2PC / Monoxide, and not Byzantine-secure relay.
 

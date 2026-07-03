@@ -25,6 +25,10 @@ class V3RuntimeTopology(BaseModel):
     network_mode: str = "in_memory_message_bus"
     network_adapter: str = "in_memory_message_bus"
     cross_shard_protocol: str = "none"
+    relay_failure_mode: str = "none"
+    relay_force_proof_fail_every_n: int = 0
+    relay_force_timeout_every_n: int = 0
+    relay_timeout_ms: int = 0
     state_backend: str = "memory_kv"
     benchmark_template: str = "full_stack_v3_template"
     baseline_profile: str = "baseline_simple_chain"

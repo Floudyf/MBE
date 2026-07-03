@@ -26,6 +26,7 @@ const groups = [
   { title: "PBFT 状态机预览产物", files: ["pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv"] },
   { title: "PBFT 网络预览产物", files: ["consensus_network_log.csv", "pbft_network_summary.json"] },
   { title: "跨片 skeleton 产物", files: ["cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json"] },
+  { title: "Relay MVP 产物", files: ["relay_state_machine_log.csv", "source_lock_log.csv", "relay_certificate_log.csv", "relay_proof_verification_log.csv", "target_verification_log.csv", "target_commit_log.csv", "source_finalize_log.csv", "cross_shard_timeout_refund_log.csv", "cross_shard_failure_log.csv", "relay_mvp_summary.json"] },
   { title: "状态真实性产物", files: ["state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json"] },
   { title: "Benchmark 产物", files: ["benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "aggregate_summary.csv", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"] },
   { title: "链运行日志", files: ["runtime.log", "block_log.csv", "tx_results.csv"] },

@@ -129,16 +129,39 @@ Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Rou
 
 V3.10.1 keeps Benchmark in the experiment control / result layer, CrossShardProtocol under Routing/Sharding, and StateProof / Witness under StateAccess / StateStorage / Commit. It does not add new main-flow cards.
 
-## V3.11 Planned
+## V3.11 Current Status
 
-V3.11 is planned as CrossShard Protocol Hardening. It has not started. V3.11 should not be entered unless explicitly requested. V3.10.1 frontend cleanup does not change runtime semantics, and V3.10 benchmark artifacts must not be treated as paper-grade evidence.
+Current stage is V3.11 CrossShard Protocol Closure. V3.11 upgrades the V3.8 `relay_preview` skeleton into a runnable local `relay_mvp` path with SourceLock, RelayCertificate, proof/certificate verification records, target verification, target commit, source finalization, and deterministic timeout/refund/abort paths.
+
+V3.11 writes `relay_state_machine_log.csv`, `source_lock_log.csv`, `relay_certificate_log.csv`, `relay_proof_verification_log.csv`, `target_verification_log.csv`, `target_commit_log.csv`, `source_finalize_log.csv`, `cross_shard_timeout_refund_log.csv`, `cross_shard_failure_log.csv`, and `relay_mvp_summary.json`. It adds Relay MVP summary metrics for source locks, certificates, proof verification success/failure, target commits, source finalization, timeout/refund/abort, success/failure, average latency, and `relay_mvp_truth`.
+
+V3.11 is closed after this Relay MVP. It is not production atomic cross-shard commit, not complete Broker / 2PC / Monoxide, not Byzantine-secure relay, not a production cross-chain bridge, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade benchmark evidence.
+
+## V3.11 CrossShard Protocol Closure
+
+CrossShardProtocol remains under Routing/Sharding as a sub-capability. It must not become a new main-flow card.
+
+Runnable options after V3.11:
+
+- `none`
+- `relay_preview`
+- `relay_mvp`
+
+Planned-only options:
+
+- `broker_preview`
+- `two_phase_commit_preview`
+
+## V3.12 Planned
+
+V3.12 is planned as Runtime Realism Closure. It has not started. V3.12 should harden V3.5 launcher / node process previews into a small local multi-process runtime only when explicitly opened.
 
 ## Compressed Remaining Roadmap After V3.10.1
 
 The compressed remaining V3 route is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`.
 
-1. V3.11 CrossShard Protocol Closure.
-2. V3.12 Runtime Realism Closure.
+1. V3.11 CrossShard Protocol Closure. Complete.
+2. V3.12 Runtime Realism Closure. Next.
 3. V3.13 Metaverse Experiment Suite Closure.
 4. V3-final Fault, Observability, and Reproducibility Closure.
 
@@ -150,7 +173,7 @@ V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is imple
 
 V3.8 is implemented as CrossShardProtocol Skeleton Closure. It stays separate from V3.6 networking and V3.7 PBFT preview work.
 V3.9 is implemented as State Authenticity Layer MVP Closure. It strengthens StateAccess / StateStorage / Commit with persistent state backend MVP, Merkle/MPT-like roots, proof verification, and witness artifacts.
-V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is planned as CrossShard Protocol Hardening.
+V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is implemented as CrossShard Protocol Closure. V3.12 is planned as Runtime Realism Closure.
 
 Planned stage list extension:
 
@@ -160,7 +183,8 @@ Planned stage list extension:
 - V3.9 State Authenticity Layer MVP Closure.
 - V3.10 Benchmark / Experiment Template Hardening Closure.
 - V3.10.1 Frontend UX and Chinese Console Cleanup Closure.
-- V3.11 CrossShard Protocol Hardening.
+- V3.11 CrossShard Protocol Closure.
+- V3.12 Runtime Realism Closure.
 
 The main transaction flow should remain:
 

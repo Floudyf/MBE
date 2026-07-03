@@ -13,6 +13,7 @@ const benchmarkTemplates: SelectOption[] = [
   ["full_stack_v3_template", "V3 全栈快速验证模板"],
   ["state_authenticity_template", "状态真实性模板"],
   ["cross_shard_relay_preview_template", "跨片 Relay 预览模板"],
+  ["cross_shard_relay_mvp_template", "跨片 Relay MVP 模板"],
   ["pbft_network_template", "PBFT 网络预览模板"],
   ["metatrack_hotspot_template", "MetaTrack 热点负载模板"],
 ];
@@ -72,8 +73,8 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           <SelectField label="网络通信方式" id="network_adapter" value={topology.network_adapter || topology.network_mode} options={[["in_memory_message_bus", "内存消息总线"], ["localhost_tcp_preview", "本地 TCP 预览"]]} onChange={(value) => patch({ network_adapter: value, network_mode: value })}>
             本地 TCP 预览只证明 typed message path，不是生产网络。
           </SelectField>
-          <SelectField label="跨片协议" id="cross_shard_protocol" value={topology.cross_shard_protocol || "none"} options={[["none", "不启用"], ["relay_preview", "Relay 预览"], ["broker_preview", "Broker 预览（规划中）", true], ["two_phase_commit_preview", "2PC 预览（规划中）", true]]} onChange={(value) => patch({ cross_shard_protocol: value })}>
-            relay_preview 是 skeleton，不是完整 Relay / Broker / 2PC。
+          <SelectField label="跨片协议" id="cross_shard_protocol" value={topology.cross_shard_protocol || "none"} options={[["none", "不启用"], ["relay_preview", "Relay 预览（历史）"], ["relay_mvp", "Relay MVP（V3.11）"], ["broker_preview", "Broker 预览（规划中）", true], ["two_phase_commit_preview", "2PC 预览（规划中）", true]]} onChange={(value) => patch({ cross_shard_protocol: value })}>
+            relay_mvp 是本地可观测 MVP，不是生产级 atomic commit / Broker / 2PC。
           </SelectField>
           <SelectField label="状态存储后端" id="state_backend" value={topology.state_backend || "memory_kv"} options={[["memory_kv", "内存 KV"], ["persistent_kv", "持久化 KV"], ["merkle_trie_mvp", "Merkle Trie MVP"], ["ethereum_mpt_compatible", "Ethereum MPT 兼容（规划中）", true]]} onChange={(value) => patch({ state_backend: value })}>
             Merkle Trie MVP 不是 Ethereum-compatible MPT，也不是完整无状态执行。

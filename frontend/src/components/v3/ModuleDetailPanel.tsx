@@ -187,7 +187,7 @@ function boundaryHint(moduleId: string): string {
   if (moduleId === "Commit") return "不实现真实 DB 锁、回滚或跨片原子验证提交。";
   if (moduleId === "StateAccess" || moduleId === "StateStorage") return "Proof / Witness 为 MVP，Merkle/MPT-like root 为 MVP；非 Ethereum MPT，非完整无状态执行。";
   if (moduleId === "Consensus") return "不声称 real PBFT、HotStuff、Raft 或生产网络。";
-  return "本轮 V3.10.1 只整理前端表达，不改变 runtime 语义。";
+  return "V3.11 增加本地 Relay MVP 观测闭环，但不代表生产级跨片协议。";
 }
 
 function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {

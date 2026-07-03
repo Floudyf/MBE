@@ -2,22 +2,22 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.10.1 Frontend UX and Chinese Console Cleanup Closure.
-Latest runtime capability: Chinese V3 experiment console with simplified navigation, progressive help tips, run progress feedback, and lightweight result chart preview.
-Runtime truth: frontend_ux_cleanup_no_runtime_semantics_change.
-Next stage: V3.11 CrossShard Protocol Hardening.
+Current stage: V3.11 CrossShard Protocol Closure.
+Latest runtime capability: cross-shard Relay MVP with state machine, SourceLock, RelayCertificate, verification records, target commit, source finalization, and timeout/refund/abort artifacts.
+Runtime truth: relay_mvp_not_production_atomic_commit.
+Next stage: V3.12 Runtime Realism Closure.
 
 ## Current Status
 
-Current stage: V3.10.1 Frontend UX and Chinese Console Cleanup Closure.
-Latest runtime capability: Chinese V3 experiment console with simplified navigation, progressive help tips, run progress feedback, and lightweight result chart preview.
-Current capability: V3.10.1 reorganizes the existing V3.10 experiment capability into a Chinese, cleaner, more explainable frontend console.
-Runtime truth: frontend_ux_cleanup_no_runtime_semantics_change.
+Current stage: V3.11 CrossShard Protocol Closure.
+Latest runtime capability: cross-shard Relay MVP with state machine, SourceLock, RelayCertificate, verification records, target commit, source finalization, and timeout/refund/abort artifacts.
+Current capability: runnable `relay_mvp` cross-shard protocol MVP with artifacts and frontend result summary.
+Runtime truth: relay_mvp_not_production_atomic_commit.
 
-V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, and V3.10.1 are closed. V3.10.1 only reorganizes frontend UX and Chinese console presentation. It does not change Go runtime semantics, benchmark truth, cross-shard protocol semantics, state authenticity semantics, or backend experiment semantics.
-Next stage: V3.11 CrossShard Protocol Hardening. V3.11 has not started.
+V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, and V3.11 are closed. V3.11 upgrades V3.8 `relay_preview` into a local observable Relay MVP with success, proof-failure, timeout/refund, and abort paths. It is not production atomic cross-shard commit, not complete Broker / 2PC / Monoxide, not Byzantine-secure relay, not a production cross-chain bridge, not BlockEmulator backend, and not paper-grade benchmark evidence.
+Next stage: V3.12 Runtime Realism Closure. V3.12 has not started.
 
-After V3.10.1, the compressed remaining V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. The next implementation stage is V3.11 CrossShard Protocol Closure.
+After V3.11, the compressed remaining V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. The next implementation stage is V3.12 Runtime Realism Closure.
 
 ## V3.5 Route
 
@@ -38,8 +38,9 @@ V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live 
 - V3.9 implemented: State Authenticity Layer MVP with persistent state backend, Merkle/MPT-like roots, proof verification, and witness artifacts.
 - V3.10 implemented: Benchmark / Experiment Template Hardening with benchmark templates, baseline profiles, local sweep runner, reproducibility manifest, and benchmark report artifacts.
 - V3.10.1 implemented: Frontend UX and Chinese Console Cleanup with simplified navigation, HelpTip explanations, run progress feedback, and lightweight result chart preview.
+- V3.11 implemented: CrossShardProtocol Relay MVP with SourceLock, RelayCertificate, target commit, source finalization, timeout/refund/abort paths, and Relay MVP artifacts.
 
-V3.6, V3.7, V3.8, V3.9, V3.10, and V3.10.1 are closed. V3.11 has not started.
+V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, and V3.11 are closed. V3.12 has not started.
 
 ## Historical V0 Scope
 
@@ -131,7 +132,7 @@ Run from the repository root:
 python scripts/v0_sanity.py
 ```
 
-The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.10 Benchmark / Experiment Template Hardening Closure.
+The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.11 CrossShard Protocol Closure.
 
 ## Windows One-Click Startup
 
@@ -166,6 +167,16 @@ After a run completes, the frontend artifact panel shows available summary, log,
 - `relay_preview_log.csv`
 - `cross_shard_status.csv`
 - `cross_shard_summary.json`
+- `relay_state_machine_log.csv`
+- `source_lock_log.csv`
+- `relay_certificate_log.csv`
+- `relay_proof_verification_log.csv`
+- `target_verification_log.csv`
+- `target_commit_log.csv`
+- `source_finalize_log.csv`
+- `cross_shard_timeout_refund_log.csv`
+- `cross_shard_failure_log.csv`
+- `relay_mvp_summary.json`
 - `state_storage_log.csv`
 - `state_version_log.csv`
 - `state_root_log.csv`
@@ -187,4 +198,4 @@ After a run completes, the frontend artifact panel shows available summary, log,
 - `benchmark_report.md`
 - `benchmark_summary.json`
 
-These launcher, node process, NetworkAdapter, PBFT-over-network, cross-shard skeleton, state authenticity, and benchmark hardening files are preview / MVP artifacts only. They do not prove production networking, production PBFT, full Byzantine safety, a real multi-process network runtime, BlockEmulator backend behavior, complete Relay/Broker/2PC, atomic cross-shard commit, Ethereum-compatible MPT, production database durability, full stateless execution, complete cross-shard state proof protocol, large-scale distributed benchmark, performance superiority, or paper-grade benchmark evidence.
+These launcher, node process, NetworkAdapter, PBFT-over-network, cross-shard skeleton, Relay MVP, state authenticity, and benchmark hardening files are preview / MVP artifacts only. They do not prove production networking, production PBFT, full Byzantine safety, a real multi-process network runtime, BlockEmulator backend behavior, complete Relay/Broker/2PC/Monoxide, production atomic cross-shard commit, Byzantine-secure relay, Ethereum-compatible MPT, production database durability, full stateless execution, complete cross-shard state proof protocol, large-scale distributed benchmark, performance superiority, or paper-grade benchmark evidence.

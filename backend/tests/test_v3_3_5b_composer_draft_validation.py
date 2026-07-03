@@ -37,8 +37,8 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.10 Benchmark / Experiment Template Hardening Closure"
-    assert result.normalized_draft["current_capability"] == "benchmark template catalog, baseline profile catalog, local controlled sweep runner, repeatability manifest, and benchmark report artifacts"
+    assert result.normalized_draft["current_stage"] == "V3.11 CrossShard Protocol Closure"
+    assert result.normalized_draft["current_capability"] == "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
     assert result.normalized_draft["topology"]["cross_shard_protocol"] == "none"
     assert result.normalized_draft["topology"]["state_backend"] == "memory_kv"
     assert result.normalized_draft["topology"]["benchmark_template"] == "full_stack_v3_template"
@@ -132,6 +132,18 @@ def test_valid_draft_accepts_relay_preview_cross_shard_protocol() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["topology"]["cross_shard_protocol"] == "relay_preview"
     assert result.normalized_draft["topology_summary"]["cross_shard_protocol"] == "relay_preview"
+
+
+def test_valid_draft_accepts_relay_mvp_cross_shard_protocol() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(cross_shard_protocol="relay_mvp", benchmark_template="cross_shard_relay_mvp_template")
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is True
+    assert result.normalized_draft is not None
+    assert result.normalized_draft["topology"]["cross_shard_protocol"] == "relay_mvp"
+    assert result.normalized_draft["topology_summary"]["cross_shard_protocol"] == "relay_mvp"
+    assert result.normalized_draft["topology"]["benchmark_template"] == "cross_shard_relay_mvp_template"
 
 
 def test_planned_cross_shard_protocols_are_rejected() -> None:

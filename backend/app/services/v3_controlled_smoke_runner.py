@@ -19,13 +19,13 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.10 Benchmark / Experiment Template Hardening Closure"
+CURRENT_STAGE = "V3.11 CrossShard Protocol Closure"
 LATEST_RUNTIME_STAGE = "V3.4.10"
 CLOSURE_STAGE = "V3.4.11"
-LATEST_COMPLETED_RUNTIME_STAGE = "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
-CURRENT_CAPABILITY = "benchmark template catalog, baseline profiles, local controlled sweep MVP, manifest, and benchmark report artifacts"
-RUNTIME_TRUTH = "benchmark_template_hardening_not_paper_grade_benchmark"
-NEXT_STAGE = "V3.11 CrossShard Protocol Hardening"
+LATEST_COMPLETED_RUNTIME_STAGE = "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
+CURRENT_CAPABILITY = "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
+RUNTIME_TRUTH = "relay_mvp_not_production_atomic_commit"
+NEXT_STAGE = "V3.12 Runtime Realism Closure"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -38,6 +38,11 @@ AGGREGATE_FIELDS = [
     "ablation_stage",
     "enabled_metatrack_components",
     "cross_shard_ratio",
+    "cross_shard_protocol_selected",
+    "relay_mvp_tx_count",
+    "relay_success_count",
+    "relay_failed_count",
+    "relay_refund_count",
     "fast_track_count",
     "conservative_track_count",
     "remote_state_access_ratio",
@@ -89,6 +94,16 @@ CONTROLLED_ARTIFACTS = [
     "relay_preview_log.csv",
     "cross_shard_status.csv",
     "cross_shard_summary.json",
+    "relay_state_machine_log.csv",
+    "source_lock_log.csv",
+    "relay_certificate_log.csv",
+    "relay_proof_verification_log.csv",
+    "target_verification_log.csv",
+    "target_commit_log.csv",
+    "source_finalize_log.csv",
+    "cross_shard_timeout_refund_log.csv",
+    "cross_shard_failure_log.csv",
+    "relay_mvp_summary.json",
     "state_storage_log.csv",
     "state_version_log.csv",
     "state_root_log.csv",
@@ -278,7 +293,7 @@ def _copy_representative_launcher_artifacts(run_dir: Path, child_results: list[d
     if not representative:
         return
     child_dir = Path(str(representative.get("output_dir", "")))
-    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"):
+    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "relay_state_machine_log.csv", "source_lock_log.csv", "relay_certificate_log.csv", "relay_proof_verification_log.csv", "target_verification_log.csv", "target_commit_log.csv", "source_finalize_log.csv", "cross_shard_timeout_refund_log.csv", "cross_shard_failure_log.csv", "relay_mvp_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"):
         source = child_dir / filename
         if source.is_file():
             shutil.copyfile(source, run_dir / filename)

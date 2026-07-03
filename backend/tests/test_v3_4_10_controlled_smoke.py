@@ -16,13 +16,13 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
 
     assert result["status"] == "completed"
     assert result["stage"] == "V3.4.10"
-    assert result["current_stage"] == "V3.10 Benchmark / Experiment Template Hardening Closure"
+    assert result["current_stage"] == "V3.11 CrossShard Protocol Closure"
     assert result["latest_runtime_stage"] == "V3.4.10"
-    assert result["latest_completed_runtime_stage"] == "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
+    assert result["latest_completed_runtime_stage"] == "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
     assert result["closure_stage"] == "V3.4.11"
-    assert result["current_capability"] == "benchmark template catalog, baseline profiles, local controlled sweep MVP, manifest, and benchmark report artifacts"
-    assert result["runtime_truth"] == "benchmark_template_hardening_not_paper_grade_benchmark"
-    assert result["next_stage"] == "V3.11 CrossShard Protocol Hardening"
+    assert result["current_capability"] == "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
+    assert result["runtime_truth"] == "relay_mvp_not_production_atomic_commit"
+    assert result["next_stage"] == "V3.12 Runtime Realism Closure"
     assert result["preset_order"] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["run_index"]] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["aggregate_summary"]] == CONTROLLED_PRESET_ORDER
@@ -57,6 +57,16 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
         "relay_preview_log.csv",
         "cross_shard_status.csv",
         "cross_shard_summary.json",
+        "relay_state_machine_log.csv",
+        "source_lock_log.csv",
+        "relay_certificate_log.csv",
+        "relay_proof_verification_log.csv",
+        "target_verification_log.csv",
+        "target_commit_log.csv",
+        "source_finalize_log.csv",
+        "cross_shard_timeout_refund_log.csv",
+        "cross_shard_failure_log.csv",
+        "relay_mvp_summary.json",
         "state_storage_log.csv",
         "state_version_log.csv",
         "state_root_log.csv",
@@ -92,9 +102,9 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     assert "paper_grade_benchmark" in aggregate_rows[0]
 
     readiness = json.loads((run_dir / "realism_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["current_stage"] == "V3.10 Benchmark / Experiment Template Hardening Closure"
+    assert readiness["current_stage"] == "V3.11 CrossShard Protocol Closure"
     assert readiness["latest_runtime_stage"] == "V3.4.10"
-    assert readiness["latest_completed_runtime_stage"] == "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts"
+    assert readiness["latest_completed_runtime_stage"] == "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
     assert len(readiness["modules"]) == 12
     assert "not BlockEmulator backend" in readiness["not_real_chain_claims"]
     assert "not Fabric/EVM live backend" in readiness["not_real_chain_claims"]

@@ -28,8 +28,8 @@ import SingleChainComposer from "../components/v3/SingleChainComposer";
 import { createComposerDraft, summarizeDraft, toComposerDraftRequest, updateDraftTopology, type ComposerDraft } from "../components/v3/composerDraft";
 import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
 
-const currentStageLabel = "V3.10.1 Frontend UX and Chinese Console Cleanup Closure";
-const latestRuntimeLabel = "中文 V3 实验控制台";
+const currentStageLabel = "V3.11 CrossShard Protocol Closure";
+const latestRuntimeLabel = "Relay MVP 跨片协议闭环";
 const controlledSmokeDescription = "按固定顺序运行五组 MetaTrack 快速验证预设。Workload、seed、TxPool、BlockProducer、Consensus、CommitteeEpoch、StateStorage、MetricsReport 保持固定，只改变 Routing、Execution、StateAccess、Commit。输出 aggregate summary 与 realism readiness；这是快速验证级别的受控对照。";
 
 const metatrackLockedModules = {
@@ -283,16 +283,16 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     <section className="page-grid v3-composer-page">
       <header className="final-card wide v3-composer-header console-hero">
         <div>
-          <p className="eyebrow">当前阶段：V3.10.1</p>
+          <p className="eyebrow">当前阶段：V3.11</p>
           <h2>MBE V3 实验控制台</h2>
-          <p>{`运行能力：${latestRuntimeLabel}。${"本轮只整理前端体验，不改变 runtime 语义。"}`} <HelpTip title="真实性边界">Proof / Witness 为 MVP，Merkle/MPT-like root 为 MVP；非 Ethereum MPT、非完整无状态执行、非生产级数据库、非生产级多节点网络。</HelpTip></p>
+          <p>{`运行能力：${latestRuntimeLabel}。${"本轮实现本地 Relay MVP，不是生产级 atomic commit。"}`} <HelpTip title="真实性边界">V3.11 是本地可观测 Relay MVP，不是生产级跨片协议、不是完整 Broker / 2PC / Monoxide、不是 Byzantine-secure relay。</HelpTip></p>
         </div>
         <div className="v3-boundary-badges">
           <span>本地快速验证</span>
           <span>中文控制台</span>
           <span>HelpTip 解释</span>
           <span>轻量图表</span>
-          <span>V3.11 未开始</span>
+          <span>V3.12 未开始</span>
         </div>
       </header>
 
@@ -316,7 +316,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
             <div><dt>实验模板</dt><dd>{labelFor(templateLabels, composer?.template_id || preview?.experiment_template || "-")}</dd></div>
             <div><dt>后端 stage</dt><dd>{preview?.current_stage || preview?.stage || "-"}</dd></div>
             <div><dt>前端 stage</dt><dd>{currentStageLabel}</dd></div>
-            <div><dt>下一阶段</dt><dd>V3.11 CrossShard Protocol Hardening（尚未开始）</dd></div>
+            <div><dt>下一阶段</dt><dd>V3.12 Runtime Realism Closure（尚未开始）</dd></div>
             <div><dt>后端类型</dt><dd>{composer?.truth_labels?.backend_type || String(profilePreview.backend_type || "-")}</dd></div>
             <div><dt>真实性标签</dt><dd>{composer?.truth_labels?.truth_label || String(profilePreview.truth_label || "-")}</dd></div>
             <div><dt>是否可运行</dt><dd>{yesNo(preview?.runnable && composer?.runnable)}</dd></div>

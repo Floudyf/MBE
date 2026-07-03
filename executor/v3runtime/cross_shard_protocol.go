@@ -11,9 +11,11 @@ import (
 const (
 	CrossShardProtocolNone                  = "none"
 	CrossShardProtocolRelayPreview          = "relay_preview"
+	CrossShardProtocolRelayMVP              = "relay_mvp"
 	CrossShardProtocolBrokerPreview         = "broker_preview"
 	CrossShardProtocolTwoPhaseCommitPreview = "two_phase_commit_preview"
 	CrossShardRuntimeTruth                  = "cross_shard_protocol_skeleton_not_atomic_cross_shard_commit"
+	RelayMVPRuntimeTruth                    = "relay_mvp_not_production_atomic_commit"
 )
 
 type CrossShardTxRecord struct {
@@ -85,6 +87,7 @@ type CrossShardProtocolPreview struct {
 	DetectionPreviewCount  int
 	RelayPreviewLatencyMS  int
 	TargetReceiveCount     int
+	RelayMVP               RelayMVPPreview
 }
 
 func RunCrossShardProtocolPreview(experiment ExperimentProfile, networkAdapter NetworkAdapterPreview, txResults []TxResult, routingLog []RoutingRecord) CrossShardProtocolPreview {
@@ -152,6 +155,24 @@ func RunCrossShardProtocolPreview(experiment ExperimentProfile, networkAdapter N
 				preview.TypedMessages = append(preview.TypedMessages, msg)
 				preview.SendRows = append(preview.SendRows, NetworkSendRecord{MessageEnvelope: msg, Status: crossShardSendStatus(preview.NetworkAdapterSelected)})
 				preview.ReceiveRows = append(preview.ReceiveRows, NetworkReceiveRecord{MessageEnvelope: msg, Status: crossShardReceiveStatus(preview.NetworkAdapterSelected)})
+			} else if protocol == CrossShardProtocolRelayMVP {
+				outcome := BuildRelayMVPForTx(experiment, tx, record, index, sourceShard, targetShard, preview.NetworkAdapterSelected)
+				status = outcome.TxStatus
+				latencyMS = outcome.LatencyMS
+				if outcome.Completed {
+					preview.CompletedCount++
+					totalLatency += latencyMS
+				}
+				if outcome.Failed {
+					preview.FailedCount++
+				}
+				preview.TargetReceiveCount += outcome.TargetReceiveCount
+				preview.RelayMVP.Append(outcome)
+				preview.MessageRows = append(preview.MessageRows, outcome.MessageRows...)
+				preview.StatusRows = append(preview.StatusRows, outcome.StatusRows...)
+				preview.TypedMessages = append(preview.TypedMessages, outcome.TypedMessages...)
+				preview.SendRows = append(preview.SendRows, outcome.SendRows...)
+				preview.ReceiveRows = append(preview.ReceiveRows, outcome.ReceiveRows...)
 			} else if protocol == CrossShardProtocolNone {
 				skipped = "cross-shard tx detected but cross_shard_protocol=none"
 				preview.SkippedCount++
@@ -195,6 +216,7 @@ func RunCrossShardProtocolPreview(experiment ExperimentProfile, networkAdapter N
 		preview.AvgLatencyMS = round(float64(totalLatency) / float64(preview.CompletedCount))
 		preview.RelayPreviewLatencyMS = int(preview.AvgLatencyMS)
 	}
+	preview.RelayMVP.Finalize(preview.AvgLatencyMS)
 	return preview
 }
 
@@ -271,6 +293,9 @@ func WriteCrossShardProtocolArtifacts(out string, preview CrossShardProtocolPrev
 	if err := writeCrossShardStatusCSV(filepath.Join(out, "cross_shard_status.csv"), preview.StatusRows); err != nil {
 		return err
 	}
+	if err := WriteRelayMVPArtifacts(out, preview.RelayMVP); err != nil {
+		return err
+	}
 	return writeCrossShardSummaryJSON(filepath.Join(out, "cross_shard_summary.json"), preview)
 }
 
@@ -332,6 +357,22 @@ func writeCrossShardSummaryJSON(path string, preview CrossShardProtocolPreview) 
 		"cross_shard_detection_preview_count": preview.DetectionPreviewCount,
 		"relay_preview_latency_ms":            preview.RelayPreviewLatencyMS,
 		"cross_shard_target_receive_count":    preview.TargetReceiveCount,
+		"relay_mvp_enabled":                   preview.RelayMVP.Enabled,
+		"relay_mvp_tx_count":                  preview.RelayMVP.TxCount,
+		"relay_source_lock_count":             preview.RelayMVP.SourceLockCount,
+		"relay_certificate_count":             preview.RelayMVP.CertificateCount,
+		"relay_proof_verified_count":          preview.RelayMVP.ProofVerifiedCount,
+		"relay_proof_failed_count":            preview.RelayMVP.ProofFailedCount,
+		"relay_target_verified_count":         preview.RelayMVP.TargetVerifiedCount,
+		"relay_target_commit_count":           preview.RelayMVP.TargetCommitCount,
+		"relay_source_finalized_count":        preview.RelayMVP.SourceFinalizedCount,
+		"relay_timeout_count":                 preview.RelayMVP.TimeoutCount,
+		"relay_refund_count":                  preview.RelayMVP.RefundCount,
+		"relay_abort_count":                   preview.RelayMVP.AbortCount,
+		"relay_success_count":                 preview.RelayMVP.SuccessCount,
+		"relay_failed_count":                  preview.RelayMVP.FailedCount,
+		"relay_avg_latency_ms":                preview.RelayMVP.AvgLatencyMS,
+		"relay_mvp_truth":                     RelayMVPRuntimeTruth,
 		"not_complete_relay":                  true,
 		"not_complete_broker":                 true,
 		"not_complete_2pc":                    true,
@@ -349,5 +390,5 @@ func writeCrossShardSummaryJSON(path string, preview CrossShardProtocolPreview) 
 }
 
 func (preview CrossShardProtocolPreview) SummaryLine() string {
-	return fmt.Sprintf("cross_shard_protocol_selected=%s\ncross_shard_tx_count=%d\ncross_shard_message_count=%d\nrelay_preview_count=%d\ncross_shard_completed_count=%d\ncross_shard_failed_count=%d\ncross_shard_avg_latency_ms=%g\n", preview.ProtocolSelected, preview.TxCount, preview.MessageCount, preview.RelayPreviewCount, preview.CompletedCount, preview.FailedCount, preview.AvgLatencyMS)
+	return fmt.Sprintf("cross_shard_protocol_selected=%s\ncross_shard_tx_count=%d\ncross_shard_message_count=%d\nrelay_preview_count=%d\ncross_shard_completed_count=%d\ncross_shard_failed_count=%d\ncross_shard_avg_latency_ms=%g\nrelay_mvp_enabled=%t\nrelay_mvp_tx_count=%d\nrelay_success_count=%d\nrelay_failed_count=%d\nrelay_mvp_truth=%s\n", preview.ProtocolSelected, preview.TxCount, preview.MessageCount, preview.RelayPreviewCount, preview.CompletedCount, preview.FailedCount, preview.AvgLatencyMS, preview.RelayMVP.Enabled, preview.RelayMVP.TxCount, preview.RelayMVP.SuccessCount, preview.RelayMVP.FailedCount, RelayMVPRuntimeTruth)
 }

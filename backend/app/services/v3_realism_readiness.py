@@ -61,10 +61,10 @@ MODULE_READINESS: list[dict[str, Any]] = [
         "runtime_status": "runnable",
         "realism_level": "deterministic_light_model",
         "implemented_plugins": ["hash_sharding", "metatrack_coaccess_routing", "hotspot_aware_routing"],
-        "artifact_logs": ["routing_log.csv", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json"],
-        "light_model_limitations": ["Routing/sharding decision model plus V3.8 relay_preview skeleton only; no atomic cross-shard commit."],
-        "missing_for_real_emulator": ["Complete Relay", "broker", "2PC", "atomic commit", "state proof", "rollback", "timeout recovery"],
-        "next_step": "Keep CrossShardProtocol under Routing/Sharding and defer state proof hardening to V3.9.",
+        "artifact_logs": ["routing_log.csv", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "relay_state_machine_log.csv", "source_lock_log.csv", "relay_certificate_log.csv", "target_commit_log.csv", "relay_mvp_summary.json"],
+        "light_model_limitations": ["Routing/sharding decision model plus V3.11 Relay MVP observability; no production atomic cross-shard commit."],
+        "missing_for_real_emulator": ["Production atomic commit", "complete Broker", "complete 2PC", "Byzantine-secure relay", "production cross-chain bridge"],
+        "next_step": "Keep CrossShardProtocol under Routing/Sharding and harden runtime realism in V3.12 only when explicitly opened.",
     },
     {
         "module_id": "Execution",
@@ -124,7 +124,7 @@ MODULE_READINESS: list[dict[str, Any]] = [
         "artifact_logs": ["benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "baseline_comparison.csv", "reproducibility_manifest.json"],
         "light_model_limitations": ["V3.10 creates controlled local benchmark scaffolding, not paper-grade evidence."],
         "missing_for_real_emulator": ["Large-scale distributed execution", "independent benchmark harness", "formal experiment database"],
-        "next_step": "Do not enter V3.11 CrossShard Protocol Hardening unless explicitly requested.",
+        "next_step": "V3.11 closes Relay MVP; do not enter V3.12 Runtime Realism Closure unless explicitly requested.",
     },
 ]
 
@@ -132,13 +132,13 @@ MODULE_READINESS: list[dict[str, Any]] = [
 def build_realism_readiness() -> dict[str, Any]:
     return {
         "stage": "V3.4.10",
-        "current_stage": "V3.10 Benchmark / Experiment Template Hardening Closure",
+        "current_stage": "V3.11 CrossShard Protocol Closure",
         "latest_runtime_stage": "V3.4.10",
-        "latest_completed_runtime_stage": "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts",
+        "latest_completed_runtime_stage": "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths",
         "closure_stage": "V3.4.11",
-        "current_capability": "benchmark template catalog, baseline profile catalog, local sweep runner, reproducibility manifest, and benchmark report artifacts",
-        "runtime_truth": "benchmark_template_hardening_not_paper_grade_benchmark",
-        "next_stage": "V3.11 CrossShard Protocol Hardening",
+        "current_capability": "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary",
+        "runtime_truth": "relay_mvp_not_production_atomic_commit",
+        "next_stage": "V3.12 Runtime Realism Closure",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",
@@ -146,6 +146,8 @@ def build_realism_readiness() -> dict[str, Any]:
             "not real PBFT/HotStuff/Raft",
             "not a real cross-shard protocol",
             "not atomic cross-shard commit",
+            "not Byzantine-secure relay",
+            "not a production cross-chain bridge",
             "not Ethereum-compatible MPT",
             "not production database durability",
             "not full stateless execution",
@@ -171,7 +173,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         "# V3.4.10 Realism Readiness Check",
         "",
         "This is an internal readiness check for the local Go-backed Draft Smoke runtime.",
-        "Current repository closure stage is V3.10; the latest controlled smoke runner remains V3.4.10 but representative runs now include V3.10 benchmark template hardening artifacts.",
+        "Current repository closure stage is V3.11; the latest controlled smoke runner remains V3.4.10 but representative runs now include V3.11 Relay MVP artifacts.",
         "It is not a real-chain, Fabric/EVM live, BlockEmulator-backed, or multi-node emulator claim.",
         "",
         "| module_id | runtime_status | realism_level | implemented_plugins | next_step |",
@@ -189,7 +191,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         )
     lines.extend([
         "",
-        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, complete relay/broker/2PC, atomic cross-shard commit, full cross-shard state proof protocol, rollback/timeout recovery, Ethereum-compatible MPT, production database durability, full stateless execution, Fabric/EVM live backend, BlockEmulator adapter, large-scale distributed benchmark, and paper-grade benchmark evidence.",
+        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, production atomic cross-shard commit, complete Broker/2PC/Monoxide, Byzantine-secure relay, full cross-shard state proof protocol, Ethereum-compatible MPT, production database durability, full stateless execution, Fabric/EVM live backend, BlockEmulator adapter, large-scale distributed benchmark, and paper-grade benchmark evidence.",
     ])
     (output_dir / "realism_readiness.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return payload
