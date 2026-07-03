@@ -17,6 +17,8 @@ Runtime truth: frontend_ux_cleanup_no_runtime_semantics_change.
 V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, and V3.10.1 are closed. V3.10.1 only reorganizes frontend UX and Chinese console presentation. It does not change Go runtime semantics, benchmark truth, cross-shard protocol semantics, state authenticity semantics, or backend experiment semantics.
 Next stage: V3.11 CrossShard Protocol Hardening. V3.11 has not started.
 
+After V3.10.1, the compressed remaining V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. The next implementation stage is V3.11 CrossShard Protocol Closure.
+
 ## V3.5 Route
 
 - V3.5.1 Logical Node Topology Runtime: frontend topology config, backend validation, single-process logical nodes, and node/network/message artifacts.

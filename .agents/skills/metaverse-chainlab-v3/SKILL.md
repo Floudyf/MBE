@@ -105,6 +105,27 @@ V3.10.1 truth boundary:
 - Do not claim paper-grade benchmark.
 - Do not claim production UI or production deployment.
 
+## Compressed Remaining V3 Roadmap After V3.10.1
+
+Current closed stage: V3.10.1.
+
+Next implementation stage: V3.11 CrossShard Protocol Closure.
+
+Compressed route:
+
+1. V3.11 CrossShard Protocol Closure.
+2. V3.12 Runtime Realism Closure.
+3. V3.13 Metaverse Experiment Suite Closure.
+4. V3-final Fault, Observability, and Reproducibility Closure.
+
+Rules:
+
+- Do not skip to V3.12 before V3.11 unless the user explicitly asks.
+- Current topology settings are logical topology until `local_multi_process` is implemented.
+- V3.5 already introduced launcher preview and node process preview.
+- V3.12 hardens V3.5 previews into a runnable local multi-process runtime.
+- Do not overclaim preview features as production implementations.
+
 As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 
 - `V3.0 Planning Scaffold`: complete.

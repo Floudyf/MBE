@@ -133,6 +133,15 @@ V3.10.1 keeps Benchmark in the experiment control / result layer, CrossShardProt
 
 V3.11 is planned as CrossShard Protocol Hardening. It has not started. V3.11 should not be entered unless explicitly requested. V3.10.1 frontend cleanup does not change runtime semantics, and V3.10 benchmark artifacts must not be treated as paper-grade evidence.
 
+## Compressed Remaining Roadmap After V3.10.1
+
+The compressed remaining V3 route is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`.
+
+1. V3.11 CrossShard Protocol Closure.
+2. V3.12 Runtime Realism Closure.
+3. V3.13 Metaverse Experiment Suite Closure.
+4. V3-final Fault, Observability, and Reproducibility Closure.
+
 ## V3.6 / V3.7 Planning
 
 V3.6 is NetworkAdapter and TCP Typed Message Runtime. V3.6.1 starts with a configurable `NetworkAdapter`, supports `in_memory_message_bus` and `localhost_tcp_preview`, adds typed `MessageEnvelope` logs, and keeps TCP as preview only. V3.6.2 adds Consensus-light over NetworkAdapter and closes V3.6. V3.6 does not implement real PBFT, HotStuff/Raft, real cross-shard protocol, Fabric/EVM live backend, or paper-grade benchmark claims.
