@@ -15,6 +15,7 @@ from backend.app.services.job_manager import JobManager
 from backend.app.services.v3_composer_catalog import GO_RUNTIME_PLUGIN_CLASSES
 from backend.app.services.v3_composer_draft_validator import model_dump, validate_v3_composer_draft
 from backend.app.services.v3_go_runtime_runner import ROLE_SEPARATED_CHAIN_PROFILE, run_go_v3_runtime
+from backend.app.services.v3_metaverse_workloads import maybe_write_metaverse_suite_artifacts
 from backend.app.services.v3_runtime_topology import stage_metadata
 
 
@@ -44,7 +45,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
         source="v3_composer_draft",
         experiment_name="composer_draft_smoke",
         data_truth_label="modular_runtime",
-        stage="V3.12 Runtime Realism Closure",
+        stage="V3.13 Metaverse Experiment Suite Closure",
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
@@ -87,6 +88,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             model_dump(result.summary) if hasattr(result.summary, "__dict__") else dict(result.summary),
             normalized,
         )
+        summary.update(maybe_write_metaverse_suite_artifacts(run_dir, normalized.get("topology", {}), summary))
         write_json(run_dir / "summary.json", summary)
         _mirror_latest(run_dir, root / "latest")
         completed = manager.mark_completed(run_id, data_truth_label="modular_runtime")
@@ -94,7 +96,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "run_id": run_id,
             "job_id": run_id,
             "status": "completed",
-            "stage": "V3.12 Runtime Realism Closure",
+            "stage": "V3.13 Metaverse Experiment Suite Closure",
             **stage_metadata(),
             "output_dir": str(run_dir),
             "data_truth_label": "modular_runtime",
@@ -142,7 +144,7 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "profile_id": f"draft_smoke_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-            "stage": "V3.12 Runtime Realism Closure",
+        "stage": "V3.13 Metaverse Experiment Suite Closure",
         "type": "draft_smoke",
         "truth_label": "modular_runtime",
         "backend_type": "modular_research_chain",
@@ -159,9 +161,13 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
         "benchmark_template": normalized.get("topology", {}).get("benchmark_template", "full_stack_v3_template"),
         "baseline_profile": normalized.get("topology", {}).get("baseline_profile", "baseline_simple_chain"),
         "repeat_count": normalized.get("topology", {}).get("repeat_count", 1),
+        "metaverse_suite_enabled": normalized.get("topology", {}).get("metaverse_suite_enabled", False),
+        "metaverse_scenario": normalized.get("topology", {}).get("metaverse_scenario", "mixed_metaverse"),
         "topology": normalized.get("topology", {}),
         "topology_summary": normalized.get("topology_summary", {}),
         **{key: value for key, value in normalized.get("topology", {}).items()},
+        "tx_count": tx_count,
+        "seed": seed,
         "experiment_template": normalized.get("template_id", "metatrack_ablation"),
         "preset_id": normalized.get("preset_id", ""),
         "preset_name": normalized.get("preset_name", ""),
@@ -179,8 +185,6 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
         **stage_metadata(),
         "chain_profile": "single_chain_research_default",
         "run_level": "smoke",
-        "tx_count": tx_count,
-        "seed": seed,
         "submit_rate": submit_rate,
         "key_count": 32,
         "hot_key_count": 4,
@@ -237,16 +241,16 @@ def build_plugin_profile(normalized: dict[str, Any]) -> dict[str, Any]:
     return {
         "profile_type": "plugin_profile_collection",
         "version": "v3",
-        "stage": "V3.12 Runtime Realism Closure",
+        "stage": "V3.13 Metaverse Experiment Suite Closure",
         "profiles": [
             {
                 "plugin_profile_id": DRAFT_PLUGIN_PROFILE_ID,
                 "label": "Composer Draft Single Smoke",
                 "domain": "metatrack",
                 "status": "runnable",
-                "min_stage": "V3.12",
+                "min_stage": "V3.13",
                 "runnable": True,
-                "description": "Single Composer Draft Smoke plugin selection with optional ConsensusRuntime PBFT preview over NetworkAdapter, V3.11 Relay MVP artifacts, V3.12 local multi-process runtime artifacts, V3.9 state authenticity MVP artifacts, and V3.10 benchmark hardening artifacts.",
+                "description": "Single Composer Draft Smoke plugin selection with optional ConsensusRuntime PBFT preview over NetworkAdapter, V3.11 Relay MVP artifacts, V3.12 local multi-process runtime artifacts, V3.13 metaverse workload suite artifacts, V3.9 state authenticity MVP artifacts, and V3.10 benchmark hardening artifacts.",
                 "plugins": plugins,
                 "module_plugins": selection,
                 "tags": ["draft_smoke", "single_chain", "go_backed"],

@@ -4,7 +4,7 @@
 
 V3.10.1 is complete. It only cleaned up the Chinese frontend console, simplified navigation, added HelpTip explanations, added run progress feedback, added lightweight result chart previews, and improved UX presentation.
 
-V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol capability, and did not make benchmark output paper-grade evidence. V3.11 and V3.12 are now closed; the next implementation stage is V3.13 Metaverse Experiment Suite Closure.
+V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol capability, and did not make benchmark output paper-grade evidence. V3.11, V3.12, and V3.13 are now closed; the next implementation stage is V3-final Fault, Observability, and Reproducibility Closure.
 
 ## 2. Existing Foundations
 
@@ -18,14 +18,14 @@ V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol ca
 
 Current frontend shard/node settings are logical topology. They do not mean the system has already started the same number of real OS processes.
 
-V3.12 should not redo topology configuration. It should harden the V3.5 launcher and node process previews into a runnable, observable, stoppable small-scale local multi-process runtime.
+V3.12 hardened the V3.5 launcher and node process previews into a runnable, observable, stoppable small-scale local multi-process runtime. V3.13 builds on that runtime with controlled metaverse workload and benchmark/export artifacts.
 
 ## 3. Compressed Remaining Route
 
 1. V3.11 CrossShard Protocol Closure. Complete.
 2. V3.12 Runtime Realism Closure. Complete.
-3. V3.13 Metaverse Experiment Suite Closure.
-4. V3-final Fault, Observability, and Reproducibility Closure.
+3. V3.13 Metaverse Experiment Suite Closure. Complete.
+4. V3-final Fault, Observability, and Reproducibility Closure. Next.
 
 ## 4. Stage Details
 
@@ -93,7 +93,9 @@ Combined scope:
 
 After V3.13, MBE can run metaverse-oriented experiments and export controlled paper experiment data.
 
-Boundary: paper-oriented benchmark suite ready, but do not claim paper-grade results until large-scale controlled experiments are actually run and analyzed.
+Status: complete.
+
+Boundary: controlled metaverse workload suite and paper export scaffold only. Do not claim real platform trace collection, production integration, or paper-grade results until large-scale controlled experiments are actually run and analyzed.
 
 ### V3-final Fault, Observability, and Reproducibility Closure
 

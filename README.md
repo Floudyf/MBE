@@ -2,22 +2,22 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V3.12 Runtime Realism Closure.
-Latest runtime capability: local multi-process runtime MVP with managed process plan/smoke, process lifecycle artifacts, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts.
-Runtime truth: local_multi_process_runtime_mvp_not_production_cluster.
-Next stage: V3.13 Metaverse Experiment Suite Closure.
+Current stage: V3.13 Metaverse Experiment Suite Closure.
+Latest runtime capability: controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts.
+Runtime truth: controlled_metaverse_workload_not_real_platform_trace.
+Next stage: V3-final Fault, Observability, and Reproducibility Closure.
 
 ## Current Status
 
-Current stage: V3.12 Runtime Realism Closure.
-Latest runtime capability: local multi-process runtime MVP with managed process plan/smoke, process lifecycle artifacts, NetworkAdapter process path preview, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts.
-Current capability: `local_multi_process` runtime mode with `dry_run` and `smoke`, max process guard, node lifecycle artifacts, and committee/epoch MVP artifacts.
-Runtime truth: local_multi_process_runtime_mvp_not_production_cluster.
+Current stage: V3.13 Metaverse Experiment Suite Closure.
+Latest runtime capability: controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts.
+Current capability: metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export.
+Runtime truth: controlled_metaverse_workload_not_real_platform_trace.
 
-V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, and V3.12 are closed. V3.12 hardens the V3.5 launcher / node process previews into a runnable, observable, cleanable local multi-process runtime MVP with shard / committee / epoch artifacts. It is not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
-Next stage: V3.13 Metaverse Experiment Suite Closure.
+V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, V3.12, and V3.13 are closed. V3.13 adds controlled metaverse scenario workloads, baseline matrix, multi-seed/sweep scaffolding, and paper table/figure export artifacts. It is not real metaverse platform trace collection, not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
+Next stage: V3-final Fault, Observability, and Reproducibility Closure.
 
-After V3.12, the compressed remaining V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. The next implementation stage is V3.13 Metaverse Experiment Suite Closure.
+After V3.13, the compressed remaining V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. The next implementation stage is V3-final Fault, Observability, and Reproducibility Closure.
 
 ## V3.5 Route
 
@@ -40,8 +40,9 @@ V3.5 is node topology and local launcher foundations. It is not Fabric/EVM live 
 - V3.10.1 implemented: Frontend UX and Chinese Console Cleanup with simplified navigation, HelpTip explanations, run progress feedback, and lightweight result chart preview.
 - V3.11 implemented: CrossShardProtocol Relay MVP with SourceLock, RelayCertificate, target commit, source finalization, timeout/refund/abort paths, and Relay MVP artifacts.
 - V3.12 implemented: Runtime Realism Closure with local_multi_process dry_run/smoke, max_local_processes guard, node lifecycle artifacts, localhost TCP process path records, shard/committee/epoch MVP artifacts, and light reconfiguration plan.
+- V3.13 implemented: Metaverse Experiment Suite Closure with metaverse workload catalog, scenario templates, baseline matrix, multi-seed/sweep MVP, and paper table/figure data export scaffold.
 
-V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, and V3.12 are closed. V3.13 has not started.
+V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, V3.12, and V3.13 are closed. V3-final has not started.
 
 ## Historical V0 Scope
 
@@ -133,7 +134,7 @@ Run from the repository root:
 python scripts/v0_sanity.py
 ```
 
-The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.12 Runtime Realism Closure.
+The sanity check regenerates the default `asset_hotspot` trace, runs Go replay, and checks required trace, summary, latency, and runtime log artifacts. This remains a regression validation even though the active project stage is V3.13 Metaverse Experiment Suite Closure.
 
 ## Windows One-Click Startup
 

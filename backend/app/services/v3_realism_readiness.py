@@ -9,12 +9,22 @@ MODULE_READINESS: list[dict[str, Any]] = [
     {
         "module_id": "Workload",
         "runtime_status": "runnable",
-        "realism_level": "runtime_realized",
-        "implemented_plugins": ["synthetic_hotspot"],
-        "artifact_logs": ["generated_experiment_profile.json", "summary.json"],
-        "light_model_limitations": ["Synthetic local workload, not imported live-chain traffic."],
-        "missing_for_real_emulator": ["Trace provenance controls", "network arrival realism"],
-        "next_step": "Keep workload fixed for controlled smoke comparisons.",
+        "realism_level": "controlled_metaverse_workload_suite",
+        "implemented_plugins": ["synthetic_hotspot", "metaverse_workload_suite_v3_13"],
+        "artifact_logs": ["generated_experiment_profile.json", "metaverse_workload_catalog.json", "scenario_summary.csv", "metaverse_experiment_summary.json"],
+        "light_model_limitations": ["Controlled deterministic metaverse-style workload metadata, not real platform trace collection."],
+        "missing_for_real_emulator": ["Real platform trace provenance", "live platform event collection", "production arrival realism"],
+        "next_step": "V3-final adds fault/observability/reproducibility closure without claiming real metaverse data.",
+    },
+    {
+        "module_id": "MetaverseExperimentSuite",
+        "runtime_status": "runnable",
+        "realism_level": "controlled_experiment_suite",
+        "implemented_plugins": ["scenario_templates", "baseline_matrix", "multi_seed_sweep_mvp", "paper_export_scaffold"],
+        "artifact_logs": ["metaverse_workload_config.json", "baseline_matrix.csv", "multi_seed_summary.csv", "paper_export_manifest.json"],
+        "light_model_limitations": ["Synthetic local scenarios only; exported paper tables are scaffolds, not conclusions."],
+        "missing_for_real_emulator": ["Real Roblox/Decentraland/Sandbox integration", "independent benchmark campaign", "paper-grade statistical evidence"],
+        "next_step": "Use V3-final for failure injection, observability, and reproducibility packaging.",
     },
     {
         "module_id": "TxPool",
@@ -131,14 +141,14 @@ MODULE_READINESS: list[dict[str, Any]] = [
 
 def build_realism_readiness() -> dict[str, Any]:
     return {
-        "stage": "V3.12",
-        "current_stage": "V3.12 Runtime Realism Closure",
-        "latest_runtime_stage": "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts",
-        "latest_completed_runtime_stage": "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts",
-        "closure_stage": "V3.12",
-        "current_capability": "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP",
-        "runtime_truth": "local_multi_process_runtime_mvp_not_production_cluster",
-        "next_stage": "V3.13 Metaverse Experiment Suite Closure",
+        "stage": "V3.13",
+        "current_stage": "V3.13 Metaverse Experiment Suite Closure",
+        "latest_runtime_stage": "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts",
+        "latest_completed_runtime_stage": "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts",
+        "closure_stage": "V3.13",
+        "current_capability": "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export",
+        "runtime_truth": "controlled_metaverse_workload_not_real_platform_trace",
+        "next_stage": "V3-final Fault, Observability, and Reproducibility Closure",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",
@@ -160,6 +170,9 @@ def build_realism_readiness() -> dict[str, Any]:
             "not large-scale distributed benchmark",
             "not production network",
             "not performance superiority claim",
+            "not real metaverse platform trace",
+            "not real Roblox/Decentraland/Sandbox integration",
+            "not paper-grade performance conclusion",
         ],
         "modules": MODULE_READINESS,
     }
@@ -172,11 +185,11 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         encoding="utf-8",
     )
     lines = [
-        "# V3.4.10 Realism Readiness Check",
+        "# V3.13 Realism Readiness Check",
         "",
         "This is an internal readiness check for the local Go-backed Draft Smoke runtime.",
-        "Current repository closure stage is V3.11; the latest controlled smoke runner remains V3.4.10 but representative runs now include V3.11 Relay MVP artifacts.",
-        "It is not a real-chain, Fabric/EVM live, BlockEmulator-backed, or multi-node emulator claim.",
+        "Current repository closure stage is V3.13; representative runs include controlled metaverse workload, baseline matrix, multi-seed sweep, and paper export scaffold artifacts.",
+        "It is not a real-chain, real metaverse platform trace, Fabric/EVM live, BlockEmulator-backed, multi-node emulator, or paper-grade conclusion claim.",
         "",
         "| module_id | runtime_status | realism_level | implemented_plugins | next_step |",
         "| --- | --- | --- | --- | --- |",
@@ -193,7 +206,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         )
     lines.extend([
         "",
-        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, production atomic cross-shard commit, complete Broker/2PC/Monoxide, Byzantine-secure relay, full cross-shard state proof protocol, Ethereum-compatible MPT, production database durability, full stateless execution, Fabric/EVM live backend, BlockEmulator adapter, large-scale distributed benchmark, and paper-grade benchmark evidence.",
+        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, production atomic cross-shard commit, complete Broker/2PC/Monoxide, Byzantine-secure relay, full cross-shard state proof protocol, Ethereum-compatible MPT, production database durability, full stateless execution, Fabric/EVM live backend, BlockEmulator adapter, real metaverse platform trace collection, large-scale distributed benchmark, and paper-grade benchmark evidence.",
     ])
     (output_dir / "realism_readiness.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return payload

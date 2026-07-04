@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest
+from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest, V3RuntimeTopology
 from backend.app.services import v3_composer_draft_runner as draft_runner
 
 
@@ -157,12 +157,12 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
     result = draft_runner.run_v3_composer_draft_smoke(valid_draft(), root=tmp_path)
 
     assert result["status"] == "completed"
-    assert result["stage"] == "V3.12 Runtime Realism Closure"
-    assert result["current_stage"] == "V3.12 Runtime Realism Closure"
-    assert result["latest_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
-    assert result["latest_completed_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
-    assert result["current_capability"] == "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP"
-    assert result["runtime_truth"] == "local_multi_process_runtime_mvp_not_production_cluster"
+    assert result["stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert result["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert result["latest_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+    assert result["latest_completed_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+    assert result["current_capability"] == "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export"
+    assert result["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
     assert result["run_mode"] == "draft_smoke"
     assert result["topology_summary"]["logical_node_count"] == 25
     assert len(calls) == 1
@@ -246,6 +246,71 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
     assert '"state_backend": "memory_kv"' in generated
     assert '"benchmark_template": "full_stack_v3_template"' in generated
     assert '"baseline_profile": "baseline_simple_chain"' in generated
+
+
+def test_run_draft_smoke_writes_metaverse_suite_artifacts(monkeypatch, tmp_path: Path) -> None:
+    def fake_run_go_v3_runtime(**kwargs):
+        output_dir = kwargs["output_dir"]
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "summary.csv").write_text("tx_count,success_count\n1,1\n", encoding="utf-8")
+        (output_dir / "latency.csv").write_text("tx_id,latency_ms\n0,1\n", encoding="utf-8")
+        (output_dir / "runtime.log").write_text("draft smoke complete\n", encoding="utf-8")
+        return SimpleNamespace(output_dir=output_dir, summary={"tx_count": 1, "success_count": 1, "avg_latency_ms": 2, "p95_latency_ms": 3, "p99_latency_ms": 4, "throughput_tps": 5})
+
+    monkeypatch.setattr(draft_runner, "run_go_v3_runtime", fake_run_go_v3_runtime)
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(
+        metaverse_suite_enabled=True,
+        metaverse_scenario="mixed_metaverse",
+        tx_count=30,
+        user_count=10,
+        asset_count=20,
+        item_count=20,
+        avatar_count=10,
+        scene_count=6,
+        metaverse_count=2,
+        offchain_failure_ratio=0.2,
+        benchmark_suite_enabled=True,
+        baseline_matrix_enabled=True,
+        multi_seed_enabled=True,
+        paper_export_enabled=True,
+        sweep_seed_count=2,
+        sweep_shard_counts=[1],
+        sweep_cross_shard_ratios=[0.0, 0.5],
+        sweep_hotspot_ratios=[0.0],
+    )
+
+    result = draft_runner.run_v3_composer_draft_smoke(draft, root=tmp_path)
+    run_dir = Path(result["output_dir"])
+
+    assert result["summary"]["metaverse_suite_enabled"] is True
+    assert result["summary"]["metaverse_scenario_selected"] == "mixed_metaverse"
+    assert result["summary"]["metaverse_tx_count"] == 30
+    assert result["summary"]["baseline_count"] == 15
+    assert result["summary"]["paper_table_available"] is True
+    for name in (
+        "metaverse_workload_catalog.json",
+        "metaverse_workload_config.json",
+        "metaverse_trace_meta.json",
+        "scenario_summary.csv",
+        "hotspot_distribution.csv",
+        "cross_scene_transfer_log.csv",
+        "offchain_confirmation_log.csv",
+        "cross_metaverse_transfer_log.csv",
+        "metaverse_experiment_summary.json",
+        "baseline_matrix.csv",
+        "multi_seed_summary.csv",
+        "benchmark_suite_summary.json",
+        "paper_table_latency.csv",
+        "paper_table_throughput.csv",
+        "paper_table_cross_shard.csv",
+        "paper_table_offchain_confirmation.csv",
+        "paper_figure_data.csv",
+        "paper_export_manifest.json",
+    ):
+        assert (run_dir / name).is_file()
+    artifact_names = {artifact["name"] for artifact in result["artifacts"]}
+    assert {"metaverse_experiment_summary.json", "baseline_matrix.csv", "paper_export_manifest.json"} <= artifact_names
 
 
 def test_run_draft_smoke_invalid_draft_does_not_start_runner(monkeypatch, tmp_path: Path) -> None:

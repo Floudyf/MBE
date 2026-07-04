@@ -67,9 +67,9 @@ def test_v3_12_artifacts_are_downloadable() -> None:
     assert expected.issubset(ARTIFACT_ALLOWLIST)
 
 
-def test_stage_metadata_reflects_v3_12() -> None:
+def test_stage_metadata_reflects_v3_13() -> None:
     metadata = stage_metadata()
 
-    assert metadata["current_stage"] == "V3.12 Runtime Realism Closure"
-    assert metadata["runtime_truth"] == "local_multi_process_runtime_mvp_not_production_cluster"
-    assert metadata["next_stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert metadata["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert metadata["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
+    assert metadata["next_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"

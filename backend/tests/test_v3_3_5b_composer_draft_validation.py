@@ -37,8 +37,8 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.12 Runtime Realism Closure"
-    assert result.normalized_draft["runtime_truth"] == "local_multi_process_runtime_mvp_not_production_cluster"
+    assert result.normalized_draft["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert result.normalized_draft["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
     assert result.normalized_draft["topology"]["cross_shard_protocol"] == "none"
     assert result.normalized_draft["topology"]["state_backend"] == "memory_kv"
     assert result.normalized_draft["topology"]["benchmark_template"] == "full_stack_v3_template"
@@ -81,6 +81,56 @@ def test_valid_draft_accepts_benchmark_template_and_baseline_profile() -> None:
     assert result.normalized_draft["topology"]["benchmark_template"] == "state_authenticity_template"
     assert result.normalized_draft["topology"]["baseline_profile"] == "baseline_memory_kv"
     assert result.normalized_draft["topology"]["repeat_count"] == 3
+
+
+def test_valid_draft_accepts_metaverse_suite_topology() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(
+        metaverse_suite_enabled=True,
+        metaverse_scenario="cross_metaverse_transfer",
+        tx_count=128,
+        user_count=20,
+        asset_count=50,
+        item_count=10,
+        avatar_count=20,
+        scene_count=8,
+        metaverse_count=2,
+        hotspot_ratio=0.3,
+        cross_scene_ratio=0.4,
+        cross_shard_ratio=0.5,
+        offchain_confirmation_enabled=True,
+        offchain_confirm_delay_ms=200,
+        offchain_failure_ratio=0.1,
+        cross_metaverse_enabled=True,
+        benchmark_suite_enabled=True,
+        baseline_matrix_enabled=True,
+        multi_seed_enabled=True,
+        paper_export_enabled=True,
+        sweep_seed_count=2,
+        sweep_shard_counts=[1, 2],
+        sweep_cross_shard_ratios=[0.0, 0.5],
+        sweep_hotspot_ratios=[0.0, 0.3],
+    )
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is True
+    assert result.normalized_draft is not None
+    topology = result.normalized_draft["topology"]
+    assert topology["metaverse_suite_enabled"] is True
+    assert topology["metaverse_scenario"] == "cross_metaverse_transfer"
+    assert topology["paper_export_enabled"] is True
+
+
+def test_invalid_metaverse_scenario_and_ranges_are_rejected() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(metaverse_scenario="real_platform_trace", tx_count=0, hotspot_ratio=1.2, sweep_seed_count=21)
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is False
+    assert any("metaverse_scenario" in error for error in result.errors)
+    assert any("tx_count" in error for error in result.errors)
+    assert any("hotspot_ratio" in error for error in result.errors)
+    assert any("sweep_seed_count" in error for error in result.errors)
 
 
 def test_invalid_benchmark_template_is_rejected() -> None:

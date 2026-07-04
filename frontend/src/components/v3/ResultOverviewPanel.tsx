@@ -30,6 +30,18 @@ export default function ResultOverviewPanel({ summary }: Props) {
         <MetricCard label="Relay 成功数" value={summary.relay_success_count} />
         <MetricCard label="状态证明验证数" value={summary.state_proof_verified_count} />
         <MetricCard label="Benchmark 运行数" value={summary.benchmark_run_count} />
+        <MetricCard label="元宇宙场景" value={summary.metaverse_scenario_selected} />
+        <MetricCard label="元宇宙交易数" value={summary.metaverse_tx_count} />
+        <MetricCard label="元宇宙用户数" value={summary.metaverse_user_count} />
+        <MetricCard label="虚拟资产数" value={summary.metaverse_asset_count} />
+        <MetricCard label="场景数" value={summary.metaverse_scene_count} />
+        <MetricCard label="跨场景次数" value={summary.metaverse_cross_scene_count} />
+        <MetricCard label="元宇宙跨片次数" value={summary.metaverse_cross_shard_count} />
+        <MetricCard label="链下确认次数" value={summary.metaverse_offchain_confirmation_count} />
+        <MetricCard label="跨元宇宙次数" value={summary.metaverse_cross_metaverse_count} />
+        <MetricCard label="Baseline 数" value={summary.baseline_count} />
+        <MetricCard label="Seed 数" value={summary.seed_count} />
+        <MetricCard label="Paper 表格" value={summary.paper_table_available} />
       </div>
       <div className="chart-grid">
         <MiniBarChart
@@ -48,6 +60,15 @@ export default function ResultOverviewPanel({ summary }: Props) {
             { label: "失败进程", value: summary.failed_process_count },
             { label: "网络消息", value: summary.network_message_count },
             { label: "Epoch", value: summary.epoch_count },
+          ]}
+        />
+        <MiniBarChart
+          title="元宇宙场景指标"
+          data={[
+            { label: "跨场景", value: summary.metaverse_cross_scene_count },
+            { label: "跨片", value: summary.metaverse_cross_shard_count },
+            { label: "链下确认", value: summary.metaverse_offchain_confirmation_count },
+            { label: "跨元宇宙", value: summary.metaverse_cross_metaverse_count },
           ]}
         />
         <MiniBarChart

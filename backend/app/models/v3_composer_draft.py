@@ -37,6 +37,35 @@ class V3RuntimeTopology(BaseModel):
     benchmark_template: str = "full_stack_v3_template"
     baseline_profile: str = "baseline_simple_chain"
     repeat_count: int = 1
+    metaverse_suite_enabled: bool = False
+    metaverse_scenario: str = "mixed_metaverse"
+    user_count: int = 100
+    asset_count: int = 1000
+    item_count: int = 1000
+    avatar_count: int = 100
+    scene_count: int = 16
+    metaverse_count: int = 2
+    tx_count: int = 10000
+    seed: int = 42
+    hotspot_ratio: float = 0.2
+    cross_scene_ratio: float = 0.15
+    cross_shard_ratio: float = 0.2
+    burst_rate: float = 0.0
+    read_write_ratio: float = 0.3
+    asset_skew: float = 0.2
+    scene_skew: float = 0.2
+    offchain_confirmation_enabled: bool = True
+    offchain_confirm_delay_ms: int = 100
+    offchain_failure_ratio: float = 0.0
+    cross_metaverse_enabled: bool = True
+    benchmark_suite_enabled: bool = False
+    baseline_matrix_enabled: bool = False
+    multi_seed_enabled: bool = False
+    paper_export_enabled: bool = False
+    sweep_seed_count: int = 3
+    sweep_shard_counts: list[int] = Field(default_factory=lambda: [1, 2, 4])
+    sweep_cross_shard_ratios: list[float] = Field(default_factory=lambda: [0.0, 0.2, 0.5])
+    sweep_hotspot_ratios: list[float] = Field(default_factory=lambda: [0.0, 0.2, 0.5])
 
 
 class V3ComposerDraftRequest(BaseModel):

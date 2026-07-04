@@ -5,11 +5,21 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.12 Runtime Realism Closure"
-LATEST_RUNTIME_STAGE = "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
-CURRENT_CAPABILITY = "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP"
-RUNTIME_TRUTH = "local_multi_process_runtime_mvp_not_production_cluster"
-NEXT_STAGE = "V3.13 Metaverse Experiment Suite Closure"
+CURRENT_STAGE = "V3.13 Metaverse Experiment Suite Closure"
+LATEST_RUNTIME_STAGE = "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+CURRENT_CAPABILITY = "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export"
+RUNTIME_TRUTH = "controlled_metaverse_workload_not_real_platform_trace"
+NEXT_STAGE = "V3-final Fault, Observability, and Reproducibility Closure"
+METAVERSE_SCENARIOS = {
+    "asset_transfer",
+    "avatar_update",
+    "scene_hotspot",
+    "item_transfer",
+    "cross_scene_migration",
+    "onchain_offchain_confirmation",
+    "cross_metaverse_transfer",
+    "mixed_metaverse",
+}
 
 BENCHMARK_TEMPLATES = {
     "metatrack_hotspot_template",
@@ -18,6 +28,10 @@ BENCHMARK_TEMPLATES = {
     "cross_shard_relay_mvp_template",
     "state_authenticity_template",
     "full_stack_v3_template",
+    "metaverse_mixed_template",
+    "metaverse_asset_transfer_template",
+    "metaverse_cross_scene_template",
+    "metaverse_cross_metaverse_template",
 }
 BASELINE_PROFILES = {
     "baseline_simple_chain",
@@ -96,12 +110,38 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     benchmark_template = data.get("benchmark_template") or "full_stack_v3_template"
     data["benchmark_template"] = benchmark_template
     if benchmark_template not in BENCHMARK_TEMPLATES:
-        errors.append("topology.benchmark_template must be one of the V3.11 benchmark templates")
+        errors.append("topology.benchmark_template must be one of the V3.13 benchmark templates")
     baseline_profile = data.get("baseline_profile") or "baseline_simple_chain"
     data["baseline_profile"] = baseline_profile
     if baseline_profile not in BASELINE_PROFILES:
         errors.append("topology.baseline_profile must be one of the V3.10 baseline profiles")
     _range(errors, data, "repeat_count", 1, 20)
+    _bool(errors, data, "metaverse_suite_enabled")
+    scenario = data.get("metaverse_scenario") or "mixed_metaverse"
+    data["metaverse_scenario"] = scenario
+    if scenario not in METAVERSE_SCENARIOS:
+        errors.append("topology.metaverse_scenario must be one of the V3.13 metaverse scenarios")
+    _range(errors, data, "user_count", 1, 100000)
+    _range(errors, data, "asset_count", 1, 1000000)
+    _range(errors, data, "item_count", 0, 1000000)
+    _range(errors, data, "avatar_count", 1, 100000)
+    _range(errors, data, "scene_count", 1, 10000)
+    _range(errors, data, "metaverse_count", 1, 100)
+    _range(errors, data, "tx_count", 1, 10000000)
+    _range(errors, data, "seed", 0, 2147483647)
+    for key in ("hotspot_ratio", "cross_scene_ratio", "cross_shard_ratio", "burst_rate", "read_write_ratio", "asset_skew", "scene_skew", "offchain_failure_ratio"):
+        _ratio(errors, data, key)
+    _bool(errors, data, "offchain_confirmation_enabled")
+    _range(errors, data, "offchain_confirm_delay_ms", 0, 600000)
+    _bool(errors, data, "cross_metaverse_enabled")
+    _bool(errors, data, "benchmark_suite_enabled")
+    _bool(errors, data, "baseline_matrix_enabled")
+    _bool(errors, data, "multi_seed_enabled")
+    _bool(errors, data, "paper_export_enabled")
+    _range(errors, data, "sweep_seed_count", 1, 20)
+    _int_list(errors, data, "sweep_shard_counts", 1, 32)
+    _float_list(errors, data, "sweep_cross_shard_ratios", 0.0, 1.0)
+    _float_list(errors, data, "sweep_hotspot_ratios", 0.0, 1.0)
     return data, errors
 
 
@@ -127,6 +167,13 @@ def topology_summary(topology: dict[str, Any]) -> dict[str, int | str | bool]:
         "max_local_processes": int(topology.get("max_local_processes", 8)),
         "committee_epoch_enabled": bool(topology.get("enable_committee_epoch", True)),
         "epoch_count": int(topology.get("epoch_count", 1)),
+        "metaverse_suite_enabled": bool(topology.get("metaverse_suite_enabled", False)),
+        "metaverse_scenario": str(topology.get("metaverse_scenario", "mixed_metaverse")),
+        "metaverse_tx_count": int(topology.get("tx_count", 10000)),
+        "benchmark_suite_enabled": bool(topology.get("benchmark_suite_enabled", False)),
+        "baseline_matrix_enabled": bool(topology.get("baseline_matrix_enabled", False)),
+        "multi_seed_enabled": bool(topology.get("multi_seed_enabled", False)),
+        "paper_export_enabled": bool(topology.get("paper_export_enabled", False)),
     }
 
 
@@ -134,3 +181,36 @@ def _range(errors: list[str], data: dict[str, Any], key: str, minimum: int, maxi
     value = data.get(key)
     if not isinstance(value, int) or value < minimum or value > maximum:
         errors.append(f"topology.{key} must be between {minimum} and {maximum}")
+
+
+def _ratio(errors: list[str], data: dict[str, Any], key: str) -> None:
+    value = data.get(key)
+    if not isinstance(value, (int, float)) or float(value) < 0.0 or float(value) > 1.0:
+        errors.append(f"topology.{key} must be between 0.0 and 1.0")
+
+
+def _bool(errors: list[str], data: dict[str, Any], key: str) -> None:
+    if not isinstance(data.get(key), bool):
+        errors.append(f"topology.{key} must be bool")
+
+
+def _int_list(errors: list[str], data: dict[str, Any], key: str, minimum: int, maximum: int) -> None:
+    values = data.get(key)
+    if not isinstance(values, list) or not values:
+        errors.append(f"topology.{key} must be a non-empty list")
+        return
+    for value in values:
+        if not isinstance(value, int) or value < minimum or value > maximum:
+            errors.append(f"topology.{key} values must be between {minimum} and {maximum}")
+            return
+
+
+def _float_list(errors: list[str], data: dict[str, Any], key: str, minimum: float, maximum: float) -> None:
+    values = data.get(key)
+    if not isinstance(values, list) or not values:
+        errors.append(f"topology.{key} must be a non-empty list")
+        return
+    for value in values:
+        if not isinstance(value, (int, float)) or float(value) < minimum or float(value) > maximum:
+            errors.append(f"topology.{key} values must be between {minimum} and {maximum}")
+            return

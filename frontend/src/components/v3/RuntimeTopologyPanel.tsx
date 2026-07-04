@@ -10,12 +10,27 @@ type Props = {
 type SelectOption = [string, string, boolean?];
 
 const benchmarkTemplates: SelectOption[] = [
+  ["metaverse_mixed_template", "元宇宙混合场景模板"],
+  ["metaverse_asset_transfer_template", "虚拟资产转移模板"],
+  ["metaverse_cross_scene_template", "跨场景迁移模板"],
+  ["metaverse_cross_metaverse_template", "跨元宇宙转移模板"],
   ["full_stack_v3_template", "V3 全栈快速验证模板"],
   ["state_authenticity_template", "状态真实性模板"],
   ["cross_shard_relay_preview_template", "跨片 Relay 预览模板"],
   ["cross_shard_relay_mvp_template", "跨片 Relay MVP 模板"],
   ["pbft_network_template", "PBFT 网络预览模板"],
   ["metatrack_hotspot_template", "MetaTrack 热点负载模板"],
+];
+
+const metaverseScenarios: SelectOption[] = [
+  ["mixed_metaverse", "混合元宇宙场景"],
+  ["asset_transfer", "虚拟资产转移"],
+  ["avatar_update", "Avatar 状态更新"],
+  ["scene_hotspot", "场景热点访问"],
+  ["item_transfer", "道具 / 装备转移"],
+  ["cross_scene_migration", "跨场景迁移"],
+  ["onchain_offchain_confirmation", "链上 + 链下确认"],
+  ["cross_metaverse_transfer", "跨元宇宙转移 MVP"],
 ];
 
 const baselineProfiles: SelectOption[] = [
@@ -106,6 +121,78 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
             记录 repeat_index / seed 的本地 repeatability MVP。
           </NumberField>
         </ConfigGroup>
+
+        <ConfigGroup title="元宇宙实验套件">
+          <label className="field-card checkbox-card">
+            <span>启用元宇宙 workload suite <HelpTip title="元宇宙 workload suite">生成受控合成场景、baseline matrix、multi-seed sweep 和 paper export scaffold；不是真实平台 trace。</HelpTip></span>
+            <input type="checkbox" checked={topology.metaverse_suite_enabled ?? false} onChange={(event) => patch({ metaverse_suite_enabled: event.target.checked })} />
+            <small>metaverse_suite_enabled</small>
+          </label>
+          <SelectField label="元宇宙场景" id="metaverse_scenario" value={topology.metaverse_scenario || "mixed_metaverse"} options={metaverseScenarios} onChange={(value) => patch({ metaverse_scenario: value })}>
+            控制 trace metadata 的场景语义；默认 mixed_metaverse。
+          </SelectField>
+          <NumberField label="交易数量" id="tx_count" value={topology.tx_count || 10000} min={1} max={10000000} onChange={(value) => patch({ tx_count: value })}>
+            用于 V3.13 metadata artifacts；Draft Smoke 的 Go 执行仍保持小规模稳定验证。
+          </NumberField>
+          <NumberField label="随机种子" id="seed" value={topology.seed || 42} min={0} max={2147483647} onChange={(value) => patch({ seed: value })}>
+            相同配置和 seed 会生成相同场景 metadata。
+          </NumberField>
+          <NumberField label="用户数" id="user_count" value={topology.user_count || 100} min={1} max={100000} onChange={(value) => patch({ user_count: value })}>
+            合成用户 ID 空间。
+          </NumberField>
+          <NumberField label="资产数" id="asset_count" value={topology.asset_count || 1000} min={1} max={1000000} onChange={(value) => patch({ asset_count: value })}>
+            合成虚拟资产 ID 空间。
+          </NumberField>
+          <NumberField label="场景数" id="scene_count" value={topology.scene_count || 16} min={1} max={10000} onChange={(value) => patch({ scene_count: value })}>
+            合成 scene ID 空间。
+          </NumberField>
+          <NumberField label="元宇宙数量" id="metaverse_count" value={topology.metaverse_count || 2} min={1} max={100} onChange={(value) => patch({ metaverse_count: value })}>
+            用于 cross_metaverse_transfer 的 source / target metaverse。
+          </NumberField>
+          <NumberField label="热点比例" id="hotspot_ratio" value={topology.hotspot_ratio ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ hotspot_ratio: value })}>
+            控制热点 scene/key 集中程度。
+          </NumberField>
+          <NumberField label="跨场景比例" id="cross_scene_ratio" value={topology.cross_scene_ratio ?? 0.15} min={0} max={1} step={0.01} onChange={(value) => patch({ cross_scene_ratio: value })}>
+            控制 cross_scene_migration metadata 数量。
+          </NumberField>
+          <NumberField label="跨片比例" id="cross_shard_ratio" value={topology.cross_shard_ratio ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ cross_shard_ratio: value })}>
+            控制合成跨片 metadata 数量。
+          </NumberField>
+          <label className="field-card checkbox-card">
+            <span>链下确认 <HelpTip title="链下确认">生成 deterministic offchain_confirmation_log.csv，不调用真实外部服务。</HelpTip></span>
+            <input type="checkbox" checked={topology.offchain_confirmation_enabled ?? true} onChange={(event) => patch({ offchain_confirmation_enabled: event.target.checked })} />
+            <small>offchain_confirmation_enabled</small>
+          </label>
+          <NumberField label="链下确认延迟" id="offchain_confirm_delay_ms" value={topology.offchain_confirm_delay_ms ?? 100} min={0} max={600000} onChange={(value) => patch({ offchain_confirm_delay_ms: value })}>
+            写入链下确认 metadata，不等待真实时间。
+          </NumberField>
+          <NumberField label="链下失败比例" id="offchain_failure_ratio" value={topology.offchain_failure_ratio ?? 0} min={0} max={1} step={0.01} onChange={(value) => patch({ offchain_failure_ratio: value })}>
+            确定性生成 failed confirmation 行。
+          </NumberField>
+          <label className="field-card checkbox-card">
+            <span>跨元宇宙转移 <HelpTip title="跨元宇宙转移">生成 Relay MVP 可衔接的 cross_metaverse_transfer_log.csv；不是生产桥。</HelpTip></span>
+            <input type="checkbox" checked={topology.cross_metaverse_enabled ?? true} onChange={(event) => patch({ cross_metaverse_enabled: event.target.checked })} />
+            <small>cross_metaverse_enabled</small>
+          </label>
+          <label className="field-card checkbox-card">
+            <span>Baseline matrix</span>
+            <input type="checkbox" checked={topology.baseline_matrix_enabled ?? false} onChange={(event) => patch({ baseline_matrix_enabled: event.target.checked })} />
+            <small>baseline_matrix_enabled</small>
+          </label>
+          <label className="field-card checkbox-card">
+            <span>Multi-seed / sweep</span>
+            <input type="checkbox" checked={topology.multi_seed_enabled ?? false} onChange={(event) => patch({ multi_seed_enabled: event.target.checked, benchmark_suite_enabled: event.target.checked || topology.benchmark_suite_enabled })} />
+            <small>multi_seed_enabled</small>
+          </label>
+          <label className="field-card checkbox-card">
+            <span>Paper export scaffold</span>
+            <input type="checkbox" checked={topology.paper_export_enabled ?? false} onChange={(event) => patch({ paper_export_enabled: event.target.checked })} />
+            <small>paper_export_enabled</small>
+          </label>
+          <NumberField label="Sweep seed 数" id="sweep_seed_count" value={topology.sweep_seed_count || 3} min={1} max={20} onChange={(value) => patch({ sweep_seed_count: value })}>
+            默认 3；用于 deterministic multi-seed scaffold。
+          </NumberField>
+        </ConfigGroup>
       </div>
 
       <dl className="topology-summary-grid">
@@ -121,11 +208,11 @@ function ConfigGroup({ title, children }: { title: string; children: ReactNode }
   return <section className="topology-group"><h4>{title}</h4><div className="topology-field-grid">{children}</div></section>;
 }
 
-function NumberField({ label, id, value, min, max, onChange, children }: { label: string; id: string; value: number; min: number; max: number; onChange: (value: number) => void; children: ReactNode }) {
+function NumberField({ label, id, value, min, max, step = 1, onChange, children }: { label: string; id: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void; children: ReactNode }) {
   return (
     <label className="field-card">
       <span>{label} <HelpTip title={label}>{children}</HelpTip></span>
-      <input type="number" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
       <small>{id}</small>
     </label>
   );
@@ -162,5 +249,9 @@ function topologySummary(topology: V3RuntimeTopology): Record<string, number | s
     最大本地进程数: topology.max_local_processes || 8,
     启用委员会Epoch: topology.enable_committee_epoch ?? true,
     Epoch数量: topology.epoch_count || 1,
+    元宇宙套件: topology.metaverse_suite_enabled ?? false,
+    元宇宙场景: topology.metaverse_scenario || "mixed_metaverse",
+    元宇宙交易数: topology.tx_count || 10000,
+    Paper导出: topology.paper_export_enabled ?? false,
   };
 }

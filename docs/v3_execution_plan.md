@@ -160,14 +160,22 @@ V3.12 adds `process_runtime_mode=dry_run|smoke`, `max_local_processes`, `enable_
 
 V3.12 is closed after this runtime realism MVP. It is not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
 
+## V3.13 Current Status
+
+Current stage is V3.13 Metaverse Experiment Suite Closure. V3.13 adds a controlled metaverse workload catalog, scenario templates, baseline matrix, multi-seed/sweep MVP, and paper table/figure data export artifacts above the existing Go-backed Draft Smoke path.
+
+V3.13 supports `asset_transfer`, `avatar_update`, `scene_hotspot`, `item_transfer`, `cross_scene_migration`, `onchain_offchain_confirmation`, `cross_metaverse_transfer`, and `mixed_metaverse` metadata generation. It writes metaverse workload config/meta, scenario/hotspot/cross-scene/offchain/cross-metaverse logs, baseline matrix, multi-seed summary, benchmark suite summary, and paper export CSV/manifest files.
+
+V3.13 is closed after this controlled experiment suite. It is not real metaverse platform trace collection, not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
+
 ## Compressed Remaining Roadmap After V3.10.1
 
 The compressed remaining V3 route is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`.
 
 1. V3.11 CrossShard Protocol Closure. Complete.
 2. V3.12 Runtime Realism Closure. Complete.
-3. V3.13 Metaverse Experiment Suite Closure.
-4. V3-final Fault, Observability, and Reproducibility Closure.
+3. V3.13 Metaverse Experiment Suite Closure. Complete.
+4. V3-final Fault, Observability, and Reproducibility Closure. Next.
 
 ## V3.6 / V3.7 Planning
 
@@ -177,7 +185,7 @@ V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is imple
 
 V3.8 is implemented as CrossShardProtocol Skeleton Closure. It stays separate from V3.6 networking and V3.7 PBFT preview work.
 V3.9 is implemented as State Authenticity Layer MVP Closure. It strengthens StateAccess / StateStorage / Commit with persistent state backend MVP, Merkle/MPT-like roots, proof verification, and witness artifacts.
-V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is implemented as CrossShard Protocol Closure. V3.12 is implemented as Runtime Realism Closure.
+V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is implemented as CrossShard Protocol Closure. V3.12 is implemented as Runtime Realism Closure. V3.13 is implemented as Metaverse Experiment Suite Closure.
 
 Planned stage list extension:
 
@@ -190,6 +198,7 @@ Planned stage list extension:
 - V3.11 CrossShard Protocol Closure.
 - V3.12 Runtime Realism Closure.
 - V3.13 Metaverse Experiment Suite Closure.
+- V3-final Fault, Observability, and Reproducibility Closure.
 
 The main transaction flow should remain:
 

@@ -15,14 +15,14 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     run_dir = tmp_path / result["run_id"]
 
     assert result["status"] == "completed"
-    assert result["stage"] == "V3.12 Runtime Realism Closure"
-    assert result["current_stage"] == "V3.12 Runtime Realism Closure"
-    assert result["latest_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
-    assert result["latest_completed_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
-    assert result["closure_stage"] == "V3.12"
-    assert result["current_capability"] == "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP"
-    assert result["runtime_truth"] == "local_multi_process_runtime_mvp_not_production_cluster"
-    assert result["next_stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert result["stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert result["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert result["latest_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+    assert result["latest_completed_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+    assert result["closure_stage"] == "V3.13"
+    assert result["current_capability"] == "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export"
+    assert result["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
+    assert result["next_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
     assert result["preset_order"] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["run_index"]] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["aggregate_summary"]] == CONTROLLED_PRESET_ORDER
@@ -86,6 +86,24 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
         "reproducibility_manifest.json",
         "benchmark_report.md",
         "benchmark_summary.json",
+        "metaverse_workload_catalog.json",
+        "metaverse_workload_config.json",
+        "metaverse_trace_meta.json",
+        "scenario_summary.csv",
+        "hotspot_distribution.csv",
+        "cross_scene_transfer_log.csv",
+        "offchain_confirmation_log.csv",
+        "cross_metaverse_transfer_log.csv",
+        "metaverse_experiment_summary.json",
+        "baseline_matrix.csv",
+        "multi_seed_summary.csv",
+        "benchmark_suite_summary.json",
+        "paper_table_latency.csv",
+        "paper_table_throughput.csv",
+        "paper_table_cross_shard.csv",
+        "paper_table_offchain_confirmation.csv",
+        "paper_figure_data.csv",
+        "paper_export_manifest.json",
     }
 
     with (run_dir / "run_index.csv").open(encoding="utf-8", newline="") as stream:
@@ -100,15 +118,18 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     assert "state_root_count" in aggregate_rows[0]
     assert "benchmark_template_selected" in aggregate_rows[0]
     assert "paper_grade_benchmark" in aggregate_rows[0]
+    assert "metaverse_tx_count" in aggregate_rows[0]
+    assert "paper_table_available" in aggregate_rows[0]
 
     readiness = json.loads((run_dir / "realism_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["current_stage"] == "V3.12 Runtime Realism Closure"
-    assert readiness["latest_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
-    assert readiness["latest_completed_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
-    assert len(readiness["modules"]) == 12
+    assert readiness["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
+    assert readiness["latest_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+    assert readiness["latest_completed_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+    assert len(readiness["modules"]) == 13
     assert "not BlockEmulator backend" in readiness["not_real_chain_claims"]
     assert "not Fabric/EVM live backend" in readiness["not_real_chain_claims"]
     assert "not paper-grade benchmark evidence" in readiness["not_real_chain_claims"]
+    assert "not real metaverse platform trace" in readiness["not_real_chain_claims"]
 
     artifact_path = get_controlled_artifact_path(result["run_id"], "aggregate_summary.csv", root=tmp_path)
     assert artifact_path == run_dir / "aggregate_summary.csv"

@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest
+from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest, V3RuntimeTopology
 from backend.app.services.artifact_manager import get_artifact_path
 from backend.app.services.job_manager import JobManager
 from backend.app.services.v3_composer_draft_runner import run_v3_composer_draft_smoke
@@ -19,13 +19,13 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.12 Runtime Realism Closure"
-LATEST_RUNTIME_STAGE = "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
-CLOSURE_STAGE = "V3.12"
+CURRENT_STAGE = "V3.13 Metaverse Experiment Suite Closure"
+LATEST_RUNTIME_STAGE = "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+CLOSURE_STAGE = "V3.13"
 LATEST_COMPLETED_RUNTIME_STAGE = LATEST_RUNTIME_STAGE
-CURRENT_CAPABILITY = "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP"
-RUNTIME_TRUTH = "local_multi_process_runtime_mvp_not_production_cluster"
-NEXT_STAGE = "V3.13 Metaverse Experiment Suite Closure"
+CURRENT_CAPABILITY = "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export"
+RUNTIME_TRUTH = "controlled_metaverse_workload_not_real_platform_trace"
+NEXT_STAGE = "V3-final Fault, Observability, and Reproducibility Closure"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -62,6 +62,15 @@ AGGREGATE_FIELDS = [
     "benchmark_run_count",
     "repeat_count",
     "paper_grade_benchmark",
+    "metaverse_scenario_selected",
+    "metaverse_tx_count",
+    "metaverse_cross_scene_count",
+    "metaverse_cross_shard_count",
+    "metaverse_offchain_confirmation_count",
+    "metaverse_cross_metaverse_count",
+    "baseline_count",
+    "seed_count",
+    "paper_table_available",
 ]
 CONTROLLED_ARTIFACTS = [
     "run_index.csv",
@@ -123,6 +132,24 @@ CONTROLLED_ARTIFACTS = [
     "reproducibility_manifest.json",
     "benchmark_report.md",
     "benchmark_summary.json",
+    "metaverse_workload_catalog.json",
+    "metaverse_workload_config.json",
+    "metaverse_trace_meta.json",
+    "scenario_summary.csv",
+    "hotspot_distribution.csv",
+    "cross_scene_transfer_log.csv",
+    "offchain_confirmation_log.csv",
+    "cross_metaverse_transfer_log.csv",
+    "metaverse_experiment_summary.json",
+    "baseline_matrix.csv",
+    "multi_seed_summary.csv",
+    "benchmark_suite_summary.json",
+    "paper_table_latency.csv",
+    "paper_table_throughput.csv",
+    "paper_table_cross_shard.csv",
+    "paper_table_offchain_confirmation.csv",
+    "paper_figure_data.csv",
+    "paper_export_manifest.json",
 ]
 
 
@@ -146,7 +173,7 @@ def run_v3_4_10_controlled_smoke(root: Path = CONTROLLED_SMOKE_ROOT) -> dict[str
         source="v3_4_10_controlled_smoke",
         experiment_name="metatrack_controlled_smoke",
         data_truth_label="modular_runtime",
-        stage="V3.4.10",
+        stage=CURRENT_STAGE,
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
@@ -264,7 +291,32 @@ def build_preset_draft_request(template: dict[str, Any], preset: dict[str, Any])
         else:
             status = "fixed"
         modules[module_id] = V3ComposerDraftModule(module_id=module_id, status=status, plugin=plugin)
-    return V3ComposerDraftRequest(template_id=METATRACK_TEMPLATE_ID, preset_id=preset_id, modules=modules)
+    topology = V3RuntimeTopology(
+        metaverse_suite_enabled=True,
+        metaverse_scenario="mixed_metaverse",
+        tx_count=64,
+        user_count=24,
+        asset_count=64,
+        item_count=32,
+        avatar_count=24,
+        scene_count=8,
+        metaverse_count=2,
+        hotspot_ratio=0.25,
+        cross_scene_ratio=0.25,
+        cross_shard_ratio=0.25,
+        offchain_confirmation_enabled=True,
+        offchain_failure_ratio=0.1,
+        cross_metaverse_enabled=True,
+        benchmark_suite_enabled=True,
+        baseline_matrix_enabled=True,
+        multi_seed_enabled=True,
+        paper_export_enabled=True,
+        sweep_seed_count=2,
+        sweep_shard_counts=[1, 2],
+        sweep_cross_shard_ratios=[0.0, 0.25],
+        sweep_hotspot_ratios=[0.0, 0.25],
+    )
+    return V3ComposerDraftRequest(template_id=METATRACK_TEMPLATE_ID, preset_id=preset_id, modules=modules, topology=topology)
 
 
 def list_controlled_artifacts(run_dir: Path, run_id: str) -> list[dict[str, Any]]:
@@ -293,7 +345,9 @@ def _copy_representative_launcher_artifacts(run_dir: Path, child_results: list[d
     if not representative:
         return
     child_dir = Path(str(representative.get("output_dir", "")))
-    for filename in ("node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "relay_state_machine_log.csv", "source_lock_log.csv", "relay_certificate_log.csv", "relay_proof_verification_log.csv", "target_verification_log.csv", "target_commit_log.csv", "source_finalize_log.csv", "cross_shard_timeout_refund_log.csv", "cross_shard_failure_log.csv", "relay_mvp_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"):
+    for filename in CONTROLLED_ARTIFACTS:
+        if filename in {"run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"}:
+            continue
         source = child_dir / filename
         if source.is_file():
             shutil.copyfile(source, run_dir / filename)
