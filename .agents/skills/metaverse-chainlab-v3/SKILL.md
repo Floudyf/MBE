@@ -2,9 +2,9 @@
 
 ## 0. Current V3 Scope Realignment
 
-As of V3.11, current_stage is V3.11 CrossShard Protocol Closure, latest_runtime_stage is cross-shard Relay MVP with state machine, SourceLock, RelayCertificate, verification records, target commit, source finalization, and timeout/refund/abort artifacts, runtime_truth is relay_mvp_not_production_atomic_commit, and next_stage is V3.12 Runtime Realism Closure. V3.4.11 closure, V3.5.4 closure, V3.6 closure, V3.7 closure, V3.8 closure, V3.9 closure, V3.10 closure, V3.10.1 closure, and V3.11 closure are complete. Do not continue adding V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, or V3.11 features after closure.
+As of V3.12, current_stage is V3.12 Runtime Realism Closure, latest_runtime_stage is local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts, runtime_truth is local_multi_process_runtime_mvp_not_production_cluster, and next_stage is V3.13 Metaverse Experiment Suite Closure. V3.4.11 closure, V3.5.4 closure, V3.6 closure, V3.7 closure, V3.8 closure, V3.9 closure, V3.10 closure, V3.10.1 closure, V3.11 closure, and V3.12 closure are complete after this round. Do not continue adding V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, or V3.12 features after closure.
 
-When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, `docs/v3_5_3_local_node_process_runtime.md`, `docs/v3_5_4_v3_5_closure.md`, `docs/v3_6_network_adapter_and_tcp_message_runtime_plan.md`, `docs/v3_7_consensus_runtime_and_blockemulator_aligned_pbft_plan.md`, `docs/v3_8_cross_shard_protocol_skeleton_plan.md`, `docs/v3_9_state_authenticity_layer_mvp_plan.md`, `docs/v3_10_benchmark_experiment_template_hardening_plan.md`, `docs/v3_10_1_frontend_ux_chinese_console_cleanup_plan.md`, `docs/v3_11_cross_shard_protocol_closure.md`, the frontend Runtime Topology / NetworkAdapter / Node Process Preview / PBFT preview / Cross-shard / Relay MVP / State Authenticity / Benchmark summary panels, backend V3 composer topology validation, Go logical node / launcher preview / node process preview / network adapter / consensus-light-over-network / PBFT-preview / cross-shard / Relay MVP / state authenticity / benchmark hardening tests, and controlled smoke tests. V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, and V3.11 are closed. Do not enter V3.12 unless the user explicitly asks for it. Do not implement production PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, complete Broker/2PC/Monoxide, production atomic cross-shard commit, Byzantine-secure relay, Ethereum-compatible MPT, production database durability, full stateless execution, full cross-shard proof protocol, large-scale distributed benchmark, performance superiority claims, or paper-grade benchmark claims.
+When taking over the project, first check `git status --short`, latest commit, README Current Status, `docs/v3_5_node_topology_and_local_launcher_plan.md`, `docs/v3_5_1_logical_node_topology_runtime.md`, `docs/v3_5_2_local_multi_process_launcher_preview.md`, `docs/v3_5_3_local_node_process_runtime.md`, `docs/v3_5_4_v3_5_closure.md`, `docs/v3_6_network_adapter_and_tcp_message_runtime_plan.md`, `docs/v3_7_consensus_runtime_and_blockemulator_aligned_pbft_plan.md`, `docs/v3_8_cross_shard_protocol_skeleton_plan.md`, `docs/v3_9_state_authenticity_layer_mvp_plan.md`, `docs/v3_10_benchmark_experiment_template_hardening_plan.md`, `docs/v3_10_1_frontend_ux_chinese_console_cleanup_plan.md`, `docs/v3_11_cross_shard_protocol_closure.md`, `docs/v3_12_runtime_realism_closure.md`, the frontend Runtime Topology / NetworkAdapter / Node Process Preview / PBFT preview / Cross-shard / Relay MVP / State Authenticity / Benchmark / Runtime Realism summary panels, backend V3 composer topology validation, Go logical node / launcher preview / node process preview / local multi-process runtime / committee epoch / network adapter / consensus-light-over-network / PBFT-preview / cross-shard / Relay MVP / state authenticity / benchmark hardening tests, and controlled smoke tests. V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, and V3.12 are closed. Do not enter V3.13 unless the user explicitly asks for it. Do not implement production PBFT, HotStuff/Raft, Fabric/EVM live backend, BlockEmulator backend, complete Broker/2PC/Monoxide, production atomic cross-shard commit, Byzantine-secure relay, Ethereum-compatible MPT, production database durability, full stateless execution, full cross-shard proof protocol, large-scale distributed benchmark, performance superiority claims, or paper-grade benchmark claims.
 
 Roadmap after V3.5 closure:
 
@@ -17,7 +17,7 @@ Roadmap after V3.5 closure:
 - V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. It supports benchmark_template_catalog, baseline_profile_catalog, local_controlled_sweep_runner, multi_seed_repeatability, reproducibility_manifest, benchmark_report, and benchmark_artifacts. Do not continue adding V3.10 features after closure.
 - V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. It supports frontend_navigation_cleanup, chinese_console_localization, help_tip_progressive_disclosure, module_selection_cleanup, run_progress_feedback, lightweight_result_chart_preview, and visual_style_cleanup. Do not continue adding V3.10.1 features after closure.
 - V3.11 is implemented as CrossShard Protocol Closure. It upgrades `relay_preview` into runnable `relay_mvp` with SourceLock, RelayCertificate, proof/certificate verification records, target commit, source finalization, and deterministic timeout/refund/abort artifacts. It is not production atomic commit, complete Broker/2PC/Monoxide, Byzantine-secure relay, a production cross-chain bridge, BlockEmulator backend, or paper-grade benchmark evidence.
-- V3.12 is planned for Runtime Realism Closure. Do not enter V3.12 unless the user explicitly asks for it.
+- V3.12 is implemented as Runtime Realism Closure. It hardens the V3.5 launcher/node process previews into a runnable, observable, cleanable local multi-process runtime MVP with shard/committee/epoch artifacts. It is not multi-server deployment, not a production cluster, not production PBFT/HotStuff/Raft, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
 - In docs-only planning rounds, do not implement V3.6/V3.7 code, schemas, tests, configs, frontend, backend, or Go runtime.
 - Do not claim production networking or real PBFT from V3.6 NetworkAdapter / consensus-light preview. Do not claim production PBFT even after V3.7 preview.
 
@@ -108,24 +108,61 @@ V3.10.1 truth boundary:
 
 ## Compressed Remaining V3 Roadmap After V3.10.1
 
-Current closed stage: V3.11.
+Current closed stage: V3.12.
 
-Next implementation stage: V3.12 Runtime Realism Closure.
+Next implementation stage: V3.13 Metaverse Experiment Suite Closure.
 
 Compressed route:
 
 1. V3.11 CrossShard Protocol Closure. Complete.
-2. V3.12 Runtime Realism Closure. Next.
+2. V3.12 Runtime Realism Closure. Complete.
 3. V3.13 Metaverse Experiment Suite Closure.
 4. V3-final Fault, Observability, and Reproducibility Closure.
 
 Rules:
 
-- Do not continue V3.11 after closure or skip beyond V3.12 unless the user explicitly asks.
+- Do not continue V3.12 after closure or skip beyond V3.13 unless the user explicitly asks.
 - Current topology settings are logical topology until `local_multi_process` is implemented.
 - V3.5 already introduced launcher preview and node process preview.
 - V3.12 hardens V3.5 previews into a runnable local multi-process runtime.
 - Do not overclaim preview features as production implementations.
+
+## V3.12 Runtime Realism Closure
+
+Current implementation stage:
+V3.12 Runtime Realism Closure
+
+Allowed in V3.12:
+
+- local_multi_process runtime mode
+- managed local process launcher MVP
+- node process lifecycle artifacts
+- localhost TCP / NetworkAdapter process path
+- shard model
+- committee model
+- epoch model
+- light reconfiguration plan
+- frontend process / shard / committee / epoch summary
+- docs and tests for V3.12
+
+Forbidden in V3.12:
+
+- V3.13 metaverse workload suite
+- paper benchmark export
+- Fabric/EVM live backend
+- BlockEmulator backend
+- multi-server deployment
+- production PBFT / HotStuff / Raft
+- production cluster
+- performance superiority claims
+
+Important boundary:
+
+- V3.5 already introduced launcher preview and node process preview.
+- V3.12 hardens those previews into a runnable, observable, cleanable local multi-process runtime.
+- Current logical topology remains valid.
+- local_multi_process is local-machine only.
+- It is not production networking and not multi-machine deployment.
 
 As of the V3.4 runtime self-check, current V3 acceptance is realigned to:
 
@@ -184,13 +221,13 @@ Existing MetaFlow profiles remain planned preview profiles and must not become r
 
 This skill governs V3 work for MBE.
 
-V3 builds a MetaTrack-oriented modular plugin chain runtime and is currently closed through V3.11 CrossShard Protocol Closure. Fabric/EVM live validation is deferred to a later stage unless explicitly reopened. V3 reuses V2 experiment management, artifacts, sweeps, reports, calibration, and frontend shell. MetaFlow dual-chain protocol evaluation is retained only as planned preview / future roadmap material in the current V3 scope.
+V3 builds a MetaTrack-oriented modular plugin chain runtime and is currently closed through V3.12 Runtime Realism Closure. Fabric/EVM live validation is deferred to a later stage unless explicitly reopened. V3 reuses V2 experiment management, artifacts, sweeps, reports, calibration, and frontend shell. MetaFlow dual-chain protocol evaluation is retained only as planned preview / future roadmap material in the current V3 scope.
 
 V3 positioning:
 
 ```text
 V3 = Modular Plugin Chain Runtime with node topology, NetworkAdapter, ConsensusRuntime, CrossShardProtocol skeleton, State Authenticity MVP, and benchmark hardening foundations
-V3 = 面向 MetaTrack 的模块化插件链实验平台；V3.11 已完成跨片 Relay MVP 收口；Fabric/EVM live validation 和 MetaFlow 保留为 planned preview / future roadmap。
+V3 = 面向 MetaTrack 的模块化插件链实验平台；V3.12 已完成本地多进程 runtime realism 收口；Fabric/EVM live validation 和 MetaFlow 保留为 planned preview / future roadmap。
 ```
 
 Fabric/EVM live backend work is not part of V3.5.4. V3.5 closes local topology, launcher preview, and node process preview only, not an automatic Fabric/EVM live implementation.
@@ -253,7 +290,7 @@ V3 stages:
 - `V3.10 Benchmark / Experiment Template Hardening Closure`: implemented; adds benchmark template catalog, baseline profile catalog, local controlled sweep runner MVP, repeatability, reproducibility manifest, benchmark report, frontend summary, and closure. It is not paper-grade benchmark evidence and not a large-scale distributed benchmark.
 - `V3.10.1 Frontend UX and Chinese Console Cleanup Closure`: implemented; adds simplified navigation, Chinese console labels, HelpTip progressive disclosure, run progress feedback, lightweight result chart preview, and visual cleanup. It does not change runtime semantics or add V3.11 capability.
 - `V3.11 CrossShard Protocol Closure`: implemented; adds runnable `relay_mvp` with SourceLock, RelayCertificate, proof/certificate verification records, target commit, source finalization, timeout/refund/abort paths, artifacts, frontend summary, and closure. It is not production atomic cross-shard commit, complete Broker/2PC/Monoxide, or Byzantine-secure relay.
-- `V3.12 Runtime Realism Closure`: future stage only; do not enter unless explicitly opened.
+- `V3.12 Runtime Realism Closure`: implemented; adds local_multi_process dry_run/smoke, max local process guard, node lifecycle artifacts, localhost TCP process path records, committee/epoch MVP, and light reconfiguration plan. It is not multi-server deployment or a production cluster.
 - `V3-final Frontend Integration and Acceptance`: only current-scope frontend integration, acceptance report, artifact browsing, and boundary presentation.
 
 Stage constraints:
@@ -277,8 +314,8 @@ V3.5.3 only local node process runtime.
 V3.5.4 only V3.5 closure.
 V3.6.1 only NetworkAdapter and TCP typed message preview.
 V3.6.2 implemented consensus-light over NetworkAdapter plus V3.6 closure.
-V3.7.1 implemented configurable ConsensusRuntime and PBFT state machine preview. V3.7.2 implemented PBFT preview over NetworkAdapter and closed V3.7. V3.8 implemented CrossShardProtocol skeleton and closed V3.8. V3.9 implemented State Authenticity Layer MVP and closed V3.9. V3.10 implemented Benchmark / Experiment Template Hardening and closed V3.10. V3.10.1 implemented Frontend UX and Chinese Console Cleanup and closed V3.10.1. V3.11 implemented CrossShard Protocol Closure and closed V3.11. V3.12 only when explicitly opened.
-V3.10.1 and V3.11 are closed; do not continue adding V3.10.1 or V3.11 features after closure.
+V3.7.1 implemented configurable ConsensusRuntime and PBFT state machine preview. V3.7.2 implemented PBFT preview over NetworkAdapter and closed V3.7. V3.8 implemented CrossShardProtocol skeleton and closed V3.8. V3.9 implemented State Authenticity Layer MVP and closed V3.9. V3.10 implemented Benchmark / Experiment Template Hardening and closed V3.10. V3.10.1 implemented Frontend UX and Chinese Console Cleanup and closed V3.10.1. V3.11 implemented CrossShard Protocol Closure and closed V3.11. V3.12 implemented Runtime Realism Closure and closed V3.12. V3.13 only when explicitly opened.
+V3.10.1, V3.11, and V3.12 are closed; do not continue adding V3.10.1, V3.11, or V3.12 features after closure.
 V3-final only frontend integration and acceptance report for current V3 scope.
 ```
 

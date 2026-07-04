@@ -5,11 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.11 CrossShard Protocol Closure"
-LATEST_RUNTIME_STAGE = "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
-CURRENT_CAPABILITY = "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
-RUNTIME_TRUTH = "relay_mvp_not_production_atomic_commit"
-NEXT_STAGE = "V3.12 Runtime Realism Closure"
+CURRENT_STAGE = "V3.12 Runtime Realism Closure"
+LATEST_RUNTIME_STAGE = "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
+CURRENT_CAPABILITY = "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP"
+RUNTIME_TRUTH = "local_multi_process_runtime_mvp_not_production_cluster"
+NEXT_STAGE = "V3.13 Metaverse Experiment Suite Closure"
 
 BENCHMARK_TEMPLATES = {
     "metatrack_hotspot_template",
@@ -54,8 +54,18 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     _range(errors, data, "storage_nodes_per_shard", 0, 64)
     if not isinstance(data.get("supervisor_enabled"), bool):
         errors.append("topology.supervisor_enabled must be bool")
-    if data.get("node_runtime_mode") != "logical_single_process":
-        errors.append("topology.node_runtime_mode currently only allows logical_single_process")
+    node_runtime_mode = data.get("node_runtime_mode") or "logical_single_process"
+    data["node_runtime_mode"] = node_runtime_mode
+    if node_runtime_mode not in {"logical_single_process", "local_multi_process"}:
+        errors.append("topology.node_runtime_mode currently allows logical_single_process or local_multi_process")
+    process_runtime_mode = data.get("process_runtime_mode") or "dry_run"
+    data["process_runtime_mode"] = process_runtime_mode
+    if process_runtime_mode not in {"dry_run", "smoke"}:
+        errors.append("topology.process_runtime_mode currently allows dry_run or smoke")
+    _range(errors, data, "max_local_processes", 1, 32)
+    if not isinstance(data.get("enable_committee_epoch"), bool):
+        errors.append("topology.enable_committee_epoch must be bool")
+    _range(errors, data, "epoch_count", 1, 5)
     mode = data.get("network_mode") or "in_memory_message_bus"
     adapter = data.get("network_adapter") or mode
     if adapter == "in_memory_message_bus" and mode != "in_memory_message_bus":
@@ -113,6 +123,10 @@ def topology_summary(topology: dict[str, Any]) -> dict[str, int | str | bool]:
         "storage_node_count": storage_count,
         "supervisor_node_count": supervisor,
         "consensus_domain_count": shard_count,
+        "process_runtime_mode": topology.get("process_runtime_mode", "dry_run"),
+        "max_local_processes": int(topology.get("max_local_processes", 8)),
+        "committee_epoch_enabled": bool(topology.get("enable_committee_epoch", True)),
+        "epoch_count": int(topology.get("epoch_count", 1)),
     }
 
 

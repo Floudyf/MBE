@@ -157,12 +157,12 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
     result = draft_runner.run_v3_composer_draft_smoke(valid_draft(), root=tmp_path)
 
     assert result["status"] == "completed"
-    assert result["stage"] == "V3.11 CrossShard Protocol Closure"
-    assert result["current_stage"] == "V3.11 CrossShard Protocol Closure"
-    assert result["latest_runtime_stage"] == "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
-    assert result["latest_completed_runtime_stage"] == "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
-    assert result["current_capability"] == "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
-    assert result["runtime_truth"] == "relay_mvp_not_production_atomic_commit"
+    assert result["stage"] == "V3.12 Runtime Realism Closure"
+    assert result["current_stage"] == "V3.12 Runtime Realism Closure"
+    assert result["latest_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
+    assert result["latest_completed_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
+    assert result["current_capability"] == "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP"
+    assert result["runtime_truth"] == "local_multi_process_runtime_mvp_not_production_cluster"
     assert result["run_mode"] == "draft_smoke"
     assert result["topology_summary"]["logical_node_count"] == 25
     assert len(calls) == 1

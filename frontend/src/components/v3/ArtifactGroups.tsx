@@ -21,6 +21,8 @@ const groups = [
   { title: "节点级运行产物", files: ["node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv"] },
   { title: "本地启动预览产物", files: ["node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md"] },
   { title: "节点进程预览产物", files: ["node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log"] },
+  { title: "Local Multi-process Runtime artifacts", files: ["address_table.json", "multi_process_manifest.json", "node_process_log.csv", "node_lifecycle_log.csv", "network_message_log.csv", "node_process_status.json", "local_multi_process_summary.json", "node_stdout.log", "node_stderr.log"] },
+  { title: "Committee / Epoch artifacts", files: ["shard_assignment_log.csv", "committee_assignment_log.csv", "committee_summary.json", "epoch_log.csv", "reconfiguration_plan.json", "reshard_plan_log.csv", "reconfiguration_summary.json"] },
   { title: "网络通信产物", files: ["tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv"] },
   { title: "轻量共识网络产物", files: ["consensus_network_light_log.csv", "network_consensus_summary.json"] },
   { title: "PBFT 状态机预览产物", files: ["pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv"] },
@@ -58,34 +60,27 @@ export default function ArtifactGroups({
             <div className="v3-artifact-group">
               <strong>预期产物</strong>
               <ul>
-                {expectedArtifacts.map((name) => {
-                  const artifact = byName.get(name);
-                  return (
-                    <li key={name} className={artifact ? "" : "missing"}>
-                      {artifact ? <a href={v2ArtifactDownloadURL(artifact.download_url)}>{name}</a> : <span>{name}（历史运行缺少该产物）</span>}
-                    </li>
-                  );
-                })}
+                {expectedArtifacts.map((name) => renderArtifact(name, byName))}
               </ul>
             </div>
           )}
           {groups.map((group) => (
             <div key={group.title} className="v3-artifact-group">
               <strong>{group.title}</strong>
-              <ul>
-                {group.files.map((name) => {
-                  const artifact = byName.get(name);
-                  return (
-                    <li key={name} className={artifact ? "" : "missing"}>
-                      {artifact ? <a href={v2ArtifactDownloadURL(artifact.download_url)}>{name}</a> : <span>{name}</span>}
-                    </li>
-                  );
-                })}
-              </ul>
+              <ul>{group.files.map((name) => renderArtifact(name, byName))}</ul>
             </div>
           ))}
         </div>
       )}
     </details>
+  );
+}
+
+function renderArtifact(name: string, byName: Map<string, V2Artifact>) {
+  const artifact = byName.get(name);
+  return (
+    <li key={name} className={artifact ? "" : "missing"}>
+      {artifact ? <a href={v2ArtifactDownloadURL(artifact.download_url)}>{name}</a> : <span>{name}</span>}
+    </li>
   );
 }

@@ -19,13 +19,13 @@ from backend.app.services.v3_realism_readiness import write_realism_readiness
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.11 CrossShard Protocol Closure"
-LATEST_RUNTIME_STAGE = "V3.4.10"
-CLOSURE_STAGE = "V3.4.11"
-LATEST_COMPLETED_RUNTIME_STAGE = "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
-CURRENT_CAPABILITY = "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
-RUNTIME_TRUTH = "relay_mvp_not_production_atomic_commit"
-NEXT_STAGE = "V3.12 Runtime Realism Closure"
+CURRENT_STAGE = "V3.12 Runtime Realism Closure"
+LATEST_RUNTIME_STAGE = "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
+CLOSURE_STAGE = "V3.12"
+LATEST_COMPLETED_RUNTIME_STAGE = LATEST_RUNTIME_STAGE
+CURRENT_CAPABILITY = "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP"
+RUNTIME_TRUTH = "local_multi_process_runtime_mvp_not_production_cluster"
+NEXT_STAGE = "V3.13 Metaverse Experiment Suite Closure"
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -200,7 +200,7 @@ def run_v3_4_10_controlled_smoke(root: Path = CONTROLLED_SMOKE_ROOT) -> dict[str
         readiness = write_realism_readiness(run_dir)
         _write_json(run_dir / "controlled_run.json", {
             "run_id": run_id,
-            "stage": LATEST_RUNTIME_STAGE,
+            "stage": CURRENT_STAGE,
             "current_stage": CURRENT_STAGE,
             "latest_runtime_stage": LATEST_RUNTIME_STAGE,
             "latest_completed_runtime_stage": LATEST_COMPLETED_RUNTIME_STAGE,
@@ -217,7 +217,7 @@ def run_v3_4_10_controlled_smoke(root: Path = CONTROLLED_SMOKE_ROOT) -> dict[str
         return {
             "run_id": run_id,
             "status": "completed",
-            "stage": LATEST_RUNTIME_STAGE,
+            "stage": CURRENT_STAGE,
             "current_stage": CURRENT_STAGE,
             "latest_runtime_stage": LATEST_RUNTIME_STAGE,
             "latest_completed_runtime_stage": LATEST_COMPLETED_RUNTIME_STAGE,

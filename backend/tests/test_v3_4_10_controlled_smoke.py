@@ -15,14 +15,14 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     run_dir = tmp_path / result["run_id"]
 
     assert result["status"] == "completed"
-    assert result["stage"] == "V3.4.10"
-    assert result["current_stage"] == "V3.11 CrossShard Protocol Closure"
-    assert result["latest_runtime_stage"] == "V3.4.10"
-    assert result["latest_completed_runtime_stage"] == "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
-    assert result["closure_stage"] == "V3.4.11"
-    assert result["current_capability"] == "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
-    assert result["runtime_truth"] == "relay_mvp_not_production_atomic_commit"
-    assert result["next_stage"] == "V3.12 Runtime Realism Closure"
+    assert result["stage"] == "V3.12 Runtime Realism Closure"
+    assert result["current_stage"] == "V3.12 Runtime Realism Closure"
+    assert result["latest_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
+    assert result["latest_completed_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
+    assert result["closure_stage"] == "V3.12"
+    assert result["current_capability"] == "local_multi_process runtime mode, process lifecycle artifacts, NetworkAdapter process path preview, committee/epoch MVP"
+    assert result["runtime_truth"] == "local_multi_process_runtime_mvp_not_production_cluster"
+    assert result["next_stage"] == "V3.13 Metaverse Experiment Suite Closure"
     assert result["preset_order"] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["run_index"]] == CONTROLLED_PRESET_ORDER
     assert [row["preset_id"] for row in result["aggregate_summary"]] == CONTROLLED_PRESET_ORDER
@@ -102,9 +102,9 @@ def test_controlled_smoke_runs_all_metatrack_presets(tmp_path) -> None:
     assert "paper_grade_benchmark" in aggregate_rows[0]
 
     readiness = json.loads((run_dir / "realism_readiness.json").read_text(encoding="utf-8"))
-    assert readiness["current_stage"] == "V3.11 CrossShard Protocol Closure"
-    assert readiness["latest_runtime_stage"] == "V3.4.10"
-    assert readiness["latest_completed_runtime_stage"] == "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
+    assert readiness["current_stage"] == "V3.12 Runtime Realism Closure"
+    assert readiness["latest_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
+    assert readiness["latest_completed_runtime_stage"] == "local multi-process runtime MVP with managed process plan/smoke, shard assignment, committee assignment, epoch log, and light reconfiguration artifacts"
     assert len(readiness["modules"]) == 12
     assert "not BlockEmulator backend" in readiness["not_real_chain_claims"]
     assert "not Fabric/EVM live backend" in readiness["not_real_chain_claims"]

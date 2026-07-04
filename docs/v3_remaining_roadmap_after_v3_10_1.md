@@ -4,7 +4,7 @@
 
 V3.10.1 is complete. It only cleaned up the Chinese frontend console, simplified navigation, added HelpTip explanations, added run progress feedback, added lightweight result chart previews, and improved UX presentation.
 
-V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol capability, and did not make benchmark output paper-grade evidence. V3.11 is now closed; the next implementation stage is V3.12 Runtime Realism Closure.
+V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol capability, and did not make benchmark output paper-grade evidence. V3.11 and V3.12 are now closed; the next implementation stage is V3.13 Metaverse Experiment Suite Closure.
 
 ## 2. Existing Foundations
 
@@ -23,7 +23,7 @@ V3.12 should not redo topology configuration. It should harden the V3.5 launcher
 ## 3. Compressed Remaining Route
 
 1. V3.11 CrossShard Protocol Closure. Complete.
-2. V3.12 Runtime Realism Closure. Next.
+2. V3.12 Runtime Realism Closure. Complete.
 3. V3.13 Metaverse Experiment Suite Closure.
 4. V3-final Fault, Observability, and Reproducibility Closure.
 
@@ -70,6 +70,8 @@ Combined scope:
 After V3.12, MBE can run a small local multi-process sharded runtime with node process status, shard assignment, committee assignment, and epoch summary.
 
 Boundary: local multi-process only, not multi-server deployment, not production cluster, and not production PBFT/HotStuff.
+
+Status: complete.
 
 ### V3.13 Metaverse Experiment Suite Closure
 

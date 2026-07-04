@@ -37,8 +37,8 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft is not None
     assert result.normalized_draft["plugin_selection"]["Commit"] == "hot_update_aggregation_commit"
     assert result.normalized_draft["topology_summary"]["logical_node_count"] == 25
-    assert result.normalized_draft["current_stage"] == "V3.11 CrossShard Protocol Closure"
-    assert result.normalized_draft["current_capability"] == "runnable relay_mvp cross-shard protocol MVP with artifacts and frontend result summary"
+    assert result.normalized_draft["current_stage"] == "V3.12 Runtime Realism Closure"
+    assert result.normalized_draft["runtime_truth"] == "local_multi_process_runtime_mvp_not_production_cluster"
     assert result.normalized_draft["topology"]["cross_shard_protocol"] == "none"
     assert result.normalized_draft["topology"]["state_backend"] == "memory_kv"
     assert result.normalized_draft["topology"]["benchmark_template"] == "full_stack_v3_template"

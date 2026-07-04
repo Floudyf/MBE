@@ -152,16 +152,20 @@ Planned-only options:
 - `broker_preview`
 - `two_phase_commit_preview`
 
-## V3.12 Planned
+## V3.12 Current Status
 
-V3.12 is planned as Runtime Realism Closure. It has not started. V3.12 should harden V3.5 launcher / node process previews into a small local multi-process runtime only when explicitly opened.
+Current stage is V3.12 Runtime Realism Closure. V3.12 hardens V3.5 launcher / node process previews into a local-machine multi-process runtime MVP with `logical_single_process` compatibility and runnable `local_multi_process` mode.
+
+V3.12 adds `process_runtime_mode=dry_run|smoke`, `max_local_processes`, `enable_committee_epoch`, and `epoch_count`. It writes local process plan/status/lifecycle artifacts, deterministic NetworkAdapter process path records, shard assignment, committee assignment, epoch log, and light reconfiguration plan.
+
+V3.12 is closed after this runtime realism MVP. It is not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
 
 ## Compressed Remaining Roadmap After V3.10.1
 
 The compressed remaining V3 route is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`.
 
 1. V3.11 CrossShard Protocol Closure. Complete.
-2. V3.12 Runtime Realism Closure. Next.
+2. V3.12 Runtime Realism Closure. Complete.
 3. V3.13 Metaverse Experiment Suite Closure.
 4. V3-final Fault, Observability, and Reproducibility Closure.
 
@@ -173,7 +177,7 @@ V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is imple
 
 V3.8 is implemented as CrossShardProtocol Skeleton Closure. It stays separate from V3.6 networking and V3.7 PBFT preview work.
 V3.9 is implemented as State Authenticity Layer MVP Closure. It strengthens StateAccess / StateStorage / Commit with persistent state backend MVP, Merkle/MPT-like roots, proof verification, and witness artifacts.
-V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is implemented as CrossShard Protocol Closure. V3.12 is planned as Runtime Realism Closure.
+V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is implemented as CrossShard Protocol Closure. V3.12 is implemented as Runtime Realism Closure.
 
 Planned stage list extension:
 
@@ -185,6 +189,7 @@ Planned stage list extension:
 - V3.10.1 Frontend UX and Chinese Console Cleanup Closure.
 - V3.11 CrossShard Protocol Closure.
 - V3.12 Runtime Realism Closure.
+- V3.13 Metaverse Experiment Suite Closure.
 
 The main transaction flow should remain:
 

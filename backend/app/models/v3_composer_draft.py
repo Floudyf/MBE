@@ -22,6 +22,10 @@ class V3RuntimeTopology(BaseModel):
     storage_nodes_per_shard: int = 1
     supervisor_enabled: bool = True
     node_runtime_mode: str = "logical_single_process"
+    process_runtime_mode: str = "dry_run"
+    max_local_processes: int = 8
+    enable_committee_epoch: bool = True
+    epoch_count: int = 1
     network_mode: str = "in_memory_message_bus"
     network_adapter: str = "in_memory_message_bus"
     cross_shard_protocol: str = "none"

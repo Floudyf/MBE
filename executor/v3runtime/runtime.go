@@ -98,6 +98,10 @@ type ExperimentProfile struct {
 	BenchmarkTemplate            string
 	BaselineProfile              string
 	RepeatCount                  int
+	ProcessRuntimeMode           string
+	MaxLocalProcesses            int
+	EnableCommitteeEpoch         bool
+	EpochCount                   int
 }
 
 type Transaction struct {
@@ -606,6 +610,22 @@ type Summary struct {
 	ReproducibilityManifestAvailable bool    `json:"reproducibility_manifest_available"`
 	BenchmarkReportAvailable         bool    `json:"benchmark_report_available"`
 	PaperGradeBenchmark              bool    `json:"paper_grade_benchmark"`
+	NodeRuntimeMode                  string  `json:"node_runtime_mode"`
+	ProcessRuntimeMode               string  `json:"process_runtime_mode"`
+	LocalMultiProcessEnabled         bool    `json:"local_multi_process_enabled"`
+	PlannedProcessCount              int     `json:"planned_process_count"`
+	StartedProcessCount              int     `json:"started_process_count"`
+	StoppedProcessCount              int     `json:"stopped_process_count"`
+	FailedProcessCount               int     `json:"failed_process_count"`
+	CappedProcessCount               int     `json:"capped_process_count"`
+	MaxLocalProcesses                int     `json:"max_local_processes"`
+	NetworkPathTruth                 string  `json:"network_path_truth"`
+	CommitteeCount                   int     `json:"committee_count"`
+	EpochCount                       int     `json:"epoch_count"`
+	ReconfigurationEventCount        int     `json:"reconfiguration_event_count"`
+	CommitteeEpochEnabled            bool    `json:"committee_epoch_enabled"`
+	CommitteeEpochTruth              string  `json:"committee_epoch_truth"`
+	RuntimeRealismTruth              string  `json:"runtime_realism_truth"`
 }
 
 type Result struct {
@@ -628,6 +648,8 @@ type Result struct {
 	CrossShard     CrossShardProtocolPreview
 	StateAuth      StateAuthenticityPreview
 	Benchmark      BenchmarkPreview
+	LocalProcess   LocalMultiProcessRuntime
+	CommitteeEpoch CommitteeEpochRuntime
 	FinalState     map[string]int
 }
 
@@ -800,6 +822,8 @@ func Run(input Input) (Result, error) {
 	crossShard := RunCrossShardProtocolPreview(experiment, networkAdapter, txResults, routingLog)
 	networkAdapter.AppendCrossShardProtocol(crossShard)
 	stateAuthenticity := RunStateAuthenticityPreview(chain, experiment, txResults, stateCommits)
+	localProcess := RunLocalMultiProcessRuntime(nodeRuntime, experiment)
+	committeeEpoch := RunCommitteeEpochRuntime(nodeRuntime, experiment)
 	applyNodeRuntimeMetrics(&summary, nodeRuntime)
 	applyLauncherPreviewMetrics(&summary, launcher)
 	applyNodeProcessPreviewMetrics(&summary)
@@ -811,10 +835,12 @@ func Run(input Input) (Result, error) {
 	ApplyStateAuthenticityMetrics(&summary, stateAuthenticity)
 	benchmark := RunBenchmarkHardeningPreview(experiment, summary)
 	ApplyBenchmarkMetrics(&summary, benchmark)
-	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, nodeRuntime, launcher, networkAdapter, consensusNetwork, pbftPreview, pbftNetwork, crossShard, stateAuthenticity, benchmark, experiment, "V3.11 CrossShard Protocol Closure run"); err != nil {
+	ApplyLocalMultiProcessMetrics(&summary, localProcess, nodeRuntime)
+	ApplyCommitteeEpochMetrics(&summary, committeeEpoch)
+	if err := writeArtifacts(input.OutputDir, chainBytes, pluginBytes, experimentBytes, summary, blockLog, txResults, stateCommits, txPool.events, consensusLog, routingLog, executionLog, stateAccessLog, nodeRuntime, launcher, networkAdapter, consensusNetwork, pbftPreview, pbftNetwork, crossShard, stateAuthenticity, benchmark, localProcess, committeeEpoch, experiment, "V3.12 Runtime Realism Closure run"); err != nil {
 		return Result{}, err
 	}
-	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, ExecutionLog: executionLog, StateAccessLog: stateAccessLog, NodeRuntime: nodeRuntime, Launcher: launcher, NetworkAdapter: networkAdapter, ConsensusNet: consensusNetwork, PBFTPreview: pbftPreview, PBFTNetwork: pbftNetwork, CrossShard: crossShard, StateAuth: stateAuthenticity, Benchmark: benchmark, FinalState: state}, nil
+	return Result{OutputDir: input.OutputDir, Summary: summary, BlockLog: blockLog, TxResults: txResults, StateCommitLog: stateCommits, TxPoolLog: txPool.events, ConsensusLog: consensusLog, RoutingLog: routingLog, ExecutionLog: executionLog, StateAccessLog: stateAccessLog, NodeRuntime: nodeRuntime, Launcher: launcher, NetworkAdapter: networkAdapter, ConsensusNet: consensusNetwork, PBFTPreview: pbftPreview, PBFTNetwork: pbftNetwork, CrossShard: crossShard, StateAuth: stateAuthenticity, Benchmark: benchmark, LocalProcess: localProcess, CommitteeEpoch: committeeEpoch, FinalState: state}, nil
 }
 
 func parseChainProfile(text string) ChainProfile {
@@ -902,6 +928,10 @@ func parseExperimentProfile(text string) ExperimentProfile {
 		BenchmarkTemplate:            fieldString(text, "benchmark_template", sectionFieldString(text, "benchmark", "template_id", "full_stack_v3_template")),
 		BaselineProfile:              fieldString(text, "baseline_profile", sectionFieldString(text, "benchmark", "baseline_id", "")),
 		RepeatCount:                  fieldInt(text, "repeat_count", sectionFieldInt(text, "benchmark", "repeat_count", 1)),
+		ProcessRuntimeMode:           fieldString(text, "process_runtime_mode", ProcessRuntimeDryRun),
+		MaxLocalProcesses:            fieldInt(text, "max_local_processes", 8),
+		EnableCommitteeEpoch:         fieldBool(text, "enable_committee_epoch", true),
+		EpochCount:                   fieldInt(text, "epoch_count", 1),
 	}
 }
 
@@ -2353,6 +2383,33 @@ func applyNetworkAdapterMetrics(summary *Summary, preview NetworkAdapterPreview)
 	summary.NetworkErrorCount = preview.ErrorCount
 }
 
+func ApplyLocalMultiProcessMetrics(summary *Summary, runtime LocalMultiProcessRuntime, nodeRuntime NodeRuntimeArtifacts) {
+	summary.NodeRuntimeMode = nodeRuntime.Config.NodeRuntimeMode
+	summary.ProcessRuntimeMode = runtime.ProcessRuntimeMode
+	summary.LocalMultiProcessEnabled = runtime.Enabled
+	summary.PlannedProcessCount = runtime.PlannedProcessCount
+	summary.StartedProcessCount = runtime.StartedProcessCount
+	summary.StoppedProcessCount = runtime.StoppedProcessCount
+	summary.FailedProcessCount = runtime.FailedProcessCount
+	summary.CappedProcessCount = runtime.CappedProcessCount
+	summary.MaxLocalProcesses = runtime.MaxLocalProcesses
+	if runtime.Enabled {
+		summary.NetworkMessageCount = runtime.NetworkMessageCount
+		summary.NetworkPathTruth = runtime.NetworkPathTruth
+		summary.RuntimeRealismTruth = runtime.RuntimeRealismTruth
+	} else {
+		summary.RuntimeRealismTruth = "logical_single_process_compatible_path"
+	}
+}
+
+func ApplyCommitteeEpochMetrics(summary *Summary, runtime CommitteeEpochRuntime) {
+	summary.CommitteeEpochEnabled = runtime.Enabled
+	summary.CommitteeCount = runtime.CommitteeCount
+	summary.EpochCount = runtime.EpochCount
+	summary.ReconfigurationEventCount = runtime.ReconfigurationEventCount
+	summary.CommitteeEpochTruth = runtime.CommitteeEpochTruth
+}
+
 func applyConsensusNetworkLightMetrics(summary *Summary, preview ConsensusNetworkLightPreview) {
 	summary.ConsensusOverNetworkEnabled = preview.Enabled
 	summary.ConsensusRuntimeSelected = preview.ConsensusRuntimeSelected
@@ -2418,7 +2475,7 @@ func applyCrossShardProtocolMetrics(summary *Summary, preview CrossShardProtocol
 	summary.RelayMVPTruth = RelayMVPRuntimeTruth
 }
 
-func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, executionLog []ExecutionRecord, stateAccessLog []StateAccessRecord, nodeRuntime NodeRuntimeArtifacts, launcher LauncherPreview, networkAdapter NetworkAdapterPreview, consensusNetwork ConsensusNetworkLightPreview, pbftPreview PBFTPreview, pbftNetwork PBFTNetworkPreview, crossShard CrossShardProtocolPreview, stateAuthenticity StateAuthenticityPreview, benchmark BenchmarkPreview, experiment ExperimentProfile, title string) error {
+func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte, summary Summary, blockLog []map[string]string, txResults []TxResult, commits []StateCommit, txPoolLog []TxPoolEvent, consensusLog []ConsensusRecord, routingLog []RoutingRecord, executionLog []ExecutionRecord, stateAccessLog []StateAccessRecord, nodeRuntime NodeRuntimeArtifacts, launcher LauncherPreview, networkAdapter NetworkAdapterPreview, consensusNetwork ConsensusNetworkLightPreview, pbftPreview PBFTPreview, pbftNetwork PBFTNetworkPreview, crossShard CrossShardProtocolPreview, stateAuthenticity StateAuthenticityPreview, benchmark BenchmarkPreview, localProcess LocalMultiProcessRuntime, committeeEpoch CommitteeEpochRuntime, experiment ExperimentProfile, title string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
@@ -2498,6 +2555,12 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 	if err := WriteBenchmarkArtifacts(out, benchmark, experiment, summary); err != nil {
 		return err
 	}
+	if err := WriteLocalMultiProcessArtifacts(out, localProcess); err != nil {
+		return err
+	}
+	if err := WriteCommitteeEpochArtifacts(out, committeeEpoch); err != nil {
+		return err
+	}
 	if len(launcher.Addresses) > 0 {
 		_, err := RunNodeProcessPreview(NodeProcessPreviewInput{
 			NodeID:       launcher.Addresses[0].NodeID,
@@ -2512,11 +2575,11 @@ func writeArtifacts(out string, chainBytes, pluginBytes, experimentBytes []byte,
 			return err
 		}
 	}
-	report := "# " + title + "\n\nThis is V3.11 output generated from the V3.5 logical topology, V3.6 configurable NetworkAdapter typed message preview, V3.7 selectable ConsensusRuntime / PBFT preview boundary, V3.8 CrossShardProtocol skeleton, V3.9 State Authenticity Layer MVP, V3.10 benchmark template hardening layer, and V3.11 Relay MVP closure.\n\nIt keeps FIFO TxPool, BlockProducer, selectable ConsensusRuntime, Routing/Sharding, Execution, StateAccess, StateStorage, Commit, and node-level logical artifacts. CrossShardProtocol remains a Routing/Sharding sub-capability, not a new main transaction-flow module.\n\nWhen `cross_shard_protocol=relay_mvp`, it writes SourceLock, RelayCertificate, proof/certificate verification, target verification, target commit, source finalization, timeout/refund/abort, and Relay MVP summary artifacts.\n\nThe V3.11 Relay MVP is local, deterministic, and observable for controlled emulator experiments. It is not production atomic cross-shard commit, not complete Broker/2PC/Monoxide, not Byzantine-secure relay, not a production cross-chain bridge, not Fabric/EVM live execution, not a BlockEmulator backend, and not paper-grade benchmark evidence.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n\nIt is also not Ethereum-compatible MPT, not a production database, not full stateless execution, not production PBFT, not HotStuff, not Raft, not a large-scale distributed benchmark, and not final paper-scale performance evidence.\n"
+	report := "# " + title + "\n\nThis is V3.12 output generated from the V3.5 logical topology and launcher/node process previews, hardened into a controlled local multi-process runtime MVP when `node_runtime_mode=local_multi_process`.\n\nIt keeps FIFO TxPool, BlockProducer, selectable ConsensusRuntime, Routing/Sharding, Execution, StateAccess, StateStorage, Commit, node-level logical artifacts, V3.11 Relay MVP artifacts, V3.12 process lifecycle artifacts, and shard/committee/epoch MVP artifacts.\n\nThe local multi-process path is local-machine only. It is not multi-server deployment, not a production cluster, not production PBFT/HotStuff/Raft, not BlockEmulator backend, not Fabric/EVM live execution, and not paper-grade performance evidence.\n\nStatePlacement phi(key) maps each key to a persistent state storage unit. ExecutionRouting M_t routes a transaction to a logical execution shard. Co-access routing changes execution-side placement/routing; it does not migrate persistent state storage placement.\n"
 	if err := os.WriteFile(filepath.Join(out, "report.md"), []byte(report), 0o644); err != nil {
 		return err
 	}
-	log := "v3.11 cross-shard protocol closure start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\nnode_runtime_mode=" + nodeRuntime.Config.NodeRuntimeMode + "\nnetwork_mode=" + nodeRuntime.Config.NetworkMode + "\nnetwork_adapter_selected=" + summary.NetworkAdapterSelected + "\ncross_shard_protocol_selected=" + summary.CrossShardProtocolSelected + "\nrelay_mvp_enabled=" + strconv.FormatBool(summary.RelayMVPEnabled) + "\nrelay_mvp_tx_count=" + strconv.Itoa(summary.RelayMVPTxCount) + "\nrelay_source_lock_count=" + strconv.Itoa(summary.RelaySourceLockCount) + "\nrelay_certificate_count=" + strconv.Itoa(summary.RelayCertificateCount) + "\nrelay_target_commit_count=" + strconv.Itoa(summary.RelayTargetCommitCount) + "\nrelay_source_finalized_count=" + strconv.Itoa(summary.RelaySourceFinalizedCount) + "\nrelay_refund_count=" + strconv.Itoa(summary.RelayRefundCount) + "\nrelay_abort_count=" + strconv.Itoa(summary.RelayAbortCount) + "\nrelay_mvp_truth=" + summary.RelayMVPTruth + "\nstate_backend_selected=" + summary.StateBackendSelected + "\nbenchmark_template_selected=" + summary.BenchmarkTemplateSelected + "\nbaseline_profile_selected=" + summary.BaselineProfileSelected + "\nbenchmark_run_count=" + strconv.Itoa(summary.BenchmarkRunCount) + "\nrepeat_count=" + strconv.Itoa(summary.RepeatCount) + "\npaper_grade_benchmark=false\npersistent_state_enabled=" + strconv.FormatBool(summary.PersistentStateEnabled) + "\nstate_root_enabled=" + strconv.FormatBool(summary.StateRootEnabled) + "\nstate_root_count=" + strconv.Itoa(summary.StateRootCount) + "\nstate_proof_verified_count=" + strconv.Itoa(summary.StateProofVerifiedCount) + "\nwitness_verified_count=" + strconv.Itoa(summary.WitnessVerifiedCount) + "\ntcp_preview_enabled=" + strconv.FormatBool(summary.TCPPreviewEnabled) + "\nlogical_node_count=" + strconv.Itoa(summary.LogicalNodeCount) + "\nlauncher_mode=" + summary.LauncherMode + "\nlaunchable_node_count=" + strconv.Itoa(summary.LaunchableNodeCount) + "\nlauncher_preview_only=true\nnode_process_entrypoint_available=true\nnode_process_preview_only=true\n" + networkAdapter.SummaryLine() + consensusNetwork.SummaryLine() + pbftPreview.SummaryLine() + pbftNetwork.SummaryLine() + crossShard.SummaryLine() + "txpool=fifo_pool\nblock_producer=time_or_count_block_producer\nconsensus_runtime_configurable=true\npbft_over_network_preview=true\nrelay_mvp=true\nrelay_certificate_mvp_no_byzantine_security=true\nstate_authenticity_mvp=true\nbenchmark_template_catalog_mvp=true\nbaseline_profile_catalog_mvp=true\nlocal_controlled_sweep_runner_mvp=true\nmulti_seed_repeatability_mvp=true\nreproducibility_manifest=true\nbenchmark_report=true\nlarge_scale_distributed_benchmark=false\nperformance_superiority_claim=false\nproof_verification_mvp=true\nstateless_witness_artifact_mvp=true\nethereum_compatible_mpt=false\nproduction_database=false\nfull_stateless_execution=false\nfull_stateless_blockchain=false\ncomplete_cross_shard_state_proof_protocol=false\nfraud_proof=false\nvalidity_proof=false\natomic_cross_shard_verified_commit=false\natomic_cross_shard_commit=false\nproduction_atomic_cross_shard_commit=false\ncomplete_relay=false\ncomplete_broker=false\ncomplete_2pc=false\nbyzantine_secure_relay=false\nproduction_cross_chain_bridge=false\nrollback_timeout_recovery=false\nproduction_pbft=false\nview_change_hardening=false\ncheckpoint_hardening=false\nsignature_hardening=false\nrouting_plugin=" + summary.RoutingPlugin + "\nexecution_plugin=" + summary.ExecutionPlugin + "\nstate_access_plugin=" + summary.StateAccessPlugin + "\nfabric_live=false\nevm_live=false\nblockemulator_backend=false\nproduction_network=false\nreal_multi_process_runtime=false\nmetaflow=false\nreal_pbft=false\nhotstuff=false\nraft=false\nreal_concurrent_execution=false\nreal_rollback=false\nreal_remote_storage=false\nv3.11 cross-shard protocol closure done\n"
+	log := "v3.12 runtime realism closure start\nruntime_mode=" + summary.RuntimeMode + "\ntruth_label=" + summary.TruthLabel + "\nnode_runtime_mode=" + nodeRuntime.Config.NodeRuntimeMode + "\nprocess_runtime_mode=" + summary.ProcessRuntimeMode + "\nlocal_multi_process_enabled=" + strconv.FormatBool(summary.LocalMultiProcessEnabled) + "\nplanned_process_count=" + strconv.Itoa(summary.PlannedProcessCount) + "\nstarted_process_count=" + strconv.Itoa(summary.StartedProcessCount) + "\nstopped_process_count=" + strconv.Itoa(summary.StoppedProcessCount) + "\nfailed_process_count=" + strconv.Itoa(summary.FailedProcessCount) + "\ncapped_process_count=" + strconv.Itoa(summary.CappedProcessCount) + "\nmax_local_processes=" + strconv.Itoa(summary.MaxLocalProcesses) + "\nnetwork_message_count=" + strconv.Itoa(summary.NetworkMessageCount) + "\nnetwork_path_truth=" + summary.NetworkPathTruth + "\ncommittee_count=" + strconv.Itoa(summary.CommitteeCount) + "\nepoch_count=" + strconv.Itoa(summary.EpochCount) + "\nreconfiguration_event_count=" + strconv.Itoa(summary.ReconfigurationEventCount) + "\ncommittee_epoch_truth=" + summary.CommitteeEpochTruth + "\nruntime_realism_truth=" + summary.RuntimeRealismTruth + "\n" + networkAdapter.SummaryLine() + consensusNetwork.SummaryLine() + pbftPreview.SummaryLine() + pbftNetwork.SummaryLine() + crossShard.SummaryLine() + "production_cluster=false\nmulti_server_deployment=false\nproduction_pbft=false\nhotstuff=false\nraft=false\nfabric_live=false\nevm_live=false\nblockemulator_backend=false\npaper_grade_performance=false\nv3.12 runtime realism closure done\n"
 	return os.WriteFile(filepath.Join(out, "runtime.log"), []byte(log), 0o644)
 }
 
@@ -2543,11 +2606,12 @@ func writeSummaryCSV(path string, s Summary) error {
 		fmt.Sprint(s.RelayMVPEnabled), strconv.Itoa(s.RelayMVPTxCount), strconv.Itoa(s.RelaySourceLockCount), strconv.Itoa(s.RelayCertificateCount), strconv.Itoa(s.RelayProofVerifiedCount), strconv.Itoa(s.RelayProofFailedCount), strconv.Itoa(s.RelayTargetVerifiedCount), strconv.Itoa(s.RelayTargetCommitCount), strconv.Itoa(s.RelaySourceFinalizedCount), strconv.Itoa(s.RelayTimeoutCount), strconv.Itoa(s.RelayRefundCount), strconv.Itoa(s.RelayAbortCount), strconv.Itoa(s.RelaySuccessCount), strconv.Itoa(s.RelayFailedCount), fmt.Sprint(s.RelayAvgLatencyMS), s.RelayMVPTruth,
 		s.StateBackendSelected, fmt.Sprint(s.PersistentStateEnabled), fmt.Sprint(s.StateRootEnabled), strconv.Itoa(s.StateRootCount), strconv.Itoa(s.StateKeyCount), strconv.Itoa(s.StateUpdateCount), strconv.Itoa(s.StateProofGeneratedCount), strconv.Itoa(s.StateProofVerifiedCount), strconv.Itoa(s.StateProofFailedCount), strconv.Itoa(s.WitnessGeneratedCount), strconv.Itoa(s.WitnessVerifiedCount), strconv.Itoa(s.WitnessFailedCount), strconv.Itoa(s.StateAuthenticityErrorCount),
 		s.BenchmarkTemplateSelected, s.BaselineProfileSelected, strconv.Itoa(s.BenchmarkRunCount), strconv.Itoa(s.SweepParameterCount), strconv.Itoa(s.RepeatCount), strconv.Itoa(s.BenchmarkArtifactCount), strconv.Itoa(s.BaselineComparisonCount), fmt.Sprint(s.ReproducibilityManifestAvailable), fmt.Sprint(s.BenchmarkReportAvailable), fmt.Sprint(s.PaperGradeBenchmark),
+		s.NodeRuntimeMode, s.ProcessRuntimeMode, fmt.Sprint(s.LocalMultiProcessEnabled), strconv.Itoa(s.PlannedProcessCount), strconv.Itoa(s.StartedProcessCount), strconv.Itoa(s.StoppedProcessCount), strconv.Itoa(s.FailedProcessCount), strconv.Itoa(s.CappedProcessCount), strconv.Itoa(s.MaxLocalProcesses), s.NetworkPathTruth, strconv.Itoa(s.CommitteeCount), strconv.Itoa(s.EpochCount), strconv.Itoa(s.ReconfigurationEventCount), fmt.Sprint(s.CommitteeEpochEnabled), s.CommitteeEpochTruth, s.RuntimeRealismTruth,
 	}})
 }
 
 func summaryFields() []string {
-	return []string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "raw_update_count", "aggregation_group_count", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance", "shard_count", "validators_per_shard", "logical_node_count", "validator_node_count", "executor_node_count", "storage_node_count", "supervisor_node_count", "message_count", "network_message_count", "node_event_count", "launcher_mode", "launcher_script_count", "launchable_node_count", "node_address_count", "windows_launcher_available", "linux_launcher_available", "launcher_preview_only", "node_process_entrypoint_available", "node_process_preview_available", "node_process_status_available", "node_process_manifest_available", "node_process_preview_only", "network_adapter_selected", "tcp_preview_enabled", "tcp_listen_node_count", "tcp_send_count", "tcp_receive_count", "typed_message_count", "network_error_count", "consensus_over_network_enabled", "consensus_runtime_selected", "proposal_preview_count", "vote_preview_count", "light_quorum_reached_count", "consensus_network_error_count", "consensus_network_path", "pbft_view", "pbft_sequence", "pbft_preprepare_count", "pbft_prepare_count", "pbft_commit_count", "pbft_quorum_reached_count", "pbft_finalized_block_count", "pbft_consensus_latency_ms", "pbft_preview_enabled", "pbft_quorum_threshold", "pbft_over_network_enabled", "pbft_network_path", "pbft_network_message_count", "pbft_network_error_count", "pbft_preprepare_network_count", "pbft_prepare_network_count", "pbft_commit_network_count", "pbft_finalized_network_count", "pbft_network_quorum_reached_count", "cross_shard_protocol_selected", "cross_shard_message_count", "relay_preview_count", "cross_shard_completed_count", "cross_shard_failed_count", "cross_shard_avg_latency_ms", "relay_mvp_enabled", "relay_mvp_tx_count", "relay_source_lock_count", "relay_certificate_count", "relay_proof_verified_count", "relay_proof_failed_count", "relay_target_verified_count", "relay_target_commit_count", "relay_source_finalized_count", "relay_timeout_count", "relay_refund_count", "relay_abort_count", "relay_success_count", "relay_failed_count", "relay_avg_latency_ms", "relay_mvp_truth", "state_backend_selected", "persistent_state_enabled", "state_root_enabled", "state_root_count", "state_key_count", "state_update_count", "state_proof_generated_count", "state_proof_verified_count", "state_proof_failed_count", "witness_generated_count", "witness_verified_count", "witness_failed_count", "state_authenticity_error_count", "benchmark_template_selected", "baseline_profile_selected", "benchmark_run_count", "sweep_parameter_count", "repeat_count", "benchmark_artifact_count", "baseline_comparison_count", "reproducibility_manifest_available", "benchmark_report_available", "paper_grade_benchmark"}
+	return append([]string{"run_id", "stage", "backend_type", "truth_label", "chain_profile_id", "plugin_profile_id", "experiment_profile_id", "tx_count", "success_count", "failure_count", "block_count", "throughput_tps", "avg_latency_ms", "p95_latency_ms", "p99_latency_ms", "runtime_mode", "remote_fetch_count", "cross_shard_ratio", "fast_track_count", "conservative_track_count", "aggregated_update_count", "aggregation_ratio", "conflict_count", "queue_wait_ms", "txpool_admitted_count", "txpool_rejected_count", "txpool_peak_size", "txpool_avg_wait_ms", "txpool_p95_wait_ms", "empty_block_count", "avg_block_size", "max_block_size", "block_interval_ms", "avg_block_interval_ms", "blockproducer_count_cut_count", "blockproducer_time_cut_count", "blockproducer_drain_cut_count", "blockproducer_empty_cut_count", "block_commit_latency_ms", "consensus_latency_ms", "avg_consensus_latency_ms", "p95_consensus_latency_ms", "consensus_message_count", "avg_consensus_message_count", "consensus_round_count", "view_change_count", "finalized_block_count", "failed_block_count", "routing_decision_count", "cross_shard_tx_count", "local_tx_count", "remote_state_access_count", "avg_touched_shards", "max_touched_shards", "hotspot_key_count", "coaccess_group_count", "avg_routing_overhead_ms", "routing_plugin", "execution_plugin", "execution_tx_count", "blocked_tx_count", "dependency_edge_count", "avg_dependency_edges_per_tx", "avg_execution_latency_ms", "p95_execution_latency_ms", "max_execution_latency_ms", "logical_worker_count", "parallelizable_tx_count", "serial_tx_count", "state_access_plugin", "state_access_count", "local_state_access_count", "remote_state_access_count", "remote_state_access_ratio", "cache_hit_count", "cache_miss_count", "cache_hit_rate", "prefetch_hit_count", "prefetch_miss_count", "prefetch_hit_rate", "avg_state_access_latency_ms", "p95_state_access_latency_ms", "max_state_access_latency_ms", "remote_state_access_latency_ms", "witness_estimated_count", "proof_estimated_count", "estimated_witness_bytes", "estimated_proof_bytes", "commit_plugin", "commit_tx_count", "commit_update_count", "normal_commit_count", "conservative_commit_count", "hotspot_update_count", "raw_update_count", "aggregation_group_count", "constraint_check_count", "constraint_passed_count", "constraint_failed_count", "avg_commit_latency_ms", "p95_commit_latency_ms", "max_commit_latency_ms", "execution_shard_count", "state_storage_unit_count", "cross_state_unit_access_count", "remote_state_fetch_count", "state_locality_ratio", "execution_shard_load_balance", "state_unit_load_balance", "shard_count", "validators_per_shard", "logical_node_count", "validator_node_count", "executor_node_count", "storage_node_count", "supervisor_node_count", "message_count", "network_message_count", "node_event_count", "launcher_mode", "launcher_script_count", "launchable_node_count", "node_address_count", "windows_launcher_available", "linux_launcher_available", "launcher_preview_only", "node_process_entrypoint_available", "node_process_preview_available", "node_process_status_available", "node_process_manifest_available", "node_process_preview_only", "network_adapter_selected", "tcp_preview_enabled", "tcp_listen_node_count", "tcp_send_count", "tcp_receive_count", "typed_message_count", "network_error_count", "consensus_over_network_enabled", "consensus_runtime_selected", "proposal_preview_count", "vote_preview_count", "light_quorum_reached_count", "consensus_network_error_count", "consensus_network_path", "pbft_view", "pbft_sequence", "pbft_preprepare_count", "pbft_prepare_count", "pbft_commit_count", "pbft_quorum_reached_count", "pbft_finalized_block_count", "pbft_consensus_latency_ms", "pbft_preview_enabled", "pbft_quorum_threshold", "pbft_over_network_enabled", "pbft_network_path", "pbft_network_message_count", "pbft_network_error_count", "pbft_preprepare_network_count", "pbft_prepare_network_count", "pbft_commit_network_count", "pbft_finalized_network_count", "pbft_network_quorum_reached_count", "cross_shard_protocol_selected", "cross_shard_message_count", "relay_preview_count", "cross_shard_completed_count", "cross_shard_failed_count", "cross_shard_avg_latency_ms", "relay_mvp_enabled", "relay_mvp_tx_count", "relay_source_lock_count", "relay_certificate_count", "relay_proof_verified_count", "relay_proof_failed_count", "relay_target_verified_count", "relay_target_commit_count", "relay_source_finalized_count", "relay_timeout_count", "relay_refund_count", "relay_abort_count", "relay_success_count", "relay_failed_count", "relay_avg_latency_ms", "relay_mvp_truth", "state_backend_selected", "persistent_state_enabled", "state_root_enabled", "state_root_count", "state_key_count", "state_update_count", "state_proof_generated_count", "state_proof_verified_count", "state_proof_failed_count", "witness_generated_count", "witness_verified_count", "witness_failed_count", "state_authenticity_error_count", "benchmark_template_selected", "baseline_profile_selected", "benchmark_run_count", "sweep_parameter_count", "repeat_count", "benchmark_artifact_count", "baseline_comparison_count", "reproducibility_manifest_available", "benchmark_report_available", "paper_grade_benchmark"}, []string{"node_runtime_mode", "process_runtime_mode", "local_multi_process_enabled", "planned_process_count", "started_process_count", "stopped_process_count", "failed_process_count", "capped_process_count", "max_local_processes", "network_path_truth", "committee_count", "epoch_count", "reconfiguration_event_count", "committee_epoch_enabled", "committee_epoch_truth", "runtime_realism_truth"}...)
 }
 
 func writeBlockLog(path string, rows []map[string]string) error {
