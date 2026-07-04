@@ -44,6 +44,23 @@ def test_valid_full_metatrack_draft_is_runnable() -> None:
     assert result.normalized_draft["topology"]["benchmark_template"] == "full_stack_v3_template"
     assert result.normalized_draft["topology"]["baseline_profile"] == "baseline_simple_chain"
     assert result.normalized_draft["topology"]["repeat_count"] == 1
+    assert result.normalized_draft["controlled_experiment_enabled"] is False
+    assert result.normalized_draft["plugin_selection_mode"] == "free"
+    assert result.normalized_draft["topology"]["controlled_experiment_enabled"] is False
+    assert result.normalized_draft["topology_summary"]["plugin_selection_mode"] == "free"
+
+
+def test_controlled_experiment_mode_records_controlled_selection_mode() -> None:
+    draft = valid_draft()
+    draft.topology = V3RuntimeTopology(controlled_experiment_enabled=True)
+    result = validate_v3_composer_draft(draft)
+
+    assert result.is_valid is True
+    assert result.normalized_draft is not None
+    assert result.normalized_draft["controlled_experiment_enabled"] is True
+    assert result.normalized_draft["plugin_selection_mode"] == "controlled"
+    assert result.normalized_draft["topology"]["controlled_experiment_enabled"] is True
+    assert result.normalized_draft["topology_summary"]["plugin_selection_mode"] == "controlled"
 
 
 def test_valid_draft_accepts_state_backend_mvp_options() -> None:
@@ -281,6 +298,8 @@ def test_preview_only_plugin_is_valid_but_not_runnable() -> None:
 
     assert result.is_valid is True
     assert result.is_runnable is False
+    assert result.normalized_draft is not None
+    assert result.normalized_draft["plugin_selection_mode"] == "free"
     assert any("仅用于预览" in warning for warning in result.warnings)
 
 

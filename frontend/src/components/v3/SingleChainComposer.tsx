@@ -12,6 +12,7 @@ type Props = {
   variableModule?: string;
   variableModules?: string[];
   lockedModules?: Record<string, string>;
+  controlledExperimentEnabled?: boolean;
 };
 
 type SnakeSlot = {
@@ -42,7 +43,7 @@ const stageGroups = [
   { title: "提交阶段", modules: "状态存储 / 状态提交 / 指标报告" },
 ];
 
-export default function SingleChainComposer({ preview, draft, onDraftChange, variableModule = "", variableModules = [], lockedModules = {} }: Props) {
+export default function SingleChainComposer({ preview, draft, onDraftChange, variableModule = "", variableModules = [], lockedModules = {}, controlledExperimentEnabled = false }: Props) {
   const modules = preview.modules || [];
   const [selectedId, setSelectedId] = useState(modules[0]?.module_id || "");
   const modulesById = useMemo(
@@ -90,7 +91,8 @@ export default function SingleChainComposer({ preview, draft, onDraftChange, var
                 module={moduleView(module, draft)}
                 selected={selected?.module_id === module.module_id}
                 onSelect={selectModule}
-                templateRole={module.module_id === variableModule || variableModules.includes(module.module_id) ? "variable" : lockedModules[module.module_id] ? "locked" : undefined}
+                templateRole={controlledExperimentEnabled && (module.module_id === variableModule || variableModules.includes(module.module_id)) ? "variable" : controlledExperimentEnabled && lockedModules[module.module_id] ? "locked" : undefined}
+                topologyEnabled={module.module_id === "CommitteeEpoch" && Boolean(draft.topology.enable_committee_epoch)}
               />
               {slot.edge && (
                 <span className={`v3-edge v3-edge-${slot.edge}`} aria-hidden="true">
@@ -106,7 +108,9 @@ export default function SingleChainComposer({ preview, draft, onDraftChange, var
         draft={draft}
         onDraftModuleChange={updateSelected}
         variableModule={variableModule}
+        variableModules={variableModules}
         lockedModules={lockedModules}
+        controlledExperimentEnabled={controlledExperimentEnabled}
       />
     </section>
   );

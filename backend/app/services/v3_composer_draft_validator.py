@@ -38,6 +38,8 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
     topology, topology_errors = normalize_topology(request.topology)
     errors.extend(topology_errors)
     topo_summary = topology_summary(topology)
+    controlled_experiment_enabled = bool(topology.get("controlled_experiment_enabled", False))
+    plugin_selection_mode = "controlled" if controlled_experiment_enabled else "free"
 
     try:
         template = get_template(request.template_id)
@@ -119,7 +121,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
             if status == "variable":
                 errors.append(f"{catalog_module.label}是输出模块，不能作为实验变量。")
             status = "output"
-        if status == "variable" and is_single_module_template and module_id != template_variable_module:
+        if controlled_experiment_enabled and status == "variable" and is_single_module_template and module_id != template_variable_module:
             errors.append(
                 fairness_error(
                     template_id,
@@ -147,7 +149,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
             has_preview_only = True
             warnings.append(f"{plugin_capability.label} 当前仅用于预览，后端尚未接入 Draft 运行。")
 
-        if request.template_id == "metatrack_ablation" and status == "variable" and module_id not in METATRACK_VARIABLE_MODULES:
+        if controlled_experiment_enabled and request.template_id == "metatrack_ablation" and status == "variable" and module_id not in METATRACK_VARIABLE_MODULES:
             if module_id == "Consensus":
                 errors.append("当前模板 metatrack_ablation 中，共识排序属于固定环境，不能作为实验变量。请切换到 consensus_only 模板。")
             else:
@@ -187,7 +189,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
             "planned": plugin_capability.planned,
         }
 
-    if request.template_id == "metatrack_ablation":
+    if controlled_experiment_enabled and request.template_id == "metatrack_ablation":
         for module_id in METATRACK_FIXED_MODULES:
             if module_id in variable_modules:
                 errors.append(f"当前模板 metatrack_ablation 中，{module_label(module_id)}属于固定环境，不能作为实验变量。")
@@ -232,7 +234,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         preset=preset,
     )
     fairness_validated = False
-    if is_single_module_template:
+    if controlled_experiment_enabled and is_single_module_template:
         fairness_validated = True
         for module_id in variable_modules:
             if module_id != template_variable_module:
@@ -267,7 +269,7 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
                         actual,
                     )
                 )
-    elif is_metatrack_ablation:
+    elif controlled_experiment_enabled and is_metatrack_ablation:
         fairness_validated = bool(requested_preset_id)
         if requested_preset_id:
             controlled = set(template_controlled_modules or ["Routing", "Execution", "StateAccess", "Commit"])
@@ -312,6 +314,8 @@ def validate_v3_composer_draft(request: V3ComposerDraftRequest) -> V3DraftValida
         "template_id": template_id,
         "experiment_template": template_id,
         "run_mode": "draft_smoke",
+        "controlled_experiment_enabled": controlled_experiment_enabled,
+        "plugin_selection_mode": plugin_selection_mode,
         "modules": normalized_modules,
         "plugin_selection": plugin_selection,
         "variable_modules": sorted(set(variable_modules)),

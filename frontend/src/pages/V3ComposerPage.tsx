@@ -155,18 +155,21 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
 
   function applyTemplateAndPreset(template: V3TemplateSummary, preset: NonNullable<V3TemplateSummary["presets"]>[number] | undefined, presetId: string) {
     if (!draft) return;
+    const controlledExperimentEnabled = draft.topology.controlled_experiment_enabled ?? false;
     const variableModule = template.variable_module || "";
     const allowedPlugins = template.allowed_variable_plugins || [];
-    const lockedModules = preset?.locked_modules || template.locked_modules || {};
+    const lockedModules = controlledExperimentEnabled ? (preset?.locked_modules || template.locked_modules || {}) : {};
     const defaultSelection = preset?.default_plugin_selection || {};
     const controlledModules = new Set([...(template.variable_modules || []), ...(preset?.controlled_modules || [])]);
     const nextModules = Object.fromEntries(
       Object.entries(draft.modules).map(([moduleId, module]) => {
         if (defaultSelection[moduleId]) {
-          const nextStatus: V3DraftModuleStatus = controlledModules.has(moduleId) ? "variable" : moduleStatusForLockedPlugin(moduleId, defaultSelection[moduleId]);
+          const nextStatus: V3DraftModuleStatus = controlledExperimentEnabled
+            ? (controlledModules.has(moduleId) ? "variable" : moduleStatusForLockedPlugin(moduleId, defaultSelection[moduleId]))
+            : module.status;
           return [moduleId, { ...module, status: nextStatus, plugin: defaultSelection[moduleId], runnable: true }];
         }
-        if (moduleId === variableModule) {
+        if (controlledExperimentEnabled && moduleId === variableModule) {
           const nextPlugin = allowedPlugins.includes(module.plugin) ? module.plugin : (allowedPlugins[0] || module.plugin);
           return [moduleId, { ...module, status: "variable" as const, plugin: nextPlugin, runnable: true }];
         }
@@ -280,7 +283,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     () => selectedTemplate?.presets?.find((preset) => preset.preset_id === (draft?.presetId || selectedTemplate.default_preset_id)) || selectedTemplate?.presets?.[0],
     [draft?.presetId, selectedTemplate],
   );
-  const selectedLockedModules = selectedPreset?.locked_modules || selectedTemplate?.locked_modules || {};
+  const controlledExperimentEnabled = draft?.topology.controlled_experiment_enabled ?? false;
+  const selectedLockedModules = controlledExperimentEnabled ? (selectedPreset?.locked_modules || selectedTemplate?.locked_modules || {}) : {};
   const selectedVariableModules = selectedPreset?.controlled_modules || (selectedTemplate?.variable_module ? [selectedTemplate.variable_module] : selectedTemplate?.variable_modules || []);
   const stageLabel = preview?.current_stage || preview?.stage || fallbackStageMetadata.currentStage;
   const latestRuntimeLabel = preview?.latest_runtime_stage || preview?.latest_completed_runtime_stage || fallbackStageMetadata.latestRuntime;
@@ -344,7 +348,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       {draft && (
         <section className="final-card wide v3-template-bar">
           <label>
-            <span>模块实验模板</span>
+            <span>起始配置模板</span>
             <select value={draft.templateId} onChange={(event) => selectExperimentTemplate(event.target.value)}>
               {templates.filter((template) => template.runnable).map((template) => (
                 <option key={template.template_id} value={template.template_id}>
@@ -356,6 +360,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           {selectedTemplate && (
             <div className="v3-template-lock-summary">
               <p className="muted">{selectedTemplate.description}</p>
+              <p className="muted">模板用于快速填充推荐插件组合。默认不锁定模块；只有打开“受控对照模式”时，模板固定规则才会生效。</p>
               {selectedTemplate.presets && selectedTemplate.presets.length > 0 && (
                 <label>
                   <span>快速验证预设 <HelpTip title="快速验证">小规模试运行，用于确认配置和产物是否正常，不代表论文级正式实验。</HelpTip></span>
@@ -374,7 +379,10 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
                 <div><dt>消融阶段</dt><dd>{selectedPreset?.ablation_stage || "-"}</dd></div>
                 <div><dt>启用组件</dt><dd>{(selectedPreset?.enabled_metatrack_components || []).join(", ") || "baseline / none"}</dd></div>
               </dl>
-              {Object.keys(selectedLockedModules).length > 0 && (
+              {!controlledExperimentEnabled && (
+                <p className="muted">当前为自由配置模式：模板固定规则未启用。</p>
+              )}
+              {controlledExperimentEnabled && Object.keys(selectedLockedModules).length > 0 && (
                 <details className="v3-foldout">
                   <summary className="v3-foldout-summary">模板固定模块</summary>
                   <ul className="v3-check-list compact">
@@ -408,6 +416,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
             variableModule={selectedTemplate?.variable_module}
             variableModules={selectedVariableModules}
             lockedModules={selectedLockedModules}
+            controlledExperimentEnabled={controlledExperimentEnabled}
           />
         </>
       )}

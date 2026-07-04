@@ -217,6 +217,8 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   preset_name?: string;
   ablation_stage?: string;
   enabled_metatrack_components?: string[] | string;
+  controlled_experiment_enabled?: boolean | string;
+  plugin_selection_mode?: string;
   controlled_modules?: string[] | string;
   variable_module?: string;
   locked_modules?: Record<string, string> | string;
@@ -497,6 +499,7 @@ export type V3RuntimeTopology = {
   benchmark_template?: "metatrack_hotspot_template" | "pbft_network_template" | "cross_shard_relay_preview_template" | "state_authenticity_template" | "full_stack_v3_template" | string;
   baseline_profile?: "baseline_simple_chain" | "baseline_hash_sharding" | "baseline_no_prefetch" | "baseline_no_cross_shard_protocol" | "baseline_memory_kv" | "baseline_no_state_authenticity" | string;
   repeat_count?: number;
+  controlled_experiment_enabled?: boolean;
   metaverse_suite_enabled?: boolean;
   metaverse_scenario?: "asset_transfer" | "avatar_update" | "scene_hotspot" | "item_transfer" | "cross_scene_migration" | "onchain_offchain_confirmation" | "cross_metaverse_transfer" | "mixed_metaverse" | string;
   user_count?: number;

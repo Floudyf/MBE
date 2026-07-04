@@ -37,6 +37,7 @@ class V3RuntimeTopology(BaseModel):
     benchmark_template: str = "full_stack_v3_template"
     baseline_profile: str = "baseline_simple_chain"
     repeat_count: int = 1
+    controlled_experiment_enabled: bool = False
     metaverse_suite_enabled: bool = False
     metaverse_scenario: str = "mixed_metaverse"
     user_count: int = 100

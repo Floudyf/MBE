@@ -128,6 +128,8 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     if baseline_profile not in BASELINE_PROFILES:
         errors.append("topology.baseline_profile must be one of the V3.10 baseline profiles")
     _range(errors, data, "repeat_count", 1, 20)
+    _bool(errors, data, "controlled_experiment_enabled")
+    data["plugin_selection_mode"] = "controlled" if bool(data.get("controlled_experiment_enabled")) else "free"
     _bool(errors, data, "metaverse_suite_enabled")
     scenario = data.get("metaverse_scenario") or "mixed_metaverse"
     data["metaverse_scenario"] = scenario
@@ -208,6 +210,8 @@ def topology_summary(topology: dict[str, Any]) -> dict[str, int | str | bool]:
         "metaverse_tx_count": int(topology.get("tx_count", 10000)),
         "benchmark_suite_enabled": bool(topology.get("benchmark_suite_enabled", False)),
         "baseline_matrix_enabled": bool(topology.get("baseline_matrix_enabled", False)),
+        "controlled_experiment_enabled": bool(topology.get("controlled_experiment_enabled", False)),
+        "plugin_selection_mode": "controlled" if bool(topology.get("controlled_experiment_enabled", False)) else "free",
         "multi_seed_enabled": bool(topology.get("multi_seed_enabled", False)),
         "paper_export_enabled": bool(topology.get("paper_export_enabled", False)),
         "fault_injection_enabled": bool(topology.get("fault_injection_enabled", False)),

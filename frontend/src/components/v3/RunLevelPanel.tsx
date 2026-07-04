@@ -41,6 +41,9 @@ export default function RunLevelPanel({
         <li><span className="status-dot ok" />内置快速验证：使用已有 MetaTrack 组合检查运行链路</li>
         <li><span className={draftRunnable ? "status-dot ok" : "status-dot planned"} />配置草稿试运行：只运行当前单组配置</li>
       </ul>
+      <div className="v3-warning-card">
+        当前运行入口用于快速验证配置链路和 artifacts 生成。它不会按 metaverse_tx_count 执行完整 runtime 压测。
+      </div>
       <div className="v3-run-buttons">
         <button type="button" disabled={!runnable || running} onClick={onRunSmoke}>
           {running ? "内置快速验证运行中..." : "运行内置快速验证"}
@@ -49,7 +52,7 @@ export default function RunLevelPanel({
           {validatingDraft ? "校验中..." : "校验当前草稿"}
         </button>
         <button type="button" className="v3-secondary-button" disabled={!draftRunnable || runningDraft || validatingDraft} onClick={onRunDraftSmoke}>
-          {runningDraft ? "草稿试运行中..." : "运行配置草稿试运行"}
+          {runningDraft ? "Draft Smoke 运行中..." : "运行当前配置快速验证"}
         </button>
       </div>
       {draft && (

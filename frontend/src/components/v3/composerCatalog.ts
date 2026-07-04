@@ -44,7 +44,7 @@ export const optionalModuleIds = new Set([
 
 export const statusLabels: Record<DraftModuleStatus, string> = {
   default: "默认配置",
-  fixed: "模板固定",
+  fixed: "已启用",
   variable: "实验变量",
   disabled: "已关闭",
   planned: "规划中",

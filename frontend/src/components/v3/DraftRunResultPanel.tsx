@@ -42,6 +42,12 @@ export default function DraftRunResultPanel({ result }: Props) {
       <dl className="v3-result-grid compact">
         <div><dt>运行 ID</dt><dd>{result.run_id}</dd></div>
         <div><dt>运行模式</dt><dd>配置草稿试运行</dd></div>
+        <div><dt>run_mode</dt><dd>{String(summary.run_mode || result.run_mode || "draft_smoke")}</dd></div>
+        <div><dt>插件选择模式</dt><dd>{String(summary.plugin_selection_mode || normalized.plugin_selection_mode || "-")}</dd></div>
+        <div><dt>受控对照</dt><dd>{String(summary.controlled_experiment_enabled ?? normalized.controlled_experiment_enabled ?? "-")}</dd></div>
+        <div><dt>runtime tx_count</dt><dd>{String(summary.tx_count || "-")}</dd></div>
+        <div><dt>metaverse_tx_count</dt><dd>{String(summary.metaverse_tx_count || "-")}</dd></div>
+        <div><dt>paper_grade_benchmark</dt><dd>{String(summary.paper_grade_benchmark ?? false)}</dd></div>
         <div><dt>实验模板</dt><dd>{String(summary.experiment_template || normalized.experiment_template || normalized.template_id || "-")}</dd></div>
         <div><dt>快速验证预设</dt><dd>{String(summary.preset_id || normalized.preset_id || "默认")}</dd></div>
         <div><dt>校验结果</dt><dd>{result.validation?.is_valid ? "通过" : "未通过"}</dd></div>

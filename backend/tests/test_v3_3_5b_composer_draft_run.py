@@ -164,6 +164,9 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
     assert result["current_capability"] == "deterministic fault injection, local observability summary, component health status, final artifact catalog, reproducibility bundle, experiment manual, and paper experiment mapping"
     assert result["runtime_truth"] == "v3_final_emulator_closure_not_production_system"
     assert result["run_mode"] == "draft_smoke"
+    assert result["summary"]["controlled_experiment_enabled"] is False
+    assert result["summary"]["plugin_selection_mode"] == "free"
+    assert result["summary"]["current_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
     assert result["topology_summary"]["logical_node_count"] == 25
     assert len(calls) == 1
     assert calls[0]["plugin_profile_id"] == draft_runner.DRAFT_PLUGIN_PROFILE_ID

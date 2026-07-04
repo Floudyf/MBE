@@ -19,12 +19,14 @@ type Props = {
   draft: ComposerDraft;
   onDraftModuleChange: (moduleId: string, patch: Partial<Pick<ComposerDraftModule, "status" | "plugin" | "params">>) => void;
   variableModule?: string;
+  variableModules?: string[];
   lockedModules?: Record<string, string>;
+  controlledExperimentEnabled?: boolean;
 };
 
 const statusChoices: DraftModuleStatus[] = ["default", "fixed", "variable", "disabled"];
 
-export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, variableModule = "", lockedModules = {} }: Props) {
+export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, variableModule = "", variableModules = [], lockedModules = {}, controlledExperimentEnabled = false }: Props) {
   if (!module) {
     return (
       <aside className="v3-detail-panel">
@@ -46,7 +48,13 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
   const moduleStatusChoices: DraftModuleStatus[] = module.module_id === "MetricsReport" ? ["output"] : statusChoices;
   const selectedPlugin = pluginOptions.find((plugin) => plugin.id === currentPlugin);
   const lockedPlugin = lockedModules[selectedModule.module_id];
-  const templateRole = selectedModule.module_id === variableModule ? "variable" : lockedPlugin ? "locked" : "";
+  const isVariable = selectedModule.module_id === variableModule || variableModules.includes(selectedModule.module_id);
+  const isLocked = controlledExperimentEnabled && Boolean(lockedPlugin);
+  const templateRole = controlledExperimentEnabled && isVariable ? "variable" : isLocked ? "locked" : "";
+  const committeeEpochTopologyEnabled = selectedModule.module_id === "CommitteeEpoch" && Boolean(draft.topology.enable_committee_epoch);
+  const statusLabel = committeeEpochTopologyEnabled ? "拓扑启用" : statusLabels[currentStatus];
+  const selectedPluginIsPreview = selectedPlugin?.status === "preview";
+  const selectedPluginIsPlanned = selectedPlugin?.status === "planned";
   const visibleMessages = draft.validationMessages
     .filter((message) => message.includes(catalog.label) || message.includes(selectedModule.module_id))
     .slice(0, 3);
@@ -71,8 +79,14 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
           <h3>{catalog.label}</h3>
           <p className="v3-sub-id">{selectedModule.module_id}</p>
         </div>
-        <span className={`v3-status-badge status-${currentStatus}`}>{statusLabels[currentStatus]}</span>
+        <span className={`v3-status-badge status-${committeeEpochTopologyEnabled ? "variable" : currentStatus}`}>{statusLabel}</span>
       </div>
+
+      {selectedPluginIsPreview && (
+        <div className="v3-warning-card">
+          当前选择的是仅预览插件，可查看配置但不能 Draft Smoke 运行。
+        </div>
+      )}
 
       <dl className="v3-detail-list compact">
         <div><dt>当前插件</dt><dd title={currentPlugin}>{selectedPlugin?.label || currentPlugin}<small>{currentPlugin}</small></dd></div>
@@ -85,6 +99,11 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
       </dl>
 
       <section className="v3-config-section">
+        <h4>编辑状态</h4>
+        <p>{editStateMessage(selectedModule.module_id, controlledExperimentEnabled, isLocked, isVariable, selectedPluginIsPlanned, committeeEpochTopologyEnabled)}</p>
+      </section>
+
+      <section className="v3-config-section">
         <h4>模块说明 <HelpTip title={catalog.label}>{moduleHint(selectedModule.module_id)}</HelpTip></h4>
         <p>{catalog.description}</p>
         <p className="muted">{boundaryHint(selectedModule.module_id)}</p>
@@ -94,7 +113,7 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
         <h4>模块状态</h4>
         <div className="v3-radio-list">
           {moduleStatusChoices.map((status) => {
-            const disabled = templateRole === "locked" || statusDisabled(selectedModule.module_id, status);
+            const disabled = isLocked || statusDisabled(selectedModule.module_id, status);
             return (
               <label key={status} className={disabled ? "disabled" : ""}>
                 <input type="radio" checked={currentStatus === status} disabled={disabled} onChange={() => changeStatus(status)} />
@@ -108,7 +127,7 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
 
       <section className="v3-config-section">
         <h4>插件选择 <HelpTip title="插件选择">主列表只显示可运行或有展示意义的预览项；规划中插件折叠在下方，不干扰本轮试运行。</HelpTip></h4>
-        <PluginList plugins={primaryPlugins} currentPlugin={currentPlugin} locked={templateRole === "locked"} onChange={changePlugin} />
+        <PluginList plugins={primaryPlugins} currentPlugin={currentPlugin} locked={isLocked} onChange={changePlugin} />
         {plannedPlugins.length > 0 && (
           <details className="v3-foldout">
             <summary className="v3-foldout-summary">规划中插件</summary>
@@ -152,6 +171,7 @@ function PluginList({ plugins, currentPlugin, locked, onChange }: { plugins: Dra
           <span>
             <strong>{plugin.label}</strong>
             <small title={plugin.id}>{plugin.id}</small>
+            <small>{pluginAvailabilityText(plugin.status)}</small>
           </span>
           <b className={`v3-status-badge plugin-${plugin.status}`}>{pluginStatusLabels[plugin.status]}</b>
         </label>
@@ -171,6 +191,33 @@ function dedupePlugins(plugins: DraftPluginOption[]): DraftPluginOption[] {
     seen.add(normalized);
     return true;
   });
+}
+
+function pluginAvailabilityText(status: DraftPluginOption["status"]): string {
+  if (status === "runnable") return "可运行";
+  if (status === "preview") return "仅预览，不能运行";
+  return "规划中，不能运行";
+}
+
+function editStateMessage(
+  moduleId: string,
+  controlledExperimentEnabled: boolean,
+  isLocked: boolean,
+  isVariable: boolean,
+  selectedPluginIsPlanned: boolean,
+  committeeEpochTopologyEnabled: boolean,
+): string {
+  if (moduleId === "MetricsReport") return "指标 / 报告是输出模块，不能作为实验变量。";
+  if (selectedPluginIsPlanned) return "规划中模块仅展示路线，不参与运行。";
+  if (moduleId === "CommitteeEpoch") {
+    return committeeEpochTopologyEnabled
+      ? "CommitteeEpoch 由实验配置中的启用委员会 / Epoch 开关控制，当前为拓扑启用，不通过插件列表切换。"
+      : "CommitteeEpoch 由实验配置中的启用委员会 / Epoch 开关控制，当前已关闭，不作为普通实验变量。";
+  }
+  if (!controlledExperimentEnabled) return "当前为自由配置模式。该模块可在可运行插件之间切换；规划中插件不可运行。";
+  if (isLocked) return "当前为受控对照模式。该模块由模板固定，用于保证公平对照。关闭受控对照模式后可自由修改。";
+  if (isVariable) return "当前模块是受控实验变量，可以在可运行插件之间切换。";
+  return "当前为受控对照模式。未锁定的可运行插件仍可按当前模板规则调整。";
 }
 
 function moduleHint(moduleId: string): string {

@@ -7,9 +7,10 @@ type Props = {
   selected: boolean;
   onSelect: (module: V3ComposerModule) => void;
   templateRole?: "variable" | "locked";
+  topologyEnabled?: boolean;
 };
 
-export default function ModuleCard({ module, selected, onSelect, templateRole }: Props) {
+export default function ModuleCard({ module, selected, onSelect, templateRole, topologyEnabled = false }: Props) {
   const plugin = module.plugin && module.plugin !== "none" ? module.plugin : "none";
   const status = (module.status in statusLabels ? module.status : "fixed") as keyof typeof statusLabels;
   const supportHint = moduleSupportHint(module.module_id, module.status, plugin);
@@ -27,7 +28,12 @@ export default function ModuleCard({ module, selected, onSelect, templateRole }:
       <span className="v3-plugin-id" title={plugin}>{labelFor(pluginLabels, plugin)}</span>
       <small title={plugin}>{plugin}</small>
       <span className={`v3-status-badge status-${status}`}>{statusLabels[status]}</span>
-      {templateRole && (
+      {topologyEnabled && (
+        <span className="v3-status-badge status-variable">
+          拓扑启用
+        </span>
+      )}
+      {templateRole && !topologyEnabled && (
         <span className={`v3-status-badge status-${templateRole === "variable" ? "variable" : "fixed"}`}>
           {templateRole === "variable" ? "实验变量" : "模板固定"}
         </span>

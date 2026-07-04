@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest
+from backend.app.models.v3_composer_draft import V3ComposerDraftModule, V3ComposerDraftRequest, V3RuntimeTopology
 from backend.app.services.v3_composer_draft_runner import build_experiment_profile, merge_run_metadata
 from backend.app.services.v3_composer_draft_validator import validate_v3_composer_draft
 from backend.app.services.v3_experiment_templates import load_templates
@@ -24,6 +24,7 @@ def draft(template_id: str, preset_id: str | None = None, **overrides: tuple[str
     return V3ComposerDraftRequest(
         template_id=template_id,
         preset_id=preset_id,
+        topology=V3RuntimeTopology(controlled_experiment_enabled=True),
         modules={
             module_id: V3ComposerDraftModule(module_id=module_id, status=status, plugin=plugin)
             for module_id, (status, plugin) in plugins.items()

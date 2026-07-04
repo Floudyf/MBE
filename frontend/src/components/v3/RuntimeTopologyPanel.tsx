@@ -143,6 +143,11 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           <NumberField label="重复次数" id="repeat_count" value={topology.repeat_count || 1} min={1} max={20} onChange={(value) => patch({ repeat_count: value })}>
             记录 repeat_index / seed 的本地 repeatability MVP。
           </NumberField>
+          <label className="field-card checkbox-card">
+            <span>受控对照模式 <HelpTip title="受控对照模式">关闭时，模板只作为起始配置，模块插件可以自由切换；开启时，模板会锁定固定模块，只允许实验变量模块变化，用于公平 baseline / 消融实验。</HelpTip></span>
+            <input type="checkbox" checked={topology.controlled_experiment_enabled ?? false} onChange={(event) => patch({ controlled_experiment_enabled: event.target.checked })} />
+            <small>controlled_experiment_enabled</small>
+          </label>
         </ConfigGroup>
 
         <ConfigGroup title="元宇宙实验套件">
@@ -330,6 +335,7 @@ function topologySummary(topology: V3RuntimeTopology): Record<string, number | s
     监督节点数: supervisor_node_count,
     共识域数量: topology.shard_count,
     节点运行模式: topology.node_runtime_mode,
+    插件选择模式: topology.controlled_experiment_enabled ? "受控对照" : "自由配置",
     进程运行模式: topology.process_runtime_mode || "dry_run",
     最大本地进程数: topology.max_local_processes || 8,
     启用委员会Epoch: topology.enable_committee_epoch ?? true,
