@@ -1436,6 +1436,24 @@ details summary {
   padding: 0.65rem 0.75rem;
 }
 
+.formal-benchmark-panel {
+  gap: 0.85rem;
+}
+
+.formal-field-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.v3-checkbox-grid {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.current-config-summary {
+  gap: 0.85rem;
+}
+
 .topology-console {
   gap: 0.9rem;
 }

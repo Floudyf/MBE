@@ -3,9 +3,11 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchV3ComposerPreview,
   fetchV3ComposerTemplates,
+  previewV3FormalMetatrackBenchmark,
   runV3ControlledSmoke,
   runV3ComposerDraftSmoke,
   runV3ComposerSmoke,
+  runV3FormalMetatrackBenchmark,
   validateV3ComposerDraft,
   type V2Artifact,
   type V3ComposerPreviewResponse,
@@ -13,12 +15,17 @@ import {
   type V3DraftModuleStatus,
   type V3DraftSmokeRunResponse,
   type V3DraftValidationResponse,
+  type V3FormalMetatrackBenchmarkPreview,
+  type V3FormalMetatrackBenchmarkRequest,
+  type V3FormalMetatrackBenchmarkRunResponse,
   type V3TemplateSummary,
 } from "../api";
 import ArtifactGroups from "../components/v3/ArtifactGroups";
 import DraftRunHistoryPanel from "../components/v3/DraftRunHistoryPanel";
 import DraftRunResultPanel from "../components/v3/DraftRunResultPanel";
 import FairnessScopePanel from "../components/v3/FairnessScopePanel";
+import FormalBenchmarkResultPanel from "../components/v3/FormalBenchmarkResultPanel";
+import FormalMetatrackExperimentPanel from "../components/v3/FormalMetatrackExperimentPanel";
 import HelpTip from "../components/v3/HelpTip";
 import PluginMatrixTable from "../components/v3/PluginMatrixTable";
 import RunLevelPanel from "../components/v3/RunLevelPanel";
@@ -34,7 +41,7 @@ const fallbackStageMetadata = {
   runtimeTruth: "v3_final_emulator_closure_not_production_system",
   nextStage: "V3 maintenance only; do not start V4 unless explicitly requested",
 };
-const controlledSmokeDescription = "按固定顺序运行五组 MetaTrack 快速验证预设。Workload、seed、TxPool、BlockProducer、Consensus、CommitteeEpoch、StateStorage、MetricsReport 保持固定，只改变 Routing、Execution、StateAccess、Commit。输出 aggregate summary 与 realism readiness；这是快速验证级别的受控对照。";
+const controlledSmokeDescription = "按固定顺序运行五组 MetaTrack 快速验证方案。Workload、seed、TxPool、BlockProducer、Consensus、CommitteeEpoch、StateStorage、MetricsReport 保持固定，只改变 Routing、Execution、StateAccess、Commit。输出 aggregate summary 与 realism readiness；这是快速验证级别的受控对照。";
 
 const metatrackLockedModules = {
   Workload: "synthetic_hotspot",
@@ -89,6 +96,35 @@ function moduleStatusForLockedPlugin(moduleId: string, plugin: string): V3DraftM
   return "fixed";
 }
 
+function CurrentConfigSummary({ draft, formalPreview, formalResult }: { draft?: ComposerDraft | null; formalPreview?: V3FormalMetatrackBenchmarkPreview | null; formalResult?: V3FormalMetatrackBenchmarkRunResponse | null }) {
+  const topology = draft?.topology;
+  const formalState = formalResult ? "已完成" : formalPreview ? (formalPreview.is_runnable ? "可运行" : "已预览矩阵") : "未配置";
+  const workloadSource = topology?.metaverse_suite_enabled ? "元宇宙场景化" : draft?.modules.Workload?.plugin === "existing_trace" ? "真实 trace 预览" : "可控合成";
+  return (
+    <section className="final-card wide current-config-summary">
+      <div className="v3-section-head">
+        <div>
+          <p className="eyebrow">当前配置摘要</p>
+          <h3>快速验证与正式性能实验分离</h3>
+        </div>
+        <span className="v3-status-badge status-fixed">本地 emulator</span>
+      </div>
+      <dl className="v3-result-grid compact">
+        <div><dt>插件选择模式</dt><dd>{topology?.controlled_experiment_enabled ? "受控对照" : "自由配置"}</dd></div>
+        <div><dt>运行类型</dt><dd>{formalResult ? "正式性能实验" : "快速验证 / 可预览正式实验"}</dd></div>
+        <div><dt>节点运行模式</dt><dd>{topology?.node_runtime_mode || "logical_single_process"}</dd></div>
+        <div><dt>网络通信方式</dt><dd>{topology?.network_adapter || topology?.network_mode || "in_memory_message_bus"}</dd></div>
+        <div><dt>跨片协议</dt><dd>{topology?.cross_shard_protocol || "none"}</dd></div>
+        <div><dt>状态后端</dt><dd>{topology?.state_backend || "memory_kv"}</dd></div>
+        <div><dt>负载来源</dt><dd>{workloadSource}</dd></div>
+        <div><dt>正式实验状态</dt><dd>{formalState}</dd></div>
+        <div><dt>运行真实性等级</dt><dd>本地 emulator，不是生产链</dd></div>
+      </dl>
+      <p className="muted">逻辑单进程：主性能实验推荐，用于控制变量。本地多进程：原型真实性验证，不作为主性能结论。本地 TCP 预览：消息路径预览，不是生产网络。</p>
+    </section>
+  );
+}
+
 export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [profileId, setProfileId] = useState("metatrack_go_backed_ablation_smoke");
   const [preview, setPreview] = useState<V3ComposerPreviewResponse | null>(null);
@@ -96,6 +132,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [artifacts, setArtifacts] = useState<V2Artifact[]>([]);
   const [draftRunResult, setDraftRunResult] = useState<V3DraftSmokeRunResponse | null>(null);
   const [controlledResult, setControlledResult] = useState<V3ControlledSmokeRunResponse | null>(null);
+  const [formalPreview, setFormalPreview] = useState<V3FormalMetatrackBenchmarkPreview | null>(null);
+  const [formalResult, setFormalResult] = useState<V3FormalMetatrackBenchmarkRunResponse | null>(null);
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
   const [backendValidation, setBackendValidation] = useState<V3DraftValidationResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -103,10 +141,13 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [validatingDraft, setValidatingDraft] = useState(false);
   const [runningDraft, setRunningDraft] = useState(false);
   const [runningControlled, setRunningControlled] = useState(false);
+  const [previewingFormal, setPreviewingFormal] = useState(false);
+  const [runningFormal, setRunningFormal] = useState(false);
   const [progressMode, setProgressMode] = useState<RunProgressMode>("idle");
   const [progressStep, setProgressStep] = useState(0);
   const [error, setError] = useState("");
   const [draftError, setDraftError] = useState("");
+  const [formalError, setFormalError] = useState("");
 
   useEffect(() => { void loadPreview(profileId); }, [profileId]);
 
@@ -269,6 +310,40 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     }
   }
 
+  async function previewFormalBenchmark(payload: V3FormalMetatrackBenchmarkRequest) {
+    try {
+      setPreviewingFormal(true);
+      setFormalError("");
+      const result = await previewV3FormalMetatrackBenchmark(payload);
+      setFormalPreview(result);
+    } catch (caught) {
+      setFormalError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setPreviewingFormal(false);
+    }
+  }
+
+  async function runFormalBenchmark(payload: V3FormalMetatrackBenchmarkRequest) {
+    try {
+      setRunningFormal(true);
+      setProgressMode("controlled");
+      setProgressStep(0);
+      const result = await runV3FormalMetatrackBenchmark(payload);
+      setFormalResult(result);
+      setFormalPreview(result.preview);
+      setArtifacts(result.artifacts || []);
+      setDraftRunResult(null);
+      if (result.run_id) onRunCompleted?.(result.run_id);
+      setFormalError("");
+      setProgressMode("success");
+    } catch (caught) {
+      setProgressMode("error");
+      setFormalError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRunningFormal(false);
+    }
+  }
+
   const composer = preview?.composer_preview;
   const profilePreview = preview?.profile_preview || {};
   const warnings = useMemo(() => {
@@ -308,24 +383,26 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         </div>
       </header>
 
+      <CurrentConfigSummary draft={draft} formalPreview={formalPreview} formalResult={formalResult} />
+
       <section className="final-card wide console-section-title">
-        <p className="eyebrow">1. 当前实验概览</p>
-        <h3>用清晰控制台组织 V3.5-V3.10 已有能力</h3>
-        <p className="muted">运行拓扑、网络通信、共识预览、跨片 skeleton、状态真实性和 Benchmark 都保留原有语义。这里提供更简洁的中文配置、运行和结果展示。</p>
+        <p className="eyebrow">1. 当前配置摘要</p>
+        <h3>控制台入口</h3>
+        <p className="muted">快速验证用于检查配置链路；正式性能实验在“论文实验设计”中按显式参数、多 seed 和单变量扫描运行。</p>
       </section>
 
       <section className="final-card wide v3-template-bar">
         <label>
-          <span>实验入口模板</span>
+          <span>控制台入口</span>
           <select value={profileId} onChange={(event) => setProfileId(event.target.value)}>
             {profileOptions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
           </select>
         </label>
-        <p>入口模板决定 Composer 初始配置；Benchmark 模板、对照基线和重复次数在下方“实验控制”中选择。</p>
+        <p>控制台入口决定 Composer 初始配置；正式性能实验参数在“论文实验设计”中配置。</p>
         <details className="v3-foldout">
           <summary className="v3-foldout-summary">实验身份详情</summary>
           <dl className="v3-identity-grid">
-            <div><dt>实验模板</dt><dd>{labelFor(templateLabels, composer?.template_id || preview?.experiment_template || "-")}</dd></div>
+            <div><dt>论文实验方案</dt><dd>{labelFor(templateLabels, composer?.template_id || preview?.experiment_template || "-")}</dd></div>
             <div><dt>后端 stage</dt><dd>{stageLabel}</dd></div>
             <div><dt>前端 stage</dt><dd>{stageLabel}</dd></div>
             <div><dt>下一阶段</dt><dd>{nextStageLabel}</dd></div>
@@ -340,15 +417,15 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
 
       {draft && (
         <section className="final-card wide console-section-title">
-          <p className="eyebrow">2. 实验配置</p>
-          <h3>模板、拓扑、协议和实验控制</h3>
+          <p className="eyebrow">2. 插件组合预设</p>
+          <h3>模板只填充推荐插件组合，默认不锁定模块</h3>
         </section>
       )}
 
       {draft && (
         <section className="final-card wide v3-template-bar">
           <label>
-            <span>起始配置模板</span>
+            <span>插件组合预设</span>
             <select value={draft.templateId} onChange={(event) => selectExperimentTemplate(event.target.value)}>
               {templates.filter((template) => template.runnable).map((template) => (
                 <option key={template.template_id} value={template.template_id}>
@@ -363,7 +440,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
               <p className="muted">模板用于快速填充推荐插件组合。默认不锁定模块；只有打开“受控对照模式”时，模板固定规则才会生效。</p>
               {selectedTemplate.presets && selectedTemplate.presets.length > 0 && (
                 <label>
-                  <span>快速验证预设 <HelpTip title="快速验证">小规模试运行，用于确认配置和产物是否正常，不代表论文级正式实验。</HelpTip></span>
+                  <span>快速验证方案 <HelpTip title="快速验证方案">用于确认配置和产物是否正常，不代表正式性能实验。</HelpTip></span>
                   <select value={selectedPreset?.preset_id || ""} onChange={(event) => selectPreset(event.target.value)}>
                     {selectedTemplate.presets.map((preset) => (
                       <option key={preset.preset_id} value={preset.preset_id}>
@@ -397,6 +474,13 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         </section>
       )}
 
+      {draft && (
+        <section className="final-card wide console-section-title">
+          <p className="eyebrow">3. 运行拓扑与负载</p>
+          <h3>基础运行路径与负载语义</h3>
+        </section>
+      )}
+
       {draft && <RuntimeTopologyPanel topology={draft.topology} onChange={(topology) => updateDraft(updateDraftTopology(draft, topology))} />}
 
       {loading && <p className="notice">正在加载 V3 Composer 预览...</p>}
@@ -405,7 +489,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       {composer && draft && (
         <>
           <section className="final-card wide console-section-title">
-            <p className="eyebrow">3. 模块流程</p>
+            <p className="eyebrow">4. 模块流程</p>
             <h3>主流程保持不变</h3>
             <p className="muted">{"Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport"}</p>
           </section>
@@ -421,8 +505,27 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         </>
       )}
 
+      {draft && (
+        <>
+          <section className="final-card wide console-section-title">
+            <p className="eyebrow">5. 论文实验设计</p>
+            <h3>MetaTrack 正式性能实验矩阵</h3>
+            <p className="muted">这里配置正式性能实验；快速验证入口保留在“运行与结果”中。</p>
+          </section>
+          <FormalMetatrackExperimentPanel
+            draft={draft}
+            preview={formalPreview}
+            running={runningFormal}
+            previewing={previewingFormal}
+            error={formalError}
+            onPreview={previewFormalBenchmark}
+            onRun={runFormalBenchmark}
+          />
+        </>
+      )}
+
       <section className="final-card wide console-section-title">
-        <p className="eyebrow">4. 运行与结果</p>
+        <p className="eyebrow">6. 运行与结果</p>
         <h3>先看进度与核心指标，再展开详细数据</h3>
       </section>
 
@@ -447,11 +550,11 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       <section className="final-card wide v3-controlled-smoke">
         <div className="v3-section-head">
           <div>
-            <p className="eyebrow">受控对照试运行</p>
-            <h3>MetaTrack 五组快速验证预设</h3>
+            <p className="eyebrow">受控快速验证</p>
+            <h3>MetaTrack 五组快速验证方案</h3>
           </div>
           <button type="button" className="v3-secondary-button" disabled={runningControlled} onClick={runControlledTrial}>
-            {runningControlled ? "运行中..." : "运行受控对照试验"}
+            {runningControlled ? "运行中..." : "运行受控快速验证"}
           </button>
         </div>
         <p className="muted">{controlledSmokeDescription}</p>
@@ -463,7 +566,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           <>
             <dl className="v3-result-grid">
               <div><dt>运行 ID</dt><dd>{controlledResult.run_id}</dd></div>
-              <div><dt>运行模式</dt><dd>受控对照试运行</dd></div>
+              <div><dt>运行模式</dt><dd>受控快速验证</dd></div>
               <div><dt>预设数量</dt><dd>{controlledResult.preset_order.length}</dd></div>
               <div><dt>后端真实性</dt><dd>{controlledResult.realism_readiness?.backend_truth || "local Go-backed quick trial"}</dd></div>
             </dl>
@@ -480,6 +583,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         )}
       </section>
 
+      <FormalBenchmarkResultPanel result={formalResult} />
       <DraftRunResultPanel result={draftRunResult} />
       <DraftRunHistoryPanel />
 
@@ -490,7 +594,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
             <PluginMatrixTable rows={composer.plugin_matrix || preview?.plugin_matrix || []} />
           </details>
           <details className="final-card wide v3-foldout">
-            <summary className="v3-foldout-summary">实验模板列表</summary>
+            <summary className="v3-foldout-summary">论文实验方案列表</summary>
             <div className="v3-template-list">
               {templates.map((template) => (
                 <div key={template.template_id} className="v3-template-row">
@@ -503,7 +607,13 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         </section>
       )}
 
-      <ArtifactGroups artifacts={artifacts} title="当前运行产物" expectedArtifacts={selectedPreset?.expected_artifacts} />
+      <section className="final-card wide console-section-title">
+        <p className="eyebrow">7. 产物下载</p>
+        <h3>正式实验、快速验证与历史兼容产物</h3>
+        <p className="muted">优先查看 formal_* 论文数据表；历史 Draft Smoke 和 V3 兼容产物保留在折叠组内。</p>
+      </section>
+
+      <ArtifactGroups artifacts={artifacts} title="产物下载" expectedArtifacts={selectedPreset?.expected_artifacts} />
     </section>
   );
 }

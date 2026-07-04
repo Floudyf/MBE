@@ -626,6 +626,53 @@ export type V3ControlledSmokeRunResponse = {
   };
   artifacts: V2Artifact[];
 };
+export type V3FormalExperimentType = "ablation" | "hotspot_sensitivity" | "cross_shard_sensitivity" | "shard_scalability" | "control_overhead";
+export type V3RuntimeEvidenceMode = "logical_single_process" | "local_multi_process_validation";
+export type V3FormalMetatrackBenchmarkRequest = {
+  draft: V3ComposerDraftRequest;
+  experiment_type: V3FormalExperimentType;
+  formal_tx_count: number;
+  seed_base: number;
+  seed_count: number;
+  baseline_ids: string[];
+  hotspot_ratio_points: number[];
+  cross_shard_ratio_points: number[];
+  shard_count_points: number[];
+  zipf_alpha: number;
+  runtime_evidence_mode: V3RuntimeEvidenceMode;
+  enable_faults_for_formal_run: boolean;
+  max_run_count: number;
+  max_total_tx_count: number;
+};
+export type V3FormalMetatrackBenchmarkPreview = {
+  is_valid: boolean;
+  is_runnable: boolean;
+  errors: string[];
+  warnings: string[];
+  matrix: Record<string, unknown>[];
+  seed_list: number[];
+  run_count: number;
+  total_tx_count: number;
+  baseline_count: number;
+  scan_point_count: number;
+  experiment_type: string;
+  formal_tx_count: number;
+  baseline_ids: string[];
+  runtime_evidence_mode: string;
+  contains_preview_or_planned_plugin: boolean;
+  exceeds_recommended_range: boolean;
+  includes_fault_injection: boolean;
+  truth_boundary: string;
+};
+export type V3FormalMetatrackBenchmarkRunResponse = {
+  run_id: string;
+  status: string;
+  run_mode: string;
+  output_dir: string;
+  summary: V3RuntimeSummary;
+  preview: V3FormalMetatrackBenchmarkPreview;
+  artifacts: V2Artifact[];
+};
 
 export async function runDefaultExperiment(): Promise<unknown> {
   return request(`${experimentPath}/run`, { method: "POST" });
@@ -811,6 +858,14 @@ export async function runV3ComposerDraftSmoke(draft: V3ComposerDraftRequest): Pr
 
 export async function runV3ControlledSmoke(): Promise<V3ControlledSmokeRunResponse> {
   return request<V3ControlledSmokeRunResponse>("/api/v3/composer/run-controlled-smoke", { method: "POST" });
+}
+
+export async function previewV3FormalMetatrackBenchmark(payload: V3FormalMetatrackBenchmarkRequest): Promise<V3FormalMetatrackBenchmarkPreview> {
+  return request<V3FormalMetatrackBenchmarkPreview>("/api/v3/composer/formal-metatrack/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function runV3FormalMetatrackBenchmark(payload: V3FormalMetatrackBenchmarkRequest): Promise<V3FormalMetatrackBenchmarkRunResponse> {
+  return request<V3FormalMetatrackBenchmarkRunResponse>("/api/v3/composer/formal-metatrack/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
 }
 
 export async function fetchV3DraftRuns(limit = 20): Promise<V3DraftRunSummary[]> {

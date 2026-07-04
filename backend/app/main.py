@@ -33,6 +33,8 @@ from backend.app.services.v3_composer_draft_validator import model_dump, validat
 from backend.app.services.v3_controlled_smoke_runner import ControlledSmokeError, get_controlled_artifact_path, run_v3_4_10_controlled_smoke
 from backend.app.services.v3_draft_run_history import DraftRunHistoryError, DraftRunNotFound, get_v3_draft_run_detail, list_v3_draft_runs
 from backend.app.services.v3_go_runtime_runner import run_metatrack_go_backed_ablation
+from backend.app.models.v3_metatrack_formal_benchmark import V3FormalMetatrackBenchmarkRequest
+from backend.app.services.v3_metatrack_formal_benchmark_runner import FormalBenchmarkNotRunnable, get_formal_artifact_path, preview_formal_metatrack_benchmark, run_formal_metatrack_benchmark
 from backend.app.services.v3_profile_preview import preview_profile
 from backend.app.services.v3_runtime_topology import stage_metadata as v3_runtime_stage_metadata
 
@@ -805,6 +807,35 @@ def v3_composer_run_draft_smoke(request: V3ComposerDraftRequest) -> dict:
         raise HTTPException(400, detail={"message": "Composer Draft is not runnable", "validation": model_dump(exc.validation)}) from exc
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
+
+
+@app.post("/api/v3/composer/formal-metatrack/preview")
+def v3_composer_formal_metatrack_preview(request: V3FormalMetatrackBenchmarkRequest) -> dict:
+    try:
+        return preview_formal_metatrack_benchmark(request)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/v3/composer/formal-metatrack/run")
+def v3_composer_formal_metatrack_run(request: V3FormalMetatrackBenchmarkRequest) -> dict:
+    try:
+        return run_formal_metatrack_benchmark(request)
+    except FormalBenchmarkNotRunnable as exc:
+        raise HTTPException(400, detail={"message": "Formal MetaTrack benchmark is not runnable", "preview": exc.preview}) from exc
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+
+@app.get("/api/v3/composer/formal-metatrack/{run_id}/artifacts/{filename}")
+def v3_composer_formal_metatrack_artifact(run_id: str, filename: str) -> FileResponse:
+    try:
+        path = get_formal_artifact_path(run_id, filename)
+    except ArtifactMissing as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except (ArtifactError, ArtifactForbidden, JobNotFound, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return FileResponse(path)
 
 
 @app.get("/api/v3/composer/draft-runs")

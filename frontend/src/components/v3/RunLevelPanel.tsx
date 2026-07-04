@@ -36,7 +36,7 @@ export default function RunLevelPanel({
   return (
     <section className="final-card v3-run-compact">
       <p className="eyebrow">运行入口</p>
-      <h3>本地快速验证 <HelpTip title="快速验证">来自软件工程 smoke test，表示小规模试运行，用于确认配置、运行链路、summary 和 artifacts 是否正常，不代表论文级正式实验。</HelpTip></h3>
+      <h3>本地快速验证 <HelpTip title="快速验证">来自软件工程 smoke test，表示受限交易数的链路试运行，用于确认配置、运行链路、summary 和 artifacts 是否正常，不代表论文级正式实验。</HelpTip></h3>
       <ul className="v3-run-list">
         <li><span className="status-dot ok" />内置快速验证：使用已有 MetaTrack 组合检查运行链路</li>
         <li><span className={draftRunnable ? "status-dot ok" : "status-dot planned"} />配置草稿试运行：只运行当前单组配置</li>

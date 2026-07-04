@@ -79,12 +79,12 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           <h3>运行拓扑与实验控制</h3>
         </div>
         <HelpTip title="运行拓扑">
-          这里配置本地 V3 实验控制台使用的逻辑拓扑、协议预览和实验模板。local_multi_process 只在本机启动小规模进程，不是多服务器部署。
+          这里配置本地 V3 实验控制台使用的逻辑拓扑、协议预览和实验模板。local_multi_process 只在本机启动受限数量的本地进程，不是多服务器部署。
         </HelpTip>
       </div>
 
       <div className="topology-groups">
-        <ConfigGroup title="节点拓扑">
+        <ConfigGroup title="节点拓扑细节" summary={`${topology.shard_count} 分片 / ${topology.validators_per_shard} 验证节点每片 / ${topology.node_runtime_mode}`}>
           <NumberField label="分片数量" id="shard_count" value={topology.shard_count} min={1} max={32} onChange={(value) => patch({ shard_count: value })}>
             决定逻辑分片数量，默认 4。
           </NumberField>
@@ -102,15 +102,6 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
             <input type="checkbox" checked={topology.supervisor_enabled} onChange={(event) => patch({ supervisor_enabled: event.target.checked })} />
             <small>supervisor_enabled</small>
           </label>
-        </ConfigGroup>
-
-        <ConfigGroup title="协议与状态">
-          <SelectField label="节点运行模式" id="node_runtime_mode" value={topology.node_runtime_mode} options={[["logical_single_process", "单进程逻辑节点"], ["local_multi_process", "本地多进程 MVP"]]} onChange={(value) => patch({ node_runtime_mode: value })}>
-            本地多进程只在本机启动小规模进程，不是多服务器部署，也不是生产集群。
-          </SelectField>
-          <SelectField label="进程运行模式" id="process_runtime_mode" value={topology.process_runtime_mode || "dry_run"} options={[["dry_run", "dry_run"], ["smoke", "smoke"]]} onChange={(value) => patch({ process_runtime_mode: value })}>
-            dry_run 只生成计划和状态产物；smoke 会启动短生命周期本地进程并清理。
-          </SelectField>
           <NumberField label="最大本地进程数" id="max_local_processes" value={topology.max_local_processes || 8} min={1} max={32} onChange={(value) => patch({ max_local_processes: value })}>
             防止本机启动过多进程；超过上限会进入 capped mode。
           </NumberField>
@@ -122,6 +113,20 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           <NumberField label="Epoch 数" id="epoch_count" value={topology.epoch_count || 1} min={1} max={5} onChange={(value) => patch({ epoch_count: value })}>
             默认 1 个 epoch；大于 1 时生成 deterministic round-robin reconfiguration plan。
           </NumberField>
+        </ConfigGroup>
+
+        <ConfigGroup title="核心运行配置" defaultOpen summary="决定当前运行路径和负载语义；正式性能实验矩阵在论文实验设计中配置。">
+          <label className="field-card checkbox-card">
+            <span>受控对照模式 <HelpTip title="受控对照模式">关闭时，模板只作为起始配置，模块插件可以自由切换；开启时，模板会锁定固定模块，只允许实验变量模块变化，用于公平 baseline / 消融实验。</HelpTip></span>
+            <input type="checkbox" checked={topology.controlled_experiment_enabled ?? false} onChange={(event) => patch({ controlled_experiment_enabled: event.target.checked })} />
+            <small>controlled_experiment_enabled</small>
+          </label>
+          <SelectField label="节点运行模式" id="node_runtime_mode" value={topology.node_runtime_mode} options={[["logical_single_process", "单进程逻辑节点"], ["local_multi_process", "本地多进程 MVP"]]} onChange={(value) => patch({ node_runtime_mode: value })}>
+            本地多进程只在本机启动受限数量的本地进程，不是多服务器部署，也不是生产集群。
+          </SelectField>
+          <SelectField label="进程运行模式" id="process_runtime_mode" value={topology.process_runtime_mode || "dry_run"} options={[["dry_run", "dry_run"], ["smoke", "smoke"]]} onChange={(value) => patch({ process_runtime_mode: value })}>
+            dry_run 只生成计划和状态产物；smoke 会启动短生命周期本地进程并清理。
+          </SelectField>
           <SelectField label="网络通信方式" id="network_adapter" value={topology.network_adapter || topology.network_mode} options={[["in_memory_message_bus", "内存消息总线"], ["localhost_tcp_preview", "本地 TCP 预览"]]} onChange={(value) => patch({ network_adapter: value, network_mode: value })}>
             本地 TCP 预览只表示 typed message path，不是生产网络。
           </SelectField>
@@ -131,26 +136,6 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           <SelectField label="状态存储后端" id="state_backend" value={topology.state_backend || "memory_kv"} options={[["memory_kv", "内存 KV"], ["persistent_kv", "持久化 KV"], ["merkle_trie_mvp", "Merkle Trie MVP"], ["ethereum_mpt_compatible", "Ethereum MPT 兼容（规划中）", true]]} onChange={(value) => patch({ state_backend: value })}>
             Merkle Trie MVP 不是 Ethereum-compatible MPT，也不是完整无状态执行。
           </SelectField>
-        </ConfigGroup>
-
-        <ConfigGroup title="实验控制">
-          <SelectField label="实验模板" id="benchmark_template" value={topology.benchmark_template || "full_stack_v3_template"} options={benchmarkTemplates} onChange={(value) => patch({ benchmark_template: value })}>
-            模板用于组织本地受控实验配置，不自动证明性能优势。
-          </SelectField>
-          <SelectField label="对照基线" id="baseline_profile" value={topology.baseline_profile || "baseline_simple_chain"} options={baselineProfiles} onChange={(value) => patch({ baseline_profile: value })}>
-            基线用于结构化对照输出，不是论文级结论。
-          </SelectField>
-          <NumberField label="重复次数" id="repeat_count" value={topology.repeat_count || 1} min={1} max={20} onChange={(value) => patch({ repeat_count: value })}>
-            记录 repeat_index / seed 的本地 repeatability MVP。
-          </NumberField>
-          <label className="field-card checkbox-card">
-            <span>受控对照模式 <HelpTip title="受控对照模式">关闭时，模板只作为起始配置，模块插件可以自由切换；开启时，模板会锁定固定模块，只允许实验变量模块变化，用于公平 baseline / 消融实验。</HelpTip></span>
-            <input type="checkbox" checked={topology.controlled_experiment_enabled ?? false} onChange={(event) => patch({ controlled_experiment_enabled: event.target.checked })} />
-            <small>controlled_experiment_enabled</small>
-          </label>
-        </ConfigGroup>
-
-        <ConfigGroup title="元宇宙实验套件">
           <label className="field-card checkbox-card">
             <span>启用元宇宙 workload suite <HelpTip title="元宇宙 workload suite">生成受控合成场景、baseline matrix、multi-seed sweep 和 paper export scaffold；不是真实平台 trace。</HelpTip></span>
             <input type="checkbox" checked={topology.metaverse_suite_enabled ?? false} onChange={(event) => patch({ metaverse_suite_enabled: event.target.checked })} />
@@ -160,8 +145,26 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
             控制 trace metadata 的场景语义；默认 mixed_metaverse。
           </SelectField>
           <NumberField label="交易数量" id="tx_count" value={topology.tx_count || 10000} min={1} max={10000000} onChange={(value) => patch({ tx_count: value })}>
-            用于 V3.13 metadata artifacts；Draft Smoke 的 Go 执行仍保持小规模稳定验证。
+            用于 V3.13 metadata artifacts；Draft Smoke 的 Go 执行仍保持受限交易数的稳定验证。
           </NumberField>
+          <SelectField label="故障 profile" id="fault_profile" value={topology.fault_profile || "none"} options={faultProfiles} onChange={(value) => patch({ fault_profile: value })}>
+            主性能实验默认不启用故障注入；故障注入属于鲁棒性或真实性验证。
+          </SelectField>
+        </ConfigGroup>
+
+        <ConfigGroup title="兼容旧 Benchmark 配置" summary="V3.10/V3.13 兼容配置；新的 MetaTrack 正式性能实验以论文实验设计面板为准。">
+          <SelectField label="实验模板" id="benchmark_template" value={topology.benchmark_template || "full_stack_v3_template"} options={benchmarkTemplates} onChange={(value) => patch({ benchmark_template: value })}>
+            模板用于组织本地受控实验配置，不自动证明性能优势。
+          </SelectField>
+          <SelectField label="对照基线" id="baseline_profile" value={topology.baseline_profile || "baseline_simple_chain"} options={baselineProfiles} onChange={(value) => patch({ baseline_profile: value })}>
+            基线用于结构化对照输出，不是论文级结论。
+          </SelectField>
+          <NumberField label="重复次数" id="repeat_count" value={topology.repeat_count || 1} min={1} max={20} onChange={(value) => patch({ repeat_count: value })}>
+            记录 repeat_index / seed 的本地 repeatability MVP。
+          </NumberField>
+        </ConfigGroup>
+
+        <ConfigGroup title="元宇宙负载细节" summary={`${topology.metaverse_scenario || "mixed_metaverse"} / tx=${topology.tx_count || 10000} / hotspot=${topology.hotspot_ratio ?? 0.2} / cross_shard=${topology.cross_shard_ratio ?? 0.2}`}>
           <NumberField label="随机种子" id="seed" value={topology.seed || 42} min={0} max={2147483647} onChange={(value) => patch({ seed: value })}>
             相同配置和 seed 会生成相同场景 metadata。
           </NumberField>
@@ -222,15 +225,12 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           </NumberField>
         </ConfigGroup>
 
-        <ConfigGroup title="故障注入与最终复现">
+        <ConfigGroup title="故障、观测与复现" summary="主性能实验默认不启用故障注入；故障注入属于鲁棒性或真实性验证。">
           <label className="field-card checkbox-card">
             <span>启用故障注入 <HelpTip title="故障注入">生成确定性的本地故障事件和观察日志；不是生产级 Byzantine adversary、不是生产容错协议。</HelpTip></span>
             <input type="checkbox" checked={topology.fault_injection_enabled ?? false} onChange={(event) => patch({ fault_injection_enabled: event.target.checked })} />
             <small>fault_injection_enabled</small>
           </label>
-          <SelectField label="故障 profile" id="fault_profile" value={topology.fault_profile || "none"} options={faultProfiles} onChange={(value) => patch({ fault_profile: value })}>
-            none 生成 no-op summary；mixed_fault 会生成小规模确定性节点、网络、拥塞和 Relay 观察事件。
-          </SelectField>
           <NumberField label="故障 seed" id="fault_seed" value={topology.fault_seed ?? 42} min={0} max={2147483647} onChange={(value) => patch({ fault_seed: value })}>
             相同配置和 seed 会生成相同故障事件。
           </NumberField>
@@ -290,8 +290,16 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
   );
 }
 
-function ConfigGroup({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="topology-group"><h4>{title}</h4><div className="topology-field-grid">{children}</div></section>;
+function ConfigGroup({ title, summary = "", defaultOpen = false, children }: { title: string; summary?: string; defaultOpen?: boolean; children: ReactNode }) {
+  return (
+    <details className="topology-group v3-foldout" open={defaultOpen}>
+      <summary className="v3-foldout-summary">
+        <span>{title}</span>
+        {summary && <small>{summary}</small>}
+      </summary>
+      <div className="topology-field-grid">{children}</div>
+    </details>
+  );
 }
 
 function NumberField({ label, id, value, min, max, step = 1, onChange, children }: { label: string; id: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void; children: ReactNode }) {

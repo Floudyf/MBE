@@ -20,6 +20,7 @@ Roadmap after V3.5 closure:
 - V3.12 is implemented as Runtime Realism Closure. It hardens the V3.5 launcher/node process previews into a runnable, observable, cleanable local multi-process runtime MVP with shard/committee/epoch artifacts. It is not multi-server deployment, not a production cluster, not production PBFT/HotStuff/Raft, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
 - V3.13 is implemented as Metaverse Experiment Suite Closure. It adds a controlled metaverse workload catalog, scenario templates, synthetic trace metadata, offchain confirmation events, cross-metaverse transfer metadata, baseline matrix, multi-seed sweep, and paper table/figure export artifacts. It is not real metaverse platform integration, not production workload crawling, not Fabric/EVM live backend, not BlockEmulator backend, and not paper-grade performance evidence by itself.
 - V3-final is implemented as Fault, Observability, and Reproducibility Closure. It closes V3 with frontend/backend stage alignment, deterministic fault injection MVP, local observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping. It is not production fault tolerance, not production monitoring, not a Byzantine adversary model, not a production blockchain system, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
+- V3 maintenance may add bounded console, artifact, validation, and documentation improvements when explicitly requested. The MetaTrack formal benchmark console is maintenance scope: it separates Draft Smoke from controlled formal benchmark runs, uses explicit numeric parameters, previews matrices, enforces resource guards, exports formal_* CSV/JSON, and preserves V3-final truth boundaries. It is not V4, not a new research mechanism, not Fabric/EVM live backend, not BlockEmulator backend, not production multi-server deployment, and not paper-final proof by itself.
 - In docs-only planning rounds, do not implement V3.6/V3.7 code, schemas, tests, configs, frontend, backend, or Go runtime.
 - Do not claim production networking or real PBFT from V3.6 NetworkAdapter / consensus-light preview. Do not claim production PBFT even after V3.7 preview.
 
@@ -182,6 +183,49 @@ Important boundary:
 - It is not a production monitoring system.
 - It is not paper-grade performance evidence by itself.
 - After V3-final, do not continue adding features unless the user explicitly starts V4 or a maintenance patch.
+
+## V3 Maintenance: MetaTrack Formal Benchmark Console
+
+Current implementation stage:
+V3 maintenance after V3-final closure.
+
+Allowed in this maintenance scope:
+
+- frontend console information architecture cleanup
+- separate Draft Smoke quick validation from formal controlled benchmark runs
+- MetaTrack formal benchmark design panel
+- explicit numeric formal parameters: transaction count, seed count/list, scan points, and baseline IDs
+- experiment matrix preview
+- resource guards for run count, total transaction count, seed count, transaction count per run, and scan point count
+- formal baseline registry using existing runnable plugins only
+- single-variable scans for ablation, hotspot sensitivity, cross-shard sensitivity, shard scalability, and control overhead
+- multi-seed aggregation with mean/std/min/max/count/ci95
+- formal_* CSV/JSON artifacts for paper figure/table preparation
+- paper_candidate eligibility labels with reasons
+- docs, tests, and artifact downloads for the maintenance console
+
+Forbidden in this maintenance scope:
+
+- V4 unless explicitly requested by the user
+- new research mechanism
+- Fabric/EVM live backend
+- BlockEmulator backend
+- production multi-server deployment
+- production PBFT / HotStuff / Raft
+- treating `local_multi_process` as production nodes
+- treating `localhost_tcp_preview` as production networking
+- including preview/planned plugins in formal benchmark runs
+- using vague scale presets for formal benchmark size
+- claiming controlled benchmark outputs are paper-final proof
+
+Important boundary:
+
+- Draft Smoke remains a bounded quick validation path.
+- Formal MetaTrack benchmark runs are local controlled emulator experiments.
+- `logical_single_process` is the default evidence mode for main performance comparisons.
+- `local_multi_process_validation` is only a prototype realism validation mode and is affected by local machine scheduling.
+- `experiment_evidence_level` must distinguish `quick_validation`, `controlled_benchmark`, and `paper_candidate`.
+- A `paper_candidate` label is a readiness label for paper data review, not a claim of final paper-grade evidence.
 
 ## V3.13 Metaverse Experiment Suite Closure
 
