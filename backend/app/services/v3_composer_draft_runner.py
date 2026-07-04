@@ -15,6 +15,7 @@ from backend.app.services.job_manager import JobManager
 from backend.app.services.v3_composer_catalog import GO_RUNTIME_PLUGIN_CLASSES
 from backend.app.services.v3_composer_draft_validator import model_dump, validate_v3_composer_draft
 from backend.app.services.v3_go_runtime_runner import ROLE_SEPARATED_CHAIN_PROFILE, run_go_v3_runtime
+from backend.app.services.v3_final_closure import write_v3_final_closure_artifacts
 from backend.app.services.v3_metaverse_workloads import maybe_write_metaverse_suite_artifacts
 from backend.app.services.v3_runtime_topology import stage_metadata
 
@@ -45,7 +46,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
         source="v3_composer_draft",
         experiment_name="composer_draft_smoke",
         data_truth_label="modular_runtime",
-        stage="V3.13 Metaverse Experiment Suite Closure",
+        stage=stage_metadata()["current_stage"],
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
@@ -89,6 +90,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             normalized,
         )
         summary.update(maybe_write_metaverse_suite_artifacts(run_dir, normalized.get("topology", {}), summary))
+        summary.update(write_v3_final_closure_artifacts(run_dir, normalized.get("topology", {}), summary))
         write_json(run_dir / "summary.json", summary)
         _mirror_latest(run_dir, root / "latest")
         completed = manager.mark_completed(run_id, data_truth_label="modular_runtime")
@@ -96,7 +98,7 @@ def run_v3_composer_draft_smoke(request: V3ComposerDraftRequest, root: Path = V3
             "run_id": run_id,
             "job_id": run_id,
             "status": "completed",
-            "stage": "V3.13 Metaverse Experiment Suite Closure",
+            "stage": stage_metadata()["current_stage"],
             **stage_metadata(),
             "output_dir": str(run_dir),
             "data_truth_label": "modular_runtime",
@@ -144,7 +146,7 @@ def build_experiment_profile(normalized: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "profile_id": f"draft_smoke_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
-        "stage": "V3.13 Metaverse Experiment Suite Closure",
+        "stage": stage_metadata()["current_stage"],
         "type": "draft_smoke",
         "truth_label": "modular_runtime",
         "backend_type": "modular_research_chain",
@@ -241,16 +243,16 @@ def build_plugin_profile(normalized: dict[str, Any]) -> dict[str, Any]:
     return {
         "profile_type": "plugin_profile_collection",
         "version": "v3",
-        "stage": "V3.13 Metaverse Experiment Suite Closure",
+        "stage": stage_metadata()["current_stage"],
         "profiles": [
             {
                 "plugin_profile_id": DRAFT_PLUGIN_PROFILE_ID,
                 "label": "Composer Draft Single Smoke",
                 "domain": "metatrack",
                 "status": "runnable",
-                "min_stage": "V3.13",
+                "min_stage": "V3-final",
                 "runnable": True,
-                "description": "Single Composer Draft Smoke plugin selection with optional ConsensusRuntime PBFT preview over NetworkAdapter, V3.11 Relay MVP artifacts, V3.12 local multi-process runtime artifacts, V3.13 metaverse workload suite artifacts, V3.9 state authenticity MVP artifacts, and V3.10 benchmark hardening artifacts.",
+                "description": "Single Composer Draft Smoke plugin selection with optional ConsensusRuntime PBFT preview over NetworkAdapter, V3.11 Relay MVP artifacts, V3.12 local multi-process runtime artifacts, V3.13 metaverse workload suite artifacts, and V3-final fault, observability, reproducibility artifacts.",
                 "plugins": plugins,
                 "module_plugins": selection,
                 "tags": ["draft_smoke", "single_chain", "go_backed"],

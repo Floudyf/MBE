@@ -4,7 +4,7 @@
 
 V3.10.1 is complete. It only cleaned up the Chinese frontend console, simplified navigation, added HelpTip explanations, added run progress feedback, added lightweight result chart previews, and improved UX presentation.
 
-V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol capability, and did not make benchmark output paper-grade evidence. V3.11, V3.12, and V3.13 are now closed; the next implementation stage is V3-final Fault, Observability, and Reproducibility Closure.
+V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol capability, and did not make benchmark output paper-grade evidence. V3.11, V3.12, V3.13, and V3-final are now closed; the next stage is V3 maintenance only unless the user explicitly starts V4.
 
 ## 2. Existing Foundations
 
@@ -18,14 +18,15 @@ V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol ca
 
 Current frontend shard/node settings are logical topology. They do not mean the system has already started the same number of real OS processes.
 
-V3.12 hardened the V3.5 launcher and node process previews into a runnable, observable, stoppable small-scale local multi-process runtime. V3.13 builds on that runtime with controlled metaverse workload and benchmark/export artifacts.
+V3.12 hardened the V3.5 launcher and node process previews into a runnable, observable, stoppable small-scale local multi-process runtime. V3.13 builds on that runtime with controlled metaverse workload and benchmark/export artifacts. V3-final closes the emulator prototype with deterministic fault injection, observability summaries, final artifact catalog, reproducibility guide/manual, and paper experiment mapping.
 
 ## 3. Compressed Remaining Route
 
 1. V3.11 CrossShard Protocol Closure. Complete.
 2. V3.12 Runtime Realism Closure. Complete.
 3. V3.13 Metaverse Experiment Suite Closure. Complete.
-4. V3-final Fault, Observability, and Reproducibility Closure. Next.
+4. V3-final Fault, Observability, and Reproducibility Closure. Complete.
+5. V3 maintenance only. Next unless V4 is explicitly requested.
 
 ## 4. Stage Details
 
@@ -118,11 +119,13 @@ Combined scope:
 
 After V3-final, MBE V3 becomes a reproducible metaverse-oriented modular sharded blockchain emulator prototype.
 
-Boundary: prototype / emulator, not production blockchain and not a full replacement of BlockEmulator.
+Boundary: prototype / emulator, not production blockchain, not production fault tolerance, not production monitoring, not Byzantine adversary modeling, not paper-grade evidence, and not a full replacement of BlockEmulator.
+
+Status: complete.
 
 ## 5. Truth Boundary
 
-Do not claim production-grade blockchain. Do not claim production PBFT / HotStuff. Do not claim Ethereum-compatible MPT unless implemented. Do not claim full stateless execution unless implemented. Do not claim complete Broker / 2PC / Monoxide unless implemented. Do not claim paper-grade benchmark results before actual large-scale experiments. Do not claim BlockEmulator replacement.
+Do not claim production-grade blockchain. Do not claim production PBFT / HotStuff. Do not claim production fault tolerance, production monitoring, or Byzantine adversary modeling. Do not claim Ethereum-compatible MPT unless implemented. Do not claim full stateless execution unless implemented. Do not claim complete Broker / 2PC / Monoxide unless implemented. Do not claim paper-grade benchmark results before actual large-scale experiments. Do not claim BlockEmulator replacement.
 
 Recommended positioning:
 

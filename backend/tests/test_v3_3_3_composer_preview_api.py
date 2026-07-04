@@ -8,6 +8,12 @@ import backend.app.main as main
 
 client = TestClient(main.app)
 
+CURRENT_STAGE = "V3-final Fault, Observability, and Reproducibility Closure"
+LATEST_RUNTIME_STAGE = "deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping"
+CURRENT_CAPABILITY = "deterministic fault injection, local observability summary, component health status, final artifact catalog, reproducibility bundle, experiment manual, and paper experiment mapping"
+RUNTIME_TRUTH = "v3_final_emulator_closure_not_production_system"
+NEXT_STAGE = "V3 maintenance only; do not start V4 unless explicitly requested"
+
 
 def test_v3_composer_preview_api_returns_additive_preview_fields() -> None:
     response = client.get("/api/v3/composer/preview", params={"experiment_profile_id": "metatrack_go_backed_ablation_smoke"})
@@ -16,13 +22,13 @@ def test_v3_composer_preview_api_returns_additive_preview_fields() -> None:
     payload = response.json()
     composer = payload["composer_preview"]
     assert payload["experiment_profile_id"] == "metatrack_go_backed_ablation_smoke"
-    assert payload["stage"] == "V3.11 CrossShard Protocol Closure"
-    assert payload["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
-    assert payload["latest_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
-    assert payload["latest_completed_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
-    assert payload["current_capability"] == "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export"
-    assert payload["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
-    assert payload["next_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
+    assert payload["stage"] == CURRENT_STAGE
+    assert payload["current_stage"] == CURRENT_STAGE
+    assert payload["latest_runtime_stage"] == LATEST_RUNTIME_STAGE
+    assert payload["latest_completed_runtime_stage"] == LATEST_RUNTIME_STAGE
+    assert payload["current_capability"] == CURRENT_CAPABILITY
+    assert payload["runtime_truth"] == RUNTIME_TRUTH
+    assert payload["next_stage"] == NEXT_STAGE
     assert composer["view"] == "single_chain"
     assert composer["template_id"] == "metatrack_ablation"
     assert composer["runnable"] is True
@@ -43,9 +49,9 @@ def test_v3_composer_templates_api_keeps_planned_templates_non_runnable() -> Non
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["stage"] == "V3.11 CrossShard Protocol Closure"
-    assert payload["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
-    assert payload["latest_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
+    assert payload["stage"] == CURRENT_STAGE
+    assert payload["current_stage"] == CURRENT_STAGE
+    assert payload["latest_runtime_stage"] == LATEST_RUNTIME_STAGE
     templates = {item["template_id"]: item for item in payload["items"]}
     assert templates["metatrack_ablation"]["runnable"] is True
     assert templates["committee_lifecycle_planned"]["preview_only"] is True
@@ -69,10 +75,10 @@ def test_v3_composer_run_smoke_registers_downloadable_artifacts_without_fabric(m
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["stage"] == "V3.11 CrossShard Protocol Closure"
-    assert payload["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
-    assert payload["latest_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
-    assert payload["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
+    assert payload["stage"] == CURRENT_STAGE
+    assert payload["current_stage"] == CURRENT_STAGE
+    assert payload["latest_runtime_stage"] == LATEST_RUNTIME_STAGE
+    assert payload["runtime_truth"] == RUNTIME_TRUTH
     assert payload["runtime_mode"] == "go_backed"
     artifact_names = {artifact["name"] for artifact in payload["artifacts"]}
     assert {"metatrack_summary.csv", "metatrack_summary.json", "metatrack_ablation_report.md", "used_experiment_profile.yaml"} <= artifact_names

@@ -92,8 +92,8 @@ def test_stage_metadata_and_readiness_reflect_v3_13_boundary() -> None:
     metadata = stage_metadata()
     readiness = build_realism_readiness()
 
-    assert metadata["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
-    assert metadata["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
-    assert readiness["next_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
+    assert metadata["current_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
+    assert metadata["runtime_truth"] == "v3_final_emulator_closure_not_production_system"
+    assert readiness["next_stage"] == "V3 maintenance only; do not start V4 unless explicitly requested"
     assert "not real metaverse platform trace" in readiness["not_real_chain_claims"]
     assert "not paper-grade performance conclusion" in readiness["not_real_chain_claims"]

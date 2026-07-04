@@ -177,6 +177,21 @@ export function defaultRuntimeTopology(): V3RuntimeTopology {
   sweep_shard_counts: [1, 2, 4],
   sweep_cross_shard_ratios: [0, 0.2, 0.5],
   sweep_hotspot_ratios: [0, 0.2, 0.5],
+  fault_injection_enabled: false,
+  fault_profile: "none",
+  fault_seed: 42,
+  fault_start_round: 1,
+  fault_duration_rounds: 1,
+  failed_node_count: 1,
+  message_delay_ms: 0,
+  message_drop_ratio: 0,
+  target_congestion_ratio: 0,
+  relay_fault_mode: "none",
+  observability_enabled: true,
+  observability_level: "basic",
+  reproducibility_bundle_enabled: true,
+  paper_mapping_enabled: true,
+  final_artifact_catalog_enabled: true,
 };
 }
 

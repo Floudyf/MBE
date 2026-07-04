@@ -14,18 +14,19 @@ from backend.app.services.job_manager import JobManager
 from backend.app.services.v3_composer_draft_runner import run_v3_composer_draft_smoke
 from backend.app.services.v3_experiment_templates import STANDARD_MODULE_ORDER, get_template
 from backend.app.services.v3_realism_readiness import write_realism_readiness
+from backend.app.services.v3_runtime_topology import stage_metadata
 
 
 ROOT = Path(__file__).resolve().parents[3]
 CONTROLLED_SMOKE_ROOT = ROOT / "experiments" / "runs" / "v3_4_10_controlled_smoke"
 METATRACK_TEMPLATE_ID = "metatrack_ablation"
-CURRENT_STAGE = "V3.13 Metaverse Experiment Suite Closure"
-LATEST_RUNTIME_STAGE = "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
-CLOSURE_STAGE = "V3.13"
+CURRENT_STAGE = stage_metadata()["current_stage"]
+LATEST_RUNTIME_STAGE = stage_metadata()["latest_runtime_stage"]
+CLOSURE_STAGE = "V3-final"
 LATEST_COMPLETED_RUNTIME_STAGE = LATEST_RUNTIME_STAGE
-CURRENT_CAPABILITY = "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export"
-RUNTIME_TRUTH = "controlled_metaverse_workload_not_real_platform_trace"
-NEXT_STAGE = "V3-final Fault, Observability, and Reproducibility Closure"
+CURRENT_CAPABILITY = stage_metadata()["current_capability"]
+RUNTIME_TRUTH = stage_metadata()["runtime_truth"]
+NEXT_STAGE = stage_metadata()["next_stage"]
 CONTROLLED_PRESET_ORDER = [
     "metatrack_baseline_smoke",
     "metatrack_routing_only_smoke",
@@ -71,6 +72,24 @@ AGGREGATE_FIELDS = [
     "baseline_count",
     "seed_count",
     "paper_table_available",
+    "v3_final_enabled",
+    "fault_injection_enabled",
+    "fault_profile",
+    "fault_event_count",
+    "node_failure_count",
+    "node_recovery_count",
+    "network_delay_event_count",
+    "network_drop_event_count",
+    "target_congestion_event_count",
+    "relay_fault_event_count",
+    "observability_enabled",
+    "observability_level",
+    "component_health_count",
+    "component_warning_count",
+    "component_error_count",
+    "final_artifact_catalog_available",
+    "reproducibility_manifest_available",
+    "paper_mapping_available",
 ]
 CONTROLLED_ARTIFACTS = [
     "run_index.csv",
@@ -150,6 +169,25 @@ CONTROLLED_ARTIFACTS = [
     "paper_table_offchain_confirmation.csv",
     "paper_figure_data.csv",
     "paper_export_manifest.json",
+    "fault_injection_config.json",
+    "fault_injection_log.csv",
+    "node_failure_log.csv",
+    "node_recovery_log.csv",
+    "network_fault_log.csv",
+    "target_congestion_log.csv",
+    "relay_fault_observation_log.csv",
+    "fault_injection_summary.json",
+    "observability_summary.json",
+    "observability_timeline.csv",
+    "component_health_summary.csv",
+    "runtime_component_status.json",
+    "final_artifact_catalog.json",
+    "final_artifact_catalog.md",
+    "v3_final_reproducibility_manifest.json",
+    "v3_reproducibility_guide.md",
+    "v3_experiment_manual.md",
+    "v3_paper_experiment_mapping.md",
+    "v3_final_summary.json",
 ]
 
 
@@ -315,6 +353,21 @@ def build_preset_draft_request(template: dict[str, Any], preset: dict[str, Any])
         sweep_shard_counts=[1, 2],
         sweep_cross_shard_ratios=[0.0, 0.25],
         sweep_hotspot_ratios=[0.0, 0.25],
+        fault_injection_enabled=True,
+        fault_profile="mixed_fault",
+        fault_seed=314,
+        fault_start_round=1,
+        fault_duration_rounds=2,
+        failed_node_count=1,
+        message_delay_ms=25,
+        message_drop_ratio=0.25,
+        target_congestion_ratio=0.25,
+        relay_fault_mode="timeout",
+        observability_enabled=True,
+        observability_level="detailed",
+        reproducibility_bundle_enabled=True,
+        paper_mapping_enabled=True,
+        final_artifact_catalog_enabled=True,
     )
     return V3ComposerDraftRequest(template_id=METATRACK_TEMPLATE_ID, preset_id=preset_id, modules=modules, topology=topology)
 
@@ -366,12 +419,12 @@ def _aggregate_row(summary: dict[str, Any], preset: dict[str, Any]) -> dict[str,
 
 def _write_report(path: Path, run_id: str, rows: list[dict[str, Any]]) -> None:
     lines = [
-        "# V3.4.10 Controlled MetaTrack Smoke",
+        "# V3-final Controlled Smoke",
         "",
         "This report summarizes five preset-controlled local Draft Smoke runs.",
-        "Repository closure stage: V3.4.11. Latest runtime capability: V3.4.10 controlled smoke runner.",
+        "Repository closure stage: V3-final. Latest runtime capability: fault, observability, and reproducibility closure over the local emulator.",
         "All presets keep workload, seed, TxPool, BlockProducer, Consensus, CommitteeEpoch, StateStorage, and MetricsReport fixed.",
-        "It is not a paper-ready benchmark, Fabric live execution, BlockEmulator backend, or multi-node emulator.",
+        "It is not a paper-ready benchmark, Fabric live execution, BlockEmulator backend, production cluster, or multi-server deployment.",
         "",
         f"- controlled_run_id: {run_id}",
         f"- preset_count: {len(rows)}",

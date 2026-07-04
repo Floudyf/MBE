@@ -157,12 +157,12 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
     result = draft_runner.run_v3_composer_draft_smoke(valid_draft(), root=tmp_path)
 
     assert result["status"] == "completed"
-    assert result["stage"] == "V3.13 Metaverse Experiment Suite Closure"
-    assert result["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
-    assert result["latest_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
-    assert result["latest_completed_runtime_stage"] == "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
-    assert result["current_capability"] == "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export"
-    assert result["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
+    assert result["stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
+    assert result["current_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
+    assert result["latest_runtime_stage"] == "deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping"
+    assert result["latest_completed_runtime_stage"] == "deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping"
+    assert result["current_capability"] == "deterministic fault injection, local observability summary, component health status, final artifact catalog, reproducibility bundle, experiment manual, and paper experiment mapping"
+    assert result["runtime_truth"] == "v3_final_emulator_closure_not_production_system"
     assert result["run_mode"] == "draft_smoke"
     assert result["topology_summary"]["logical_node_count"] == 25
     assert len(calls) == 1
@@ -237,10 +237,15 @@ def test_run_draft_smoke_writes_single_draft_artifacts(monkeypatch, tmp_path: Pa
         "benchmark_summary.json",
         "quorum_log.csv",
         "finalized_block_log.csv",
+        "fault_injection_summary.json",
+        "observability_summary.json",
+        "final_artifact_catalog.json",
+        "v3_final_reproducibility_manifest.json",
+        "v3_final_summary.json",
     ):
         assert (run_dir / name).is_file()
     artifact_names = {artifact["name"] for artifact in result["artifacts"]}
-    assert {"composer_draft.json", "normalized_draft.json", "generated_experiment_profile.json", "summary.csv", "runtime.log", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "relay_state_machine_log.csv", "source_lock_log.csv", "relay_certificate_log.csv", "relay_proof_verification_log.csv", "target_verification_log.csv", "target_commit_log.csv", "source_finalize_log.csv", "cross_shard_timeout_refund_log.csv", "cross_shard_failure_log.csv", "relay_mvp_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "aggregate_summary.csv", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json"} <= artifact_names
+    assert {"composer_draft.json", "normalized_draft.json", "generated_experiment_profile.json", "summary.csv", "runtime.log", "node_topology.csv", "node_log.csv", "network_log.csv", "consensus_message_log.csv", "node_address_table.csv", "topology.json", "launch_nodes_windows.bat", "launch_nodes_linux.sh", "launcher_readme.md", "node_process_status.csv", "node_process_manifest.json", "node_process_log_sample.log", "tcp_adapter_status.csv", "network_send_log.csv", "network_receive_log.csv", "typed_message_log.csv", "consensus_network_light_log.csv", "network_consensus_summary.json", "pbft_state_log.csv", "pbft_message_log.csv", "quorum_log.csv", "finalized_block_log.csv", "consensus_network_log.csv", "pbft_network_summary.json", "cross_shard_tx_log.csv", "cross_shard_message_log.csv", "relay_preview_log.csv", "cross_shard_status.csv", "cross_shard_summary.json", "relay_state_machine_log.csv", "source_lock_log.csv", "relay_certificate_log.csv", "relay_proof_verification_log.csv", "target_verification_log.csv", "target_commit_log.csv", "source_finalize_log.csv", "cross_shard_timeout_refund_log.csv", "cross_shard_failure_log.csv", "relay_mvp_summary.json", "state_storage_log.csv", "state_version_log.csv", "state_root_log.csv", "state_proof_log.csv", "state_proof_verification_log.csv", "witness_log.csv", "witness_verification_log.csv", "state_authenticity_summary.json", "benchmark_template_catalog.json", "baseline_profile_catalog.json", "benchmark_plan.json", "benchmark_run_index.csv", "sweep_matrix.csv", "sweep_summary.csv", "sweep_summary.json", "aggregate_summary.csv", "baseline_comparison.csv", "reproducibility_manifest.json", "benchmark_report.md", "benchmark_summary.json", "fault_injection_summary.json", "observability_summary.json", "final_artifact_catalog.json", "v3_final_reproducibility_manifest.json", "v3_final_summary.json"} <= artifact_names
     generated = (run_dir / "generated_experiment_profile.json").read_text(encoding="utf-8")
     assert '"cross_shard_protocol": "none"' in generated
     assert '"state_backend": "memory_kv"' in generated

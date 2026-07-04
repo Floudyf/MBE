@@ -16,6 +16,7 @@ const rawMetricGroups = [
   { title: "状态真实性", keys: ["state_backend_selected", "state_root_count", "state_key_count", "state_update_count", "state_proof_generated_count", "state_proof_verified_count", "state_proof_failed_count", "witness_generated_count", "witness_verified_count", "witness_failed_count"] },
   { title: "Benchmark", keys: ["benchmark_template_selected", "baseline_profile_selected", "benchmark_run_count", "sweep_parameter_count", "repeat_count", "benchmark_artifact_count", "baseline_comparison_count", "reproducibility_manifest_available", "benchmark_report_available", "paper_grade_benchmark"] },
   { title: "元宇宙实验套件", keys: ["metaverse_suite_enabled", "metaverse_scenario_selected", "metaverse_tx_count", "metaverse_user_count", "metaverse_asset_count", "metaverse_item_count", "metaverse_avatar_count", "metaverse_scene_count", "metaverse_count", "metaverse_hotspot_ratio", "metaverse_cross_scene_ratio", "metaverse_cross_shard_ratio", "metaverse_cross_scene_count", "metaverse_cross_shard_count", "metaverse_burst_count", "metaverse_offchain_confirmation_count", "metaverse_offchain_failure_count", "metaverse_cross_metaverse_count", "baseline_matrix_enabled", "baseline_count", "multi_seed_enabled", "seed_count", "paper_export_enabled", "paper_table_available", "paper_figure_data_available", "metaverse_experiment_truth"] },
+  { title: "V3-final 故障 / 观测 / 复现", keys: ["v3_final_enabled", "stage_alignment_ok", "frontend_backend_alignment_truth", "v3_final_truth", "fault_injection_enabled", "fault_profile", "fault_event_count", "node_failure_count", "node_recovery_count", "network_delay_event_count", "network_drop_event_count", "target_congestion_event_count", "relay_fault_event_count", "fault_injection_truth", "observability_enabled", "observability_level", "component_health_count", "component_warning_count", "component_error_count", "observability_truth", "reproducibility_bundle_enabled", "final_artifact_catalog_available", "reproducibility_manifest_available", "reproducibility_guide_available", "experiment_manual_available", "paper_mapping_available", "reproducibility_truth"] },
   { title: "节点拓扑", keys: ["shard_count", "validators_per_shard", "logical_node_count", "validator_node_count", "executor_node_count", "storage_node_count", "supervisor_node_count"] },
 ];
 
@@ -57,7 +58,7 @@ export default function DraftRunResultPanel({ result }: Props) {
           </HelpTip>
         </div>
         <div className="artifact-pill-grid">
-          {["summary.json", "report.md", "cross_shard_summary.json", "state_authenticity_summary.json", "benchmark_summary.json", "metaverse_experiment_summary.json", "paper_export_manifest.json"].map((name) => (
+          {["summary.json", "report.md", "cross_shard_summary.json", "state_authenticity_summary.json", "benchmark_summary.json", "metaverse_experiment_summary.json", "paper_export_manifest.json", "fault_injection_summary.json", "observability_summary.json", "final_artifact_catalog.json", "v3_final_reproducibility_manifest.json", "v3_final_summary.json"].map((name) => (
             <span key={name} className={artifactNames.has(name) ? "artifact-pill ok" : "artifact-pill missing"}>
               {name}: {artifactNames.has(name) ? "可下载" : "历史运行缺少该产物"}
             </span>

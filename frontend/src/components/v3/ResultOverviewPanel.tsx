@@ -42,6 +42,18 @@ export default function ResultOverviewPanel({ summary }: Props) {
         <MetricCard label="Baseline 数" value={summary.baseline_count} />
         <MetricCard label="Seed 数" value={summary.seed_count} />
         <MetricCard label="Paper 表格" value={summary.paper_table_available} />
+        <MetricCard label="故障 profile" value={summary.fault_profile} />
+        <MetricCard label="故障事件数" value={summary.fault_event_count} />
+        <MetricCard label="节点失败数" value={summary.node_failure_count} />
+        <MetricCard label="节点恢复数" value={summary.node_recovery_count} />
+        <MetricCard label="网络延迟事件" value={summary.network_delay_event_count} />
+        <MetricCard label="网络丢包事件" value={summary.network_drop_event_count} />
+        <MetricCard label="目标拥塞事件" value={summary.target_congestion_event_count} />
+        <MetricCard label="Relay 故障事件" value={summary.relay_fault_event_count} />
+        <MetricCard label="观测级别" value={summary.observability_level} />
+        <MetricCard label="组件健康数" value={summary.component_health_count} />
+        <MetricCard label="组件警告数" value={summary.component_warning_count} />
+        <MetricCard label="复现 manifest" value={summary.reproducibility_manifest_available} />
       </div>
       <div className="chart-grid">
         <MiniBarChart
@@ -69,6 +81,16 @@ export default function ResultOverviewPanel({ summary }: Props) {
             { label: "跨片", value: summary.metaverse_cross_shard_count },
             { label: "链下确认", value: summary.metaverse_offchain_confirmation_count },
             { label: "跨元宇宙", value: summary.metaverse_cross_metaverse_count },
+          ]}
+        />
+        <MiniBarChart
+          title="V3-final 故障观察"
+          data={[
+            { label: "节点失败", value: summary.node_failure_count },
+            { label: "节点恢复", value: summary.node_recovery_count },
+            { label: "网络延迟", value: summary.network_delay_event_count },
+            { label: "网络丢包", value: summary.network_drop_event_count },
+            { label: "Relay", value: summary.relay_fault_event_count },
           ]}
         />
         <MiniBarChart

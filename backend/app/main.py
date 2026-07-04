@@ -53,9 +53,6 @@ V1_SWEEP_DOWNLOADABLE_FILES = frozenset({"report.md", "sweep_summary.csv", "swee
 V1_CUSTOM_DOWNLOADABLE_FILES = frozenset({"trace_meta.json", "summary.csv", "latency.csv", "runtime.log", "report.md", "used_config.yaml", "used_config.json", "config.yaml"})
 app = FastAPI(title="MBE V0")
 
-V3_CURRENT_STAGE = "V3.11 CrossShard Protocol Closure"
-V3_LATEST_RUNTIME_STAGE = "cross-shard Relay MVP with state machine, source lock, relay certificate, target verification, target commit, source finalization, timeout/refund/abort paths"
-
 ABLATION_PRESETS = {
     "baseline_hash_only": {"routing_policy": "hash", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},
     "co_access_only": {"routing_policy": "co_access", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},
@@ -128,6 +125,10 @@ def job_manager() -> JobManager:
 
 def v3_stage_metadata() -> dict[str, str]:
     return v3_runtime_stage_metadata()
+
+
+def v3_current_stage() -> str:
+    return v3_stage_metadata()["current_stage"]
 
 
 def v2_artifacts_response(run_id: str) -> dict:
@@ -767,7 +768,7 @@ def v3_composer_templates() -> dict:
         }
         for item in templates
     ]
-    return {"stage": V3_CURRENT_STAGE, **v3_stage_metadata(), "items": items}
+    return {"stage": v3_current_stage(), **v3_stage_metadata(), "items": items}
 
 
 @app.get("/api/v3/composer/preview")
@@ -778,7 +779,7 @@ def v3_composer_preview(experiment_profile_id: str = "metatrack_go_backed_ablati
         raise HTTPException(404, str(exc)) from exc
     return {
         "experiment_profile_id": experiment_profile_id,
-        "stage": V3_CURRENT_STAGE,
+        "stage": v3_current_stage(),
         **v3_stage_metadata(),
         "profile_preview": preview,
         "composer_preview": preview.get("composer_preview", {}),
@@ -862,7 +863,7 @@ def v3_composer_run_smoke() -> dict:
         source="v3_composer_frontend",
         experiment_name="metatrack_go_backed_ablation_smoke",
         data_truth_label="modular_runtime",
-        stage=V3_CURRENT_STAGE,
+        stage=v3_current_stage(),
         extra_metadata={
             "backend_type": "modular_research_chain",
             "runtime_mode": "go_backed",
@@ -879,7 +880,7 @@ def v3_composer_run_smoke() -> dict:
         return {
             "run_id": run_id,
             "status": "completed",
-            "stage": V3_CURRENT_STAGE,
+            "stage": v3_current_stage(),
             **v3_stage_metadata(),
             "output_dir": str(result["output_dir"]),
             "data_truth_label": "modular_runtime",

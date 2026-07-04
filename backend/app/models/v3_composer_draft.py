@@ -66,6 +66,21 @@ class V3RuntimeTopology(BaseModel):
     sweep_shard_counts: list[int] = Field(default_factory=lambda: [1, 2, 4])
     sweep_cross_shard_ratios: list[float] = Field(default_factory=lambda: [0.0, 0.2, 0.5])
     sweep_hotspot_ratios: list[float] = Field(default_factory=lambda: [0.0, 0.2, 0.5])
+    fault_injection_enabled: bool = False
+    fault_profile: str = "none"
+    fault_seed: int = 42
+    fault_start_round: int = 1
+    fault_duration_rounds: int = 1
+    failed_node_count: int = 1
+    message_delay_ms: int = 0
+    message_drop_ratio: float = 0.0
+    target_congestion_ratio: float = 0.0
+    relay_fault_mode: str = "none"
+    observability_enabled: bool = True
+    observability_level: str = "basic"
+    reproducibility_bundle_enabled: bool = True
+    paper_mapping_enabled: bool = True
+    final_artifact_catalog_enabled: bool = True
 
 
 class V3ComposerDraftRequest(BaseModel):

@@ -28,8 +28,12 @@ import SingleChainComposer from "../components/v3/SingleChainComposer";
 import { createComposerDraft, summarizeDraft, toComposerDraftRequest, updateDraftTopology, type ComposerDraft } from "../components/v3/composerDraft";
 import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
 
-const currentStageLabel = "V3.11 CrossShard Protocol Closure";
-const latestRuntimeLabel = "Relay MVP 跨片协议闭环";
+const fallbackStageMetadata = {
+  currentStage: "V3-final Fault, Observability, and Reproducibility Closure",
+  latestRuntime: "deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping",
+  runtimeTruth: "v3_final_emulator_closure_not_production_system",
+  nextStage: "V3 maintenance only; do not start V4 unless explicitly requested",
+};
 const controlledSmokeDescription = "按固定顺序运行五组 MetaTrack 快速验证预设。Workload、seed、TxPool、BlockProducer、Consensus、CommitteeEpoch、StateStorage、MetricsReport 保持固定，只改变 Routing、Execution、StateAccess、Commit。输出 aggregate summary 与 realism readiness；这是快速验证级别的受控对照。";
 
 const metatrackLockedModules = {
@@ -278,21 +282,25 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   );
   const selectedLockedModules = selectedPreset?.locked_modules || selectedTemplate?.locked_modules || {};
   const selectedVariableModules = selectedPreset?.controlled_modules || (selectedTemplate?.variable_module ? [selectedTemplate.variable_module] : selectedTemplate?.variable_modules || []);
+  const stageLabel = preview?.current_stage || preview?.stage || fallbackStageMetadata.currentStage;
+  const latestRuntimeLabel = preview?.latest_runtime_stage || preview?.latest_completed_runtime_stage || fallbackStageMetadata.latestRuntime;
+  const runtimeTruthLabel = preview?.runtime_truth || fallbackStageMetadata.runtimeTruth;
+  const nextStageLabel = preview?.next_stage || fallbackStageMetadata.nextStage;
 
   return (
     <section className="page-grid v3-composer-page">
       <header className="final-card wide v3-composer-header console-hero">
         <div>
-          <p className="eyebrow">当前阶段：V3.11</p>
+          <p className="eyebrow">当前阶段：{stageLabel}</p>
           <h2>MBE V3 实验控制台</h2>
-          <p>{`运行能力：${latestRuntimeLabel}。${"本轮实现本地 Relay MVP，不是生产级 atomic commit。"}`} <HelpTip title="真实性边界">V3.11 是本地可观测 Relay MVP，不是生产级跨片协议、不是完整 Broker / 2PC / Monoxide、不是 Byzantine-secure relay。</HelpTip></p>
+          <p>{`运行能力：${latestRuntimeLabel}。`} <HelpTip title="真实性边界">V3-final 是本地 emulator 闭环：确定性故障注入、观测摘要和复现 bundle；不是多服务器部署、生产集群、生产共识网络或论文级性能结论。</HelpTip></p>
         </div>
         <div className="v3-boundary-badges">
           <span>本地快速验证</span>
           <span>中文控制台</span>
           <span>HelpTip 解释</span>
           <span>轻量图表</span>
-          <span>V3.12 未开始</span>
+          <span>V3-final closure</span>
         </div>
       </header>
 
@@ -314,9 +322,10 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
           <summary className="v3-foldout-summary">实验身份详情</summary>
           <dl className="v3-identity-grid">
             <div><dt>实验模板</dt><dd>{labelFor(templateLabels, composer?.template_id || preview?.experiment_template || "-")}</dd></div>
-            <div><dt>后端 stage</dt><dd>{preview?.current_stage || preview?.stage || "-"}</dd></div>
-            <div><dt>前端 stage</dt><dd>{currentStageLabel}</dd></div>
-            <div><dt>下一阶段</dt><dd>V3.12 Runtime Realism Closure（尚未开始）</dd></div>
+            <div><dt>后端 stage</dt><dd>{stageLabel}</dd></div>
+            <div><dt>前端 stage</dt><dd>{stageLabel}</dd></div>
+            <div><dt>下一阶段</dt><dd>{nextStageLabel}</dd></div>
+            <div><dt>Runtime truth</dt><dd>{runtimeTruthLabel}</dd></div>
             <div><dt>后端类型</dt><dd>{composer?.truth_labels?.backend_type || String(profilePreview.backend_type || "-")}</dd></div>
             <div><dt>真实性标签</dt><dd>{composer?.truth_labels?.truth_label || String(profilePreview.truth_label || "-")}</dd></div>
             <div><dt>是否可运行</dt><dd>{yesNo(preview?.runnable && composer?.runnable)}</dd></div>

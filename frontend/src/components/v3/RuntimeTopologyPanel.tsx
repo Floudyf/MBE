@@ -42,6 +42,29 @@ const baselineProfiles: SelectOption[] = [
   ["baseline_no_state_authenticity", "无状态真实性基线"],
 ];
 
+const faultProfiles: SelectOption[] = [
+  ["none", "不注入故障"],
+  ["node_failure", "节点失败"],
+  ["node_recovery", "节点恢复"],
+  ["network_delay", "网络延迟"],
+  ["network_drop", "网络丢包"],
+  ["target_congestion", "目标分片拥塞"],
+  ["relay_fault", "Relay 故障观察"],
+  ["mixed_fault", "混合故障"],
+];
+
+const relayFaultModes: SelectOption[] = [
+  ["none", "不指定"],
+  ["proof_fail", "proof_fail"],
+  ["timeout", "timeout"],
+  ["target_reject", "target_reject"],
+];
+
+const observabilityLevels: SelectOption[] = [
+  ["basic", "basic"],
+  ["detailed", "detailed"],
+];
+
 export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
   const summary = topologySummary(topology);
   function patch(patchValue: Partial<V3RuntimeTopology>) {
@@ -193,6 +216,64 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
             默认 3；用于 deterministic multi-seed scaffold。
           </NumberField>
         </ConfigGroup>
+
+        <ConfigGroup title="故障注入与最终复现">
+          <label className="field-card checkbox-card">
+            <span>启用故障注入 <HelpTip title="故障注入">生成确定性的本地故障事件和观察日志；不是生产级 Byzantine adversary、不是生产容错协议。</HelpTip></span>
+            <input type="checkbox" checked={topology.fault_injection_enabled ?? false} onChange={(event) => patch({ fault_injection_enabled: event.target.checked })} />
+            <small>fault_injection_enabled</small>
+          </label>
+          <SelectField label="故障 profile" id="fault_profile" value={topology.fault_profile || "none"} options={faultProfiles} onChange={(value) => patch({ fault_profile: value })}>
+            none 生成 no-op summary；mixed_fault 会生成小规模确定性节点、网络、拥塞和 Relay 观察事件。
+          </SelectField>
+          <NumberField label="故障 seed" id="fault_seed" value={topology.fault_seed ?? 42} min={0} max={2147483647} onChange={(value) => patch({ fault_seed: value })}>
+            相同配置和 seed 会生成相同故障事件。
+          </NumberField>
+          <NumberField label="起始 round" id="fault_start_round" value={topology.fault_start_round ?? 1} min={0} max={1000000} onChange={(value) => patch({ fault_start_round: value })}>
+            故障事件开始的逻辑 round。
+          </NumberField>
+          <NumberField label="持续 rounds" id="fault_duration_rounds" value={topology.fault_duration_rounds ?? 1} min={0} max={1000000} onChange={(value) => patch({ fault_duration_rounds: value })}>
+            用于 node_recovery 和 mixed_fault 的恢复计划。
+          </NumberField>
+          <NumberField label="失败节点数" id="failed_node_count" value={topology.failed_node_count ?? 1} min={0} max={10000} onChange={(value) => patch({ failed_node_count: value })}>
+            只标记本地逻辑/进程节点，不模拟生产容错。
+          </NumberField>
+          <NumberField label="消息延迟 ms" id="message_delay_ms" value={topology.message_delay_ms ?? 0} min={0} max={600000} onChange={(value) => patch({ message_delay_ms: value })}>
+            写入 network_fault_log.csv 的确定性延迟元数据。
+          </NumberField>
+          <NumberField label="消息丢弃比例" id="message_drop_ratio" value={topology.message_drop_ratio ?? 0} min={0} max={1} step={0.01} onChange={(value) => patch({ message_drop_ratio: value })}>
+            生成 delivered=false 的确定性 drop 事件。
+          </NumberField>
+          <NumberField label="目标拥塞比例" id="target_congestion_ratio" value={topology.target_congestion_ratio ?? 0} min={0} max={1} step={0.01} onChange={(value) => patch({ target_congestion_ratio: value })}>
+            生成 target_congestion_log.csv 的本地拥塞观察。
+          </NumberField>
+          <SelectField label="Relay 故障模式" id="relay_fault_mode" value={topology.relay_fault_mode || "none"} options={relayFaultModes} onChange={(value) => patch({ relay_fault_mode: value })}>
+            使用 proof_fail / timeout / target_reject 语义观察 Relay MVP，不实现生产级跨链桥。
+          </SelectField>
+          <label className="field-card checkbox-card">
+            <span>启用观测摘要</span>
+            <input type="checkbox" checked={topology.observability_enabled ?? true} onChange={(event) => patch({ observability_enabled: event.target.checked })} />
+            <small>observability_enabled</small>
+          </label>
+          <SelectField label="观测级别" id="observability_level" value={topology.observability_level || "basic"} options={observabilityLevels} onChange={(value) => patch({ observability_level: value })}>
+            detailed 会额外写入组件级 timeline 行；仍不是生产监控系统。
+          </SelectField>
+          <label className="field-card checkbox-card">
+            <span>复现 bundle</span>
+            <input type="checkbox" checked={topology.reproducibility_bundle_enabled ?? true} onChange={(event) => patch({ reproducibility_bundle_enabled: event.target.checked })} />
+            <small>reproducibility_bundle_enabled</small>
+          </label>
+          <label className="field-card checkbox-card">
+            <span>Paper mapping</span>
+            <input type="checkbox" checked={topology.paper_mapping_enabled ?? true} onChange={(event) => patch({ paper_mapping_enabled: event.target.checked })} />
+            <small>paper_mapping_enabled</small>
+          </label>
+          <label className="field-card checkbox-card">
+            <span>最终 artifact catalog</span>
+            <input type="checkbox" checked={topology.final_artifact_catalog_enabled ?? true} onChange={(event) => patch({ final_artifact_catalog_enabled: event.target.checked })} />
+            <small>final_artifact_catalog_enabled</small>
+          </label>
+        </ConfigGroup>
       </div>
 
       <dl className="topology-summary-grid">
@@ -238,6 +319,10 @@ function topologySummary(topology: V3RuntimeTopology): Record<string, number | s
   const storage_node_count = topology.shard_count * topology.storage_nodes_per_shard;
   const supervisor_node_count = topology.supervisor_enabled ? 1 : 0;
   return {
+    故障注入: topology.fault_injection_enabled ?? false,
+    故障Profile: topology.fault_profile || "none",
+    观测级别: topology.observability_level || "basic",
+    复现Bundle: topology.reproducibility_bundle_enabled ?? true,
     逻辑节点总数: validator_node_count + executor_node_count + storage_node_count + supervisor_node_count,
     验证节点数: validator_node_count,
     执行节点数: executor_node_count,

@@ -70,6 +70,6 @@ def test_v3_12_artifacts_are_downloadable() -> None:
 def test_stage_metadata_reflects_v3_13() -> None:
     metadata = stage_metadata()
 
-    assert metadata["current_stage"] == "V3.13 Metaverse Experiment Suite Closure"
-    assert metadata["runtime_truth"] == "controlled_metaverse_workload_not_real_platform_trace"
-    assert metadata["next_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
+    assert metadata["current_stage"] == "V3-final Fault, Observability, and Reproducibility Closure"
+    assert metadata["runtime_truth"] == "v3_final_emulator_closure_not_production_system"
+    assert metadata["next_stage"] == "V3 maintenance only; do not start V4 unless explicitly requested"

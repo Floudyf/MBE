@@ -5,11 +5,11 @@ from typing import Any
 from backend.app.models.v3_composer_draft import V3RuntimeTopology
 
 
-CURRENT_STAGE = "V3.13 Metaverse Experiment Suite Closure"
-LATEST_RUNTIME_STAGE = "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts"
-CURRENT_CAPABILITY = "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export"
-RUNTIME_TRUTH = "controlled_metaverse_workload_not_real_platform_trace"
-NEXT_STAGE = "V3-final Fault, Observability, and Reproducibility Closure"
+CURRENT_STAGE = "V3-final Fault, Observability, and Reproducibility Closure"
+LATEST_RUNTIME_STAGE = "deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping"
+CURRENT_CAPABILITY = "deterministic fault injection, local observability summary, component health status, final artifact catalog, reproducibility bundle, experiment manual, and paper experiment mapping"
+RUNTIME_TRUTH = "v3_final_emulator_closure_not_production_system"
+NEXT_STAGE = "V3 maintenance only; do not start V4 unless explicitly requested"
 METAVERSE_SCENARIOS = {
     "asset_transfer",
     "avatar_update",
@@ -41,6 +41,18 @@ BASELINE_PROFILES = {
     "baseline_memory_kv",
     "baseline_no_state_authenticity",
 }
+FAULT_PROFILES = {
+    "none",
+    "node_failure",
+    "node_recovery",
+    "network_delay",
+    "network_drop",
+    "target_congestion",
+    "relay_fault",
+    "mixed_fault",
+}
+RELAY_FAULT_MODES = {"none", "proof_fail", "timeout", "target_reject"}
+OBSERVABILITY_LEVELS = {"basic", "detailed"}
 
 
 def default_topology() -> V3RuntimeTopology:
@@ -142,6 +154,30 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     _int_list(errors, data, "sweep_shard_counts", 1, 32)
     _float_list(errors, data, "sweep_cross_shard_ratios", 0.0, 1.0)
     _float_list(errors, data, "sweep_hotspot_ratios", 0.0, 1.0)
+    _bool(errors, data, "fault_injection_enabled")
+    fault_profile = data.get("fault_profile") or "none"
+    data["fault_profile"] = fault_profile
+    if fault_profile not in FAULT_PROFILES:
+        errors.append("topology.fault_profile must be one of none, node_failure, node_recovery, network_delay, network_drop, target_congestion, relay_fault, or mixed_fault")
+    _range(errors, data, "fault_seed", 0, 2147483647)
+    _range(errors, data, "fault_start_round", 0, 1000000)
+    _range(errors, data, "fault_duration_rounds", 0, 1000000)
+    _range(errors, data, "failed_node_count", 0, 10000)
+    _range(errors, data, "message_delay_ms", 0, 600000)
+    _ratio(errors, data, "message_drop_ratio")
+    _ratio(errors, data, "target_congestion_ratio")
+    relay_fault_mode = data.get("relay_fault_mode") or "none"
+    data["relay_fault_mode"] = relay_fault_mode
+    if relay_fault_mode not in RELAY_FAULT_MODES:
+        errors.append("topology.relay_fault_mode currently allows none, proof_fail, timeout, or target_reject")
+    _bool(errors, data, "observability_enabled")
+    observability_level = data.get("observability_level") or "basic"
+    data["observability_level"] = observability_level
+    if observability_level not in OBSERVABILITY_LEVELS:
+        errors.append("topology.observability_level currently allows basic or detailed")
+    _bool(errors, data, "reproducibility_bundle_enabled")
+    _bool(errors, data, "paper_mapping_enabled")
+    _bool(errors, data, "final_artifact_catalog_enabled")
     return data, errors
 
 
@@ -174,6 +210,13 @@ def topology_summary(topology: dict[str, Any]) -> dict[str, int | str | bool]:
         "baseline_matrix_enabled": bool(topology.get("baseline_matrix_enabled", False)),
         "multi_seed_enabled": bool(topology.get("multi_seed_enabled", False)),
         "paper_export_enabled": bool(topology.get("paper_export_enabled", False)),
+        "fault_injection_enabled": bool(topology.get("fault_injection_enabled", False)),
+        "fault_profile": str(topology.get("fault_profile", "none")),
+        "observability_enabled": bool(topology.get("observability_enabled", True)),
+        "observability_level": str(topology.get("observability_level", "basic")),
+        "reproducibility_bundle_enabled": bool(topology.get("reproducibility_bundle_enabled", True)),
+        "paper_mapping_enabled": bool(topology.get("paper_mapping_enabled", True)),
+        "final_artifact_catalog_enabled": bool(topology.get("final_artifact_catalog_enabled", True)),
     }
 
 

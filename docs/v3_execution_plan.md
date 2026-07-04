@@ -168,6 +168,14 @@ V3.13 supports `asset_transfer`, `avatar_update`, `scene_hotspot`, `item_transfe
 
 V3.13 is closed after this controlled experiment suite. It is not real metaverse platform trace collection, not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
 
+## V3-final Current Status
+
+Current stage is V3-final Fault, Observability, and Reproducibility Closure. V3-final aligns frontend/backend stage metadata through `backend/app/services/v3_runtime_topology.py::stage_metadata()`, adds deterministic fault injection MVP artifacts, adds local observability summary/component health artifacts, and writes the final artifact catalog, reproducibility manifest, reproducibility guide, experiment manual, paper experiment mapping, and final summary.
+
+V3-final supports `fault_injection_enabled`, `fault_profile`, `fault_seed`, `fault_start_round`, `fault_duration_rounds`, `failed_node_count`, `message_delay_ms`, `message_drop_ratio`, `target_congestion_ratio`, `relay_fault_mode`, `observability_enabled`, `observability_level`, `reproducibility_bundle_enabled`, `paper_mapping_enabled`, and `final_artifact_catalog_enabled`. It writes `fault_injection_config.json`, `fault_injection_log.csv`, `node_failure_log.csv`, `node_recovery_log.csv`, `network_fault_log.csv`, `target_congestion_log.csv`, `relay_fault_observation_log.csv`, `fault_injection_summary.json`, `observability_summary.json`, `observability_timeline.csv`, `component_health_summary.csv`, `runtime_component_status.json`, `final_artifact_catalog.json`, `final_artifact_catalog.md`, `v3_final_reproducibility_manifest.json`, `v3_reproducibility_guide.md`, `v3_experiment_manual.md`, `v3_paper_experiment_mapping.md`, and `v3_final_summary.json`.
+
+V3-final is closed after this fault/observability/reproducibility package. It is not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not production fault tolerance, not production monitoring, not a Byzantine adversary model, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
+
 ## Compressed Remaining Roadmap After V3.10.1
 
 The compressed remaining V3 route is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`.
@@ -175,7 +183,8 @@ The compressed remaining V3 route is documented in `docs/v3_remaining_roadmap_af
 1. V3.11 CrossShard Protocol Closure. Complete.
 2. V3.12 Runtime Realism Closure. Complete.
 3. V3.13 Metaverse Experiment Suite Closure. Complete.
-4. V3-final Fault, Observability, and Reproducibility Closure. Next.
+4. V3-final Fault, Observability, and Reproducibility Closure. Complete.
+5. V3 maintenance only unless V4 is explicitly requested. Next.
 
 ## V3.6 / V3.7 Planning
 
@@ -185,7 +194,7 @@ V3.7 is ConsensusRuntime and BlockEmulator-aligned PBFT Preview. V3.7.1 is imple
 
 V3.8 is implemented as CrossShardProtocol Skeleton Closure. It stays separate from V3.6 networking and V3.7 PBFT preview work.
 V3.9 is implemented as State Authenticity Layer MVP Closure. It strengthens StateAccess / StateStorage / Commit with persistent state backend MVP, Merkle/MPT-like roots, proof verification, and witness artifacts.
-V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is implemented as CrossShard Protocol Closure. V3.12 is implemented as Runtime Realism Closure. V3.13 is implemented as Metaverse Experiment Suite Closure.
+V3.10 is implemented as Benchmark / Experiment Template Hardening Closure. V3.10.1 is implemented as Frontend UX and Chinese Console Cleanup Closure. V3.11 is implemented as CrossShard Protocol Closure. V3.12 is implemented as Runtime Realism Closure. V3.13 is implemented as Metaverse Experiment Suite Closure. V3-final is implemented as Fault, Observability, and Reproducibility Closure.
 
 Planned stage list extension:
 
@@ -199,6 +208,7 @@ Planned stage list extension:
 - V3.12 Runtime Realism Closure.
 - V3.13 Metaverse Experiment Suite Closure.
 - V3-final Fault, Observability, and Reproducibility Closure.
+- V3 maintenance only unless V4 is explicitly requested.
 
 The main transaction flow should remain:
 

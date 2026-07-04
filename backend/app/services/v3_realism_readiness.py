@@ -27,6 +27,36 @@ MODULE_READINESS: list[dict[str, Any]] = [
         "next_step": "Use V3-final for failure injection, observability, and reproducibility packaging.",
     },
     {
+        "module_id": "FaultInjection",
+        "runtime_status": "runnable",
+        "realism_level": "deterministic_fault_injection_mvp",
+        "implemented_plugins": ["node_failure", "node_recovery", "network_delay", "network_drop", "target_congestion", "relay_fault"],
+        "artifact_logs": ["fault_injection_config.json", "fault_injection_log.csv", "node_failure_log.csv", "network_fault_log.csv", "relay_fault_observation_log.csv", "fault_injection_summary.json"],
+        "light_model_limitations": ["Deterministic local events only; not Byzantine adversary modeling or production fault tolerance."],
+        "missing_for_real_emulator": ["Byzantine adversary model", "production recovery protocol", "real network partitions"],
+        "next_step": "Maintenance only unless the user explicitly starts V4.",
+    },
+    {
+        "module_id": "Observability",
+        "runtime_status": "runnable",
+        "realism_level": "local_observability_summary",
+        "implemented_plugins": ["observability_summary", "component_health_summary", "runtime_component_status"],
+        "artifact_logs": ["observability_summary.json", "observability_timeline.csv", "component_health_summary.csv", "runtime_component_status.json"],
+        "light_model_limitations": ["Local artifact-derived observability only; not production monitoring."],
+        "missing_for_real_emulator": ["Metrics backend", "distributed tracing", "alerting pipeline"],
+        "next_step": "Maintenance only unless the user explicitly starts V4.",
+    },
+    {
+        "module_id": "ReproducibilityBundle",
+        "runtime_status": "runnable",
+        "realism_level": "reproducibility_bundle",
+        "implemented_plugins": ["final_artifact_catalog", "reproducibility_manifest", "experiment_manual", "paper_experiment_mapping"],
+        "artifact_logs": ["final_artifact_catalog.json", "v3_final_reproducibility_manifest.json", "v3_reproducibility_guide.md", "v3_experiment_manual.md", "v3_paper_experiment_mapping.md"],
+        "light_model_limitations": ["Reproducibility packaging only; not a paper-grade result claim."],
+        "missing_for_real_emulator": ["Independent benchmark audit", "large-scale campaign", "paper acceptance evidence"],
+        "next_step": "Maintenance only unless the user explicitly starts V4.",
+    },
+    {
         "module_id": "TxPool",
         "runtime_status": "runnable",
         "realism_level": "runtime_realized",
@@ -141,14 +171,14 @@ MODULE_READINESS: list[dict[str, Any]] = [
 
 def build_realism_readiness() -> dict[str, Any]:
     return {
-        "stage": "V3.13",
-        "current_stage": "V3.13 Metaverse Experiment Suite Closure",
-        "latest_runtime_stage": "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts",
-        "latest_completed_runtime_stage": "controlled metaverse workload suite with scenario templates, baseline matrix, multi-seed sweep, and paper export artifacts",
-        "closure_stage": "V3.13",
-        "current_capability": "metaverse workload catalog, scenario templates, controlled benchmark matrix, multi-seed sweep MVP, and paper table/figure data export",
-        "runtime_truth": "controlled_metaverse_workload_not_real_platform_trace",
-        "next_stage": "V3-final Fault, Observability, and Reproducibility Closure",
+        "stage": "V3-final",
+        "current_stage": "V3-final Fault, Observability, and Reproducibility Closure",
+        "latest_runtime_stage": "deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping",
+        "latest_completed_runtime_stage": "deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping",
+        "closure_stage": "V3-final",
+        "current_capability": "deterministic fault injection, local observability summary, component health status, final artifact catalog, reproducibility bundle, experiment manual, and paper experiment mapping",
+        "runtime_truth": "v3_final_emulator_closure_not_production_system",
+        "next_stage": "V3 maintenance only; do not start V4 unless explicitly requested",
         "backend_truth": "local Go-backed modular research chain Draft Smoke",
         "not_real_chain_claims": [
             "not real on-chain execution",
@@ -156,6 +186,9 @@ def build_realism_readiness() -> dict[str, Any]:
             "not multi-server deployment",
             "not a production cluster",
             "not real PBFT/HotStuff/Raft",
+            "not production fault tolerance",
+            "not production Byzantine adversary model",
+            "not production monitoring",
             "not a real cross-shard protocol",
             "not atomic cross-shard commit",
             "not Byzantine-secure relay",
@@ -185,11 +218,11 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         encoding="utf-8",
     )
     lines = [
-        "# V3.13 Realism Readiness Check",
+        "# V3-final Realism Readiness Check",
         "",
         "This is an internal readiness check for the local Go-backed Draft Smoke runtime.",
-        "Current repository closure stage is V3.13; representative runs include controlled metaverse workload, baseline matrix, multi-seed sweep, and paper export scaffold artifacts.",
-        "It is not a real-chain, real metaverse platform trace, Fabric/EVM live, BlockEmulator-backed, multi-node emulator, or paper-grade conclusion claim.",
+        "Current repository closure stage is V3-final; representative runs include deterministic fault injection, observability, final artifact catalog, reproducibility guide, experiment manual, and paper mapping artifacts.",
+        "It is not a real-chain, real metaverse platform trace, Fabric/EVM live, BlockEmulator-backed, production cluster, multi-server deployment, production monitoring system, or paper-grade conclusion claim.",
         "",
         "| module_id | runtime_status | realism_level | implemented_plugins | next_step |",
         "| --- | --- | --- | --- | --- |",
@@ -206,7 +239,7 @@ def write_realism_readiness(output_dir: Path) -> dict[str, Any]:
         )
     lines.extend([
         "",
-        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, production atomic cross-shard commit, complete Broker/2PC/Monoxide, Byzantine-secure relay, full cross-shard state proof protocol, Ethereum-compatible MPT, production database durability, full stateless execution, Fabric/EVM live backend, BlockEmulator adapter, real metaverse platform trace collection, large-scale distributed benchmark, and paper-grade benchmark evidence.",
+        "Still missing for real emulator scope: production networking, production BFT/Raft consensus, production fault tolerance, production Byzantine adversary model, production monitoring, production atomic cross-shard commit, complete Broker/2PC/Monoxide, Byzantine-secure relay, full cross-shard state proof protocol, Ethereum-compatible MPT, production database durability, full stateless execution, Fabric/EVM live backend, BlockEmulator adapter, real metaverse platform trace collection, large-scale distributed benchmark, and paper-grade benchmark evidence.",
     ])
     (output_dir / "realism_readiness.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return payload
