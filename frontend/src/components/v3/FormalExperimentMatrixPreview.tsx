@@ -14,6 +14,9 @@ export default function FormalExperimentMatrixPreview({ preview }: Props) {
     );
   }
   const sampleRows = (preview.matrix || []).slice(0, 8);
+  const scenarioRows = preview.experiment_type === "workload_comparison" ? preview.matrix || [] : [];
+  const methods = Array.from(new Set(scenarioRows.map((row) => String(row.method_config_name || row.baseline_label || row.baseline_id || row.method_config_id || "-"))));
+  const scenarios = Array.from(new Set(scenarioRows.map((row) => String(row.workload_scenario || row.scan_value || "-"))));
   return (
     <section className="v3-config-section">
       <div className="v3-section-head">
@@ -21,6 +24,15 @@ export default function FormalExperimentMatrixPreview({ preview }: Props) {
         <span className={`v3-status-badge status-${preview.is_runnable ? "variable" : "planned"}`}>
           {preview.is_runnable ? "可运行" : "需要调整"}
         </span>
+      </div>
+      <div className="v3-matrix-kpis">
+        <div><strong>{preview.run_count}</strong><small>总运行组数</small></div>
+        <div><strong>{preview.total_tx_count}</strong><small>总交易数</small></div>
+        <div><strong>{preview.method_count ?? preview.baseline_count}</strong><small>方法数</small></div>
+        <div><strong>{preview.workload_count ?? 1}</strong><small>负载数</small></div>
+        <div><strong>{preview.topology_count ?? 1}</strong><small>拓扑数</small></div>
+        <div><strong>{preview.seed_list.length}</strong><small>seed 数</small></div>
+        <div><strong>{scenarios.length || preview.scan_point_count}</strong><small>场景 / 扫描点</small></div>
       </div>
       <dl className="v3-result-grid compact">
         <div><dt>实验类型</dt><dd>{preview.experiment_type}</dd></div>
@@ -39,6 +51,25 @@ export default function FormalExperimentMatrixPreview({ preview }: Props) {
           {preview.exceeds_recommended_range && <p>总运行组数或总交易数偏大，建议减少 seed_count 或扫描点。</p>}
           {preview.errors.map((error) => <p key={error}>{error}</p>)}
         </div>
+      )}
+      {preview.run_count > 50 && <div className="v3-warning-card">本地多进程下运行组较多，建议先使用链路确认预设。</div>}
+      {preview.total_tx_count > 100000 && <div className="v3-warning-card">总交易数较高，建议先完成链路确认后再放大。</div>}
+      {preview.experiment_type === "workload_comparison" && (
+        <details className="v3-foldout" open>
+          <summary className="v3-foldout-summary">method × workload_scenario</summary>
+          <div className="v3-matrix-table">
+            <div className="v3-matrix-row header"><span>方法</span>{scenarios.map((scenario) => <span key={scenario}>{scenario}</span>)}</div>
+            {methods.map((method) => (
+              <div className="v3-matrix-row" key={method}>
+                <span>{method}</span>
+                {scenarios.map((scenario) => {
+                  const count = scenarioRows.filter((row) => String(row.workload_scenario || row.scan_value || "-") === scenario && String(row.method_config_name || row.baseline_label || row.baseline_id || row.method_config_id || "-") === method).length;
+                  return <span key={scenario}>{count}</span>;
+                })}
+              </div>
+            ))}
+          </div>
+        </details>
       )}
       <details className="v3-foldout">
         <summary className="v3-foldout-summary">完整矩阵样例</summary>

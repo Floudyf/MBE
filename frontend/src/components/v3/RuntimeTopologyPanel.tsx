@@ -78,6 +78,43 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
   function patch(patchValue: Partial<V3RuntimeTopology>) {
     onChange({ ...topology, ...patchValue });
   }
+  function applyTopologyPreset(preset: "quick" | "realism" | "state_realism") {
+    const base: Partial<V3RuntimeTopology> = preset === "quick"
+      ? {
+          node_runtime_mode: "logical_single_process",
+          process_runtime_mode: "dry_run",
+          network_adapter: "in_memory_message_bus",
+          network_mode: "in_memory_message_bus",
+          cross_shard_protocol: "none",
+          state_backend: "memory_kv",
+          shard_count: 4,
+          max_local_processes: 4,
+        }
+      : {
+          node_runtime_mode: "local_multi_process",
+          process_runtime_mode: "smoke",
+          network_adapter: "localhost_tcp_preview",
+          network_mode: "localhost_tcp_preview",
+          cross_shard_protocol: "relay_mvp",
+          state_backend: "merkle_trie_mvp",
+          shard_count: 4,
+          validators_per_shard: 4,
+          executors_per_shard: 1,
+          storage_nodes_per_shard: 1,
+          max_local_processes: 8,
+          enable_committee_epoch: true,
+          epoch_count: 1,
+        };
+    patch(preset === "state_realism" ? { ...base, observability_enabled: true, reproducibility_bundle_enabled: true, paper_mapping_enabled: true, final_artifact_catalog_enabled: true } : base);
+  }
+  function applyWorkloadPreset(preset: "hotspot" | "migration" | "mixed") {
+    const values: Record<"hotspot" | "migration" | "mixed", Partial<V3RuntimeTopology>> = {
+      hotspot: { metaverse_scenario: "scene_hotspot", hotspot_ratio: 0.4, cross_scene_ratio: 0.2, cross_shard_ratio: 0.3, burst_rate: 0.2, read_write_ratio: 0.5, asset_skew: 0.8, scene_skew: 0.8, offchain_confirmation_enabled: false, cross_metaverse_enabled: false },
+      migration: { metaverse_scenario: "cross_scene_migration", hotspot_ratio: 0.3, cross_scene_ratio: 0.5, cross_shard_ratio: 0.4, burst_rate: 0.2, read_write_ratio: 0.5, asset_skew: 0.7, scene_skew: 0.7, offchain_confirmation_enabled: false, cross_metaverse_enabled: false },
+      mixed: { metaverse_scenario: "mixed_metaverse", hotspot_ratio: 0.4, cross_scene_ratio: 0.3, cross_shard_ratio: 0.3, burst_rate: 0.2, read_write_ratio: 0.5, asset_skew: 0.8, scene_skew: 0.8, offchain_confirmation_enabled: false, cross_metaverse_enabled: false },
+    };
+    patch({ workload_source: "metaverse", metaverse_suite_enabled: true, ...values[preset] });
+  }
 
   return (
     <section className="final-card wide topology-console">
@@ -89,6 +126,14 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
         <HelpTip title="运行拓扑">
           这里配置本地 V3 实验控制台使用的逻辑拓扑、协议预览和实验模板。local_multi_process 只在本机启动受限数量的本地进程，不是多服务器部署。
         </HelpTip>
+      </div>
+
+      <div className="v3-preset-strip">
+        <span>拓扑预设</span>
+        <button type="button" className="preset-chip" onClick={() => applyTopologyPreset("quick")}>逻辑快速验证</button>
+        <button type="button" className="preset-chip" onClick={() => applyTopologyPreset("realism")}>真实性优先</button>
+        <button type="button" className="preset-chip" onClick={() => applyTopologyPreset("state_realism")}>状态真实性优先</button>
+        <small>本地 emulator 原型验证，不是生产链。</small>
       </div>
 
       <div className="topology-groups">
@@ -192,6 +237,14 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           )}
           {workloadSource === "metaverse" && (
             <>
+              <div className="field-card">
+                <span>负载预设</span>
+                <div className="chip-row">
+                  <button type="button" className="preset-chip" onClick={() => applyWorkloadPreset("hotspot")}>场景热点</button>
+                  <button type="button" className="preset-chip" onClick={() => applyWorkloadPreset("migration")}>跨场景迁移</button>
+                  <button type="button" className="preset-chip" onClick={() => applyWorkloadPreset("mixed")}>混合元宇宙</button>
+                </div>
+              </div>
               <NumberField label="随机种子" id="seed" value={topology.seed || 42} min={0} max={2147483647} onChange={(value) => patch({ seed: value })}>相同配置和 seed 会生成相同场景 metadata。</NumberField>
               <SelectField label="元宇宙场景" id="metaverse_scenario" value={topology.metaverse_scenario || "mixed_metaverse"} options={metaverseScenarios} onChange={(value) => patch({ metaverse_scenario: value })}>控制 trace metadata 的场景语义。</SelectField>
               <NumberField label="交易数量" id="tx_count" value={topology.tx_count || 10000} min={1} max={10000000} onChange={(value) => patch({ tx_count: value })}>场景化负载交易数量。</NumberField>
@@ -319,14 +372,39 @@ function ConfigGroup({ title, summary = "", defaultOpen = false, children }: { t
   );
 }
 
+const ratioFieldIds = new Set([
+  "hotspot_ratio",
+  "cross_shard_ratio",
+  "cross_scene_ratio",
+  "read_write_ratio",
+  "burst_rate",
+  "asset_skew",
+  "scene_skew",
+  "offchain_failure_ratio",
+  "message_drop_ratio",
+  "target_congestion_ratio",
+]);
+
 function NumberField({ label, id, value, min, max, step = 1, onChange, children }: { label: string; id: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void; children: ReactNode }) {
+  const isRatio = ratioFieldIds.has(id);
+  const displayValue = clamp(value, min, max);
+  function handleChange(nextValue: number) {
+    const normalized = isRatio && nextValue > 1 ? nextValue / 100 : nextValue;
+    onChange(clamp(normalized, min, max));
+  }
   return (
     <label className="field-card">
       <span>{label} <HelpTip title={label}>{children}</HelpTip></span>
-      <input type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
-      <small>{id}</small>
+      <input type="range" min={min} max={max} step={step} value={displayValue} onChange={(event) => handleChange(Number(event.target.value))} />
+      <input type="number" min={min} max={max} step={step} value={displayValue} onChange={(event) => handleChange(Number(event.target.value))} />
+      <small>{id}{isRatio ? ` · ${Math.round(displayValue * 100)}% · 可输入 80 表示 80%` : ""}</small>
     </label>
   );
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
 }
 
 function SelectField({ label, id, value, options, onChange, children }: { label: string; id: string; value?: string; options: SelectOption[]; onChange: (value: string) => void; children: ReactNode }) {

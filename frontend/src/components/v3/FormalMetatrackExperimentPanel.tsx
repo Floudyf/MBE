@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { V3FormalExperimentType, V3FormalMetatrackBenchmarkPreview, V3FormalMetatrackBenchmarkRequest, V3RuntimeEvidenceMode, V3SavedConfig } from "../../api";
 import { toComposerDraftRequest, type ComposerDraft } from "./composerDraft";
 import FormalExperimentMatrixPreview from "./FormalExperimentMatrixPreview";
+import { IntegerSliderField, MultiSelectChipGroup, PresetChipGroup, RatioSliderField, SliderNumberField } from "./SliderFields";
 
 type Props = {
   draft?: ComposerDraft | null;
@@ -29,6 +30,14 @@ const baselineOptions = [
   "baseline_hash_aggregation",
   "metatrack_full",
 ];
+const workloadScenarioOptions = [
+  { id: "asset_transfer", label: "资产转移" },
+  { id: "avatar_update", label: "Avatar 更新" },
+  { id: "scene_hotspot", label: "场景热点" },
+  { id: "item_transfer", label: "道具转移" },
+  { id: "cross_scene_migration", label: "跨场景迁移" },
+  { id: "mixed_metaverse", label: "混合元宇宙" },
+];
 
 export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [], preview, running = false, previewing = false, error = "", onPreview, onRun }: Props) {
   const [experimentType, setExperimentType] = useState<V3FormalExperimentType>("ablation");
@@ -40,7 +49,7 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
   const [hotspotPoints, setHotspotPoints] = useState("0.0, 0.2, 0.4, 0.6, 0.8");
   const [crossShardPoints, setCrossShardPoints] = useState("0.0, 0.2, 0.4, 0.6");
   const [shardPoints, setShardPoints] = useState("1, 2, 4, 8");
-  const [workloadScenarioPoints, setWorkloadScenarioPoints] = useState("scene_hotspot, cross_scene_migration, mixed_metaverse");
+  const [workloadScenarioPoints, setWorkloadScenarioPoints] = useState<string[]>(["scene_hotspot", "cross_scene_migration", "mixed_metaverse"]);
   const [methodConfigIds, setMethodConfigIds] = useState<string[]>([]);
   const [workloadConfigIds, setWorkloadConfigIds] = useState<string[]>([]);
   const [topologyConfigIds, setTopologyConfigIds] = useState<string[]>([]);
@@ -61,7 +70,7 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
       hotspot_ratio_points: parseFloatList(hotspotPoints),
       cross_shard_ratio_points: parseFloatList(crossShardPoints),
       shard_count_points: parseIntList(shardPoints),
-      workload_scenario_points: parseStringList(workloadScenarioPoints),
+      workload_scenario_points: workloadScenarioPoints,
       method_config_ids: methodSource === "builtin" ? [] : methodConfigIds,
       workload_config_ids: workloadConfigIds,
       topology_config_ids: topologyConfigIds,
@@ -79,6 +88,50 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
   function toggleSaved(id: string, values: string[], setValues: (value: string[]) => void) {
     setValues(values.includes(id) ? values.filter((item) => item !== id) : [...values, id]);
   }
+  function applyPreset(id: string) {
+    if (id === "link_check") {
+      setExperimentType("workload_comparison");
+      setFormalTxCount(1000);
+      setSeedCount(1);
+      setRuntimeEvidenceMode("local_multi_process_validation");
+      setHotspotPoints("0.4");
+      setCrossShardPoints("0.3");
+      setShardPoints("4");
+      setWorkloadScenarioPoints(["scene_hotspot", "cross_scene_migration", "mixed_metaverse"]);
+      setEnableFaults(false);
+    }
+    if (id === "local_realism") {
+      setExperimentType("workload_comparison");
+      setFormalTxCount(5000);
+      setSeedCount(3);
+      setRuntimeEvidenceMode("local_multi_process_validation");
+      setHotspotPoints("0.4");
+      setCrossShardPoints("0.3");
+      setShardPoints("4");
+      setWorkloadScenarioPoints(["scene_hotspot", "cross_scene_migration", "mixed_metaverse"]);
+      setEnableFaults(false);
+    }
+    if (id === "paper_candidate") {
+      setExperimentType("workload_comparison");
+      setFormalTxCount(20000);
+      setSeedCount(3);
+      setRuntimeEvidenceMode("logical_single_process");
+      setHotspotPoints("0.4");
+      setCrossShardPoints("0.3");
+      setShardPoints("4");
+      setWorkloadScenarioPoints(["scene_hotspot", "cross_scene_migration", "mixed_metaverse"]);
+      setEnableFaults(false);
+    }
+  }
+  function applyScenarioPreset(id: string) {
+    const presets: Record<string, string[]> = {
+      recommended: ["scene_hotspot", "cross_scene_migration", "mixed_metaverse"],
+      all: workloadScenarioOptions.map((item) => item.id),
+      hotspot: ["scene_hotspot"],
+      migration: ["cross_scene_migration"],
+    };
+    setWorkloadScenarioPoints(presets[id] || workloadScenarioPoints);
+  }
 
   const methodConfigs = savedConfigs.filter((config) => config.config_kind === "method");
   const workloadConfigs = savedConfigs.filter((config) => config.config_kind === "workload");
@@ -94,6 +147,15 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
         <span className="v3-status-badge status-variable">受控基准实验</span>
       </div>
       <p className="muted">该入口用于生成受控性能实验数据。它不同于快速验证，会按显式交易数量、多随机种子、固定基线和单变量扫描运行。</p>
+      <PresetChipGroup
+        label="推荐实验方案"
+        items={[
+          { id: "link_check", label: "最真实链路确认" },
+          { id: "local_realism", label: "本地真实性对比" },
+          { id: "paper_candidate", label: "论文候选预跑" },
+        ]}
+        onSelect={applyPreset}
+      />
       <div className="topology-field-grid formal-field-grid">
         <label className="field-card">
           <span>实验类型</span>
@@ -111,14 +173,14 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
           </select>
           <small>正式实验可直接复用配置库中的 method 方案。</small>
         </label>
-        <RangeNumber label="交易数量" value={formalTxCount} min={1000} max={1000000} step={1000} onChange={setFormalTxCount} />
-        <RangeNumber label="随机种子数量" value={seedCount} min={1} max={10} step={1} onChange={setSeedCount} />
+        <SliderNumberField label="交易数量" value={formalTxCount} min={1000} max={1000000} step={1000} helper="正式性能实验每组运行的交易数量，不受 Draft Smoke 限制。" onChange={setFormalTxCount} />
+        <IntegerSliderField label="随机种子数量" value={seedCount} min={1} max={10} helper="多 seed 用于受控统计聚合。" onChange={setSeedCount} />
         <label className="field-card">
           <span>seed_base</span>
           <input type="number" value={seedBase} onChange={(event) => setSeedBase(Number(event.target.value))} />
           <small>seed_list: [{seedList.join(", ")}]</small>
         </label>
-        <RangeNumber label="Zipf 偏斜参数" value={zipfAlpha} min={0} max={2} step={0.05} onChange={setZipfAlpha} />
+        <SliderNumberField label="Zipf 偏斜参数" value={zipfAlpha} min={0} max={2} step={0.05} onChange={setZipfAlpha} />
         <label className="field-card">
           <span>运行真实性等级</span>
           <select value={runtimeEvidenceMode} onChange={(event) => setRuntimeEvidenceMode(event.target.value as V3RuntimeEvidenceMode)}>
@@ -162,10 +224,26 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
       <details className="v3-foldout">
         <summary className="v3-foldout-summary">高级扫描点</summary>
         <div className="topology-field-grid formal-field-grid">
-          <TextList label="热点比例扫描" value={hotspotPoints} onChange={setHotspotPoints} />
-          <TextList label="跨片比例扫描" value={crossShardPoints} onChange={setCrossShardPoints} />
-          <TextList label="分片数量扫描" value={shardPoints} onChange={setShardPoints} />
-          <TextList label="负载场景扫描" value={workloadScenarioPoints} onChange={setWorkloadScenarioPoints} />
+          {experimentType === "workload_comparison" ? (
+            <>
+              <RatioSliderField label="固定热点比例" value={parseFloatList(hotspotPoints)[0] ?? 0.4} onChange={(value) => setHotspotPoints(String(value))} />
+              <RatioSliderField label="固定跨片比例" value={parseFloatList(crossShardPoints)[0] ?? 0.3} onChange={(value) => setCrossShardPoints(String(value))} />
+              <IntegerSliderField label="固定分片数量" value={parseIntList(shardPoints)[0] ?? 4} min={1} max={32} onChange={(value) => setShardPoints(String(value))} />
+              <PresetChipGroup label="负载场景快捷" items={[
+                { id: "recommended", label: "推荐三场景" },
+                { id: "all", label: "全场景" },
+                { id: "hotspot", label: "只看热点" },
+                { id: "migration", label: "只看迁移" },
+              ]} onSelect={applyScenarioPreset} />
+              <MultiSelectChipGroup label="负载场景" options={workloadScenarioOptions} selected={workloadScenarioPoints} onChange={setWorkloadScenarioPoints} />
+            </>
+          ) : (
+            <>
+              {experimentType === "hotspot_sensitivity" && <TextList label="热点比例扫描" value={hotspotPoints} onChange={setHotspotPoints} />}
+              {experimentType === "cross_shard_sensitivity" && <TextList label="跨片比例扫描" value={crossShardPoints} onChange={setCrossShardPoints} />}
+              {experimentType === "shard_scalability" && <TextList label="分片数量扫描" value={shardPoints} onChange={setShardPoints} />}
+            </>
+          )}
           <label className="field-card checkbox-card">
             <span>正式实验包含故障注入</span>
             <input type="checkbox" checked={enableFaults} onChange={(event) => setEnableFaults(event.target.checked)} />
@@ -185,17 +263,6 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
       {error && <p className="file-error">{error}</p>}
       <FormalExperimentMatrixPreview preview={preview} />
     </section>
-  );
-}
-
-function RangeNumber({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void }) {
-  return (
-    <label className="field-card">
-      <span>{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
-      <input type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
-      <small>{min} - {max}</small>
-    </label>
   );
 }
 
@@ -230,8 +297,4 @@ function parseFloatList(value: string): number[] {
 
 function parseIntList(value: string): number[] {
   return value.split(",").map((item) => Math.trunc(Number(item.trim()))).filter((item) => Number.isFinite(item));
-}
-
-function parseStringList(value: string): string[] {
-  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }

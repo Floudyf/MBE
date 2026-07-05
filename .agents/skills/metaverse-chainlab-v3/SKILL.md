@@ -205,6 +205,8 @@ Allowed in this maintenance scope:
 - saved config library for module/workload/topology/method/formal_plan reuse
 - workload_comparison formal experiment type
 - formal run manifest, progress, failed run index, and child artifact index
+- formal result dashboard, chart preview, data-file explanation, preview/download split, ZIP export, and Formal Run History
+- slider/chip usability controls for ratios, workload comparison scenarios, and recommended local emulator presets
 - paper_candidate eligibility labels with reasons
 - docs, tests, and artifact downloads for the maintenance console
 
@@ -223,6 +225,7 @@ Forbidden in this maintenance scope:
 - claiming controlled benchmark outputs are paper-final proof
 - treating saved configs as production deployment manifests
 - admitting `existing_trace_preview` into the default formal benchmark path
+- claiming chart previews prove paper-final results
 
 Important boundary:
 
@@ -234,6 +237,9 @@ Important boundary:
 - A `paper_candidate` label is a readiness label for paper data review, not a claim of final paper-grade evidence.
 - Saved method configs must preserve the full 11-module draft, topology, workload source, validation state, and last smoke run ID.
 - Formal benchmark profiles must inherit user topology/workload details unless a single scan variable intentionally overrides them.
+- Formal result downloads must preserve artifact allowlists and run-directory path boundaries.
+- `formal_chart_preview.json` must be derived from aggregate or figure rows and must not fabricate missing metrics.
+- Formal Run History is a local convenience view over `.cache/v3_metatrack_formal_runs/`, not a production result database.
 
 ## V3.13 Metaverse Experiment Suite Closure
 

@@ -4,6 +4,7 @@ import csv
 import json
 import math
 import shutil
+import zipfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,50 @@ AGGREGATE_METRICS = [
     "avg_commit_latency_ms",
     "consensus_latency_ms",
     "control_overhead_ratio",
+]
+CHART_PREVIEW_METRICS = [
+    "throughput_tps",
+    "avg_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+    "remote_fetch_count",
+    "cross_shard_ratio",
+    "aggregation_ratio",
+    "control_overhead_ratio",
+]
+FORMAL_ROOT_ZIP_FILES = [
+    "summary.json",
+    "formal_benchmark_report.md",
+    "formal_benchmark_config.json",
+    "formal_matrix_preview.json",
+    "formal_run_manifest.json",
+    "formal_progress.json",
+    "formal_run_matrix.csv",
+    "formal_run_index.csv",
+    "formal_failed_runs.csv",
+    "formal_child_artifact_index.csv",
+    "formal_raw_summary.csv",
+    "formal_aggregate_summary.csv",
+    "formal_workload_comparison.csv",
+    "formal_latency_summary.csv",
+    "formal_throughput_summary.csv",
+    "formal_overhead_summary.csv",
+    "formal_confidence_interval.csv",
+    "formal_paper_figure_data.csv",
+    "formal_chart_preview.json",
+    "formal_reproducibility_manifest.json",
+]
+FORMAL_CHILD_ZIP_FILES = [
+    "generated_experiment_profile.json",
+    "generated_plugin_profile.json",
+    "summary.json",
+    "routing_log.csv",
+    "execution_log.csv",
+    "state_access_log.csv",
+    "state_commit_log.csv",
+    "relay_mvp_summary.json",
+    "state_authenticity_summary.json",
+    "runtime.log",
 ]
 FORMAL_WORKLOAD_SCENARIOS = {
     "asset_transfer",
@@ -267,6 +312,7 @@ def run_formal_metatrack_benchmark(request: V3FormalMetatrackBenchmarkRequest, r
         aggregate_rows, ci_rows, missing_metrics = aggregate_formal_results(raw_rows)
         figure_rows = build_paper_figure_rows(aggregate_rows)
         summary = build_formal_summary(request, preview, raw_rows, aggregate_rows, figure_rows, missing_metrics)
+        write_json(run_dir / "formal_chart_preview.json", summary["chart_preview"])
         write_csv(run_dir / "formal_run_index.csv", run_index)
         write_csv(run_dir / "formal_failed_runs.csv", failed_runs)
         write_csv(run_dir / "formal_child_artifact_index.csv", child_artifact_index)
@@ -541,6 +587,44 @@ def build_paper_figure_rows(aggregate_rows: list[dict[str, Any]]) -> list[dict[s
     ]
 
 
+def build_chart_preview(aggregate_rows: list[dict[str, Any]], figure_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    groups: list[dict[str, Any]] = []
+    available_metrics: list[str] = []
+    seen_metrics: set[str] = set()
+    for row in aggregate_rows:
+        metric = str(row.get("metric", ""))
+        mean = _to_float(row.get("mean"))
+        if metric not in CHART_PREVIEW_METRICS or mean is None:
+            continue
+        if metric not in seen_metrics:
+            seen_metrics.add(metric)
+            available_metrics.append(metric)
+        x_value = row.get("workload_scenario") if row.get("experiment_type") == "workload_comparison" else row.get("scan_value")
+        groups.append({
+            "x": str(x_value if x_value not in (None, "") else row.get("scan_value", "")),
+            "series": str(row.get("method_config_name") or row.get("baseline_label") or row.get("baseline_id") or row.get("method_or_baseline_id") or "method"),
+            "metric": metric,
+            "mean": mean,
+            "ci95": _to_float(row.get("ci95")),
+            "count": int(_to_float(row.get("count")) or 0),
+        })
+    figure_metric_count = len({str(row.get("metric", "")) for row in figure_rows if row.get("mean") not in (None, "")})
+    return {
+        "primary_metric": "throughput_tps" if "throughput_tps" in seen_metrics else (available_metrics[0] if available_metrics else ""),
+        "available_metrics": available_metrics,
+        "groups": groups,
+        "figure_metric_count": figure_metric_count,
+        "data_files": {
+            "figure_data": "formal_paper_figure_data.csv",
+            "workload_comparison": "formal_workload_comparison.csv",
+            "aggregate_summary": "formal_aggregate_summary.csv",
+            "raw_summary": "formal_raw_summary.csv",
+            "child_artifact_index": "formal_child_artifact_index.csv",
+            "reproducibility_manifest": "formal_reproducibility_manifest.json",
+        },
+    }
+
+
 def build_formal_summary(
     request: V3FormalMetatrackBenchmarkRequest,
     preview: dict[str, Any],
@@ -569,6 +653,7 @@ def build_formal_summary(
     if failed:
         reasons.append("not all sub-runs completed.")
     paper_candidate = not reasons
+    chart_preview = build_chart_preview(aggregate_rows, figure_rows)
     return {
         **stage_metadata(),
         "run_mode": "formal_metatrack_benchmark",
@@ -596,6 +681,7 @@ def build_formal_summary(
         "scan_variable": _scan_values(request)[0],
         "truth_boundary": TRUTH_BOUNDARY,
         "missing_metrics": missing_metrics,
+        "chart_preview": chart_preview,
     }
 
 
@@ -613,7 +699,97 @@ def list_formal_artifacts(run_dir: Path, run_id: str) -> list[dict[str, Any]]:
 
 
 def get_formal_artifact_path(run_id: str, filename: str, root: Path = FORMAL_RUNS_ROOT) -> Path:
-    return get_artifact_path(JobManager(root), run_id, filename)
+    manager = JobManager(root)
+    manager.get_run(run_id)
+    return get_artifact_path(manager.run_dir(run_id), filename)
+
+
+def build_formal_artifacts_zip(run_id: str, root: Path = FORMAL_RUNS_ROOT) -> Path:
+    manager = JobManager(root)
+    manager.get_run(run_id)
+    run_dir = manager.run_dir(run_id).resolve()
+    zip_path = run_dir / "formal_artifacts.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for filename in FORMAL_ROOT_ZIP_FILES:
+            if filename not in ARTIFACT_ALLOWLIST:
+                continue
+            try:
+                path = get_artifact_path(run_dir, filename)
+            except Exception:
+                continue
+            archive.write(path, filename)
+        for child_index, child_dir in enumerate(_child_run_dirs(run_dir)):
+            safe_child_dir = child_dir.resolve()
+            try:
+                safe_child_dir.relative_to(run_dir)
+            except ValueError:
+                continue
+            for filename in FORMAL_CHILD_ZIP_FILES:
+                if filename not in ARTIFACT_ALLOWLIST:
+                    continue
+                path = (safe_child_dir / filename).resolve()
+                try:
+                    path.relative_to(run_dir)
+                except ValueError:
+                    continue
+                if path.is_file():
+                    archive.write(path, f"child_runs/run_{child_index:03d}/{filename}")
+    return zip_path
+
+
+def list_formal_runs(limit: int = 20, root: Path = FORMAL_RUNS_ROOT) -> list[dict[str, Any]]:
+    manager = JobManager(root)
+    runs: list[dict[str, Any]] = []
+    seen_run_ids: set[str] = set()
+    for metadata in manager.list_runs(limit=min(max(limit * 2, limit), 200)):
+        run_id = str(metadata.get("run_id", ""))
+        if not run_id or run_id in seen_run_ids:
+            continue
+        seen_run_ids.add(run_id)
+        run_dir = manager.run_dir(run_id)
+        summary = _read_json_if_exists(run_dir / "summary.json")
+        progress = _read_json_if_exists(run_dir / "formal_progress.json")
+        runs.append({
+            "run_id": run_id,
+            "created_at": metadata.get("created_at", ""),
+            "updated_at": metadata.get("updated_at", ""),
+            "status": progress.get("status") or metadata.get("status", ""),
+            "experiment_type": summary.get("experiment_type") or metadata.get("experiment_type", ""),
+            "formal_tx_count": summary.get("formal_tx_count") or metadata.get("formal_tx_count", ""),
+            "run_count": summary.get("run_count") or metadata.get("run_count", 0),
+            "completed_run_count": summary.get("completed_run_count", progress.get("completed_runs", 0)),
+            "failed_run_count": summary.get("failed_run_count", progress.get("failed_runs", 0)),
+            "total_tx_count": summary.get("total_tx_count", 0),
+            "runtime_evidence_mode": summary.get("runtime_evidence_mode", ""),
+            "method_count": summary.get("method_count", 0),
+            "workload_count": summary.get("workload_count", 0),
+            "topology_count": summary.get("topology_count", 0),
+            "output_dir": str(run_dir),
+            "summary_available": (run_dir / "summary.json").is_file(),
+            "chart_preview_available": (run_dir / "formal_chart_preview.json").is_file(),
+            "zip_download_url": f"/api/v3/composer/formal-metatrack/{run_id}/artifacts.zip",
+        })
+        if len(runs) >= max(1, min(limit, 200)):
+            break
+    return runs
+
+
+def get_formal_run_result(run_id: str, root: Path = FORMAL_RUNS_ROOT) -> dict[str, Any]:
+    manager = JobManager(root)
+    metadata = manager.get_run(run_id)
+    run_dir = manager.run_dir(run_id)
+    summary = _read_json_if_exists(run_dir / "summary.json")
+    preview = _read_json_if_exists(run_dir / "formal_matrix_preview.json")
+    return {
+        "run_id": run_id,
+        "status": metadata.get("status", ""),
+        "run_mode": "formal_metatrack_benchmark",
+        "output_dir": str(run_dir),
+        "summary": summary,
+        "preview": preview,
+        "artifacts": list_formal_artifacts(run_dir, run_id),
+        "run": metadata,
+    }
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -653,6 +829,24 @@ def write_report(path: Path, summary: dict[str, Any], missing_metrics: list[str]
     if not missing_metrics:
         lines.append("- none")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _read_json_if_exists(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _child_run_dirs(run_dir: Path) -> list[Path]:
+    index_path = run_dir / "formal_child_artifact_index.csv"
+    if index_path.is_file():
+        with index_path.open(encoding="utf-8", newline="") as handle:
+            return [Path(row.get("child_output_dir", "")) for row in csv.DictReader(handle) if row.get("child_output_dir")]
+    return sorted(path for path in run_dir.glob("run_*") if path.is_dir())
 
 
 def _scan_values(request: V3FormalMetatrackBenchmarkRequest) -> tuple[str, list[Any]]:

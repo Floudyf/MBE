@@ -721,6 +721,26 @@ export type V3FormalMetatrackBenchmarkRunResponse = {
   preview: V3FormalMetatrackBenchmarkPreview;
   artifacts: V2Artifact[];
 };
+export type V3FormalRunHistoryItem = {
+  run_id: string;
+  created_at: string;
+  updated_at: string;
+  status: string;
+  experiment_type: string;
+  formal_tx_count: number | string;
+  run_count: number | string;
+  completed_run_count: number | string;
+  failed_run_count: number | string;
+  total_tx_count: number | string;
+  runtime_evidence_mode: string;
+  method_count: number | string;
+  workload_count: number | string;
+  topology_count: number | string;
+  output_dir: string;
+  summary_available: boolean;
+  chart_preview_available: boolean;
+  zip_download_url: string;
+};
 
 export async function runDefaultExperiment(): Promise<unknown> {
   return request(`${experimentPath}/run`, { method: "POST" });
@@ -883,6 +903,18 @@ export function v2ArtifactDownloadURL(downloadURL: string): string {
   return `${requestBaseURL}${downloadURL}`;
 }
 
+export function artifactPreviewURL(downloadURL: string): string {
+  return `${requestBaseURL}${downloadURL}`;
+}
+
+export function artifactDownloadURL(downloadURL: string): string {
+  return `${requestBaseURL}${downloadURL}`;
+}
+
+export function formalArtifactsZipURL(runId: string): string {
+  return `${requestBaseURL}/api/v3/composer/formal-metatrack/${encodeURIComponent(runId)}/artifacts.zip`;
+}
+
 export async function fetchV3ComposerTemplates(): Promise<V3TemplateSummary[]> {
   const response = await request<{ items: V3TemplateSummary[] }>("/api/v3/composer/templates");
   return response.items;
@@ -936,6 +968,15 @@ export async function previewV3FormalMetatrackBenchmark(payload: V3FormalMetatra
 
 export async function runV3FormalMetatrackBenchmark(payload: V3FormalMetatrackBenchmarkRequest): Promise<V3FormalMetatrackBenchmarkRunResponse> {
   return request<V3FormalMetatrackBenchmarkRunResponse>("/api/v3/composer/formal-metatrack/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function fetchV3FormalMetatrackRuns(limit = 20): Promise<V3FormalRunHistoryItem[]> {
+  const response = await request<{ runs: V3FormalRunHistoryItem[] }>(`/api/v3/composer/formal-metatrack/runs?limit=${encodeURIComponent(String(limit))}`);
+  return response.runs;
+}
+
+export async function fetchV3FormalMetatrackRunResult(runId: string): Promise<V3FormalMetatrackBenchmarkRunResponse> {
+  return request<V3FormalMetatrackBenchmarkRunResponse>(`/api/v3/composer/formal-metatrack/runs/${encodeURIComponent(runId)}`);
 }
 
 export async function fetchV3DraftRuns(limit = 20): Promise<V3DraftRunSummary[]> {

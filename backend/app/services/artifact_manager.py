@@ -109,6 +109,7 @@ ARTIFACT_ALLOWLIST = frozenset({
     "formal_progress.json",
     "formal_failed_runs.csv",
     "formal_child_artifact_index.csv",
+    "formal_chart_preview.json",
     "formal_raw_summary.csv",
     "formal_aggregate_summary.csv",
     "formal_workload_comparison.csv",

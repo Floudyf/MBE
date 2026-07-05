@@ -32,6 +32,7 @@ Every config carries `truth_boundary = local_emulator_config_not_production_chai
 6. Use saved methods/workloads/topologies in the formal MetaTrack benchmark panel.
 7. Preview the matrix before running.
 8. Run the controlled formal benchmark and inspect manifest/progress/failed run index artifacts.
+9. Use the result dashboard, chart preview, data-file guide, ZIP download, and Formal Run History to close the result review loop.
 
 Draft Smoke remains a quick validation path. It is not paper-final evidence.
 
@@ -74,8 +75,23 @@ Formal runs now write:
 - `formal_progress.json`
 - `formal_failed_runs.csv`
 - `formal_child_artifact_index.csv`
+- `formal_chart_preview.json`
 
 The child artifact index records child output directories and whether key child artifacts exist.
+
+## Download And Review Loop
+
+Formal result artifacts are now exposed with separate preview and download actions. JSON/CSV/MD files can be opened for inspection or downloaded explicitly. A ZIP endpoint packages the formal root files and selected child-run allowlisted files for offline review.
+
+The dashboard highlights which file supports each review task:
+
+- Paper plotting: `formal_paper_figure_data.csv`
+- Workload comparison: `formal_workload_comparison.csv`
+- Aggregate statistics: `formal_aggregate_summary.csv`
+- Raw per-child summaries: `formal_raw_summary.csv`
+- Child artifact lookup: `formal_child_artifact_index.csv`
+- Reproducibility: `formal_reproducibility_manifest.json`
+- Chart preview source: `formal_chart_preview.json`
 
 ## Truth Boundary
 

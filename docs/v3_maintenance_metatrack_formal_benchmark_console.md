@@ -60,6 +60,7 @@ Formal benchmark runs write to `.cache/v3_metatrack_formal_runs/<run_id>/` and g
 - `formal_progress.json`
 - `formal_failed_runs.csv`
 - `formal_child_artifact_index.csv`
+- `formal_chart_preview.json`
 - `formal_raw_summary.csv`
 - `formal_aggregate_summary.csv`
 - `formal_workload_comparison.csv`
@@ -71,6 +72,24 @@ Formal benchmark runs write to `.cache/v3_metatrack_formal_runs/<run_id>/` and g
 - `formal_reproducibility_manifest.json`
 - `formal_benchmark_report.md`
 - `summary.json`
+
+The frontend also exposes a one-click ZIP endpoint for the formal result root. The ZIP includes root-level formal files and key child-run allowlisted artifacts when present. Missing child files do not fail ZIP generation.
+
+## Result Dashboard
+
+Completed formal runs now include a result dashboard:
+
+- Summary cards for evidence level, run count, seed list, method/workload/topology counts, and failed child runs.
+- Chart preview for throughput, average latency, P95 latency, and P99 latency when those metrics exist.
+- Data file explanations for `formal_paper_figure_data.csv`, `formal_workload_comparison.csv`, `formal_aggregate_summary.csv`, `formal_raw_summary.csv`, `formal_child_artifact_index.csv`, `formal_reproducibility_manifest.json`, and `formal_chart_preview.json`.
+- Separate preview and download links for individual CSV/JSON/MD files.
+- ZIP download for the full formal result package.
+
+`formal_chart_preview.json` is derived from aggregate rows and paper figure rows. It does not fabricate missing metrics. The chart preview is a convenience view for trend inspection; the CSV files remain the authoritative plotting source.
+
+## Formal Run History
+
+The console can list recent formal runs and reload a previous result after page refresh. History reads local run metadata plus `summary.json` and `formal_chart_preview.json` when available. Runs without a summary are listed without breaking the page.
 
 Missing runtime metrics are left empty and listed in the report. The runner does not fabricate overhead, latency, or cross-shard fields.
 

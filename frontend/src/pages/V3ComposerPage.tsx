@@ -31,6 +31,7 @@ import DraftRunResultPanel from "../components/v3/DraftRunResultPanel";
 import FairnessScopePanel from "../components/v3/FairnessScopePanel";
 import FormalBenchmarkResultPanel from "../components/v3/FormalBenchmarkResultPanel";
 import FormalMetatrackExperimentPanel from "../components/v3/FormalMetatrackExperimentPanel";
+import FormalRunHistoryPanel from "../components/v3/FormalRunHistoryPanel";
 import HelpTip from "../components/v3/HelpTip";
 import PluginMatrixTable from "../components/v3/PluginMatrixTable";
 import RunLevelPanel from "../components/v3/RunLevelPanel";
@@ -746,6 +747,11 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         )}
       </section>
 
+      <FormalRunHistoryPanel onSelectResult={(result) => {
+        setFormalResult(result);
+        setFormalPreview(result.preview);
+        setArtifacts(result.artifacts || []);
+      }} />
       <FormalBenchmarkResultPanel result={formalResult} />
       <DraftRunResultPanel result={draftRunResult} />
       <DraftRunHistoryPanel />
