@@ -3,6 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   fetchV3ComposerPreview,
   fetchV3ComposerTemplates,
+  createV3SavedConfig,
+  deleteV3SavedConfig,
+  listV3SavedConfigs,
   previewV3FormalMetatrackBenchmark,
   runV3ControlledSmoke,
   runV3ComposerDraftSmoke,
@@ -18,6 +21,8 @@ import {
   type V3FormalMetatrackBenchmarkPreview,
   type V3FormalMetatrackBenchmarkRequest,
   type V3FormalMetatrackBenchmarkRunResponse,
+  type V3SavedConfig,
+  type V3SavedConfigKind,
   type V3TemplateSummary,
 } from "../api";
 import ArtifactGroups from "../components/v3/ArtifactGroups";
@@ -31,6 +36,8 @@ import PluginMatrixTable from "../components/v3/PluginMatrixTable";
 import RunLevelPanel from "../components/v3/RunLevelPanel";
 import RunProgressPanel, { type RunProgressMode } from "../components/v3/RunProgressPanel";
 import RuntimeTopologyPanel from "../components/v3/RuntimeTopologyPanel";
+import SaveCurrentConfigPanel from "../components/v3/SaveCurrentConfigPanel";
+import SavedConfigLibraryPanel from "../components/v3/SavedConfigLibraryPanel";
 import SingleChainComposer from "../components/v3/SingleChainComposer";
 import { createComposerDraft, summarizeDraft, toComposerDraftRequest, updateDraftTopology, type ComposerDraft } from "../components/v3/composerDraft";
 import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
@@ -96,20 +103,25 @@ function moduleStatusForLockedPlugin(moduleId: string, plugin: string): V3DraftM
   return "fixed";
 }
 
-function CurrentConfigSummary({ draft, formalPreview, formalResult }: { draft?: ComposerDraft | null; formalPreview?: V3FormalMetatrackBenchmarkPreview | null; formalResult?: V3FormalMetatrackBenchmarkRunResponse | null }) {
+function CurrentWorkflowStatus({ draft, formalPreview, formalResult, backendValidation, draftRunResult, currentMethodName, currentWorkloadName, currentTopologyName }: { draft?: ComposerDraft | null; formalPreview?: V3FormalMetatrackBenchmarkPreview | null; formalResult?: V3FormalMetatrackBenchmarkRunResponse | null; backendValidation?: V3DraftValidationResponse | null; draftRunResult?: V3DraftSmokeRunResponse | null; currentMethodName?: string; currentWorkloadName?: string; currentTopologyName?: string }) {
   const topology = draft?.topology;
   const formalState = formalResult ? "已完成" : formalPreview ? (formalPreview.is_runnable ? "可运行" : "已预览矩阵") : "未配置";
   const workloadSource = topology?.metaverse_suite_enabled ? "元宇宙场景化" : draft?.modules.Workload?.plugin === "existing_trace" ? "真实 trace 预览" : "可控合成";
+  const step = formalResult ? "正式实验完成" : formalPreview ? "已预览正式矩阵" : currentMethodName ? "已保存" : draftRunResult ? "快速验证通过" : backendValidation ? "已校验" : "配置中";
   return (
     <section className="final-card wide current-config-summary">
       <div className="v3-section-head">
         <div>
-          <p className="eyebrow">当前配置摘要</p>
-          <h3>快速验证与正式性能实验分离</h3>
+          <p className="eyebrow">当前工作流状态</p>
+          <h3>配置 → 校验 → 快速验证 → 保存 → 正式实验</h3>
         </div>
         <span className="v3-status-badge status-fixed">本地 emulator</span>
       </div>
       <dl className="v3-result-grid compact">
+        <div><dt>当前步骤</dt><dd>{step}</dd></div>
+        <div><dt>当前完整方案</dt><dd>{currentMethodName || "未保存"}</dd></div>
+        <div><dt>当前负载</dt><dd>{topology?.workload_source || workloadSource}{currentWorkloadName ? ` / ${currentWorkloadName}` : ""}</dd></div>
+        <div><dt>当前拓扑</dt><dd>{currentTopologyName || "当前草稿"}</dd></div>
         <div><dt>插件选择模式</dt><dd>{topology?.controlled_experiment_enabled ? "受控对照" : "自由配置"}</dd></div>
         <div><dt>运行类型</dt><dd>{formalResult ? "正式性能实验" : "快速验证 / 可预览正式实验"}</dd></div>
         <div><dt>节点运行模式</dt><dd>{topology?.node_runtime_mode || "logical_single_process"}</dd></div>
@@ -134,6 +146,11 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [controlledResult, setControlledResult] = useState<V3ControlledSmokeRunResponse | null>(null);
   const [formalPreview, setFormalPreview] = useState<V3FormalMetatrackBenchmarkPreview | null>(null);
   const [formalResult, setFormalResult] = useState<V3FormalMetatrackBenchmarkRunResponse | null>(null);
+  const [savedConfigs, setSavedConfigs] = useState<V3SavedConfig[]>([]);
+  const [loadingSavedConfigs, setLoadingSavedConfigs] = useState(false);
+  const [currentMethodName, setCurrentMethodName] = useState("");
+  const [currentWorkloadName, setCurrentWorkloadName] = useState("");
+  const [currentTopologyName, setCurrentTopologyName] = useState("");
   const [draft, setDraft] = useState<ComposerDraft | null>(null);
   const [backendValidation, setBackendValidation] = useState<V3DraftValidationResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -148,8 +165,10 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [error, setError] = useState("");
   const [draftError, setDraftError] = useState("");
   const [formalError, setFormalError] = useState("");
+  const [savedConfigError, setSavedConfigError] = useState("");
 
   useEffect(() => { void loadPreview(profileId); }, [profileId]);
+  useEffect(() => { void refreshSavedConfigs(); }, []);
 
   async function loadPreview(nextProfileId: string) {
     try {
@@ -168,6 +187,18 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refreshSavedConfigs() {
+    try {
+      setLoadingSavedConfigs(true);
+      setSavedConfigs(await listV3SavedConfigs());
+      setSavedConfigError("");
+    } catch (caught) {
+      setSavedConfigError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoadingSavedConfigs(false);
     }
   }
 
@@ -289,6 +320,103 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
     }
   }
 
+  async function saveCurrentConfig(kind: V3SavedConfigKind, name: string, description: string, tags: string[]) {
+    if (!draft) return;
+    const draftRequest = toComposerDraftRequest(draft);
+    const validationStatus = backendValidation?.is_runnable ? "runnable" : backendValidation?.is_valid ? "valid" : backendValidation ? "blocked" : "unknown";
+    const payload = kind === "method"
+      ? {
+          draft: draftRequest,
+          modules: draftRequest.modules,
+          topology: draftRequest.topology,
+          workload_source: draft.topology.workload_source || "synthetic",
+          template_id: draft.templateId,
+          preset_id: draft.presetId || "",
+          last_validation: backendValidation || {},
+          last_smoke_run_id: draftRunResult?.run_id || "",
+        }
+      : kind === "workload"
+        ? workloadPayloadFromTopology(draft.topology)
+        : { topology: draft.topology };
+    try {
+      const saved = await createV3SavedConfig({
+        config_kind: kind,
+        name,
+        description,
+        owner_label: "local_user",
+        tags,
+        payload,
+        validation_status: validationStatus,
+        last_validation: backendValidation || {},
+        last_smoke_run_id: draftRunResult?.run_id || "",
+      });
+      if (kind === "method") setCurrentMethodName(saved.name);
+      if (kind === "workload") setCurrentWorkloadName(saved.name);
+      if (kind === "topology") setCurrentTopologyName(saved.name);
+      await refreshSavedConfigs();
+      setSavedConfigError("");
+    } catch (caught) {
+      setSavedConfigError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function copySavedConfig(config: V3SavedConfig) {
+    try {
+      await createV3SavedConfig({
+        config_kind: config.config_kind,
+        name: `${config.name} copy`,
+        description: config.description,
+        owner_label: config.owner_label,
+        tags: config.tags,
+        payload: config.payload,
+        validation_status: config.validation_status,
+        last_validation: config.last_validation,
+        last_smoke_run_id: config.last_smoke_run_id,
+      });
+      await refreshSavedConfigs();
+    } catch (caught) {
+      setSavedConfigError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function removeSavedConfig(config: V3SavedConfig) {
+    try {
+      await deleteV3SavedConfig(config.config_id);
+      await refreshSavedConfigs();
+    } catch (caught) {
+      setSavedConfigError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  function loadSavedConfig(config: V3SavedConfig) {
+    if (!draft) return;
+    const payload = config.payload || {};
+    if (config.config_kind === "method" && payload.draft && typeof payload.draft === "object") {
+      const savedDraft = payload.draft as ReturnType<typeof toComposerDraftRequest>;
+      const modules = Object.fromEntries(Object.entries(savedDraft.modules || {}).map(([moduleId, module]) => [moduleId, {
+        moduleId,
+        status: module.status,
+        plugin: module.plugin,
+        runnable: module.status !== "planned",
+        params: module.params || {},
+      }]));
+      updateDraft(summarizeDraft({ templateId: savedDraft.template_id, presetId: savedDraft.preset_id, modules, topology: savedDraft.topology || draft.topology }));
+      setBackendValidation((payload.last_validation as V3DraftValidationResponse) || null);
+      setCurrentMethodName(config.name);
+      return;
+    }
+    if (config.config_kind === "topology") {
+      const topology = (payload.topology && typeof payload.topology === "object" ? payload.topology : payload) as ComposerDraft["topology"];
+      updateDraft(updateDraftTopology(draft, { ...draft.topology, ...topology }));
+      setCurrentTopologyName(config.name);
+      return;
+    }
+    if (config.config_kind === "workload") {
+      updateDraft(updateDraftTopology(draft, { ...draft.topology, ...payload }));
+      setCurrentWorkloadName(config.name);
+    }
+  }
+
   async function runControlledTrial() {
     try {
       setRunningControlled(true);
@@ -383,11 +511,20 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         </div>
       </header>
 
-      <CurrentConfigSummary draft={draft} formalPreview={formalPreview} formalResult={formalResult} />
+      <CurrentWorkflowStatus
+        draft={draft}
+        formalPreview={formalPreview}
+        formalResult={formalResult}
+        backendValidation={backendValidation}
+        draftRunResult={draftRunResult}
+        currentMethodName={currentMethodName}
+        currentWorkloadName={currentWorkloadName}
+        currentTopologyName={currentTopologyName}
+      />
 
       <section className="final-card wide console-section-title">
-        <p className="eyebrow">1. 当前配置摘要</p>
-        <h3>控制台入口</h3>
+        <p className="eyebrow">2. 控制台入口</p>
+        <h3>入口与插件组合预设</h3>
         <p className="muted">快速验证用于检查配置链路；正式性能实验在“论文实验设计”中按显式参数、多 seed 和单变量扫描运行。</p>
       </section>
 
@@ -476,8 +613,8 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
 
       {draft && (
         <section className="final-card wide console-section-title">
-          <p className="eyebrow">3. 运行拓扑与负载</p>
-          <h3>基础运行路径与负载语义</h3>
+          <p className="eyebrow">3. 负载配置 / 4. 运行拓扑配置</p>
+          <h3>基础运行路径、负载语义与拓扑细节</h3>
         </section>
       )}
 
@@ -489,7 +626,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       {composer && draft && (
         <>
           <section className="final-card wide console-section-title">
-            <p className="eyebrow">4. 模块流程</p>
+            <p className="eyebrow">5. 11 模块方案配置</p>
             <h3>主流程保持不变</h3>
             <p className="muted">{"Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport"}</p>
           </section>
@@ -502,18 +639,56 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
             lockedModules={selectedLockedModules}
             controlledExperimentEnabled={controlledExperimentEnabled}
           />
+          <section className="final-card wide console-section-title">
+            <p className="eyebrow">6. 校验与快速验证当前方案</p>
+            <h3>先校验，再运行当前配置快速验证</h3>
+            <p className="muted">快速验证通过后，可以把完整方案、负载或拓扑保存到配置库。</p>
+          </section>
+          <div className="final-card-grid v3-post-workbench">
+            <RunLevelPanel
+              runnable={Boolean(preview?.runnable && composer?.runnable)}
+              running={runningBuiltin}
+              onRunSmoke={runBuiltinTrial}
+              draft={draft}
+              backendValidation={backendValidation}
+              validatingDraft={validatingDraft}
+              runningDraft={runningDraft}
+              draftError={draftError}
+              onValidateDraft={validateDraftOnServer}
+              onRunDraftSmoke={runDraftTrial}
+            />
+            <SaveCurrentConfigPanel
+              disabled={!draft}
+              validationStatus={backendValidation?.is_runnable ? "runnable" : backendValidation?.is_valid ? "valid" : backendValidation ? "blocked" : "unknown"}
+              onSave={saveCurrentConfig}
+            />
+          </div>
+          <section className="final-card wide console-section-title">
+            <p className="eyebrow">7. 保存 / 加载配置</p>
+            <h3>配置库用于复用正式实验方案</h3>
+          </section>
+          <SavedConfigLibraryPanel
+            configs={savedConfigs}
+            loading={loadingSavedConfigs}
+            error={savedConfigError}
+            onRefresh={refreshSavedConfigs}
+            onLoad={loadSavedConfig}
+            onCopy={copySavedConfig}
+            onDelete={removeSavedConfig}
+          />
         </>
       )}
 
       {draft && (
         <>
           <section className="final-card wide console-section-title">
-            <p className="eyebrow">5. 论文实验设计</p>
+            <p className="eyebrow">8. 正式实验设计</p>
             <h3>MetaTrack 正式性能实验矩阵</h3>
             <p className="muted">这里配置正式性能实验；快速验证入口保留在“运行与结果”中。</p>
           </section>
           <FormalMetatrackExperimentPanel
             draft={draft}
+            savedConfigs={savedConfigs}
             preview={formalPreview}
             running={runningFormal}
             previewing={previewingFormal}
@@ -525,24 +700,12 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       )}
 
       <section className="final-card wide console-section-title">
-        <p className="eyebrow">6. 运行与结果</p>
+        <p className="eyebrow">9. 运行结果</p>
         <h3>先看进度与核心指标，再展开详细数据</h3>
       </section>
 
       <div className="final-card-grid v3-post-workbench">
         <FairnessScopePanel scope={composer?.fairness_scope || preview?.fairness_scope || {}} valid={Boolean(profilePreview.valid ?? preview?.runnable)} warnings={warnings} draft={draft} />
-        <RunLevelPanel
-          runnable={Boolean(preview?.runnable && composer?.runnable)}
-          running={runningBuiltin}
-          onRunSmoke={runBuiltinTrial}
-          draft={draft}
-          backendValidation={backendValidation}
-          validatingDraft={validatingDraft}
-          runningDraft={runningDraft}
-          draftError={draftError}
-          onValidateDraft={validateDraftOnServer}
-          onRunDraftSmoke={runDraftTrial}
-        />
       </div>
 
       <RunProgressPanel mode={progressMode} activeStep={progressStep} error={draftError || error} />
@@ -589,6 +752,10 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
 
       {composer && (
         <section className="v3-supporting-sections">
+          <section className="final-card wide console-section-title">
+            <p className="eyebrow">11. 开发者详情</p>
+            <h3>插件矩阵、模板列表与调试信息</h3>
+          </section>
           <details className="final-card wide v3-foldout">
             <summary className="v3-foldout-summary">插件矩阵与开发者详情</summary>
             <PluginMatrixTable rows={composer.plugin_matrix || preview?.plugin_matrix || []} />
@@ -608,7 +775,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       )}
 
       <section className="final-card wide console-section-title">
-        <p className="eyebrow">7. 产物下载</p>
+        <p className="eyebrow">10. 产物下载</p>
         <h3>正式实验、快速验证与历史兼容产物</h3>
         <p className="muted">优先查看 formal_* 论文数据表；历史 Draft Smoke 和 V3 兼容产物保留在折叠组内。</p>
       </section>
@@ -616,4 +783,38 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       <ArtifactGroups artifacts={artifacts} title="产物下载" expectedArtifacts={selectedPreset?.expected_artifacts} />
     </section>
   );
+}
+
+function workloadPayloadFromTopology(topology: ComposerDraft["topology"]): Record<string, unknown> {
+  const keys = [
+    "workload_source",
+    "metaverse_scenario",
+    "tx_count",
+    "seed",
+    "user_count",
+    "asset_count",
+    "item_count",
+    "avatar_count",
+    "scene_count",
+    "metaverse_count",
+    "hotspot_ratio",
+    "cross_scene_ratio",
+    "cross_shard_ratio",
+    "burst_rate",
+    "read_write_ratio",
+    "zipf_alpha",
+    "submit_rate",
+    "arrival_rate",
+    "key_space_size",
+    "asset_skew",
+    "scene_skew",
+    "offchain_confirmation_enabled",
+    "offchain_confirm_delay_ms",
+    "offchain_failure_ratio",
+    "cross_metaverse_enabled",
+    "trace_path",
+    "trace_schema",
+    "trace_field_mapping",
+  ];
+  return Object.fromEntries(keys.map((key) => [key, topology[key as keyof typeof topology]]).filter(([, value]) => value !== undefined));
 }

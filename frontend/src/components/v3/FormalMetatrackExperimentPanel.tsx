@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
-import type { V3FormalExperimentType, V3FormalMetatrackBenchmarkPreview, V3FormalMetatrackBenchmarkRequest, V3RuntimeEvidenceMode } from "../../api";
+import type { V3FormalExperimentType, V3FormalMetatrackBenchmarkPreview, V3FormalMetatrackBenchmarkRequest, V3RuntimeEvidenceMode, V3SavedConfig } from "../../api";
 import { toComposerDraftRequest, type ComposerDraft } from "./composerDraft";
 import FormalExperimentMatrixPreview from "./FormalExperimentMatrixPreview";
 
 type Props = {
   draft?: ComposerDraft | null;
+  savedConfigs?: V3SavedConfig[];
   preview?: V3FormalMetatrackBenchmarkPreview | null;
   running?: boolean;
   previewing?: boolean;
@@ -19,6 +20,7 @@ const experimentTypes: [V3FormalExperimentType, string][] = [
   ["cross_shard_sensitivity", "跨片比例敏感性"],
   ["shard_scalability", "分片数量扩展性"],
   ["control_overhead", "控制面开销实验"],
+  ["workload_comparison", "不同负载场景对比"],
 ];
 const baselineOptions = [
   "baseline_hash_serial",
@@ -28,8 +30,9 @@ const baselineOptions = [
   "metatrack_full",
 ];
 
-export default function FormalMetatrackExperimentPanel({ draft, preview, running = false, previewing = false, error = "", onPreview, onRun }: Props) {
+export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [], preview, running = false, previewing = false, error = "", onPreview, onRun }: Props) {
   const [experimentType, setExperimentType] = useState<V3FormalExperimentType>("ablation");
+  const [methodSource, setMethodSource] = useState<"builtin" | "saved" | "mixed">("builtin");
   const [formalTxCount, setFormalTxCount] = useState(10000);
   const [seedBase, setSeedBase] = useState(42);
   const [seedCount, setSeedCount] = useState(5);
@@ -37,6 +40,10 @@ export default function FormalMetatrackExperimentPanel({ draft, preview, running
   const [hotspotPoints, setHotspotPoints] = useState("0.0, 0.2, 0.4, 0.6, 0.8");
   const [crossShardPoints, setCrossShardPoints] = useState("0.0, 0.2, 0.4, 0.6");
   const [shardPoints, setShardPoints] = useState("1, 2, 4, 8");
+  const [workloadScenarioPoints, setWorkloadScenarioPoints] = useState("scene_hotspot, cross_scene_migration, mixed_metaverse");
+  const [methodConfigIds, setMethodConfigIds] = useState<string[]>([]);
+  const [workloadConfigIds, setWorkloadConfigIds] = useState<string[]>([]);
+  const [topologyConfigIds, setTopologyConfigIds] = useState<string[]>([]);
   const [zipfAlpha, setZipfAlpha] = useState(0.8);
   const [runtimeEvidenceMode, setRuntimeEvidenceMode] = useState<V3RuntimeEvidenceMode>("logical_single_process");
   const [enableFaults, setEnableFaults] = useState(false);
@@ -50,10 +57,14 @@ export default function FormalMetatrackExperimentPanel({ draft, preview, running
       formal_tx_count: formalTxCount,
       seed_base: seedBase,
       seed_count: seedCount,
-      baseline_ids: baselineIds,
+      baseline_ids: methodSource === "saved" ? [] : baselineIds,
       hotspot_ratio_points: parseFloatList(hotspotPoints),
       cross_shard_ratio_points: parseFloatList(crossShardPoints),
       shard_count_points: parseIntList(shardPoints),
+      workload_scenario_points: parseStringList(workloadScenarioPoints),
+      method_config_ids: methodSource === "builtin" ? [] : methodConfigIds,
+      workload_config_ids: workloadConfigIds,
+      topology_config_ids: topologyConfigIds,
       zipf_alpha: zipfAlpha,
       runtime_evidence_mode: runtimeEvidenceMode,
       enable_faults_for_formal_run: enableFaults,
@@ -65,6 +76,13 @@ export default function FormalMetatrackExperimentPanel({ draft, preview, running
   function toggleBaseline(id: string) {
     setBaselineIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   }
+  function toggleSaved(id: string, values: string[], setValues: (value: string[]) => void) {
+    setValues(values.includes(id) ? values.filter((item) => item !== id) : [...values, id]);
+  }
+
+  const methodConfigs = savedConfigs.filter((config) => config.config_kind === "method");
+  const workloadConfigs = savedConfigs.filter((config) => config.config_kind === "workload");
+  const topologyConfigs = savedConfigs.filter((config) => config.config_kind === "topology");
 
   return (
     <section className="final-card wide formal-benchmark-panel">
@@ -83,6 +101,15 @@ export default function FormalMetatrackExperimentPanel({ draft, preview, running
             {experimentTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
           <small>默认单变量扫描，不做全因子组合。</small>
+        </label>
+        <label className="field-card">
+          <span>方案来源</span>
+          <select value={methodSource} onChange={(event) => setMethodSource(event.target.value as "builtin" | "saved" | "mixed")}>
+            <option value="builtin">内置基线</option>
+            <option value="saved">已保存方案</option>
+            <option value="mixed">内置基线 + 已保存方案</option>
+          </select>
+          <small>正式实验可直接复用配置库中的 method 方案。</small>
         </label>
         <RangeNumber label="交易数量" value={formalTxCount} min={1000} max={1000000} step={1000} onChange={setFormalTxCount} />
         <RangeNumber label="随机种子数量" value={seedCount} min={1} max={10} step={1} onChange={setSeedCount} />
@@ -103,6 +130,7 @@ export default function FormalMetatrackExperimentPanel({ draft, preview, running
       </div>
       <details className="v3-foldout">
         <summary className="v3-foldout-summary">对照基线配置</summary>
+        {methodSource !== "saved" && (
         <div className="v3-checkbox-grid">
           {baselineOptions.map((id) => (
             <label key={id} className="checkbox-card field-card">
@@ -111,6 +139,25 @@ export default function FormalMetatrackExperimentPanel({ draft, preview, running
             </label>
           ))}
         </div>
+        )}
+        {methodSource !== "builtin" && (
+          <div className="v3-checkbox-grid">
+            {methodConfigs.map((config) => (
+              <label key={config.config_id} className="checkbox-card field-card">
+                <span>{config.name}<small>{config.config_id}</small></span>
+                <input type="checkbox" checked={methodConfigIds.includes(config.config_id)} onChange={() => toggleSaved(config.config_id, methodConfigIds, setMethodConfigIds)} />
+              </label>
+            ))}
+            {methodConfigs.length === 0 && <p className="muted">暂无已保存方案；先在 11 模块下方保存完整方案。</p>}
+          </div>
+        )}
+      </details>
+      <details className="v3-foldout">
+        <summary className="v3-foldout-summary">已保存负载 / 拓扑</summary>
+        <div className="topology-field-grid">
+          <SavedConfigChecks title="已保存负载" configs={workloadConfigs} selected={workloadConfigIds} onToggle={(id) => toggleSaved(id, workloadConfigIds, setWorkloadConfigIds)} />
+          <SavedConfigChecks title="已保存拓扑" configs={topologyConfigs} selected={topologyConfigIds} onToggle={(id) => toggleSaved(id, topologyConfigIds, setTopologyConfigIds)} />
+        </div>
       </details>
       <details className="v3-foldout">
         <summary className="v3-foldout-summary">高级扫描点</summary>
@@ -118,6 +165,7 @@ export default function FormalMetatrackExperimentPanel({ draft, preview, running
           <TextList label="热点比例扫描" value={hotspotPoints} onChange={setHotspotPoints} />
           <TextList label="跨片比例扫描" value={crossShardPoints} onChange={setCrossShardPoints} />
           <TextList label="分片数量扫描" value={shardPoints} onChange={setShardPoints} />
+          <TextList label="负载场景扫描" value={workloadScenarioPoints} onChange={setWorkloadScenarioPoints} />
           <label className="field-card checkbox-card">
             <span>正式实验包含故障注入</span>
             <input type="checkbox" checked={enableFaults} onChange={(event) => setEnableFaults(event.target.checked)} />
@@ -161,10 +209,29 @@ function TextList({ label, value, onChange }: { label: string; value: string; on
   );
 }
 
+function SavedConfigChecks({ title, configs, selected, onToggle }: { title: string; configs: V3SavedConfig[]; selected: string[]; onToggle: (id: string) => void }) {
+  return (
+    <div className="field-card">
+      <span>{title}</span>
+      {configs.length === 0 && <small>暂无配置</small>}
+      {configs.map((config) => (
+        <label key={config.config_id} className="checkbox-card compact">
+          <span>{config.name}</span>
+          <input type="checkbox" checked={selected.includes(config.config_id)} onChange={() => onToggle(config.config_id)} />
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function parseFloatList(value: string): number[] {
   return value.split(",").map((item) => Number(item.trim())).filter((item) => Number.isFinite(item));
 }
 
 function parseIntList(value: string): number[] {
   return value.split(",").map((item) => Math.trunc(Number(item.trim()))).filter((item) => Number.isFinite(item));
+}
+
+function parseStringList(value: string): string[] {
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }

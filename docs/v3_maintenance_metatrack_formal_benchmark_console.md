@@ -30,8 +30,11 @@ The console does not use vague scale presets. Every formal run count and transac
 - `cross_shard_sensitivity`: scans only `cross_shard_ratio`.
 - `shard_scalability`: scans only `shard_count`.
 - `control_overhead`: scans mechanism combinations and reports overhead metrics when the runtime emits them.
+- `workload_comparison`: scans workload scenarios such as `scene_hotspot`, `cross_scene_migration`, and `mixed_metaverse`.
 
 The default rule is single-variable scanning. The formal console does not perform a full-factorial sweep by default.
+
+Saved methods, workloads, and topologies from the V3 saved config library can be selected as formal benchmark inputs. Legacy built-in baseline IDs remain supported for compatibility.
 
 ## Resource Protection
 
@@ -53,8 +56,13 @@ Formal benchmark runs write to `.cache/v3_metatrack_formal_runs/<run_id>/` and g
 - `formal_matrix_preview.json`
 - `formal_run_matrix.csv`
 - `formal_run_index.csv`
+- `formal_run_manifest.json`
+- `formal_progress.json`
+- `formal_failed_runs.csv`
+- `formal_child_artifact_index.csv`
 - `formal_raw_summary.csv`
 - `formal_aggregate_summary.csv`
+- `formal_workload_comparison.csv`
 - `formal_latency_summary.csv`
 - `formal_throughput_summary.csv`
 - `formal_overhead_summary.csv`

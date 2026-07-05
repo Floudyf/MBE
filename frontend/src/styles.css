@@ -1454,6 +1454,35 @@ details summary {
   gap: 0.85rem;
 }
 
+.saved-config-save-panel,
+.saved-config-library-panel {
+  min-width: 0;
+}
+
+.saved-config-row {
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.v3-saved-config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.v3-secondary-button.danger {
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.checkbox-card.compact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .topology-console {
   gap: 0.9rem;
 }

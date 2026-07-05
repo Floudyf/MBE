@@ -53,6 +53,7 @@ FAULT_PROFILES = {
 }
 RELAY_FAULT_MODES = {"none", "proof_fail", "timeout", "target_reject"}
 OBSERVABILITY_LEVELS = {"basic", "detailed"}
+WORKLOAD_SOURCES = {"synthetic", "metaverse", "saved_workload", "existing_trace_preview"}
 
 
 def default_topology() -> V3RuntimeTopology:
@@ -131,6 +132,10 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     _bool(errors, data, "controlled_experiment_enabled")
     data["plugin_selection_mode"] = "controlled" if bool(data.get("controlled_experiment_enabled")) else "free"
     _bool(errors, data, "metaverse_suite_enabled")
+    workload_source = data.get("workload_source") or ("metaverse" if data.get("metaverse_suite_enabled") else "synthetic")
+    data["workload_source"] = workload_source
+    if workload_source not in WORKLOAD_SOURCES:
+        errors.append("topology.workload_source must be synthetic, metaverse, saved_workload, or existing_trace_preview")
     scenario = data.get("metaverse_scenario") or "mixed_metaverse"
     data["metaverse_scenario"] = scenario
     if scenario not in METAVERSE_SCENARIOS:
@@ -145,6 +150,10 @@ def normalize_topology(value: V3RuntimeTopology | dict[str, Any] | None) -> tupl
     _range(errors, data, "seed", 0, 2147483647)
     for key in ("hotspot_ratio", "cross_scene_ratio", "cross_shard_ratio", "burst_rate", "read_write_ratio", "asset_skew", "scene_skew", "offchain_failure_ratio"):
         _ratio(errors, data, key)
+    _ratio(errors, data, "zipf_alpha", maximum=2.0)
+    _range_float(errors, data, "submit_rate", 0.0, 1000000.0)
+    _range_float(errors, data, "arrival_rate", 0.0, 1000000.0)
+    _range(errors, data, "key_space_size", 1, 100000000)
     _bool(errors, data, "offchain_confirmation_enabled")
     _range(errors, data, "offchain_confirm_delay_ms", 0, 600000)
     _bool(errors, data, "cross_metaverse_enabled")
@@ -206,6 +215,7 @@ def topology_summary(topology: dict[str, Any]) -> dict[str, int | str | bool]:
         "committee_epoch_enabled": bool(topology.get("enable_committee_epoch", True)),
         "epoch_count": int(topology.get("epoch_count", 1)),
         "metaverse_suite_enabled": bool(topology.get("metaverse_suite_enabled", False)),
+        "workload_source": str(topology.get("workload_source", "synthetic")),
         "metaverse_scenario": str(topology.get("metaverse_scenario", "mixed_metaverse")),
         "metaverse_tx_count": int(topology.get("tx_count", 10000)),
         "benchmark_suite_enabled": bool(topology.get("benchmark_suite_enabled", False)),
@@ -230,10 +240,16 @@ def _range(errors: list[str], data: dict[str, Any], key: str, minimum: int, maxi
         errors.append(f"topology.{key} must be between {minimum} and {maximum}")
 
 
-def _ratio(errors: list[str], data: dict[str, Any], key: str) -> None:
+def _ratio(errors: list[str], data: dict[str, Any], key: str, maximum: float = 1.0) -> None:
     value = data.get(key)
-    if not isinstance(value, (int, float)) or float(value) < 0.0 or float(value) > 1.0:
-        errors.append(f"topology.{key} must be between 0.0 and 1.0")
+    if not isinstance(value, (int, float)) or float(value) < 0.0 or float(value) > maximum:
+        errors.append(f"topology.{key} must be between 0.0 and {maximum}")
+
+
+def _range_float(errors: list[str], data: dict[str, Any], key: str, minimum: float, maximum: float) -> None:
+    value = data.get(key)
+    if not isinstance(value, (int, float)) or float(value) < minimum or float(value) > maximum:
+        errors.append(f"topology.{key} must be between {minimum} and {maximum}")
 
 
 def _bool(errors: list[str], data: dict[str, Any], key: str) -> None:

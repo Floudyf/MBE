@@ -13,6 +13,7 @@ V3FormalExperimentType = Literal[
     "cross_shard_sensitivity",
     "shard_scalability",
     "control_overhead",
+    "workload_comparison",
 ]
 
 V3RuntimeEvidenceMode = Literal["logical_single_process", "local_multi_process_validation"]
@@ -34,6 +35,10 @@ class V3FormalMetatrackBenchmarkRequest(BaseModel):
     hotspot_ratio_points: list[float] = Field(default_factory=lambda: [0.0, 0.2, 0.4, 0.6, 0.8])
     cross_shard_ratio_points: list[float] = Field(default_factory=lambda: [0.0, 0.2, 0.4, 0.6])
     shard_count_points: list[int] = Field(default_factory=lambda: [1, 2, 4, 8])
+    workload_scenario_points: list[str] = Field(default_factory=lambda: ["scene_hotspot", "cross_scene_migration", "mixed_metaverse"])
+    method_config_ids: list[str] = Field(default_factory=list)
+    workload_config_ids: list[str] = Field(default_factory=list)
+    topology_config_ids: list[str] = Field(default_factory=list)
     zipf_alpha: float = Field(default=0.8, ge=0.0, le=2.0)
     runtime_evidence_mode: V3RuntimeEvidenceMode = "logical_single_process"
     enable_faults_for_formal_run: bool = False

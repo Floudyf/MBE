@@ -21,6 +21,7 @@ Roadmap after V3.5 closure:
 - V3.13 is implemented as Metaverse Experiment Suite Closure. It adds a controlled metaverse workload catalog, scenario templates, synthetic trace metadata, offchain confirmation events, cross-metaverse transfer metadata, baseline matrix, multi-seed sweep, and paper table/figure export artifacts. It is not real metaverse platform integration, not production workload crawling, not Fabric/EVM live backend, not BlockEmulator backend, and not paper-grade performance evidence by itself.
 - V3-final is implemented as Fault, Observability, and Reproducibility Closure. It closes V3 with frontend/backend stage alignment, deterministic fault injection MVP, local observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping. It is not production fault tolerance, not production monitoring, not a Byzantine adversary model, not a production blockchain system, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
 - V3 maintenance may add bounded console, artifact, validation, and documentation improvements when explicitly requested. The MetaTrack formal benchmark console is maintenance scope: it separates Draft Smoke from controlled formal benchmark runs, uses explicit numeric parameters, previews matrices, enforces resource guards, exports formal_* CSV/JSON, and preserves V3-final truth boundaries. It is not V4, not a new research mechanism, not Fabric/EVM live backend, not BlockEmulator backend, not production multi-server deployment, and not paper-final proof by itself.
+- V3 maintenance may add a saved configuration workflow when explicitly requested. Saved configs are local JSON files under `.cache/v3_saved_configs/` for `module`, `workload`, `topology`, `method`, and `formal_plan` objects. They support configure -> validate -> Draft Smoke -> save -> reuse -> formal run. They are local emulator configs, not production-chain deployment manifests.
 - In docs-only planning rounds, do not implement V3.6/V3.7 code, schemas, tests, configs, frontend, backend, or Go runtime.
 - Do not claim production networking or real PBFT from V3.6 NetworkAdapter / consensus-light preview. Do not claim production PBFT even after V3.7 preview.
 
@@ -201,6 +202,9 @@ Allowed in this maintenance scope:
 - single-variable scans for ablation, hotspot sensitivity, cross-shard sensitivity, shard scalability, and control overhead
 - multi-seed aggregation with mean/std/min/max/count/ci95
 - formal_* CSV/JSON artifacts for paper figure/table preparation
+- saved config library for module/workload/topology/method/formal_plan reuse
+- workload_comparison formal experiment type
+- formal run manifest, progress, failed run index, and child artifact index
 - paper_candidate eligibility labels with reasons
 - docs, tests, and artifact downloads for the maintenance console
 
@@ -217,6 +221,8 @@ Forbidden in this maintenance scope:
 - including preview/planned plugins in formal benchmark runs
 - using vague scale presets for formal benchmark size
 - claiming controlled benchmark outputs are paper-final proof
+- treating saved configs as production deployment manifests
+- admitting `existing_trace_preview` into the default formal benchmark path
 
 Important boundary:
 
@@ -226,6 +232,8 @@ Important boundary:
 - `local_multi_process_validation` is only a prototype realism validation mode and is affected by local machine scheduling.
 - `experiment_evidence_level` must distinguish `quick_validation`, `controlled_benchmark`, and `paper_candidate`.
 - A `paper_candidate` label is a readiness label for paper data review, not a claim of final paper-grade evidence.
+- Saved method configs must preserve the full 11-module draft, topology, workload source, validation state, and last smoke run ID.
+- Formal benchmark profiles must inherit user topology/workload details unless a single scan variable intentionally overrides them.
 
 ## V3.13 Metaverse Experiment Suite Closure
 

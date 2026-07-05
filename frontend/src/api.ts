@@ -501,6 +501,10 @@ export type V3RuntimeTopology = {
   repeat_count?: number;
   controlled_experiment_enabled?: boolean;
   metaverse_suite_enabled?: boolean;
+  workload_source?: "synthetic" | "metaverse" | "saved_workload" | "existing_trace_preview" | string;
+  trace_path?: string;
+  trace_schema?: string;
+  trace_field_mapping?: Record<string, unknown>;
   metaverse_scenario?: "asset_transfer" | "avatar_update" | "scene_hotspot" | "item_transfer" | "cross_scene_migration" | "onchain_offchain_confirmation" | "cross_metaverse_transfer" | "mixed_metaverse" | string;
   user_count?: number;
   asset_count?: number;
@@ -515,6 +519,10 @@ export type V3RuntimeTopology = {
   cross_shard_ratio?: number;
   burst_rate?: number;
   read_write_ratio?: number;
+  zipf_alpha?: number;
+  submit_rate?: number;
+  arrival_rate?: number;
+  key_space_size?: number;
   asset_skew?: number;
   scene_skew?: number;
   offchain_confirmation_enabled?: boolean;
@@ -626,7 +634,37 @@ export type V3ControlledSmokeRunResponse = {
   };
   artifacts: V2Artifact[];
 };
-export type V3FormalExperimentType = "ablation" | "hotspot_sensitivity" | "cross_shard_sensitivity" | "shard_scalability" | "control_overhead";
+export type V3SavedConfigKind = "module" | "workload" | "topology" | "method" | "formal_plan";
+export type V3SavedConfig = {
+  config_id: string;
+  config_kind: V3SavedConfigKind;
+  name: string;
+  description: string;
+  owner_label: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+  version: number;
+  payload: Record<string, unknown>;
+  validation_status: "unknown" | "valid" | "runnable" | "blocked" | string;
+  last_validation: Record<string, unknown>;
+  last_smoke_run_id: string;
+  source: "user_saved" | "builtin_seed" | "imported" | string;
+  truth_boundary: string;
+};
+export type V3SavedConfigPayload = {
+  config_kind: V3SavedConfigKind;
+  name: string;
+  description?: string;
+  owner_label?: string;
+  tags?: string[];
+  payload: Record<string, unknown>;
+  validation_status?: "unknown" | "valid" | "runnable" | "blocked" | string;
+  last_validation?: Record<string, unknown>;
+  last_smoke_run_id?: string;
+  source?: "user_saved" | "builtin_seed" | "imported" | string;
+};
+export type V3FormalExperimentType = "ablation" | "hotspot_sensitivity" | "cross_shard_sensitivity" | "shard_scalability" | "control_overhead" | "workload_comparison";
 export type V3RuntimeEvidenceMode = "logical_single_process" | "local_multi_process_validation";
 export type V3FormalMetatrackBenchmarkRequest = {
   draft: V3ComposerDraftRequest;
@@ -638,6 +676,10 @@ export type V3FormalMetatrackBenchmarkRequest = {
   hotspot_ratio_points: number[];
   cross_shard_ratio_points: number[];
   shard_count_points: number[];
+  workload_scenario_points: string[];
+  method_config_ids: string[];
+  workload_config_ids: string[];
+  topology_config_ids: string[];
   zipf_alpha: number;
   runtime_evidence_mode: V3RuntimeEvidenceMode;
   enable_faults_for_formal_run: boolean;
@@ -654,10 +696,16 @@ export type V3FormalMetatrackBenchmarkPreview = {
   run_count: number;
   total_tx_count: number;
   baseline_count: number;
+  method_count?: number;
+  workload_count?: number;
+  topology_count?: number;
   scan_point_count: number;
   experiment_type: string;
   formal_tx_count: number;
   baseline_ids: string[];
+  method_config_ids?: string[];
+  workload_config_ids?: string[];
+  topology_config_ids?: string[];
   runtime_evidence_mode: string;
   contains_preview_or_planned_plugin: boolean;
   exceeds_recommended_range: boolean;
@@ -858,6 +906,28 @@ export async function runV3ComposerDraftSmoke(draft: V3ComposerDraftRequest): Pr
 
 export async function runV3ControlledSmoke(): Promise<V3ControlledSmokeRunResponse> {
   return request<V3ControlledSmokeRunResponse>("/api/v3/composer/run-controlled-smoke", { method: "POST" });
+}
+
+export async function listV3SavedConfigs(kind?: V3SavedConfigKind): Promise<V3SavedConfig[]> {
+  const query = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+  const response = await request<{ items: V3SavedConfig[] }>(`/api/v3/saved-configs${query}`);
+  return response.items;
+}
+
+export async function getV3SavedConfig(configId: string): Promise<V3SavedConfig> {
+  return request<V3SavedConfig>(`/api/v3/saved-configs/${encodeURIComponent(configId)}`);
+}
+
+export async function createV3SavedConfig(payload: V3SavedConfigPayload): Promise<V3SavedConfig> {
+  return request<V3SavedConfig>("/api/v3/saved-configs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function updateV3SavedConfig(configId: string, payload: Partial<V3SavedConfigPayload>): Promise<V3SavedConfig> {
+  return request<V3SavedConfig>(`/api/v3/saved-configs/${encodeURIComponent(configId)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function deleteV3SavedConfig(configId: string): Promise<{ deleted: boolean; config_id: string }> {
+  return request<{ deleted: boolean; config_id: string }>(`/api/v3/saved-configs/${encodeURIComponent(configId)}`, { method: "DELETE" });
 }
 
 export async function previewV3FormalMetatrackBenchmark(payload: V3FormalMetatrackBenchmarkRequest): Promise<V3FormalMetatrackBenchmarkPreview> {

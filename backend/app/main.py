@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
 from backend.app.models.v3_composer_draft import V3ComposerDraftRequest
+from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest, V3SavedConfigUpdateRequest
 from backend.app.services.config_validator_v2 import validate_planned_topology_file
 from backend.app.services.calibration_runner_v2 import CALIBRATION_CONFIGS, CalibrationBlocked, CalibrationError, get_calibration_config, list_calibration_configs, run_calibration_job, summarize_calibration_config
 from backend.app.services.chain_backend import list_backend_capabilities
@@ -37,6 +38,7 @@ from backend.app.models.v3_metatrack_formal_benchmark import V3FormalMetatrackBe
 from backend.app.services.v3_metatrack_formal_benchmark_runner import FormalBenchmarkNotRunnable, get_formal_artifact_path, preview_formal_metatrack_benchmark, run_formal_metatrack_benchmark
 from backend.app.services.v3_profile_preview import preview_profile
 from backend.app.services.v3_runtime_topology import stage_metadata as v3_runtime_stage_metadata
+from backend.app.services.v3_saved_config_store import SavedConfigNotFound, SavedConfigStoreError, create_saved_config, delete_saved_config, get_saved_config, list_saved_configs, update_saved_config
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
@@ -807,6 +809,52 @@ def v3_composer_run_draft_smoke(request: V3ComposerDraftRequest) -> dict:
         raise HTTPException(400, detail={"message": "Composer Draft is not runnable", "validation": model_dump(exc.validation)}) from exc
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
+
+
+@app.get("/api/v3/saved-configs")
+def v3_saved_configs(kind: str | None = None) -> dict:
+    try:
+        return {"items": list_saved_configs(kind)}  # type: ignore[arg-type]
+    except (SavedConfigStoreError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v3/saved-configs/{config_id}")
+def v3_saved_config_detail(config_id: str) -> dict:
+    try:
+        return get_saved_config(config_id)
+    except SavedConfigNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SavedConfigStoreError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/v3/saved-configs")
+def v3_saved_config_create(request: V3SavedConfigCreateRequest) -> dict:
+    try:
+        return create_saved_config(request)
+    except SavedConfigStoreError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.put("/api/v3/saved-configs/{config_id}")
+def v3_saved_config_update(config_id: str, request: V3SavedConfigUpdateRequest) -> dict:
+    try:
+        return update_saved_config(config_id, request)
+    except SavedConfigNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SavedConfigStoreError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/v3/saved-configs/{config_id}")
+def v3_saved_config_delete(config_id: str) -> dict:
+    try:
+        return delete_saved_config(config_id)
+    except SavedConfigNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SavedConfigStoreError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/v3/composer/formal-metatrack/preview")

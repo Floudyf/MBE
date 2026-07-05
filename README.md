@@ -4,7 +4,7 @@ MBE is evolving from a local modular research-chain runtime toward a configurabl
 
 Current stage: V3-final Fault, Observability, and Reproducibility Closure.
 Latest runtime capability: deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping.
-Latest maintenance capability: MetaTrack formal controlled benchmark console with explicit numeric parameters, matrix preview, resource guards, multi-seed aggregation, and formal_* paper data exports.
+Latest maintenance capability: saved configuration workflow, workload-comparison formal benchmark, explicit numeric parameters, matrix preview, resource guards, multi-seed aggregation, and formal_* paper data exports.
 Runtime truth: v3_final_emulator_closure_not_production_system.
 Next stage: V3 maintenance only; do not start V4 unless explicitly requested.
 
@@ -12,7 +12,7 @@ Next stage: V3 maintenance only; do not start V4 unless explicitly requested.
 
 Current stage: V3-final Fault, Observability, and Reproducibility Closure.
 Latest runtime capability: deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping.
-Latest maintenance capability: MetaTrack formal controlled benchmark console. It separates Draft Smoke quick validation from controlled formal benchmark runs and keeps V3-final truth boundaries.
+Latest maintenance capability: saved configuration workflow and workload-comparison formal benchmark. It separates Draft Smoke quick validation from controlled formal benchmark runs and keeps V3-final truth boundaries.
 Current capability: deterministic fault injection, local observability summary, component health status, final artifact catalog, reproducibility bundle, experiment manual, and paper experiment mapping.
 Runtime truth: v3_final_emulator_closure_not_production_system.
 
@@ -21,7 +21,7 @@ Next stage: V3 maintenance only; do not start V4 unless explicitly requested.
 
 After V3-final, the compressed V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. New feature work should be treated as maintenance unless the user explicitly starts V4.
 
-The latest maintenance note is `docs/v3_maintenance_metatrack_formal_benchmark_console.md`. It documents the formal MetaTrack benchmark console, explicit run parameters, matrix preview, resource protection, formal result artifacts, paper-candidate criteria, and the local emulator truth boundary.
+The latest maintenance notes are `docs/v3_maintenance_metatrack_formal_benchmark_console.md` and `docs/v3_maintenance_saved_config_workflow.md`. They document the formal MetaTrack benchmark console, saved configuration workflow, workload-comparison matrix, explicit run parameters, resource protection, formal result artifacts, paper-candidate criteria, and the local emulator truth boundary.
 
 ## V3.5 Route
 

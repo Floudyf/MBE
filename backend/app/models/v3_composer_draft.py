@@ -39,6 +39,10 @@ class V3RuntimeTopology(BaseModel):
     repeat_count: int = 1
     controlled_experiment_enabled: bool = False
     metaverse_suite_enabled: bool = False
+    workload_source: str = "synthetic"
+    trace_path: str = ""
+    trace_schema: str = ""
+    trace_field_mapping: dict[str, Any] = Field(default_factory=dict)
     metaverse_scenario: str = "mixed_metaverse"
     user_count: int = 100
     asset_count: int = 1000
@@ -53,6 +57,10 @@ class V3RuntimeTopology(BaseModel):
     cross_shard_ratio: float = 0.2
     burst_rate: float = 0.0
     read_write_ratio: float = 0.3
+    zipf_alpha: float = 0.8
+    submit_rate: float = 120.0
+    arrival_rate: float = 120.0
+    key_space_size: int = 10000
     asset_skew: float = 0.2
     scene_skew: float = 0.2
     offchain_confirmation_enabled: bool = True

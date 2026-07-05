@@ -65,8 +65,16 @@ const observabilityLevels: SelectOption[] = [
   ["detailed", "detailed"],
 ];
 
+const workloadSources: SelectOption[] = [
+  ["synthetic", "可控合成"],
+  ["metaverse", "元宇宙场景化"],
+  ["saved_workload", "已保存负载"],
+  ["existing_trace_preview", "真实 trace 预览"],
+];
+
 export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
   const summary = topologySummary(topology);
+  const workloadSource = topology.workload_source || "synthetic";
   function patch(patchValue: Partial<V3RuntimeTopology>) {
     onChange({ ...topology, ...patchValue });
   }
@@ -102,9 +110,11 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
             <input type="checkbox" checked={topology.supervisor_enabled} onChange={(event) => patch({ supervisor_enabled: event.target.checked })} />
             <small>supervisor_enabled</small>
           </label>
-          <NumberField label="最大本地进程数" id="max_local_processes" value={topology.max_local_processes || 8} min={1} max={32} onChange={(value) => patch({ max_local_processes: value })}>
-            防止本机启动过多进程；超过上限会进入 capped mode。
-          </NumberField>
+          {topology.node_runtime_mode === "local_multi_process" && (
+            <NumberField label="最大本地进程数" id="max_local_processes" value={topology.max_local_processes || 8} min={1} max={32} onChange={(value) => patch({ max_local_processes: value })}>
+              防止本机启动过多进程；超过上限会进入 capped mode。
+            </NumberField>
+          )}
           <label className="field-card checkbox-card">
             <span>启用委员会 / Epoch <HelpTip title="委员会 / Epoch">生成 shard assignment、committee assignment、epoch log 和轻量 reconfiguration plan；不是安全随机重分片。</HelpTip></span>
             <input type="checkbox" checked={topology.enable_committee_epoch ?? true} onChange={(event) => patch({ enable_committee_epoch: event.target.checked })} />
@@ -164,47 +174,54 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
           </NumberField>
         </ConfigGroup>
 
-        <ConfigGroup title="元宇宙负载细节" summary={`${topology.metaverse_scenario || "mixed_metaverse"} / tx=${topology.tx_count || 10000} / hotspot=${topology.hotspot_ratio ?? 0.2} / cross_shard=${topology.cross_shard_ratio ?? 0.2}`}>
-          <NumberField label="随机种子" id="seed" value={topology.seed || 42} min={0} max={2147483647} onChange={(value) => patch({ seed: value })}>
-            相同配置和 seed 会生成相同场景 metadata。
-          </NumberField>
-          <NumberField label="用户数" id="user_count" value={topology.user_count || 100} min={1} max={100000} onChange={(value) => patch({ user_count: value })}>
-            合成用户 ID 空间。
-          </NumberField>
-          <NumberField label="资产数" id="asset_count" value={topology.asset_count || 1000} min={1} max={1000000} onChange={(value) => patch({ asset_count: value })}>
-            合成虚拟资产 ID 空间。
-          </NumberField>
-          <NumberField label="场景数" id="scene_count" value={topology.scene_count || 16} min={1} max={10000} onChange={(value) => patch({ scene_count: value })}>
-            合成 scene ID 空间。
-          </NumberField>
-          <NumberField label="元宇宙数量" id="metaverse_count" value={topology.metaverse_count || 2} min={1} max={100} onChange={(value) => patch({ metaverse_count: value })}>
-            用于 cross_metaverse_transfer 的 source / target metaverse。
-          </NumberField>
-          <NumberField label="热点比例" id="hotspot_ratio" value={topology.hotspot_ratio ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ hotspot_ratio: value })}>
-            控制热点 scene/key 集中程度。
-          </NumberField>
-          <NumberField label="跨场景比例" id="cross_scene_ratio" value={topology.cross_scene_ratio ?? 0.15} min={0} max={1} step={0.01} onChange={(value) => patch({ cross_scene_ratio: value })}>
-            控制 cross_scene_migration metadata 数量。
-          </NumberField>
-          <NumberField label="跨片比例" id="cross_shard_ratio" value={topology.cross_shard_ratio ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ cross_shard_ratio: value })}>
-            控制合成跨片 metadata 数量。
-          </NumberField>
-          <label className="field-card checkbox-card">
-            <span>链下确认 <HelpTip title="链下确认">生成 deterministic offchain_confirmation_log.csv，不调用真实外部服务。</HelpTip></span>
-            <input type="checkbox" checked={topology.offchain_confirmation_enabled ?? true} onChange={(event) => patch({ offchain_confirmation_enabled: event.target.checked })} />
-            <small>offchain_confirmation_enabled</small>
-          </label>
-          <NumberField label="链下确认延迟" id="offchain_confirm_delay_ms" value={topology.offchain_confirm_delay_ms ?? 100} min={0} max={600000} onChange={(value) => patch({ offchain_confirm_delay_ms: value })}>
-            写入链下确认 metadata，不等待真实时间。
-          </NumberField>
-          <NumberField label="链下失败比例" id="offchain_failure_ratio" value={topology.offchain_failure_ratio ?? 0} min={0} max={1} step={0.01} onChange={(value) => patch({ offchain_failure_ratio: value })}>
-            确定性生成 failed confirmation 行。
-          </NumberField>
-          <label className="field-card checkbox-card">
-            <span>跨元宇宙转移 <HelpTip title="跨元宇宙转移">生成 Relay MVP 可衔接的 cross_metaverse_transfer_log.csv；不是生产桥。</HelpTip></span>
-            <input type="checkbox" checked={topology.cross_metaverse_enabled ?? true} onChange={(event) => patch({ cross_metaverse_enabled: event.target.checked })} />
-            <small>cross_metaverse_enabled</small>
-          </label>
+        <ConfigGroup title="负载配置" summary={`${workloadSource} / tx=${topology.tx_count || 10000} / hotspot=${topology.hotspot_ratio ?? 0.2} / cross_shard=${topology.cross_shard_ratio ?? 0.2}`}>
+          <SelectField label="负载来源" id="workload_source" value={workloadSource} options={workloadSources} onChange={(value) => patch({ workload_source: value, metaverse_suite_enabled: value === "metaverse" })}>
+            synthetic 使用可控合成参数；metaverse 展开场景化字段；saved_workload 从配置库加载；existing_trace_preview 只做预览，不默认进入正式性能实验。
+          </SelectField>
+          {workloadSource === "synthetic" && (
+            <>
+              <NumberField label="交易数量" id="tx_count" value={topology.tx_count || 10000} min={1} max={10000000} onChange={(value) => patch({ tx_count: value })}>合成负载交易数量。</NumberField>
+              <NumberField label="随机种子" id="seed" value={topology.seed || 42} min={0} max={2147483647} onChange={(value) => patch({ seed: value })}>相同配置和 seed 会生成相同合成负载。</NumberField>
+              <NumberField label="热点比例" id="hotspot_ratio" value={topology.hotspot_ratio ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ hotspot_ratio: value })}>控制热点 key 集中程度。</NumberField>
+              <NumberField label="跨片比例" id="cross_shard_ratio" value={topology.cross_shard_ratio ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ cross_shard_ratio: value })}>控制合成跨片交易比例。</NumberField>
+              <NumberField label="读写比例" id="read_write_ratio" value={topology.read_write_ratio ?? 0.3} min={0} max={1} step={0.01} onChange={(value) => patch({ read_write_ratio: value })}>合成读写混合比例。</NumberField>
+              <NumberField label="Zipf 偏斜" id="zipf_alpha" value={topology.zipf_alpha ?? 0.8} min={0} max={2} step={0.05} onChange={(value) => patch({ zipf_alpha: value })}>合成热点偏斜参数。</NumberField>
+              <NumberField label="提交速率" id="submit_rate" value={topology.submit_rate ?? topology.arrival_rate ?? 120} min={0} max={1000000} onChange={(value) => patch({ submit_rate: value, arrival_rate: value })}>本地 profile 元数据，不模拟真实墙钟压测。</NumberField>
+              <NumberField label="Key 空间" id="key_space_size" value={topology.key_space_size ?? 10000} min={1} max={100000000} onChange={(value) => patch({ key_space_size: value })}>合成负载 key 空间大小。</NumberField>
+            </>
+          )}
+          {workloadSource === "metaverse" && (
+            <>
+              <NumberField label="随机种子" id="seed" value={topology.seed || 42} min={0} max={2147483647} onChange={(value) => patch({ seed: value })}>相同配置和 seed 会生成相同场景 metadata。</NumberField>
+              <SelectField label="元宇宙场景" id="metaverse_scenario" value={topology.metaverse_scenario || "mixed_metaverse"} options={metaverseScenarios} onChange={(value) => patch({ metaverse_scenario: value })}>控制 trace metadata 的场景语义。</SelectField>
+              <NumberField label="交易数量" id="tx_count" value={topology.tx_count || 10000} min={1} max={10000000} onChange={(value) => patch({ tx_count: value })}>场景化负载交易数量。</NumberField>
+              <NumberField label="用户数" id="user_count" value={topology.user_count || 100} min={1} max={100000} onChange={(value) => patch({ user_count: value })}>合成用户 ID 空间。</NumberField>
+              <NumberField label="资产数" id="asset_count" value={topology.asset_count || 1000} min={1} max={1000000} onChange={(value) => patch({ asset_count: value })}>合成虚拟资产 ID 空间。</NumberField>
+              <NumberField label="道具数" id="item_count" value={topology.item_count || 1000} min={0} max={1000000} onChange={(value) => patch({ item_count: value })}>合成 item ID 空间。</NumberField>
+              <NumberField label="Avatar 数" id="avatar_count" value={topology.avatar_count || 100} min={1} max={100000} onChange={(value) => patch({ avatar_count: value })}>合成 avatar ID 空间。</NumberField>
+              <NumberField label="场景数" id="scene_count" value={topology.scene_count || 16} min={1} max={10000} onChange={(value) => patch({ scene_count: value })}>合成 scene ID 空间。</NumberField>
+              <NumberField label="元宇宙数量" id="metaverse_count" value={topology.metaverse_count || 2} min={1} max={100} onChange={(value) => patch({ metaverse_count: value })}>用于 cross_metaverse_transfer。</NumberField>
+              <NumberField label="热点比例" id="hotspot_ratio" value={topology.hotspot_ratio ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ hotspot_ratio: value })}>控制热点 scene/key 集中程度。</NumberField>
+              <NumberField label="跨场景比例" id="cross_scene_ratio" value={topology.cross_scene_ratio ?? 0.15} min={0} max={1} step={0.01} onChange={(value) => patch({ cross_scene_ratio: value })}>控制跨场景迁移比例。</NumberField>
+              <NumberField label="跨片比例" id="cross_shard_ratio" value={topology.cross_shard_ratio ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ cross_shard_ratio: value })}>控制合成跨片 metadata 数量。</NumberField>
+              <NumberField label="burst_rate" id="burst_rate" value={topology.burst_rate ?? 0} min={0} max={1} step={0.01} onChange={(value) => patch({ burst_rate: value })}>突发负载比例。</NumberField>
+              <NumberField label="读写比例" id="read_write_ratio" value={topology.read_write_ratio ?? 0.3} min={0} max={1} step={0.01} onChange={(value) => patch({ read_write_ratio: value })}>读写混合比例。</NumberField>
+              <NumberField label="资产偏斜" id="asset_skew" value={topology.asset_skew ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ asset_skew: value })}>资产访问偏斜。</NumberField>
+              <NumberField label="场景偏斜" id="scene_skew" value={topology.scene_skew ?? 0.2} min={0} max={1} step={0.01} onChange={(value) => patch({ scene_skew: value })}>场景访问偏斜。</NumberField>
+              <label className="field-card checkbox-card"><span>链下确认</span><input type="checkbox" checked={topology.offchain_confirmation_enabled ?? true} onChange={(event) => patch({ offchain_confirmation_enabled: event.target.checked })} /><small>offchain_confirmation_enabled</small></label>
+              <NumberField label="链下确认延迟" id="offchain_confirm_delay_ms" value={topology.offchain_confirm_delay_ms ?? 100} min={0} max={600000} onChange={(value) => patch({ offchain_confirm_delay_ms: value })}>写入链下确认 metadata，不等待真实时间。</NumberField>
+              <NumberField label="链下失败比例" id="offchain_failure_ratio" value={topology.offchain_failure_ratio ?? 0} min={0} max={1} step={0.01} onChange={(value) => patch({ offchain_failure_ratio: value })}>确定性生成 failed confirmation 行。</NumberField>
+              <label className="field-card checkbox-card"><span>跨元宇宙转移</span><input type="checkbox" checked={topology.cross_metaverse_enabled ?? true} onChange={(event) => patch({ cross_metaverse_enabled: event.target.checked })} /><small>cross_metaverse_enabled</small></label>
+            </>
+          )}
+          {workloadSource === "saved_workload" && <div className="field-card"><span>已保存负载选择器</span><p className="muted">在“保存 / 加载配置”区域加载 workload 配置；这里保留只读摘要位置。</p><small>saved_workload</small></div>}
+          {workloadSource === "existing_trace_preview" && (
+            <>
+              <label className="field-card"><span>trace_path</span><input value={topology.trace_path || ""} onChange={(event) => patch({ trace_path: event.target.value })} /><small>existing_trace_preview</small></label>
+              <label className="field-card"><span>trace_schema</span><input value={topology.trace_schema || ""} onChange={(event) => patch({ trace_schema: event.target.value })} /><small>字段映射摘要</small></label>
+              <div className="v3-warning-card">当前 trace 回放仍是 preview，不默认进入正式性能实验主路径。</div>
+            </>
+          )}
           <label className="field-card checkbox-card">
             <span>Baseline matrix</span>
             <input type="checkbox" checked={topology.baseline_matrix_enabled ?? false} onChange={(event) => patch({ baseline_matrix_enabled: event.target.checked })} />

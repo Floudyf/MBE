@@ -6,7 +6,7 @@ V3.10.1 is complete. It only cleaned up the Chinese frontend console, simplified
 
 V3.10.1 did not change Go runtime semantics, did not add cross-shard protocol capability, and did not make benchmark output paper-grade evidence. V3.11, V3.12, V3.13, and V3-final are now closed; the next stage is V3 maintenance only unless the user explicitly starts V4.
 
-Latest maintenance capability: MetaTrack formal controlled benchmark console. It separates Draft Smoke quick validation from formal controlled benchmark runs, uses explicit numeric parameters, previews the experiment matrix, enforces resource guards, and exports formal_* CSV/JSON data for paper figure/table preparation. It remains local emulator evidence, not production-chain or paper-final proof.
+Latest maintenance capability: saved configuration workflow and workload-comparison formal benchmark. It separates Draft Smoke quick validation from formal controlled benchmark runs, lets users save and reuse method/workload/topology configs, uses explicit numeric parameters, previews the experiment matrix, enforces resource guards, and exports formal_* CSV/JSON data for paper figure/table preparation. It remains local emulator evidence, not production-chain or paper-final proof.
 
 ## 2. Existing Foundations
 
@@ -30,7 +30,7 @@ V3.12 hardened the V3.5 launcher and node process previews into a runnable, obse
 4. V3-final Fault, Observability, and Reproducibility Closure. Complete.
 5. V3 maintenance only. Next unless V4 is explicitly requested.
 
-Current maintenance note: `docs/v3_maintenance_metatrack_formal_benchmark_console.md`.
+Current maintenance notes: `docs/v3_maintenance_metatrack_formal_benchmark_console.md` and `docs/v3_maintenance_saved_config_workflow.md`.
 
 ## 4. Stage Details
 

@@ -35,11 +35,17 @@ export default function FormalBenchmarkResultPanel({ result }: Props) {
         <div><dt>总运行组数</dt><dd>{String(summary.run_count || "-")}</dd></div>
         <div><dt>总交易数</dt><dd>{String(summary.total_tx_count || "-")}</dd></div>
         <div><dt>基线数量</dt><dd>{String(summary.baseline_count || "-")}</dd></div>
+        <div><dt>方案数量</dt><dd>{String(summary.method_count || summary.baseline_count || "-")}</dd></div>
+        <div><dt>负载数量</dt><dd>{String(summary.workload_count || "-")}</dd></div>
+        <div><dt>拓扑数量</dt><dd>{String(summary.topology_count || "-")}</dd></div>
         <div><dt>扫描变量</dt><dd>{String(summary.scan_variable || "-")}</dd></div>
         <div><dt>运行真实性等级</dt><dd>{String(summary.runtime_evidence_mode || "-")}</dd></div>
         <div><dt>完成组数</dt><dd>{String(summary.completed_run_count || 0)}</dd></div>
         <div><dt>失败组数</dt><dd>{String(summary.failed_run_count || 0)}</dd></div>
+        <div><dt>当前运行索引</dt><dd>{String(summary.current_run_index ?? "-")}</dd></div>
+        <div><dt>失败子运行</dt><dd>{String(summary.failed_child_run_count ?? summary.failed_run_count ?? 0)}</dd></div>
       </dl>
+      <div className="v3-warning-card">正式运行会输出 formal_run_manifest.json、formal_progress.json、formal_failed_runs.csv 和 formal_child_artifact_index.csv，用于定位子运行状态和失败原因。</div>
       {reasons.length > 0 && (
         <details className="v3-foldout">
           <summary className="v3-foldout-summary">论文候选结果判定</summary>
