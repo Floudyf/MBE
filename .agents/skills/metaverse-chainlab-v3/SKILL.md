@@ -206,6 +206,7 @@ Allowed in this maintenance scope:
 - workload_comparison formal experiment type
 - formal run manifest, progress, failed run index, and child artifact index
 - formal result dashboard, chart preview, data-file explanation, preview/download split, ZIP export, and Formal Run History
+- formal metric extraction and aggregation repairs for child-run summaries, latency CSVs, missing metric diagnostics, and chart preview data
 - slider/chip usability controls for ratios, workload comparison scenarios, and recommended local emulator presets
 - paper_candidate eligibility labels with reasons
 - docs, tests, and artifact downloads for the maintenance console
@@ -239,6 +240,7 @@ Important boundary:
 - Formal benchmark profiles must inherit user topology/workload details unless a single scan variable intentionally overrides them.
 - Formal result downloads must preserve artifact allowlists and run-directory path boundaries.
 - `formal_chart_preview.json` must be derived from aggregate or figure rows and must not fabricate missing metrics.
+- Formal metric extraction must not fill missing values with zero. It may derive latency from successful `latency_ms` rows and throughput from explicit success count plus positive elapsed time only.
 - Formal Run History is a local convenience view over `.cache/v3_metatrack_formal_runs/`, not a production result database.
 
 ## V3.13 Metaverse Experiment Suite Closure

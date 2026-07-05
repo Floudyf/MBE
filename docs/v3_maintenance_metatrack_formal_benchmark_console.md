@@ -61,6 +61,9 @@ Formal benchmark runs write to `.cache/v3_metatrack_formal_runs/<run_id>/` and g
 - `formal_failed_runs.csv`
 - `formal_child_artifact_index.csv`
 - `formal_chart_preview.json`
+- `formal_metric_extraction_report.csv`
+- `formal_metric_extraction_report.json`
+- `formal_missing_metrics.csv`
 - `formal_raw_summary.csv`
 - `formal_aggregate_summary.csv`
 - `formal_workload_comparison.csv`
@@ -92,6 +95,10 @@ Completed formal runs now include a result dashboard:
 The console can list recent formal runs and reload a previous result after page refresh. History reads local run metadata plus `summary.json` and `formal_chart_preview.json` when available. Runs without a summary are listed without breaking the page.
 
 Missing runtime metrics are left empty and listed in the report. The runner does not fabricate overhead, latency, or cross-shard fields.
+
+The formal metric extraction layer also records where each metric came from. It can read runtime summary fields, JSON/CSV summaries, MetaTrack mechanism metrics, and latency files. When summary files do not expose latency metrics, it computes average/P95/P99 from successful `latency_ms` rows. When throughput is absent but a success count and positive elapsed duration exist, it derives `throughput_tps`.
+
+`formal_aggregate_summary.csv` keeps unavailable metrics with `metric_available=false` for diagnostics. `formal_workload_comparison.csv` filters those unavailable rows so the workload comparison table is not dominated by empty metrics.
 
 ## Paper Candidate Rule
 

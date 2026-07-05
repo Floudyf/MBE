@@ -82,6 +82,8 @@ function DataFileList({ artifacts }: { artifacts: V2Artifact[] }) {
     ["formal_aggregate_summary.csv", "全部聚合统计"],
     ["formal_raw_summary.csv", "每个子运行原始统计"],
     ["formal_child_artifact_index.csv", "子运行目录索引"],
+    ["formal_metric_extraction_report.csv", "指标抽取来源"],
+    ["formal_missing_metrics.csv", "缺失指标诊断"],
     ["formal_reproducibility_manifest.json", "复现实验配置"],
     ["formal_chart_preview.json", "图表预览数据"],
   ];

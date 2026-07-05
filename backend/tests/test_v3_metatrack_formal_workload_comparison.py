@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import zipfile
+import csv
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -126,7 +128,10 @@ def test_run_writes_progress_and_child_index(monkeypatch, tmp_path) -> None:
     assert "formal_failed_runs.csv" in names
     assert "formal_child_artifact_index.csv" in names
     assert "formal_chart_preview.json" in names
+    assert "formal_metric_extraction_report.csv" in names
+    assert "formal_missing_metrics.csv" in names
     assert "chart_preview" in result["summary"]
+    assert result["summary"]["chart_preview"]["groups"]
 
 
 def test_existing_trace_preview_is_not_formal_default() -> None:
@@ -174,8 +179,8 @@ def test_formal_zip_contains_only_allowlisted_files(tmp_path) -> None:
 
 def test_chart_preview_uses_workload_scenario_and_skips_missing_metrics() -> None:
     aggregate_rows = [
-        runner._aggregate_row("workload_comparison", "metatrack_full", "MetaTrack full", "metatrack_full", "", "", "", "", "workload_scenario", "scene_hotspot", "scene_hotspot", "throughput_tps", 123.0, 1.0, 122.0, 124.0, 3, 1.13),
-        runner._aggregate_row("workload_comparison", "metatrack_full", "MetaTrack full", "metatrack_full", "", "", "", "", "workload_scenario", "scene_hotspot", "scene_hotspot", "avg_latency_ms", None, None, None, None, 0, None),
+        runner._aggregate_row("workload_comparison", "metatrack_full", "MetaTrack full", "metatrack_full", "", "", "", "", "workload_scenario", "scene_hotspot", "scene_hotspot", "throughput_tps", 123.0, 1.0, 122.0, 124.0, 3, 1.13, True),
+        runner._aggregate_row("workload_comparison", "metatrack_full", "MetaTrack full", "metatrack_full", "", "", "", "", "workload_scenario", "scene_hotspot", "scene_hotspot", "avg_latency_ms", None, None, None, None, 0, None, False),
     ]
     figure_rows = runner.build_paper_figure_rows(aggregate_rows)
     chart = runner.build_chart_preview(aggregate_rows, figure_rows)
@@ -183,6 +188,104 @@ def test_chart_preview_uses_workload_scenario_and_skips_missing_metrics() -> Non
     assert chart["available_metrics"] == ["throughput_tps"]
     assert chart["groups"][0]["x"] == "scene_hotspot"
     assert chart["groups"][0]["series"] == "MetaTrack full"
+
+
+def test_extract_child_metrics_reads_runtime_summary(tmp_path) -> None:
+    row = {"run_index": 1}
+    metrics, report = runner.extract_child_run_metrics(tmp_path, {"throughput_tps": 12.5}, row)
+
+    assert metrics["throughput_tps"] == 12.5
+    throughput_row = next(item for item in report if item["metric"] == "throughput_tps")
+    assert throughput_row["source_file"] == "runtime_summary"
+    assert throughput_row["source_field"] == "throughput_tps"
+
+
+def test_extract_child_metrics_uses_alias(tmp_path) -> None:
+    metrics, report = runner.extract_child_run_metrics(tmp_path, {"tps": "42.0"}, {"run_index": 2})
+
+    assert metrics["throughput_tps"] == 42.0
+    assert next(item for item in report if item["metric"] == "throughput_tps")["source_field"] == "tps"
+
+
+def test_extract_child_metrics_calculates_latency_from_tx_results(tmp_path) -> None:
+    (tmp_path / "tx_results.csv").write_text("tx_id,latency_ms,status\n1,10,success\n2,20,completed\n3,30,failed\n4,40,ok\n", encoding="utf-8")
+
+    metrics, report = runner.extract_child_run_metrics(tmp_path, {}, {"run_index": 3})
+
+    assert metrics["avg_latency_ms"] == pytest.approx((10 + 20 + 40) / 3)
+    assert metrics["p95_latency_ms"] > 20
+    assert metrics["p99_latency_ms"] > 20
+    latency_row = next(item for item in report if item["metric"] == "avg_latency_ms")
+    assert latency_row["source_file"] == "tx_results.csv"
+    assert latency_row["source_field"] == "latency_ms"
+
+
+def test_extract_child_metrics_derives_throughput(tmp_path) -> None:
+    metrics, report = runner.extract_child_run_metrics(tmp_path, {"success_count": 50, "elapsed_ms": 5000}, {"run_index": 4})
+
+    assert metrics["throughput_tps"] == 10.0
+    assert next(item for item in report if item["metric"] == "throughput_tps")["source_field"] == "success_count/elapsed_ms"
+
+
+def test_extract_child_metrics_does_not_fill_missing_with_zero(tmp_path) -> None:
+    metrics, report = runner.extract_child_run_metrics(tmp_path, {}, {"run_index": 5})
+
+    assert "throughput_tps" not in metrics
+    missing = next(item for item in report if item["metric"] == "throughput_tps")
+    assert missing["status"] == "missing"
+    assert missing["value"] == ""
+
+
+def test_aggregate_marks_metric_available() -> None:
+    rows = [
+        {"experiment_type": "workload_comparison", "baseline_id": "metatrack_full", "baseline_label": "MetaTrack full", "scan_variable": "workload_scenario", "scan_value": "scene_hotspot", "workload_scenario": "scene_hotspot", "throughput_tps": 10.0},
+        {"experiment_type": "workload_comparison", "baseline_id": "metatrack_full", "baseline_label": "MetaTrack full", "scan_variable": "workload_scenario", "scan_value": "scene_hotspot", "workload_scenario": "scene_hotspot", "throughput_tps": 20.0},
+    ]
+    aggregate, _, missing, missing_rows = runner.aggregate_formal_results(rows)
+    throughput = next(row for row in aggregate if row["metric"] == "throughput_tps")
+    latency = next(row for row in aggregate if row["metric"] == "avg_latency_ms")
+
+    assert throughput["count"] == 2
+    assert throughput["metric_available"] is True
+    assert latency["metric_available"] is False
+    assert "avg_latency_ms" in missing
+    assert any(row["metric"] == "avg_latency_ms" for row in missing_rows)
+
+
+def test_chart_preview_has_diagnostics_without_available_metrics() -> None:
+    aggregate = [
+        runner._aggregate_row("workload_comparison", "metatrack_full", "MetaTrack full", "metatrack_full", "", "", "", "", "workload_scenario", "scene_hotspot", "scene_hotspot", "throughput_tps", None, None, None, None, 0, None, False)
+    ]
+
+    chart = runner.build_chart_preview(aggregate, [])
+
+    assert chart["groups"] == []
+    assert chart["diagnostics"]["reason"] == "no_available_aggregate_metrics"
+
+
+def test_formal_workload_comparison_outputs_only_available_metrics(monkeypatch, tmp_path) -> None:
+    def fake_run_go_v3_runtime(**kwargs):
+        output_dir = kwargs["output_dir"]
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "tx_results.csv").write_text("tx_id,latency_ms,status\n1,10,success\n2,20,success\n", encoding="utf-8")
+        (output_dir / "summary.json").write_text(json.dumps({"tps": 25, "success_count": 2, "elapsed_ms": 80}), encoding="utf-8")
+        return SimpleNamespace(summary={})
+
+    monkeypatch.setattr(runner, "run_go_v3_runtime", fake_run_go_v3_runtime)
+    result = runner.run_formal_metatrack_benchmark(request(experiment_type="workload_comparison", seed_count=1, workload_scenario_points=["scene_hotspot"]), root=tmp_path)
+    run_dir = tmp_path / result["run_id"]
+
+    with (run_dir / "formal_workload_comparison.csv").open(encoding="utf-8", newline="") as handle:
+        workload_rows = list(csv.DictReader(handle))
+    with (run_dir / "formal_metric_extraction_report.csv").open(encoding="utf-8", newline="") as handle:
+        extraction_rows = list(csv.DictReader(handle))
+
+    assert workload_rows
+    assert all(row["metric_available"] == "True" for row in workload_rows)
+    assert any(row["metric"] == "throughput_tps" and row["source_field"] == "tps" for row in extraction_rows)
+    assert (run_dir / "formal_metric_extraction_report.json").is_file()
+    assert (run_dir / "formal_missing_metrics.csv").is_file()
+    assert result["summary"]["chart_preview"]["groups"]
 
 
 def test_list_and_get_formal_run_result(tmp_path) -> None:

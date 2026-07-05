@@ -109,21 +109,23 @@ def test_aggregate_stats_and_missing_metrics() -> None:
         {"experiment_type": "ablation", "baseline_id": "metatrack_full", "scan_variable": "plugin_combination", "scan_value": "baseline", "throughput_tps": 120.0},
     ]
 
-    aggregate, ci_rows, missing = runner.aggregate_formal_results(rows)
+    aggregate, ci_rows, missing, missing_rows = runner.aggregate_formal_results(rows)
     throughput = next(row for row in aggregate if row["metric"] == "throughput_tps")
 
     assert throughput["mean"] == 110.0
     assert throughput["count"] == 2
+    assert throughput["metric_available"] is True
     assert throughput["ci95"] is not None
     assert ci_rows
     assert "avg_latency_ms" in missing
+    assert missing_rows
 
 
 def test_paper_candidate_eligibility() -> None:
     req = request()
     preview = runner.preview_formal_metatrack_benchmark(req)
     raw_rows = [{**row, "status": "completed", "throughput_tps": 100 + row["run_index"]} for row in preview["matrix"]]
-    aggregate, _, missing = runner.aggregate_formal_results(raw_rows)
+    aggregate, _, missing, _ = runner.aggregate_formal_results(raw_rows)
     figures = runner.build_paper_figure_rows(aggregate)
     summary = runner.build_formal_summary(req, preview, raw_rows, aggregate, figures, missing)
 

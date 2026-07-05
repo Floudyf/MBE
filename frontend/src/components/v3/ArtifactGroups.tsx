@@ -10,7 +10,7 @@ type Props = {
 };
 
 const groups = [
-  { title: "正式性能实验核心结果", defaultOpen: true, files: ["formal_benchmark_config.json", "formal_matrix_preview.json", "formal_run_matrix.csv", "formal_run_index.csv", "formal_run_manifest.json", "formal_progress.json", "formal_failed_runs.csv", "formal_child_artifact_index.csv", "formal_chart_preview.json", "formal_raw_summary.csv", "formal_aggregate_summary.csv", "formal_workload_comparison.csv", "summary.json"] },
+  { title: "正式性能实验核心结果", defaultOpen: true, files: ["formal_benchmark_config.json", "formal_matrix_preview.json", "formal_run_matrix.csv", "formal_run_index.csv", "formal_run_manifest.json", "formal_progress.json", "formal_failed_runs.csv", "formal_child_artifact_index.csv", "formal_metric_extraction_report.csv", "formal_metric_extraction_report.json", "formal_missing_metrics.csv", "formal_chart_preview.json", "formal_raw_summary.csv", "formal_aggregate_summary.csv", "formal_workload_comparison.csv", "summary.json"] },
   { title: "论文画图数据", defaultOpen: true, files: ["formal_latency_summary.csv", "formal_throughput_summary.csv", "formal_overhead_summary.csv", "formal_confidence_interval.csv", "formal_paper_figure_data.csv", "formal_chart_preview.json"] },
   { title: "正式实验复现包", defaultOpen: false, files: ["formal_reproducibility_manifest.json", "formal_benchmark_report.md"] },
   { title: "配置草稿", files: ["composer_draft.json", "normalized_draft.json", "draft_validation.json", "generated_experiment_profile.json", "generated_experiment_profile.yaml", "generated_plugin_profile.json", "generated_plugin_profile.yaml"] },

@@ -52,6 +52,126 @@ AGGREGATE_METRICS = [
     "consensus_latency_ms",
     "control_overhead_ratio",
 ]
+METRIC_ALIASES = {
+    "throughput_tps": ["throughput_tps", "tps", "TPS", "avg_tps", "transactions_per_second"],
+    "avg_latency_ms": ["avg_latency_ms", "average_latency_ms", "latency_avg_ms", "avg_latency", "mean_latency_ms"],
+    "p95_latency_ms": ["p95_latency_ms", "latency_p95_ms", "p95", "p95_ms"],
+    "p99_latency_ms": ["p99_latency_ms", "latency_p99_ms", "p99", "p99_ms"],
+    "remote_fetch_count": ["remote_fetch_count", "remote_state_fetch_count"],
+    "cross_shard_ratio": ["cross_shard_ratio"],
+    "cross_shard_tx_count": ["cross_shard_tx_count"],
+    "remote_state_access_count": ["remote_state_access_count", "remote_access_count"],
+    "blocked_tx_count": ["blocked_tx_count"],
+    "aggregation_ratio": ["aggregation_ratio"],
+    "avg_routing_overhead_ms": ["avg_routing_overhead_ms", "routing_overhead_ms"],
+    "avg_execution_latency_ms": ["avg_execution_latency_ms", "execution_latency_ms"],
+    "avg_state_access_latency_ms": ["avg_state_access_latency_ms", "state_access_latency_ms"],
+    "avg_commit_latency_ms": ["avg_commit_latency_ms", "commit_latency_ms"],
+    "consensus_latency_ms": ["consensus_latency_ms", "avg_consensus_latency_ms", "pbft_consensus_latency_ms"],
+    "control_overhead_ratio": ["control_overhead_ratio"],
+}
+SUMMARY_SOURCES = [
+    ("runtime_summary", None),
+    ("summary.json", "json"),
+    ("summary.csv", "csv_first"),
+    ("metatrack_summary.json", "json"),
+    ("metatrack_summary.csv", "csv_first"),
+    ("metatrack_mechanism_metrics.csv", "csv_first"),
+]
+LATENCY_SOURCES = ["tx_results.csv", "metatrack_latency.csv"]
+SUCCESS_STATUSES = {"", "success", "completed", "ok", "true", "1"}
+RAW_SUMMARY_FIELDS = [
+    "run_index",
+    "status",
+    "error",
+    "experiment_type",
+    "method_config_name",
+    "baseline_id",
+    "method_config_id",
+    "workload_scenario",
+    "seed",
+    "formal_tx_count",
+    "throughput_tps",
+    "avg_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+    "cross_shard_ratio",
+    "cross_shard_tx_count",
+    "remote_fetch_count",
+    "remote_state_access_count",
+    "blocked_tx_count",
+    "aggregation_ratio",
+    "avg_routing_overhead_ms",
+    "avg_execution_latency_ms",
+    "avg_state_access_latency_ms",
+    "avg_commit_latency_ms",
+    "consensus_latency_ms",
+    "control_overhead_ratio",
+    "child_output_dir",
+    "scan_variable",
+    "scan_value",
+]
+AGGREGATE_SUMMARY_FIELDS = [
+    "experiment_type",
+    "method_config_name",
+    "baseline_id",
+    "method_or_baseline_id",
+    "workload_scenario",
+    "metric",
+    "metric_available",
+    "mean",
+    "ci95",
+    "count",
+    "std",
+    "min",
+    "max",
+    "scan_variable",
+    "scan_value",
+    "method_config_id",
+    "workload_config_name",
+    "workload_config_id",
+    "topology_config_name",
+    "topology_config_id",
+]
+FIGURE_FIELDS = ["figure_group", "x_value", "series", "metric", "mean", "ci95", "count"]
+EXTRACTION_FIELDS = ["run_index", "child_output_dir", "metric", "value", "source_file", "source_field", "status", "missing_reason"]
+MISSING_METRIC_FIELDS = ["experiment_type", "method_config_name", "baseline_id", "workload_scenario", "metric", "missing_count", "group_count", "reason"]
+RUN_MATRIX_FIELDS = [
+    "run_index",
+    "experiment_type",
+    "baseline_id",
+    "baseline_label",
+    "method_config_id",
+    "method_config_name",
+    "workload_config_id",
+    "workload_config_name",
+    "topology_config_id",
+    "topology_config_name",
+    "seed",
+    "formal_tx_count",
+    "scan_variable",
+    "scan_value",
+    "workload_scenario",
+    "runtime_evidence_mode",
+]
+CHILD_INDEX_FIELDS = [
+    "run_index",
+    "baseline_id",
+    "method_config_id",
+    "workload_scenario",
+    "seed",
+    "child_output_dir",
+    "summary_json_exists",
+    "summary_json_path",
+    "runtime_log_path",
+    "routing_log_exists",
+    "execution_log_exists",
+    "state_access_log_exists",
+    "relay_mvp_summary_exists",
+    "state_authenticity_summary_exists",
+    "status",
+    "error",
+]
 CHART_PREVIEW_METRICS = [
     "throughput_tps",
     "avg_latency_ms",
@@ -73,6 +193,9 @@ FORMAL_ROOT_ZIP_FILES = [
     "formal_run_index.csv",
     "formal_failed_runs.csv",
     "formal_child_artifact_index.csv",
+    "formal_metric_extraction_report.csv",
+    "formal_metric_extraction_report.json",
+    "formal_missing_metrics.csv",
     "formal_raw_summary.csv",
     "formal_aggregate_summary.csv",
     "formal_workload_comparison.csv",
@@ -253,10 +376,11 @@ def run_formal_metatrack_benchmark(request: V3FormalMetatrackBenchmarkRequest, r
     run_index: list[dict[str, Any]] = []
     failed_runs: list[dict[str, Any]] = []
     child_artifact_index: list[dict[str, Any]] = []
+    metric_extraction_rows: list[dict[str, Any]] = []
     try:
         write_json(run_dir / "formal_benchmark_config.json", model_dump(request))
         write_json(run_dir / "formal_matrix_preview.json", preview)
-        write_csv(run_dir / "formal_run_matrix.csv", preview["matrix"])
+        write_csv(run_dir / "formal_run_matrix.csv", preview["matrix"], preferred_fields=RUN_MATRIX_FIELDS)
         write_json(run_dir / "formal_run_manifest.json", {
             "run_id": run_id,
             "run_mode": "formal_metatrack_benchmark",
@@ -292,7 +416,14 @@ def run_formal_metatrack_benchmark(request: V3FormalMetatrackBenchmarkRequest, r
                 status = "failed"
                 error = str(exc)
                 failed_runs.append({**row, "status": status, "error": error, "child_output_dir": str(child_dir)})
-            raw_row = {**row, **summary, "status": status, "error": error, "child_output_dir": str(child_dir)}
+            normalized_metrics, extraction_rows = extract_child_run_metrics(child_dir, summary, row)
+            if status == "failed":
+                extraction_rows = [
+                    {**item, "status": "failed", "missing_reason": item.get("missing_reason") or error}
+                    for item in extraction_rows
+                ]
+            metric_extraction_rows.extend(extraction_rows)
+            raw_row = {**row, **summary, **normalized_metrics, "status": status, "error": error, "child_output_dir": str(child_dir)}
             raw_rows.append(raw_row)
             run_index.append({
                 "run_index": row["run_index"],
@@ -309,22 +440,25 @@ def run_formal_metatrack_benchmark(request: V3FormalMetatrackBenchmarkRequest, r
             child_artifact_index.append(_child_artifact_row(row, child_dir, status, error))
             _write_progress(run_dir, run_id, preview["run_count"], len(raw_rows), len(failed_runs), row["run_index"], row.get("method_config_name") or row.get("baseline_label") or row.get("baseline_id", ""), row.get("workload_config_name") or row.get("workload_scenario", ""), "running")
 
-        aggregate_rows, ci_rows, missing_metrics = aggregate_formal_results(raw_rows)
+        aggregate_rows, ci_rows, missing_metrics, missing_metric_rows = aggregate_formal_results(raw_rows)
         figure_rows = build_paper_figure_rows(aggregate_rows)
         summary = build_formal_summary(request, preview, raw_rows, aggregate_rows, figure_rows, missing_metrics)
         write_json(run_dir / "formal_chart_preview.json", summary["chart_preview"])
         write_csv(run_dir / "formal_run_index.csv", run_index)
         write_csv(run_dir / "formal_failed_runs.csv", failed_runs)
-        write_csv(run_dir / "formal_child_artifact_index.csv", child_artifact_index)
-        write_csv(run_dir / "formal_raw_summary.csv", raw_rows)
-        write_csv(run_dir / "formal_aggregate_summary.csv", aggregate_rows)
+        write_csv(run_dir / "formal_child_artifact_index.csv", child_artifact_index, preferred_fields=CHILD_INDEX_FIELDS)
+        write_csv(run_dir / "formal_metric_extraction_report.csv", metric_extraction_rows, preferred_fields=EXTRACTION_FIELDS)
+        write_json(run_dir / "formal_metric_extraction_report.json", {"rows": metric_extraction_rows})
+        write_csv(run_dir / "formal_missing_metrics.csv", missing_metric_rows, preferred_fields=MISSING_METRIC_FIELDS)
+        write_csv(run_dir / "formal_raw_summary.csv", raw_rows, preferred_fields=RAW_SUMMARY_FIELDS)
+        write_csv(run_dir / "formal_aggregate_summary.csv", aggregate_rows, preferred_fields=AGGREGATE_SUMMARY_FIELDS)
         if request.experiment_type == "workload_comparison":
-            write_csv(run_dir / "formal_workload_comparison.csv", [row for row in aggregate_rows if row.get("experiment_type") == "workload_comparison"])
-        write_csv(run_dir / "formal_latency_summary.csv", [row for row in aggregate_rows if "latency" in row.get("metric", "")])
-        write_csv(run_dir / "formal_throughput_summary.csv", [row for row in aggregate_rows if row.get("metric") == "throughput_tps"])
-        write_csv(run_dir / "formal_overhead_summary.csv", [row for row in aggregate_rows if "overhead" in row.get("metric", "")])
-        write_csv(run_dir / "formal_confidence_interval.csv", ci_rows)
-        write_csv(run_dir / "formal_paper_figure_data.csv", figure_rows)
+            write_csv(run_dir / "formal_workload_comparison.csv", [row for row in aggregate_rows if row.get("experiment_type") == "workload_comparison" and row.get("metric_available") is True and int(row.get("count") or 0) > 0], preferred_fields=AGGREGATE_SUMMARY_FIELDS)
+        write_csv(run_dir / "formal_latency_summary.csv", [row for row in aggregate_rows if "latency" in row.get("metric", "") and row.get("metric_available") is True], preferred_fields=AGGREGATE_SUMMARY_FIELDS)
+        write_csv(run_dir / "formal_throughput_summary.csv", [row for row in aggregate_rows if row.get("metric") == "throughput_tps" and row.get("metric_available") is True], preferred_fields=AGGREGATE_SUMMARY_FIELDS)
+        write_csv(run_dir / "formal_overhead_summary.csv", [row for row in aggregate_rows if "overhead" in row.get("metric", "") and row.get("metric_available") is True], preferred_fields=AGGREGATE_SUMMARY_FIELDS)
+        write_csv(run_dir / "formal_confidence_interval.csv", ci_rows, preferred_fields=AGGREGATE_SUMMARY_FIELDS)
+        write_csv(run_dir / "formal_paper_figure_data.csv", figure_rows, preferred_fields=FIGURE_FIELDS)
         write_json(run_dir / "formal_reproducibility_manifest.json", {
             **stage_metadata(),
             "run_id": run_id,
@@ -535,7 +669,68 @@ def build_formal_plugin_profile(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def aggregate_formal_results(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+def extract_child_run_metrics(
+    child_dir: Path,
+    runtime_summary: dict[str, Any],
+    row: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    normalized_metrics: dict[str, Any] = {}
+    extraction_rows: list[dict[str, Any]] = []
+    sources: list[tuple[str, dict[str, Any]]] = []
+    missing_by_source: dict[str, str] = {}
+    for source_file, source_type in SUMMARY_SOURCES:
+        if source_file == "runtime_summary":
+            sources.append((source_file, runtime_summary or {}))
+            continue
+        path = child_dir / source_file
+        if not path.is_file():
+            missing_by_source[source_file] = "file_missing"
+            continue
+        try:
+            if source_type == "json":
+                loaded = _read_json_metric_source(path)
+            else:
+                loaded = _read_csv_metric_source(path)
+            if loaded:
+                sources.append((source_file, loaded))
+            else:
+                missing_by_source[source_file] = "empty_or_non_object_source"
+        except Exception as exc:
+            missing_by_source[source_file] = f"parse_error: {exc}"
+
+    for metric in AGGREGATE_METRICS:
+        found = False
+        for source_file, payload in sources:
+            value, source_field = _metric_from_payload(metric, payload)
+            if value is None:
+                continue
+            normalized_metrics[metric] = value
+            extraction_rows.append(_extraction_row(row, child_dir, metric, value, source_file, source_field, "ok", ""))
+            found = True
+            break
+        if not found:
+            extraction_rows.append(_extraction_row(row, child_dir, metric, "", "", "", "missing", _missing_reason(metric, missing_by_source)))
+
+    latency_metrics, latency_rows = _extract_latency_metrics(child_dir, row)
+    for metric, value in latency_metrics.items():
+        if metric not in normalized_metrics:
+            normalized_metrics[metric] = value
+            extraction_rows = [item for item in extraction_rows if item["metric"] != metric]
+            extraction_rows.append(latency_rows[metric])
+
+    if "throughput_tps" not in normalized_metrics:
+        throughput, source_file, source_field, reason = _derive_throughput(sources)
+        extraction_rows = [item for item in extraction_rows if item["metric"] != "throughput_tps"]
+        if throughput is not None:
+            normalized_metrics["throughput_tps"] = throughput
+            extraction_rows.append(_extraction_row(row, child_dir, "throughput_tps", throughput, source_file, source_field, "ok", ""))
+        else:
+            extraction_rows.append(_extraction_row(row, child_dir, "throughput_tps", "", "", "", "missing", reason))
+
+    return normalized_metrics, extraction_rows
+
+
+def aggregate_formal_results(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], list[dict[str, Any]]]:
     grouped: dict[tuple[str, str, str, str, str, str, str, str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         method_key = row.get("method_config_id") or row.get("baseline_id", "")
@@ -554,6 +749,7 @@ def aggregate_formal_results(rows: list[dict[str, Any]]) -> tuple[list[dict[str,
         )].append(row)
     aggregate_rows: list[dict[str, Any]] = []
     ci_rows: list[dict[str, Any]] = []
+    missing_metric_rows: list[dict[str, Any]] = []
     missing: set[str] = set()
     for key, group_rows in grouped.items():
         experiment_type, method_key, method_name, baseline_id, workload_config_id, workload_config_name, topology_config_id, topology_config_name, scan_variable, scan_value, workload_scenario = key
@@ -561,16 +757,26 @@ def aggregate_formal_results(rows: list[dict[str, Any]]) -> tuple[list[dict[str,
             values = [_to_float(row.get(metric)) for row in group_rows if _to_float(row.get(metric)) is not None]
             if not values:
                 missing.add(metric)
-                aggregate_rows.append(_aggregate_row(experiment_type, method_key, method_name, baseline_id, workload_config_id, workload_config_name, topology_config_id, topology_config_name, scan_variable, scan_value, workload_scenario, metric, None, None, None, None, 0, None))
+                aggregate_rows.append(_aggregate_row(experiment_type, method_key, method_name, baseline_id, workload_config_id, workload_config_name, topology_config_id, topology_config_name, scan_variable, scan_value, workload_scenario, metric, None, None, None, None, 0, None, False))
+                missing_metric_rows.append({
+                    "experiment_type": experiment_type,
+                    "method_config_name": method_name,
+                    "baseline_id": baseline_id,
+                    "workload_scenario": workload_scenario,
+                    "metric": metric,
+                    "missing_count": len(group_rows),
+                    "group_count": len(group_rows),
+                    "reason": "metric_not_extracted",
+                })
                 continue
             mean = sum(values) / len(values)
             variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1) if len(values) > 1 else 0.0
             std = math.sqrt(variance)
             ci95 = 1.96 * std / math.sqrt(len(values)) if len(values) > 1 else None
-            row = _aggregate_row(experiment_type, method_key, method_name, baseline_id, workload_config_id, workload_config_name, topology_config_id, topology_config_name, scan_variable, scan_value, workload_scenario, metric, mean, std, min(values), max(values), len(values), ci95)
+            row = _aggregate_row(experiment_type, method_key, method_name, baseline_id, workload_config_id, workload_config_name, topology_config_id, topology_config_name, scan_variable, scan_value, workload_scenario, metric, mean, std, min(values), max(values), len(values), ci95, True)
             aggregate_rows.append(row)
             ci_rows.append(row)
-    return aggregate_rows, ci_rows, sorted(missing)
+    return aggregate_rows, ci_rows, sorted(missing), missing_metric_rows
 
 
 def build_paper_figure_rows(aggregate_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -582,8 +788,10 @@ def build_paper_figure_rows(aggregate_rows: list[dict[str, Any]]) -> list[dict[s
             "metric": row["metric"],
             "mean": row["mean"],
             "ci95": row["ci95"],
+            "count": row.get("count", 0),
         }
         for row in aggregate_rows
+        if row.get("metric_available") is True and int(row.get("count") or 0) > 0 and _to_float(row.get("mean")) is not None
     ]
 
 
@@ -594,7 +802,7 @@ def build_chart_preview(aggregate_rows: list[dict[str, Any]], figure_rows: list[
     for row in aggregate_rows:
         metric = str(row.get("metric", ""))
         mean = _to_float(row.get("mean"))
-        if metric not in CHART_PREVIEW_METRICS or mean is None:
+        if metric not in CHART_PREVIEW_METRICS or mean is None or row.get("metric_available") is not True or int(row.get("count") or 0) <= 0:
             continue
         if metric not in seen_metrics:
             seen_metrics.add(metric)
@@ -614,6 +822,11 @@ def build_chart_preview(aggregate_rows: list[dict[str, Any]], figure_rows: list[
         "available_metrics": available_metrics,
         "groups": groups,
         "figure_metric_count": figure_metric_count,
+        "diagnostics": {} if groups else {
+            "reason": "no_available_aggregate_metrics",
+            "missing_metrics_file": "formal_missing_metrics.csv",
+            "extraction_report_file": "formal_metric_extraction_report.csv",
+        },
         "data_files": {
             "figure_data": "formal_paper_figure_data.csv",
             "workload_comparison": "formal_workload_comparison.csv",
@@ -800,8 +1013,10 @@ def write_yaml(path: Path, payload: Any) -> None:
     path.write_text(yaml.safe_dump(payload, sort_keys=False, allow_unicode=True), encoding="utf-8")
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    fieldnames = sorted({key for row in rows for key in row})
+def write_csv(path: Path, rows: list[dict[str, Any]], preferred_fields: list[str] | None = None) -> None:
+    keys = {key for row in rows for key in row}
+    preferred = [field for field in (preferred_fields or []) if field in keys or preferred_fields]
+    fieldnames = preferred + sorted(keys - set(preferred))
     if not fieldnames:
         fieldnames = ["empty"]
         rows = []
@@ -839,6 +1054,125 @@ def _read_json_if_exists(path: Path) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _read_json_metric_source(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+        return dict(payload[0])
+    return {}
+
+
+def _read_csv_metric_source(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            return dict(row)
+    return {}
+
+
+def _metric_from_payload(metric: str, payload: dict[str, Any]) -> tuple[float | None, str]:
+    for field in METRIC_ALIASES.get(metric, [metric]):
+        value = _to_float(payload.get(field))
+        if value is not None:
+            return value, field
+    return None, ""
+
+
+def _extract_latency_metrics(child_dir: Path, row: dict[str, Any]) -> tuple[dict[str, float], dict[str, dict[str, Any]]]:
+    for filename in LATENCY_SOURCES:
+        path = child_dir / filename
+        if not path.is_file():
+            continue
+        latencies = _read_latency_values(path)
+        if not latencies:
+            continue
+        metrics = {
+            "avg_latency_ms": sum(latencies) / len(latencies),
+            "p95_latency_ms": _percentile(latencies, 95),
+            "p99_latency_ms": _percentile(latencies, 99),
+        }
+        rows = {
+            metric: _extraction_row(row, child_dir, metric, value, filename, "latency_ms", "ok", f"latency_count={len(latencies)}")
+            for metric, value in metrics.items()
+        }
+        return metrics, rows
+    return {}, {}
+
+
+def _read_latency_values(path: Path) -> list[float]:
+    values: list[float] = []
+    with path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            value = _to_float(row.get("latency_ms"))
+            if value is None:
+                continue
+            status = str(row.get("status", "")).strip().lower()
+            if status and status not in SUCCESS_STATUSES:
+                continue
+            values.append(value)
+    return values
+
+
+def _percentile(values: list[float], percentile: int) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (percentile / 100) * (len(ordered) - 1)
+    lower = math.floor(rank)
+    upper = math.ceil(rank)
+    if lower == upper:
+        return ordered[int(rank)]
+    weight = rank - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _derive_throughput(sources: list[tuple[str, dict[str, Any]]]) -> tuple[float | None, str, str, str]:
+    count_fields = ["success_count", "successful_tx_count", "completed_tx_count", "tx_count"]
+    elapsed_fields = ["elapsed_ms", "duration_ms", "runtime_ms"]
+    for source_file, payload in sources:
+        count_value = None
+        count_field = ""
+        for field in count_fields:
+            count_value = _to_float(payload.get(field))
+            if count_value is not None:
+                count_field = field
+                break
+        elapsed_value = None
+        elapsed_field = ""
+        for field in elapsed_fields:
+            elapsed_value = _to_float(payload.get(field))
+            if elapsed_value is not None:
+                elapsed_field = field
+                break
+        if count_value is not None and elapsed_value and elapsed_value > 0:
+            return count_value / (elapsed_value / 1000), source_file, f"{count_field}/{elapsed_field}", ""
+    return None, "", "", "throughput_tps unavailable and no positive elapsed_ms with success_count"
+
+
+def _extraction_row(row: dict[str, Any], child_dir: Path, metric: str, value: Any, source_file: str, source_field: str, status: str, missing_reason: str) -> dict[str, Any]:
+    return {
+        "run_index": row.get("run_index", ""),
+        "child_output_dir": str(child_dir),
+        "metric": metric,
+        "value": value,
+        "source_file": source_file,
+        "source_field": source_field,
+        "status": status,
+        "missing_reason": missing_reason,
+    }
+
+
+def _missing_reason(metric: str, missing_by_source: dict[str, str]) -> str:
+    if missing_by_source:
+        details = "; ".join(f"{source}:{reason}" for source, reason in sorted(missing_by_source.items()))
+        return f"{metric} not found in available sources; {details}"
+    return f"{metric} not found in runtime_summary"
 
 
 def _child_run_dirs(run_dir: Path) -> list[Path]:
@@ -1008,7 +1342,7 @@ def _child_artifact_row(row: dict[str, Any], child_dir: Path, status: str, error
     }
 
 
-def _aggregate_row(experiment_type: str, method_key: str, method_name: str, baseline_id: str, workload_config_id: str, workload_config_name: str, topology_config_id: str, topology_config_name: str, scan_variable: str, scan_value: str, workload_scenario: str, metric: str, mean: float | None, std: float | None, minimum: float | None, maximum: float | None, count: int, ci95: float | None) -> dict[str, Any]:
+def _aggregate_row(experiment_type: str, method_key: str, method_name: str, baseline_id: str, workload_config_id: str, workload_config_name: str, topology_config_id: str, topology_config_name: str, scan_variable: str, scan_value: str, workload_scenario: str, metric: str, mean: float | None, std: float | None, minimum: float | None, maximum: float | None, count: int, ci95: float | None, metric_available: bool) -> dict[str, Any]:
     return {
         "experiment_type": experiment_type,
         "baseline_id": baseline_id,
@@ -1023,6 +1357,7 @@ def _aggregate_row(experiment_type: str, method_key: str, method_name: str, base
         "scan_value": scan_value,
         "workload_scenario": workload_scenario,
         "metric": metric,
+        "metric_available": metric_available,
         "mean": mean,
         "std": std,
         "min": minimum,

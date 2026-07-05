@@ -13,6 +13,7 @@ type ChartPreview = {
   primary_metric?: string;
   available_metrics?: string[];
   groups?: ChartGroup[];
+  diagnostics?: Record<string, string>;
   data_files?: Record<string, string>;
 };
 
@@ -40,6 +41,9 @@ export default function FormalResultCharts({ summary }: Props) {
         <span className="v3-status-badge status-fixed">来源 formal_paper_figure_data.csv</span>
       </div>
       <p className="muted">图表预览用于快速查看趋势，不替代 CSV、复现包或论文绘图脚本。</p>
+      {preview.diagnostics?.reason && (
+        <div className="v3-warning-card">指标抽取诊断见 formal_metric_extraction_report.csv；缺失指标汇总见 formal_missing_metrics.csv。</div>
+      )}
       <div className="v3-chart-grid">
         {charts.map(([metric, title]) => (
           <MetricBarChart key={metric} title={title} metric={metric} groups={groups.filter((group) => group.metric === metric)} />

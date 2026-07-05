@@ -27,11 +27,34 @@ The formal result panel shows:
 
 The chart preview does not fabricate missing metrics. If the runtime does not emit a metric, the corresponding chart says the metric has no preview data.
 
+## Metric Extraction Diagnostics
+
+Formal runs extract standard metrics from child-run outputs in this order:
+
+1. runtime summary returned by the Go runner
+2. `summary.json`
+3. `summary.csv`
+4. `metatrack_summary.json`
+5. `metatrack_summary.csv`
+6. `metatrack_mechanism_metrics.csv`
+7. `tx_results.csv`
+8. `metatrack_latency.csv`
+
+The extraction layer supports field aliases such as `tps -> throughput_tps` and computes latency summaries from `latency_ms` rows when summary files do not already provide average/P95/P99 latency. It may derive throughput from success count and elapsed milliseconds when that is unambiguous.
+
+Diagnostics are written to:
+
+- `formal_metric_extraction_report.csv`
+- `formal_metric_extraction_report.json`
+- `formal_missing_metrics.csv`
+
+Missing metrics are not filled with zero. `formal_workload_comparison.csv` includes only available metrics so it stays usable for plotting.
+
 ## ZIP Contents
 
 `GET /api/v3/composer/formal-metatrack/<run_id>/artifacts.zip` returns:
 
-- Core formal files such as `summary.json`, `formal_benchmark_config.json`, `formal_matrix_preview.json`, `formal_run_manifest.json`, `formal_progress.json`, `formal_run_matrix.csv`, `formal_run_index.csv`, `formal_failed_runs.csv`, `formal_child_artifact_index.csv`, `formal_raw_summary.csv`, `formal_aggregate_summary.csv`, `formal_workload_comparison.csv`, and `formal_chart_preview.json`.
+- Core formal files such as `summary.json`, `formal_benchmark_config.json`, `formal_matrix_preview.json`, `formal_run_manifest.json`, `formal_progress.json`, `formal_run_matrix.csv`, `formal_run_index.csv`, `formal_failed_runs.csv`, `formal_child_artifact_index.csv`, `formal_metric_extraction_report.csv`, `formal_missing_metrics.csv`, `formal_raw_summary.csv`, `formal_aggregate_summary.csv`, `formal_workload_comparison.csv`, and `formal_chart_preview.json`.
 - Paper files such as `formal_latency_summary.csv`, `formal_throughput_summary.csv`, `formal_overhead_summary.csv`, `formal_confidence_interval.csv`, and `formal_paper_figure_data.csv`.
 - Reproducibility files such as `formal_reproducibility_manifest.json` and `formal_benchmark_report.md`.
 - Selected child-run allowlisted files under `child_runs/run_<index>/`.
