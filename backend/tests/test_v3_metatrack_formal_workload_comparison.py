@@ -112,6 +112,61 @@ def test_saved_method_config_can_replace_baselines(monkeypatch) -> None:
     assert preview["matrix"][0]["method_config_name"] == "Saved MetaTrack full"
 
 
+def test_preview_warns_when_saved_method_metrics_report_needs_go_normalization(monkeypatch) -> None:
+    saved_draft = draft()
+    saved_draft.modules["MetricsReport"].plugin = "metatrack_metrics"
+    saved = {
+        "v3cfg_method": {
+            "config_id": "v3cfg_method",
+            "config_kind": "method",
+            "name": "Saved MetaTrack metrics",
+            "payload": {"draft": runner.model_dump(saved_draft)},
+        }
+    }
+    monkeypatch.setattr(runner, "get_saved_config", lambda config_id: saved[config_id])
+
+    preview = runner.preview_formal_metatrack_benchmark(request(baseline_ids=[], method_config_ids=["v3cfg_method"], seed_count=1))
+
+    assert preview["is_runnable"] is True
+    assert any("MetricsReport=metatrack_metrics" in warning for warning in preview["warnings"])
+
+
+def test_formal_plugin_profile_normalizes_metrics_report_for_go_runtime() -> None:
+    plugins = {
+        "Workload": "synthetic_hotspot",
+        "TxPool": "fifo_pool",
+        "BlockProducer": "time_or_count_block_producer",
+        "Consensus": "simple_leader",
+        "CommitteeEpoch": "disabled",
+        "Routing": "metatrack_coaccess_routing",
+        "Execution": "metatrack_dual_track_execution",
+        "StateAccess": "access_list_prefetch",
+        "StateStorage": "hash_state_storage",
+        "Commit": "constraint_checked_aggregation",
+        "MetricsReport": "metatrack_metrics",
+    }
+
+    profile = runner.build_formal_plugin_profile({"baseline_id": "saved_method", "plugins": plugins})
+    generated = profile["profiles"][0]
+
+    assert generated["plugins"]["MetricsPlugin"] == "basic_metrics"
+    assert generated["module_plugins"]["MetricsReport"] == "basic_metrics"
+    assert generated["original_module_plugins"]["MetricsReport"] == "metatrack_metrics"
+    assert "MetricsReport=metatrack_metrics normalized to basic_metrics" in generated["compatibility_warnings"][0]
+
+
+def test_failure_summary_normalizes_repeated_go_runtime_errors() -> None:
+    failed_runs = [
+        {"status": "failed", "error": "Go V3 runtime failed: 2026/07/05 21:34:09 V3 Go runtime requires MetricsPlugin=basic_metrics exit status 1"},
+        {"status": "failed", "error": "Go V3 runtime failed: 2026/07/05 21:35:10 V3 Go runtime requires MetricsPlugin=basic_metrics exit status 1"},
+    ]
+
+    summary = runner.build_failure_summary([], failed_runs)
+
+    assert summary["failed_run_count"] == 2
+    assert summary["top_errors"][0] == {"count": 2, "message": "V3 Go runtime requires MetricsPlugin=basic_metrics"}
+
+
 def test_run_writes_progress_and_child_index(monkeypatch, tmp_path) -> None:
     def fake_run_go_v3_runtime(**kwargs):
         output_dir = kwargs["output_dir"]

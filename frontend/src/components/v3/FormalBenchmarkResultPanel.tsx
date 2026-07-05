@@ -11,8 +11,12 @@ export default function FormalBenchmarkResultPanel({ result }: Props) {
   const summary = result.summary || {};
   const paperCandidate = Boolean(summary.paper_candidate_eligible);
   const reasons = readArray(summary.paper_candidate_reasons);
+  const failedRunCount = Number(summary.failed_run_count || 0);
+  const completedRunCount = Number(summary.completed_run_count || 0);
+  const runCount = Number(summary.run_count || 0);
+  const failureSummary = readFailureSummary(summary.failure_summary);
   return (
-    <section className="final-card wide result-console">
+    <section className="final-card wide result-console" data-testid="v3-formal-result-panel">
       <div className="v3-section-head">
         <div>
           <p className="eyebrow">正式性能实验结果</p>
@@ -47,6 +51,24 @@ export default function FormalBenchmarkResultPanel({ result }: Props) {
         <div><dt>失败子运行</dt><dd>{String(summary.failed_child_run_count ?? summary.failed_run_count ?? 0)}</dd></div>
       </dl>
       <div className="v3-warning-card">正式运行会输出 formal_run_manifest.json、formal_progress.json、formal_failed_runs.csv 和 formal_child_artifact_index.csv，用于定位子运行状态和失败原因。</div>
+      {failedRunCount > 0 && (
+        <section className="v3-warning-card" data-testid="v3-formal-failure-diagnostics">
+          <strong>本次正式实验存在失败子运行。</strong>
+          <p>完成：{completedRunCount} / 总计：{runCount}；失败：{failedRunCount}</p>
+          {completedRunCount === 0 && <p>本次没有可用于图表的成功子运行。</p>}
+          {failureSummary.top_errors.length > 0 && (
+            <>
+              <p>主要失败原因：</p>
+              <ul className="v3-check-list compact">
+                {failureSummary.top_errors.map((item) => (
+                  <li key={`${item.count}-${item.message}`}>{item.count} 次：{item.message}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          <p>建议查看：{failureSummary.failed_runs_file}、{failureSummary.child_artifact_index_file}、formal_metric_extraction_report.csv</p>
+        </section>
+      )}
       <FormalResultCharts summary={summary} />
       <section className="v3-config-section">
         <div className="v3-section-head">
@@ -54,7 +76,7 @@ export default function FormalBenchmarkResultPanel({ result }: Props) {
             <p className="eyebrow">数据文件说明</p>
             <h4>论文画图与复现入口</h4>
           </div>
-          <a className="v3-secondary-button" href={formalArtifactsZipURL(result.run_id)} download={`formal_metatrack_results_${result.run_id}.zip`}>下载全部 ZIP</a>
+          <a className="v3-secondary-button" data-testid="v3-formal-zip-download" href={formalArtifactsZipURL(result.run_id)} download={`formal_metatrack_results_${result.run_id}.zip`}>下载全部 ZIP</a>
         </div>
         <p className="muted">实验输出目录：{result.output_dir}</p>
         <DataFileList artifacts={result.artifacts || []} />
@@ -88,7 +110,7 @@ function DataFileList({ artifacts }: { artifacts: V2Artifact[] }) {
     ["formal_chart_preview.json", "图表预览数据"],
   ];
   return (
-    <ul className="v3-data-file-list">
+    <ul className="v3-data-file-list" data-testid="v3-formal-data-file-list">
       {files.map(([name, label]) => {
         const artifact = byName.get(name);
         return (
@@ -111,4 +133,22 @@ function readArray(value: unknown): string[] {
   if (Array.isArray(value)) return value.map(String);
   if (typeof value === "string" && value.trim()) return value.split(",").map((item) => item.trim()).filter(Boolean);
   return [];
+}
+
+function readFailureSummary(value: unknown): { top_errors: { count: number; message: string }[]; failed_runs_file: string; child_artifact_index_file: string } {
+  if (!value || typeof value !== "object") {
+    return { top_errors: [], failed_runs_file: "formal_failed_runs.csv", child_artifact_index_file: "formal_child_artifact_index.csv" };
+  }
+  const payload = value as { top_errors?: unknown; failed_runs_file?: unknown; child_artifact_index_file?: unknown };
+  const topErrors = Array.isArray(payload.top_errors)
+    ? payload.top_errors.map((item) => {
+      const row = item as { count?: unknown; message?: unknown };
+      return { count: Number(row.count || 0), message: String(row.message || "") };
+    }).filter((item) => item.message)
+    : [];
+  return {
+    top_errors: topErrors,
+    failed_runs_file: String(payload.failed_runs_file || "formal_failed_runs.csv"),
+    child_artifact_index_file: String(payload.child_artifact_index_file || "formal_child_artifact_index.csv"),
+  };
 }

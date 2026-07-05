@@ -94,6 +94,7 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
       setFormalTxCount(1000);
       setSeedCount(1);
       setRuntimeEvidenceMode("local_multi_process_validation");
+      setBaselineIds(["baseline_hash_serial", "metatrack_full"]);
       setHotspotPoints("0.4");
       setCrossShardPoints("0.3");
       setShardPoints("4");
@@ -253,10 +254,10 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
       </details>
       <div className="v3-warning-card">资源保护：最多 200 个运行组、总交易数最多 20000000、seed 数量最多 10、每组交易数最多 1000000、扫描点最多 20。</div>
       <div className="v3-run-buttons">
-        <button type="button" className="v3-secondary-button" disabled={!payload || previewing || running} onClick={() => payload && onPreview(payload)}>
+        <button type="button" className="v3-secondary-button" data-testid="v3-formal-preview-button" disabled={!payload || previewing || running} onClick={() => payload && onPreview(payload)}>
           {previewing ? "预览中..." : "预览实验矩阵"}
         </button>
-        <button type="button" disabled={!payload || running || !preview?.is_runnable} onClick={() => payload && onRun(payload)}>
+        <button type="button" data-testid="v3-formal-run-button" disabled={!payload || running || !preview?.is_runnable} onClick={() => payload && onRun(payload)}>
           {running ? "正式性能实验运行中..." : "运行正式性能实验"}
         </button>
       </div>

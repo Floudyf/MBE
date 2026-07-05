@@ -32,7 +32,7 @@ export default function FormalResultCharts({ summary }: Props) {
   const preview = readChartPreview(summary);
   const groups = preview.groups || [];
   return (
-    <section className="v3-chart-dashboard">
+    <section className="v3-chart-dashboard" data-testid="v3-formal-chart-dashboard">
       <div className="v3-section-head">
         <div>
           <p className="eyebrow">结果图表预览</p>

@@ -219,6 +219,12 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   enabled_metatrack_components?: string[] | string;
   controlled_experiment_enabled?: boolean | string;
   plugin_selection_mode?: string;
+  failure_summary?: {
+    failed_run_count?: number;
+    top_errors?: { count: number; message: string }[];
+    failed_runs_file?: string;
+    child_artifact_index_file?: string;
+  };
   controlled_modules?: string[] | string;
   variable_module?: string;
   locked_modules?: Record<string, string> | string;

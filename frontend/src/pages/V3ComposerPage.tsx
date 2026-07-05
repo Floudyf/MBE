@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   fetchV3ComposerPreview,
@@ -147,6 +147,7 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [controlledResult, setControlledResult] = useState<V3ControlledSmokeRunResponse | null>(null);
   const [formalPreview, setFormalPreview] = useState<V3FormalMetatrackBenchmarkPreview | null>(null);
   const [formalResult, setFormalResult] = useState<V3FormalMetatrackBenchmarkRunResponse | null>(null);
+  const [formalHistoryRefreshKey, setFormalHistoryRefreshKey] = useState(0);
   const [savedConfigs, setSavedConfigs] = useState<V3SavedConfig[]>([]);
   const [loadingSavedConfigs, setLoadingSavedConfigs] = useState(false);
   const [currentMethodName, setCurrentMethodName] = useState("");
@@ -167,9 +168,17 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
   const [draftError, setDraftError] = useState("");
   const [formalError, setFormalError] = useState("");
   const [savedConfigError, setSavedConfigError] = useState("");
+  const formalResultRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { void loadPreview(profileId); }, [profileId]);
   useEffect(() => { void refreshSavedConfigs(); }, []);
+
+  function showFormalResult(result: V3FormalMetatrackBenchmarkRunResponse) {
+    setFormalResult(result);
+    setFormalPreview(result.preview);
+    setArtifacts(result.artifacts || []);
+    window.setTimeout(() => formalResultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  }
 
   async function loadPreview(nextProfileId: string) {
     try {
@@ -458,10 +467,9 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       setProgressMode("controlled");
       setProgressStep(0);
       const result = await runV3FormalMetatrackBenchmark(payload);
-      setFormalResult(result);
-      setFormalPreview(result.preview);
-      setArtifacts(result.artifacts || []);
+      showFormalResult(result);
       setDraftRunResult(null);
+      setFormalHistoryRefreshKey((value) => value + 1);
       if (result.run_id) onRunCompleted?.(result.run_id);
       setFormalError("");
       setProgressMode("success");
@@ -747,12 +755,10 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
         )}
       </section>
 
-      <FormalRunHistoryPanel onSelectResult={(result) => {
-        setFormalResult(result);
-        setFormalPreview(result.preview);
-        setArtifacts(result.artifacts || []);
-      }} />
-      <FormalBenchmarkResultPanel result={formalResult} />
+      <FormalRunHistoryPanel refreshKey={formalHistoryRefreshKey} autoLoadLatest onSelectResult={showFormalResult} />
+      <div ref={formalResultRef}>
+        <FormalBenchmarkResultPanel result={formalResult} />
+      </div>
       <DraftRunResultPanel result={draftRunResult} />
       <DraftRunHistoryPanel />
 

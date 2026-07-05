@@ -34,3 +34,5 @@ Thumbs.db
 
 # TypeScript build cache
 frontend/tsconfig.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/

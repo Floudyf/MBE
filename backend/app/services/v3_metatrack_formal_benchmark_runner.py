@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 import shutil
 import zipfile
 from collections import defaultdict
@@ -306,6 +307,8 @@ def preview_formal_metatrack_benchmark(request: V3FormalMetatrackBenchmarkReques
         errors.append("Composer draft validation failed.")
 
     matrix = build_formal_experiment_matrix(request, normalized_draft)
+    for warning in _formal_runtime_compatibility_warnings(matrix):
+        warnings.append(warning)
     run_count = len(matrix)
     total_tx_count = run_count * request.formal_tx_count
     scan_point_count = len({(row["scan_variable"], str(row["scan_value"])) for row in matrix}) if matrix else 0
@@ -442,7 +445,7 @@ def run_formal_metatrack_benchmark(request: V3FormalMetatrackBenchmarkRequest, r
 
         aggregate_rows, ci_rows, missing_metrics, missing_metric_rows = aggregate_formal_results(raw_rows)
         figure_rows = build_paper_figure_rows(aggregate_rows)
-        summary = build_formal_summary(request, preview, raw_rows, aggregate_rows, figure_rows, missing_metrics)
+        summary = build_formal_summary(request, preview, raw_rows, aggregate_rows, figure_rows, missing_metrics, failed_runs)
         write_json(run_dir / "formal_chart_preview.json", summary["chart_preview"])
         write_csv(run_dir / "formal_run_index.csv", run_index)
         write_csv(run_dir / "formal_failed_runs.csv", failed_runs)
@@ -638,7 +641,8 @@ def build_formal_experiment_profile(request: V3FormalMetatrackBenchmarkRequest, 
 
 
 def build_formal_plugin_profile(row: dict[str, Any]) -> dict[str, Any]:
-    plugins = row["plugins"]
+    original_plugins = dict(row["plugins"])
+    plugins, compatibility_warnings = normalize_formal_plugins_for_go_runtime(original_plugins)
     return {
         "profile_type": "plugin_profile_collection",
         "version": "v3",
@@ -663,10 +667,22 @@ def build_formal_plugin_profile(row: dict[str, Any]) -> dict[str, Any]:
                 "MetricsPlugin": plugins["MetricsReport"],
             },
             "module_plugins": plugins,
+            "original_module_plugins": original_plugins,
+            "compatibility_warnings": compatibility_warnings,
             "tags": ["formal_metatrack", "controlled_benchmark"],
             "blocking_reasons": [],
         }],
     }
+
+
+def normalize_formal_plugins_for_go_runtime(plugins: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    normalized = dict(plugins)
+    warnings: list[str] = []
+    metrics_plugin = normalized.get("MetricsReport")
+    if metrics_plugin and metrics_plugin != "basic_metrics":
+        normalized["MetricsReport"] = "basic_metrics"
+        warnings.append(f"MetricsReport={metrics_plugin} normalized to basic_metrics for Go runtime compatibility.")
+    return normalized, warnings
 
 
 def extract_child_run_metrics(
@@ -845,6 +861,7 @@ def build_formal_summary(
     aggregate_rows: list[dict[str, Any]],
     figure_rows: list[dict[str, Any]],
     missing_metrics: list[str],
+    failed_runs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     completed = sum(1 for row in raw_rows if row.get("status") == "completed")
     failed = len(raw_rows) - completed
@@ -867,6 +884,7 @@ def build_formal_summary(
         reasons.append("not all sub-runs completed.")
     paper_candidate = not reasons
     chart_preview = build_chart_preview(aggregate_rows, figure_rows)
+    failure_summary = build_failure_summary(raw_rows, failed_runs or [])
     return {
         **stage_metadata(),
         "run_mode": "formal_metatrack_benchmark",
@@ -895,6 +913,27 @@ def build_formal_summary(
         "truth_boundary": TRUTH_BOUNDARY,
         "missing_metrics": missing_metrics,
         "chart_preview": chart_preview,
+        "failure_summary": failure_summary,
+    }
+
+
+def build_failure_summary(raw_rows: list[dict[str, Any]], failed_runs: list[dict[str, Any]]) -> dict[str, Any]:
+    failed = [row for row in failed_runs if row.get("error")]
+    if not failed:
+        failed = [row for row in raw_rows if row.get("status") == "failed" and row.get("error")]
+    error_counts: dict[str, int] = defaultdict(int)
+    for row in failed:
+        error_counts[_normalize_failure_message(str(row.get("error", "")))] += 1
+    top_errors = [
+        {"count": count, "message": message}
+        for message, count in sorted(error_counts.items(), key=lambda item: (-item[1], item[0]))
+        if message
+    ]
+    return {
+        "failed_run_count": len(failed),
+        "top_errors": top_errors[:5],
+        "failed_runs_file": "formal_failed_runs.csv",
+        "child_artifact_index_file": "formal_child_artifact_index.csv",
     }
 
 
@@ -1221,6 +1260,19 @@ def _contains_preview_or_planned(normalized_draft: dict[str, Any]) -> bool:
     return any(bool(module.get("preview_only") or module.get("planned")) for module in modules.values() if isinstance(module, dict))
 
 
+def _formal_runtime_compatibility_warnings(matrix: list[dict[str, Any]]) -> list[str]:
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for row in matrix:
+        plugins = row.get("plugins") or {}
+        metrics_plugin = plugins.get("MetricsReport") if isinstance(plugins, dict) else None
+        if not metrics_plugin or metrics_plugin == "basic_metrics" or str(metrics_plugin) in seen:
+            continue
+        seen.add(str(metrics_plugin))
+        warnings.append(f"Formal Go runtime will normalize MetricsReport={metrics_plugin} to basic_metrics.")
+    return warnings
+
+
 def _method_definitions(request: V3FormalMetatrackBenchmarkRequest) -> list[dict[str, Any]]:
     methods: list[dict[str, Any]] = []
     methods.extend([
@@ -1403,3 +1455,14 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _normalize_failure_message(message: str) -> str:
+    cleaned = message.strip()
+    if "V3 Go runtime requires MetricsPlugin=basic_metrics" in cleaned:
+        return "V3 Go runtime requires MetricsPlugin=basic_metrics"
+    cleaned = re.sub(r"Go V3 runtime failed:\s*", "", cleaned)
+    cleaned = re.sub(r"\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}\s*", "", cleaned)
+    cleaned = re.sub(r"\s*exit status \d+\s*$", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or "unknown formal benchmark failure"

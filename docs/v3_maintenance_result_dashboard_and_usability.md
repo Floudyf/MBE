@@ -67,6 +67,24 @@ The history API lists recent formal runs and allows the frontend to reload a pre
 
 History is a local convenience feature. It is not a production result database.
 
+The history panel now exposes stable Playwright selectors, shows a per-run loading state when "view result" is clicked, reports the loaded `run_id`, refreshes after a formal run completes, and can auto-load the latest available result. The parent console scrolls to the result panel after a formal run or history reload.
+
+## Failure Diagnostics
+
+`summary.json` includes a `failure_summary` block when formal child runs fail. It aggregates repeated child-run errors into stable top errors, links users to `formal_failed_runs.csv` and `formal_child_artifact_index.csv`, and keeps `formal_metric_extraction_report.csv` as the metric-level diagnostic source.
+
+The frontend result panel shows a failure diagnostics card when `failed_run_count > 0`. If no child run completed, the panel says that there is no successful run data for charts instead of leaving the user to infer that from empty graphs.
+
+## Playwright E2E Validation
+
+The repository includes Playwright tests and a Windows wrapper script:
+
+```powershell
+.\scripts\v3_e2e_check.ps1
+```
+
+The script starts the FastAPI backend, starts the Vite frontend, waits for both local endpoints, runs `npx playwright test`, and stops the launched process trees. Playwright artifacts are written under `frontend/test-results/` and traces are retained on failure.
+
 ## Ratio Slider Safety
 
 Ratio fields use a slider plus number input. The UI accepts decimal input such as `0.8`, and also treats `80` as `0.8` to avoid the common 80/0.8 mistake. Values are clamped to `0..1`.

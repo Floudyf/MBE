@@ -7,7 +7,7 @@ type Props = {
 export default function FormalExperimentMatrixPreview({ preview }: Props) {
   if (!preview) {
     return (
-      <section className="v3-config-section">
+      <section className="v3-config-section" data-testid="v3-formal-matrix-preview">
         <h4>实验矩阵预览</h4>
         <p className="muted">配置正式性能实验参数后，可预览基线、seed 和扫描点组合。</p>
       </section>
@@ -18,7 +18,7 @@ export default function FormalExperimentMatrixPreview({ preview }: Props) {
   const methods = Array.from(new Set(scenarioRows.map((row) => String(row.method_config_name || row.baseline_label || row.baseline_id || row.method_config_id || "-"))));
   const scenarios = Array.from(new Set(scenarioRows.map((row) => String(row.workload_scenario || row.scan_value || "-"))));
   return (
-    <section className="v3-config-section">
+    <section className="v3-config-section" data-testid="v3-formal-matrix-preview">
       <div className="v3-section-head">
         <h4>实验矩阵预览</h4>
         <span className={`v3-status-badge status-${preview.is_runnable ? "variable" : "planned"}`}>

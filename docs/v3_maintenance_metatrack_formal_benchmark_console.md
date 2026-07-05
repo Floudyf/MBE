@@ -96,6 +96,18 @@ The console can list recent formal runs and reload a previous result after page 
 
 Missing runtime metrics are left empty and listed in the report. The runner does not fabricate overhead, latency, or cross-shard fields.
 
+## Go Runtime Compatibility Diagnostics
+
+Formal runs may reuse saved method configs. If a saved method uses `MetricsReport=metatrack_metrics`, the formal runner keeps the saved config unchanged but normalizes the generated Go runtime profile to `MetricsPlugin=basic_metrics`, because the current V3 Go runtime accepts only `basic_metrics` as the runtime metrics plugin.
+
+Preview returns a warning before execution:
+
+```text
+Formal Go runtime will normalize MetricsReport=<old> to basic_metrics.
+```
+
+Each child `generated_plugin_profile.json` records both `original_module_plugins` and normalized `module_plugins`, plus `compatibility_warnings`. This avoids all child runs failing for a profile compatibility issue while preserving the user's saved method definition.
+
 The formal metric extraction layer also records where each metric came from. It can read runtime summary fields, JSON/CSV summaries, MetaTrack mechanism metrics, and latency files. When summary files do not expose latency metrics, it computes average/P95/P99 from successful `latency_ms` rows. When throughput is absent but a success count and positive elapsed duration exist, it derives `throughput_tps`.
 
 `formal_aggregate_summary.csv` keeps unavailable metrics with `metric_available=false` for diagnostics. `formal_workload_comparison.csv` filters those unavailable rows so the workload comparison table is not dominated by empty metrics.
