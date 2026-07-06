@@ -5,6 +5,7 @@ import (
 
 	"metaverse-chainlab/executor/realism/account"
 	"metaverse-chainlab/executor/realism/mempool"
+	"metaverse-chainlab/executor/realism/p2p"
 )
 
 type Config struct {
@@ -19,6 +20,15 @@ type Config struct {
 	AdmissionLogOut string
 	RealTraceImport bool
 	TTL             time.Duration
+	ListenAddr      string
+	Peers           []p2p.Peer
+	Role            string
+	BlockSize       int
+	BlockIntervalMS int
+	Consensus       string
+	RunDurationMS   int
+	LeaderID        string
+	Validators      []string
 }
 
 type Node struct {

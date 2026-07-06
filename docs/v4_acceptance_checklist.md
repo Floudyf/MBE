@@ -71,18 +71,18 @@ v4_real_node_foundation
 
 Accepted when:
 
-- multiple nodes run as long-running processes;
-- each node listens on its own address;
-- nodes exchange real TCP/gRPC messages;
-- tx gossip appears in real send/receive logs;
-- leader selects transactions from mempool;
-- leader builds and broadcasts block proposals;
-- validators receive PrePrepare and send Prepare;
-- validators collect Prepare quorum and send Commit;
-- nodes commit after Commit quorum;
-- basic ViewChange/NewView can be triggered by timeout or leader failure;
-- block commit logs are generated from real consensus state;
-- V3 remains runnable.
+- Implemented/verified: multiple V4.1 runtimes run with long-running server semantics and test-controlled graceful shutdown.
+- Implemented/verified: each node listens on its own localhost TCP address.
+- Implemented/verified: nodes exchange real TCP messages.
+- Implemented/verified: TX_GOSSIP appears in real send/receive logs and receiving-node mempool admission.
+- Implemented/verified: leader selects transactions from mempool.
+- Implemented/verified: leader builds and broadcasts block proposals as PBFT_PRE_PREPARE.
+- Implemented/verified: validators receive PrePrepare and send Prepare.
+- Implemented/verified: validators collect Prepare quorum and send Commit.
+- Implemented/verified: nodes commit after Commit quorum.
+- Implemented/verified: basic ViewChange/NewView state transition is covered; production view-change proof, checkpoint, and stable log are not implemented.
+- Implemented/verified: block commit logs are generated from real consensus state.
+- Implemented/verified: V3 remains runnable under `go test ./...`.
 
 Required artifacts:
 
@@ -97,6 +97,21 @@ v4_view_change_log.csv
 v4_block_commit_log.csv
 v4_consensus_summary.json
 ```
+
+Implemented artifact foundation:
+
+```text
+network_log.csv
+pbft_message_log.csv
+quorum_log.csv
+view_change_log.csv
+block_proposal_log.csv
+block_commit_log.csv
+v4_1_node_runtime_summary.json
+v4_1_supervisor_plan.json
+```
+
+The current implementation stores send/receive network events in one `network_log.csv` and writes node runtime summaries. Split send/receive/message-trace files and aggregate consensus summary naming remain refinements.
 
 Truth label:
 

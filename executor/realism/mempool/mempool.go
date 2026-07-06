@@ -2,6 +2,7 @@ package mempool
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"metaverse-chainlab/executor/realism/account"
@@ -15,6 +16,7 @@ type entry struct {
 }
 
 type Mempool struct {
+	mu      sync.Mutex
 	nodeID  string
 	shardID string
 	policy  Policy
@@ -48,11 +50,13 @@ func (m *Mempool) Admit(item tx.SignedTransaction) AdmissionResult {
 }
 
 func (m *Mempool) AdmitAt(item tx.SignedTransaction, now time.Time) AdmissionResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	nowMS := now.UnixMilli()
 	if err := tx.Verify(item); err != nil {
 		return rejected(item, m.nodeID, m.shardID, reasonOf(err), len(m.byID), nowMS)
 	}
-	if m.Has(item.TxID) {
+	if m.hasLocked(item.TxID) {
 		return rejected(item, m.nodeID, m.shardID, ReasonDuplicateTx, len(m.byID), nowMS)
 	}
 	if len(m.byID) >= m.policy.Capacity {
@@ -80,7 +84,13 @@ func (m *Mempool) AdmitAt(item tx.SignedTransaction, now time.Time) AdmissionRes
 }
 
 func (m *Mempool) Remove(txID string) bool {
-	if !m.Has(txID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.removeLocked(txID)
+}
+
+func (m *Mempool) removeLocked(txID string) bool {
+	if !m.hasLocked(txID) {
 		return false
 	}
 	delete(m.byID, txID)
@@ -89,6 +99,8 @@ func (m *Mempool) Remove(txID string) bool {
 }
 
 func (m *Mempool) PopReady(limit int) []tx.SignedTransaction {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if limit <= 0 {
 		return nil
 	}
@@ -100,17 +112,25 @@ func (m *Mempool) PopReady(limit int) []tx.SignedTransaction {
 	for _, id := range ids {
 		if e, ok := m.byID[id]; ok {
 			out = append(out, e.tx)
-			m.Remove(id)
+			m.removeLocked(id)
 		}
 	}
 	return out
 }
 
 func (m *Mempool) Len() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return len(m.byID)
 }
 
 func (m *Mempool) Has(txID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hasLocked(txID)
+}
+
+func (m *Mempool) hasLocked(txID string) bool {
 	_, ok := m.byID[txID]
 	return ok
 }
@@ -120,6 +140,8 @@ func (m *Mempool) Capacity() int {
 }
 
 func (m *Mempool) Expire(now time.Time) []AdmissionResult {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	expired := []AdmissionResult{}
 	if m.policy.TTL <= 0 {
 		return expired
@@ -130,7 +152,7 @@ func (m *Mempool) Expire(now time.Time) []AdmissionResult {
 			continue
 		}
 		if now.Sub(e.admittedAt) > m.policy.TTL {
-			m.Remove(id)
+			m.removeLocked(id)
 			expired = append(expired, AdmissionResult{
 				Accepted:     false,
 				TxID:         e.tx.TxID,
@@ -151,6 +173,8 @@ func (m *Mempool) Expire(now time.Time) []AdmissionResult {
 }
 
 func (m *Mempool) Snapshot() Snapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	items := make([]SnapshotItem, 0, len(m.order))
 	now := time.Now()
 	for _, id := range m.order {
@@ -172,6 +196,8 @@ func (m *Mempool) Snapshot() Snapshot {
 }
 
 func (m *Mempool) Stats() Stats {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return Stats{NodeID: m.nodeID, ShardID: m.shardID, Size: len(m.byID), Capacity: m.policy.Capacity}
 }
 

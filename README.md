@@ -27,6 +27,8 @@ Current truth boundary: V4 is planned until each stage is implemented and valida
 
 V4.0 implementation status: the standalone Go path now supports deterministic signed transaction generation, Ed25519 verification, account nonce checks, independent per-node mempool admission, `mbe-client`, `mbe-node` once/server skeleton, `mbe-supervisor` config skeleton, CSV trace-to-signed-JSONL import foundation, and V4.0 node summary/log artifacts. Runtime truth remains `v4_real_node_foundation`: real P2P, PBFT/HotStuff/Raft, block proposer, persistent state/block/receipt commit, cross-shard protocol, backend integration, and frontend Realism Mode are not implemented.
 
+V4.1 implementation status: the standalone Go path now supports localhost TCP message envelopes, TX_GOSSIP, shard leader block proposal from per-node mempool, PBFT-style PrePrepare / Prepare / Commit with 2f+1 quorum, basic ViewChange / NewView state, lightweight committed block logs, `mbe-node` V4.1 server runtime, and `mbe-supervisor` V4.1 run-plan output. Runtime truth is `v4_real_p2p_consensus_commit`: this is not production PBFT, not full Byzantine security, not checkpoint/stable-log PBFT, not persistent state/account execution, not receipt db, not cross-shard protocol, and not frontend Realism Mode.
+
 ## Current Status
 
 Current stage: V3-final Fault, Observability, and Reproducibility Closure.
