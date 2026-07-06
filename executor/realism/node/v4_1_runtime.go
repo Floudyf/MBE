@@ -153,7 +153,7 @@ func (r *RuntimeV41) HandleMessage(ctx context.Context, msg p2p.MessageEnvelope)
 }
 
 func (r *RuntimeV41) GossipTx(ctx context.Context, item tx.SignedTransaction) error {
-	msg, err := p2p.NewEnvelope(p2p.MessageTXGossip, r.cfg.NodeID, "", r.cfg.ShardID, 0, r.consensus.ViewID, 0, item)
+	msg, err := p2p.NewEnvelope(p2p.MessageTXGossip, r.cfg.NodeID, "", r.cfg.ShardID, 0, r.consensus.View(), 0, item)
 	if err != nil {
 		return err
 	}
@@ -175,7 +175,7 @@ func (r *RuntimeV41) ProposeBlock(ctx context.Context) (realblock.Block, error) 
 	r.mu.Lock()
 	r.proposed = append(r.proposed, b)
 	r.mu.Unlock()
-	pre := pbft.PrePrepare{View: r.consensus.ViewID, Sequence: b.Height, Height: b.Height, LeaderID: r.cfg.NodeID, BlockHash: b.BlockHash, Block: b}
+	pre := pbft.PrePrepare{View: r.consensus.View(), Sequence: b.Height, Height: b.Height, LeaderID: r.cfg.NodeID, BlockHash: b.BlockHash, Block: b}
 	prepare, err := r.consensus.OnPrePrepare(pre)
 	if err != nil {
 		return realblock.Block{}, err
@@ -224,9 +224,10 @@ func (r *RuntimeV41) broadcastCommit(ctx context.Context, commit pbft.Commit) er
 }
 
 func (r *RuntimeV41) BroadcastViewChange(ctx context.Context, newView uint64) error {
-	vc := pbft.ViewChange{View: r.consensus.ViewID, NewView: newView, NodeID: r.cfg.NodeID, Height: r.consensus.Height, LeaderID: r.consensus.NextLeader(newView)}
+	view, height, sequence := r.consensus.ViewHeightSequence()
+	vc := pbft.ViewChange{View: view, NewView: newView, NodeID: r.cfg.NodeID, Height: height, LeaderID: r.consensus.NextLeader(newView)}
 	r.consensus.OnViewChange(vc)
-	msg, err := p2p.NewEnvelope(p2p.MessagePBFTViewChange, r.cfg.NodeID, "", r.cfg.ShardID, r.consensus.Height, r.consensus.ViewID, r.consensus.SequenceID, vc)
+	msg, err := p2p.NewEnvelope(p2p.MessagePBFTViewChange, r.cfg.NodeID, "", r.cfg.ShardID, height, view, sequence, vc)
 	if err != nil {
 		return err
 	}
@@ -235,9 +236,10 @@ func (r *RuntimeV41) BroadcastViewChange(ctx context.Context, newView uint64) er
 }
 
 func (r *RuntimeV41) BroadcastNewView(ctx context.Context, newView uint64) error {
-	nv := pbft.NewView{View: newView, LeaderID: r.consensus.NextLeader(newView), Height: r.consensus.Height}
+	_, height, sequence := r.consensus.ViewHeightSequence()
+	nv := pbft.NewView{View: newView, LeaderID: r.consensus.NextLeader(newView), Height: height}
 	r.consensus.OnNewView(nv)
-	msg, err := p2p.NewEnvelope(p2p.MessagePBFTNewView, r.cfg.NodeID, "", r.cfg.ShardID, r.consensus.Height, newView, r.consensus.SequenceID, nv)
+	msg, err := p2p.NewEnvelope(p2p.MessagePBFTNewView, r.cfg.NodeID, "", r.cfg.ShardID, height, newView, sequence, nv)
 	if err != nil {
 		return err
 	}
@@ -307,7 +309,7 @@ func (r *RuntimeV41) Summary() RuntimeSummaryV41 {
 		TxGossip:                       r.txGossipSeen,
 		BlockProposer:                  len(r.proposed) > 0,
 		PBFTStyleConsensus:             true,
-		RealPBFTMessages:               len(r.pbftLogs.Messages) > 0,
+		RealPBFTMessages:               r.pbftLogs.MessageCount() > 0,
 		BlockCommit:                    r.committedHeight > 0,
 		StateCommit:                    false,
 		CrossShardProtocol:             false,
@@ -331,12 +333,7 @@ func (r *RuntimeV41) CommittedBlock() (realblock.Block, bool) {
 	if hash == "" {
 		return realblock.Block{}, false
 	}
-	for _, b := range r.consensus.CommittedBlocks {
-		if b.BlockHash == hash {
-			return b, true
-		}
-	}
-	return realblock.Block{}, false
+	return r.consensus.CommittedBlockByHash(hash)
 }
 
 func (r *RuntimeV41) writeProposalCSV(path string) error {

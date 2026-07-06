@@ -182,7 +182,7 @@ func RunV42FinalSmoke(ctx context.Context, opts SmokeOptionsV42) (FinalSummaryV4
 	if err != nil {
 		return FinalSummaryV42{}, nil, err
 	}
-	if err := bridge.WriteComparisonSummary(opts.OutDir, bridge.ComparisonSummary{TxCount: imported, NodeCount: opts.Nodes, ShardCount: opts.Shards, ConsensusMessageCount: len(runtimes[0].pbftLogs.Messages), NetworkMessageCount: len(runtimes[0].transport.Log.Entries()), CommittedBlocks: 1, CommittedTxs: opts.TxCount, StateRootMismatchCount: consistency.MismatchCount, CrossShardTxCount: xres.CrossShardTxCount, RecoverySupported: recoverySummary.NodeRecovery, FaultInjectionSupported: faultResult.FaultInjection}); err != nil {
+	if err := bridge.WriteComparisonSummary(opts.OutDir, bridge.ComparisonSummary{TxCount: imported, NodeCount: opts.Nodes, ShardCount: opts.Shards, ConsensusMessageCount: runtimes[0].pbftLogs.MessageCount(), NetworkMessageCount: len(runtimes[0].transport.Log.Entries()), CommittedBlocks: 1, CommittedTxs: opts.TxCount, StateRootMismatchCount: consistency.MismatchCount, CrossShardTxCount: xres.CrossShardTxCount, RecoverySupported: recoverySummary.NodeRecovery, FaultInjectionSupported: faultResult.FaultInjection}); err != nil {
 		return FinalSummaryV42{}, nil, err
 	}
 	summary := FinalSummaryV42{

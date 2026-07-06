@@ -72,6 +72,12 @@ func (l *Logs) AddViewChange(e ViewChangeLogEntry) {
 	l.ViewChanges = append(l.ViewChanges, e)
 }
 
+func (l *Logs) MessageCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.Messages)
+}
+
 func (l *Logs) WriteMessageCSV(path string) error {
 	l.mu.Lock()
 	rows := make([][]string, 0, len(l.Messages))
