@@ -105,3 +105,20 @@ real signed tx
 ```
 
 are implemented and validated.
+
+## 9. V4.2 Verified Alignment
+
+The current V4.2 implementation matches BlockEmulator's core runtime realism targets in the research-emulator sense: real signed transaction admission, independent per-node mempools, localhost TCP node messaging, PBFT-style real PrePrepare / Prepare / Commit messages, quorum block commit, durable block artifacts, and runtime logs.
+
+V4.2 extends that baseline with deterministic execution, persistent state root generation, receipt and tx-index storage, state-root consistency reports across honest nodes, recovery evidence, fault-injection logs, frontend Realism Mode, and a BlockEmulator bridge MVP for comparison-oriented artifacts.
+
+Truth boundary:
+
+- `blockemulator_bridge_mvp=true`
+- `full_blockemulator_compatibility=false`
+- `research_grade_real_emulator=true`
+- `production_blockchain=false`
+- `production_pbft=false`
+- `full_byzantine_security=false`
+
+MBE V4 can be described as matching BlockEmulator-style core runtime realism and extending it with state root, receipt/tx index, cross-shard state machine, recovery/fault injection, frontend Realism Mode, and metaverse-oriented experiment control. It must not be described as fully replacing BlockEmulator in every scenario without controlled comparison experiments.

@@ -324,6 +324,21 @@ func (r *RuntimeV41) Summary() RuntimeSummaryV41 {
 	}
 }
 
+func (r *RuntimeV41) CommittedBlock() (realblock.Block, bool) {
+	r.mu.Lock()
+	hash := r.committedHash
+	r.mu.Unlock()
+	if hash == "" {
+		return realblock.Block{}, false
+	}
+	for _, b := range r.consensus.CommittedBlocks {
+		if b.BlockHash == hash {
+			return b, true
+		}
+	}
+	return realblock.Block{}, false
+}
+
 func (r *RuntimeV41) writeProposalCSV(path string) error {
 	r.mu.Lock()
 	proposed := append([]realblock.Block(nil), r.proposed...)

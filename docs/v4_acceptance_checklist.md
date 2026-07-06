@@ -151,6 +151,35 @@ v4_refund_abort_log.csv
 v4_realism_summary.json
 ```
 
+Implemented/verified artifact foundation:
+
+```text
+v4_2_realism_final_summary.json
+v4_2_acceptance_report.json
+consistency_check_report.json
+consistency_check_log.csv
+recovery_summary.json
+recovery_log.csv
+xshard_state_log.csv
+xshard_event_log.csv
+relay_certificate_log.csv
+refund_log.csv
+fault_injection_log.csv
+blockemulator_trace_import_log.csv
+blockemulator_comparison_summary.json
+```
+
+V4.2 verification result:
+
+- Implemented/verified: deterministic execution updates account state and receipts.
+- Implemented/verified: persistent state db derives deterministic state roots from real state updates.
+- Implemented/verified: durable block, receipt, and tx-index artifacts are written.
+- Implemented/verified: honest-node consistency check reports matching committed height, block hash, receipt root, and state root.
+- Implemented/verified: recovery reloads committed height and state root.
+- Implemented/verified: cross-shard SourceLock / RelayCertificate / TargetCommit / SourceFinalize and Timeout / Refund / Abort paths are exercised.
+- Implemented/verified: backend V4 realism smoke API and frontend Realism Mode are present.
+- Not claimed: production PBFT, full Byzantine security, checkpoint/stable-log PBFT, Ethereum MPT compatibility, Fabric/EVM live backend, production atomic cross-shard commit, or measured superiority over BlockEmulator in every scenario.
+
 Truth label:
 
 ```text

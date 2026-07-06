@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 
 from backend.app.models.v3_composer_draft import V3ComposerDraftRequest
 from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest, V3SavedConfigUpdateRequest
+from backend.app.models.v4_realism import V4RealismSmokeRequest
 from backend.app.services.config_validator_v2 import validate_planned_topology_file
 from backend.app.services.calibration_runner_v2 import CALIBRATION_CONFIGS, CalibrationBlocked, CalibrationError, get_calibration_config, list_calibration_configs, run_calibration_job, summarize_calibration_config
 from backend.app.services.chain_backend import list_backend_capabilities
@@ -39,6 +40,7 @@ from backend.app.services.v3_metatrack_formal_benchmark_runner import FormalBenc
 from backend.app.services.v3_profile_preview import preview_profile
 from backend.app.services.v3_runtime_topology import stage_metadata as v3_runtime_stage_metadata
 from backend.app.services.v3_saved_config_store import SavedConfigNotFound, SavedConfigStoreError, create_saved_config, delete_saved_config, get_saved_config, list_saved_configs, update_saved_config
+from backend.app.services import v4_realism_runner
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "configs/experiments/v0_default_asset_hotspot.yaml"
@@ -1001,6 +1003,43 @@ def v3_composer_run_smoke() -> dict:
     except Exception as exc:
         manager.mark_failed(run_id, str(exc))
         raise HTTPException(500, str(exc)) from exc
+
+
+@app.get("/api/v4/realism/status")
+def v4_realism_status() -> dict:
+    return v4_realism_runner.status()
+
+
+@app.post("/api/v4/realism/smoke")
+def v4_realism_smoke(payload: V4RealismSmokeRequest) -> dict:
+    result = v4_realism_runner.run_smoke(payload)
+    if result.get("status") == "failed":
+        raise HTTPException(500, detail=result)
+    return result
+
+
+@app.get("/api/v4/realism/runs/{run_id}/summary")
+def v4_realism_run_summary(run_id: str) -> dict:
+    try:
+        return v4_realism_runner.get_summary(run_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v4/realism/runs/{run_id}/artifacts")
+def v4_realism_run_artifacts(run_id: str) -> dict:
+    try:
+        return {"run_id": run_id, "artifacts": v4_realism_runner.list_artifacts(run_id)}
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/v4/realism/runs/{run_id}/artifacts/{filename:path}")
+def v4_realism_artifact(run_id: str, filename: str) -> FileResponse:
+    try:
+        return FileResponse(v4_realism_runner.artifact_path(run_id, filename))
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @app.post("/api/v0/experiments")

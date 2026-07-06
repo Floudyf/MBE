@@ -1947,6 +1947,50 @@ details summary {
   font-weight: 700;
 }
 
+.compact-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.mini-status {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.25rem 0.55rem;
+  grid-template-columns: auto 1fr;
+  padding: 0.7rem;
+}
+
+.mini-status strong,
+.mini-status small {
+  overflow-wrap: anywhere;
+}
+
+.status-dot {
+  border-radius: 999px;
+  display: inline-block;
+  height: 10px;
+  width: 10px;
+}
+
+.status-dot.ok {
+  background: #16a34a;
+}
+
+.status-dot.blocked {
+  background: #dc2626;
+}
+
+.artifact-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.artifact-list a {
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 760px) {
   .v3-run-history-row,
   .v3-data-file-list li {

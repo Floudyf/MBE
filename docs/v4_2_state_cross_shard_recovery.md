@@ -153,3 +153,36 @@ v4_real_state_cross_shard_recovery
 ```
 
 This label means V4 has a first real node/network/consensus/state/cross-shard candidate. It does not imply production security or paper-final superiority without comparative experiments.
+
+## 11. Implementation Verification Status
+
+V4.2 is implemented and verified in the current repository as a research-grade real multi-node sharded blockchain emulator path.
+
+Implemented and verified:
+
+- deterministic execution of committed block transactions;
+- persistent file-backed state database with deterministic state root;
+- durable block, receipt, and tx-index commit artifacts;
+- state-root consistency checking across honest nodes;
+- node recovery from committed height and state root in `data_dir`;
+- cross-shard state machine MVP with SourceLock, RelayCertificate, TargetCommit, SourceFinalize, Timeout, Refund, and Abort evidence;
+- fault-injection configuration/logging MVP;
+- BlockEmulator trace/comparison bridge MVP;
+- backend `/api/v4/realism/*` status, smoke, summary, and artifact endpoints;
+- frontend Realism Mode panel and artifact display.
+
+Verified smoke truth:
+
+```text
+runtime_stage = v4_2_state_cross_shard_recovery_frontend
+runtime_truth = v4_real_state_cross_shard_recovery
+research_grade_real_emulator = true
+production_blockchain = false
+production_pbft = false
+full_byzantine_security = false
+ethereum_mpt_compatible = false
+fabric_execution = false
+evm_execution = false
+```
+
+The final smoke writes `v4_2_realism_final_summary.json` and `v4_2_acceptance_report.json`, with at least three honest nodes agreeing on committed height, block hash, receipt root, and state root.

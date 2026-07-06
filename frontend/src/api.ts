@@ -469,6 +469,35 @@ export type V3RuntimeSummary = Record<string, unknown> & {
   paper_mapping_available?: boolean | string;
   reproducibility_truth?: string;
 };
+
+export type V4RealismStatus = {
+  runtime_stage: string;
+  runtime_truth: string;
+  real_signed_tx: boolean;
+  per_node_mempool: boolean;
+  real_p2p: boolean;
+  pbft_style_consensus: boolean;
+  production_pbft: boolean;
+  full_byzantine_security: boolean;
+  persistent_state_db: boolean;
+  state_root_from_real_state_updates: boolean;
+  real_cross_shard_state_machine: boolean;
+  recovery_supported: boolean;
+  fault_injection_supported: boolean;
+  frontend_realism_mode: boolean;
+  fabric_evm_backend: boolean;
+  production_blockchain: boolean;
+};
+
+export type V4RealismArtifact = { name: string; download_url: string; size_bytes: number };
+export type V4RealismSmokeResponse = {
+  run_id: string;
+  status: string;
+  output_dir: string;
+  summary: Record<string, unknown>;
+  artifacts: V4RealismArtifact[];
+  stdout?: string;
+};
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
 export type V3ComposerDraftModuleRequest = {
@@ -992,6 +1021,22 @@ export async function fetchV3DraftRuns(limit = 20): Promise<V3DraftRunSummary[]>
 
 export async function fetchV3DraftRunDetail(runId: string): Promise<V3DraftRunDetail> {
   return request<V3DraftRunDetail>(`/api/v3/composer/draft-runs/${encodeURIComponent(runId)}`);
+}
+
+export async function fetchV4RealismStatus(): Promise<V4RealismStatus> {
+  return request<V4RealismStatus>("/api/v4/realism/status");
+}
+
+export async function runV4RealismSmoke(payload = { nodes: 4, shards: 1, tx_count: 10, enable_cross_shard: true, enable_faults: true, run_duration_ms: 1000 }): Promise<V4RealismSmokeResponse> {
+  return request<V4RealismSmokeResponse>("/api/v4/realism/smoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function fetchV4RealismArtifacts(runId: string): Promise<{ run_id: string; artifacts: V4RealismArtifact[] }> {
+  return request<{ run_id: string; artifacts: V4RealismArtifact[] }>(`/api/v4/realism/runs/${encodeURIComponent(runId)}/artifacts`);
+}
+
+export function v4RealismArtifactURL(downloadURL: string): string {
+  return `${requestBaseURL}${downloadURL}`;
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {

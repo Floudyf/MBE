@@ -48,6 +48,7 @@ import {
   type V2TraceSource,
 } from "./api";
 import V2Dashboard from "./components/V2Dashboard";
+import RealismModePanel from "./components/v4/RealismModePanel";
 import V3ComposerPage from "./pages/V3ComposerPage";
 
 type PageId =
@@ -59,6 +60,7 @@ type PageId =
   | "sweep"
   | "calibration"
   | "v3composer"
+  | "v4realism"
   | "runs"
   | "artifacts"
   | "boundaries"
@@ -89,6 +91,7 @@ const navGroups: { title: string; items: { id: PageId; label: string }[] }[] = [
     title: "MBE",
     items: [
       { id: "v3composer", label: "实验控制台" },
+      { id: "v4realism", label: "V4 Realism Mode" },
       { id: "runs", label: "运行记录" },
       { id: "artifacts", label: "产物下载" },
       { id: "boundaries", label: "系统边界" },
@@ -318,6 +321,7 @@ function App() {
       {activePage === "sweep" && <SweepPage sweeps={sweeps} sweepId={sweepId} setSweepId={setSweepId} result={v2Result as V2SweepRunResponse | null} artifacts={v2Artifacts} runSweepExperiment={runSweepExperiment} />}
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
       {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} />}
+      {activePage === "v4realism" && <RealismModePanel />}
       {(activePage === "runs" || activePage === "artifacts") && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
       {activePage === "boundaries" && <BoundariesPage />}
       {activePage === "developer" && <DeveloperPage traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
@@ -457,6 +461,7 @@ function DeveloperPage(props: { traceSources: V2TraceSource[]; backends: V2Chain
 function AdvancedPage(props: { setActivePage: (page: PageId) => void; traceSources: V2TraceSource[]; backends: V2ChainBackend[]; protocols: V2ProtocolInfo[]; sweeps: V2SweepInfo[]; calibrations: V2CalibrationInfo[]; v1Stages: V1StageStatus[] }) {
   const entries: Array<[PageId, string, string]> = [
     ["overview", "平台总览", "历史 V1/V2 总览入口"],
+    ["v4realism", "V4 Realism Mode", "真实 P2P / PBFT-style / state / cross-shard / recovery smoke"],
     ["single", "V1 单链机制实验", "MetaTrack 早期单链机制实验"],
     ["ablation", "V1 单链消融对比", "早期单链 sweep / report"],
     ["dual", "V2 双链回放实验", "本地虚拟双链回放"],

@@ -181,3 +181,36 @@ Before V4.1, MBE must not claim real P2P or real PBFT.
 Before V4.2, MBE must not claim persistent state commit or real cross-shard commit.
 
 Before direct comparison artifacts exist, MBE must not claim measured superiority over BlockEmulator.
+
+## 9. Current Implementation Status
+
+V4.0, V4.1, and V4.2 are implemented and verified in the current repository.
+
+Verified V4.2 chain segment:
+
+```text
+signed tx
+-> per-node mempool
+-> real localhost TCP P2P
+-> PBFT-style quorum commit
+-> deterministic execution
+-> persistent state root
+-> durable block/receipt/tx-index commit
+-> cross-shard state machine
+-> recovery/fault evidence
+-> backend API and frontend Realism Mode
+```
+
+Current runtime truth:
+
+```text
+v4_real_state_cross_shard_recovery
+```
+
+Allowed description:
+
+```text
+MBE V4 provides a research-grade real multi-node sharded blockchain emulator.
+```
+
+Non-claims remain in force: V4 is not a production blockchain, not production PBFT, not full Byzantine security, not an industrial-grade chain, and not complete Ethereum/Fabric compatibility.
