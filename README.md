@@ -25,6 +25,8 @@ V4 aims to meet and exceed BlockEmulator-style emulator realism by combining rea
 
 Current truth boundary: V4 is planned until each stage is implemented and validated. Do not claim V4 capabilities as runnable before their corresponding stage is complete.
 
+V4.0 implementation status: the standalone Go path now supports deterministic signed transaction generation, Ed25519 verification, account nonce checks, independent per-node mempool admission, `mbe-client`, `mbe-node` once/server skeleton, `mbe-supervisor` config skeleton, CSV trace-to-signed-JSONL import foundation, and V4.0 node summary/log artifacts. Runtime truth remains `v4_real_node_foundation`: real P2P, PBFT/HotStuff/Raft, block proposer, persistent state/block/receipt commit, cross-shard protocol, backend integration, and frontend Realism Mode are not implemented.
+
 ## Current Status
 
 Current stage: V3-final Fault, Observability, and Reproducibility Closure.

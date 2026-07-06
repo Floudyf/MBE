@@ -28,17 +28,17 @@ executor/realism/metrics/
 
 V4.0 may implement:
 
-- signed transaction model;
-- deterministic local signing/verifying for emulator use;
-- account and nonce model;
-- duplicate tx detection;
-- per-node mempool;
-- mempool admission policy;
-- mempool capacity, TTL, priority, and wait metrics;
-- real trace import into signed tx records;
-- minimal long-running node lifecycle skeleton;
-- minimal client submit command;
-- V4.0 logs and summary.
+- signed transaction model; implemented in `executor/realism/tx`.
+- deterministic local signing/verifying for emulator use; implemented with standard-library Ed25519.
+- account and nonce model; implemented in `executor/realism/account`.
+- duplicate tx detection; implemented in `executor/realism/mempool`.
+- per-node mempool; implemented with independent `Mempool` instances per node.
+- mempool admission policy; implemented for format, signature, duplicate, nonce, capacity, TTL representation, value, and state keys.
+- mempool capacity, TTL, priority, and wait metrics; capacity/TTL/wait metrics are implemented, while priority remains deterministic FIFO for V4.0.
+- real trace import into signed tx records; implemented as a CSV importer foundation in `executor/realism/trace`.
+- minimal long-running node lifecycle skeleton; server mode writes a truthful skeleton summary with `real_p2p=false`.
+- minimal client submit command; implemented as local signed JSONL generation only, not RPC submit.
+- V4.0 logs and summary; implemented for client, trace import, node admission/mempool, and node summary artifacts.
 
 ## 3. Forbidden Scope
 
@@ -120,6 +120,19 @@ signature_validation_log.csv
 v4_node_foundation_summary.json
 ```
 
+Implemented V4.0 artifact foundation:
+
+```text
+client_tx_log.csv
+trace_import_log.csv
+node_admission_log.csv
+node_mempool_log.csv
+v4_0_real_node_summary.json
+v4_node_foundation_summary.json
+```
+
+`nonce_validation_log.csv` and `signature_validation_log.csv` remain planned as split-out diagnostic logs; V4.0 currently records nonce/signature outcomes in the admission/mempool logs.
+
 ## 7. Acceptance Criteria
 
 A V4.0 smoke run passes only if:
@@ -137,16 +150,19 @@ A V4.0 smoke run passes only if:
 
 ## 8. Suggested Smoke Commands
 
-Exact commands can be adjusted after code implementation, but the intended shape is:
+Verified local smoke command shape:
 
 ```powershell
 cd executor
-go run ./cmd/mbe-node --node-id n0 --shard-id s0 --config ../../configs/v4/local_4node.json
 
-go run ./cmd/mbe-client --target n0 --tx-count 100 --seed 1 --signed true
+go run ./cmd/mbe-client --mode generate --out ..\.cache\v4_smoke\signed_txs.jsonl --count 10 --sender alice --receiver bob --start-nonce 0 --value 1 --seed 100 --private-key-out ..\.cache\v4_smoke\alice_private_seed.txt --public-key-out ..\.cache\v4_smoke\alice_public_key.txt --client-log-out ..\.cache\v4_smoke\client_tx_log.csv
+
+go run ./cmd/mbe-node --node-id n0 --shard-id s0 --data-dir ..\.cache\v4_smoke\node-n0 --mempool-capacity 100 --input-jsonl ..\.cache\v4_smoke\signed_txs.jsonl --run-mode once --summary-out ..\.cache\v4_smoke\node-n0\v4_0_real_node_summary.json --mempool-log-out ..\.cache\v4_smoke\node-n0\node_mempool_log.csv
 
 go test ./...
 ```
+
+The verified smoke admits 10 signed transactions into node `n0`'s independent mempool and writes a summary with `real_p2p=false`, `real_pbft=false`, `block_proposer=false`, `state_commit=false`, `cross_shard_protocol=false`, and `frontend_realism_mode=false`.
 
 ## 9. Stage Truth Label
 
