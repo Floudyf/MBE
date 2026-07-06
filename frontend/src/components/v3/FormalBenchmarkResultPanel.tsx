@@ -30,14 +30,14 @@ export default function FormalBenchmarkResultPanel({ result }: Props) {
         <div className="v3-warning-card">当前结果为受控基准实验结果，尚未满足论文候选条件。</div>
       )}
       <dl className="v3-result-grid compact">
-        <div><dt>运行 ID</dt><dd>{result.run_id}</dd></div>
+        <div><dt>运行 ID</dt><dd data-testid="v3-formal-result-run-id">{result.run_id}</dd></div>
         <div><dt>运行模式</dt><dd>{result.run_mode}</dd></div>
         <div><dt>实验类型</dt><dd>{String(summary.experiment_type || "-")}</dd></div>
         <div><dt>证据等级</dt><dd>{String(summary.experiment_evidence_level || "-")}</dd></div>
         <div><dt>是否论文候选</dt><dd>{paperCandidate ? "是" : "否"}</dd></div>
         <div><dt>每组交易数</dt><dd>{String(summary.formal_tx_count || "-")}</dd></div>
         <div><dt>seed_list</dt><dd>{readArray(summary.seed_list).join(", ") || "-"}</dd></div>
-        <div><dt>总运行组数</dt><dd>{String(summary.run_count || "-")}</dd></div>
+        <div><dt>总运行组数</dt><dd data-testid="v3-formal-result-run-count">{String(summary.run_count || "-")}</dd></div>
         <div><dt>总交易数</dt><dd>{String(summary.total_tx_count || "-")}</dd></div>
         <div><dt>基线数量</dt><dd>{String(summary.baseline_count || "-")}</dd></div>
         <div><dt>方案数量</dt><dd>{String(summary.method_count || summary.baseline_count || "-")}</dd></div>
@@ -45,8 +45,8 @@ export default function FormalBenchmarkResultPanel({ result }: Props) {
         <div><dt>拓扑数量</dt><dd>{String(summary.topology_count || "-")}</dd></div>
         <div><dt>扫描变量</dt><dd>{String(summary.scan_variable || "-")}</dd></div>
         <div><dt>运行真实性等级</dt><dd>{String(summary.runtime_evidence_mode || "-")}</dd></div>
-        <div><dt>完成组数</dt><dd>{String(summary.completed_run_count || 0)}</dd></div>
-        <div><dt>失败组数</dt><dd>{String(summary.failed_run_count || 0)}</dd></div>
+        <div><dt>完成组数</dt><dd data-testid="v3-formal-result-completed-count">{String(summary.completed_run_count || 0)}</dd></div>
+        <div><dt>失败组数</dt><dd data-testid="v3-formal-result-failed-count">{String(summary.failed_run_count || 0)}</dd></div>
         <div><dt>当前运行索引</dt><dd>{String(summary.current_run_index ?? "-")}</dd></div>
         <div><dt>失败子运行</dt><dd>{String(summary.failed_child_run_count ?? summary.failed_run_count ?? 0)}</dd></div>
       </dl>

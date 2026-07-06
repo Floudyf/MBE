@@ -85,6 +85,16 @@ The repository includes Playwright tests and a Windows wrapper script:
 
 The script starts the FastAPI backend, starts the Vite frontend, waits for both local endpoints, runs `npx playwright test`, and stops the launched process trees. Playwright artifacts are written under `frontend/test-results/` and traces are retained on failure.
 
+The wrapper supports focused modes:
+
+```powershell
+.\scripts\v3_e2e_check.ps1 -Mode smoke
+.\scripts\v3_e2e_check.ps1 -Mode formal
+.\scripts\v3_e2e_check.ps1 -Mode all
+```
+
+`smoke` covers result history, plugin compatibility, and preview-only blocking. `formal` covers the synthetic logical path and the metaverse local multi-process path. `all` also covers hotspot and cross-shard sensitivity. These are small frontend-driven validation experiments, not paper-scale runs.
+
 ## Ratio Slider Safety
 
 Ratio fields use a slider plus number input. The UI accepts decimal input such as `0.8`, and also treats `80` as `0.8` to avoid the common 80/0.8 mistake. Values are clamped to `0..1`.

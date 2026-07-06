@@ -12,7 +12,7 @@ The formal MetaTrack benchmark uses explicit numeric parameters: per-run transac
 
 ## Formal Parameters
 
-- `formal_tx_count`: 1,000 to 1,000,000 transactions per run. Default 10,000.
+- `formal_tx_count`: 100 to 1,000,000 transactions per run. Default 10,000. The 100-transaction lower bound exists for local E2E validation experiments; paper-candidate review still requires at least 10,000 transactions per run.
 - `seed_base`, `seed_count`, `seed_list`: deterministic multi-seed control. Default seed list is derived from 42 and 5 seeds.
 - `baseline_ids`: controlled MetaTrack baseline registry.
 - `hotspot_ratio_points`: default `0.0, 0.2, 0.4, 0.6, 0.8`.
@@ -100,10 +100,16 @@ Missing runtime metrics are left empty and listed in the report. The runner does
 
 Formal runs may reuse saved method configs. If a saved method uses `MetricsReport=metatrack_metrics`, the formal runner keeps the saved config unchanged but normalizes the generated Go runtime profile to `MetricsPlugin=basic_metrics`, because the current V3 Go runtime accepts only `basic_metrics` as the runtime metrics plugin.
 
+If a saved method uses `Consensus=blockemulator_aligned_pbft_preview`, the formal runner keeps the saved config unchanged but normalizes the generated Go runtime profile to a Go-supported local consensus model, currently `pbft_light_model`. This prevents a preview consensus label from making every child run fail while preserving the original saved method in `original_module_plugins`.
+
 Preview returns a warning before execution:
 
 ```text
 Formal Go runtime will normalize MetricsReport=<old> to basic_metrics.
+```
+
+```text
+Formal Go runtime will normalize Consensus=blockemulator_aligned_pbft_preview to pbft_light_model.
 ```
 
 Each child `generated_plugin_profile.json` records both `original_module_plugins` and normalized `module_plugins`, plus `compatibility_warnings`. This avoids all child runs failing for a profile compatibility issue while preserving the user's saved method definition.

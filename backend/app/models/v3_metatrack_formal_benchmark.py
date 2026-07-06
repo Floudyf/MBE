@@ -22,7 +22,7 @@ V3RuntimeEvidenceMode = Literal["logical_single_process", "local_multi_process_v
 class V3FormalMetatrackBenchmarkRequest(BaseModel):
     draft: V3ComposerDraftRequest
     experiment_type: V3FormalExperimentType = "ablation"
-    formal_tx_count: int = Field(default=10000, ge=1000, le=1000000)
+    formal_tx_count: int = Field(default=10000, ge=100, le=1000000)
     seed_base: int = 42
     seed_count: int = Field(default=5, ge=1, le=10)
     baseline_ids: list[str] = Field(default_factory=lambda: [

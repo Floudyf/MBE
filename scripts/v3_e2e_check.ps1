@@ -1,4 +1,6 @@
 param(
+  [ValidateSet("smoke", "formal", "all")]
+  [string]$Mode = "all",
   [int]$BackendPort = 8000,
   [int]$FrontendPort = 5173
 )
@@ -60,7 +62,13 @@ try {
 
   Push-Location $frontendRoot
   try {
-    & npx.cmd playwright test
+    $testArgs = @("playwright", "test")
+    if ($Mode -eq "smoke") {
+      $testArgs += @("tests/v3-formal-result.spec.ts", "tests/v3-formal-experiment-suite.spec.ts", "--grep", "preview-only|plugin compatibility")
+    } elseif ($Mode -eq "formal") {
+      $testArgs += @("tests/v3-formal-experiment-suite.spec.ts", "--grep", "synthetic logical|metaverse local")
+    }
+    & npx.cmd @testArgs
     $exitCode = $LASTEXITCODE
   } finally {
     Pop-Location

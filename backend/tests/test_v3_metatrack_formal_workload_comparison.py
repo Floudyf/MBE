@@ -131,12 +131,31 @@ def test_preview_warns_when_saved_method_metrics_report_needs_go_normalization(m
     assert any("MetricsReport=metatrack_metrics" in warning for warning in preview["warnings"])
 
 
-def test_formal_plugin_profile_normalizes_metrics_report_for_go_runtime() -> None:
+def test_preview_warns_when_saved_method_consensus_needs_go_normalization(monkeypatch) -> None:
+    saved_draft = draft()
+    saved_draft.modules["Consensus"].plugin = "blockemulator_aligned_pbft_preview"
+    saved = {
+        "v3cfg_method": {
+            "config_id": "v3cfg_method",
+            "config_kind": "method",
+            "name": "Saved PBFT preview method",
+            "payload": {"draft": runner.model_dump(saved_draft)},
+        }
+    }
+    monkeypatch.setattr(runner, "get_saved_config", lambda config_id: saved[config_id])
+
+    preview = runner.preview_formal_metatrack_benchmark(request(baseline_ids=[], method_config_ids=["v3cfg_method"], seed_count=1))
+
+    assert preview["is_runnable"] is True
+    assert any("Consensus=blockemulator_aligned_pbft_preview" in warning for warning in preview["warnings"])
+
+
+def test_formal_plugin_profile_normalizes_go_runtime_compatibility_plugins() -> None:
     plugins = {
         "Workload": "synthetic_hotspot",
         "TxPool": "fifo_pool",
         "BlockProducer": "time_or_count_block_producer",
-        "Consensus": "simple_leader",
+        "Consensus": "blockemulator_aligned_pbft_preview",
         "CommitteeEpoch": "disabled",
         "Routing": "metatrack_coaccess_routing",
         "Execution": "metatrack_dual_track_execution",
@@ -150,9 +169,14 @@ def test_formal_plugin_profile_normalizes_metrics_report_for_go_runtime() -> Non
     generated = profile["profiles"][0]
 
     assert generated["plugins"]["MetricsPlugin"] == "basic_metrics"
+    assert generated["plugins"]["ConsensusPlugin"] == "pbft_light_model"
+    assert generated["plugins"]["ConsensusRuntimePlugin"] == "pbft_light_model"
     assert generated["module_plugins"]["MetricsReport"] == "basic_metrics"
+    assert generated["module_plugins"]["Consensus"] == "pbft_light_model"
     assert generated["original_module_plugins"]["MetricsReport"] == "metatrack_metrics"
-    assert "MetricsReport=metatrack_metrics normalized to basic_metrics" in generated["compatibility_warnings"][0]
+    assert generated["original_module_plugins"]["Consensus"] == "blockemulator_aligned_pbft_preview"
+    assert any("MetricsReport=metatrack_metrics normalized to basic_metrics" in warning for warning in generated["compatibility_warnings"])
+    assert any("Consensus=blockemulator_aligned_pbft_preview normalized to pbft_light_model" in warning for warning in generated["compatibility_warnings"])
 
 
 def test_failure_summary_normalizes_repeated_go_runtime_errors() -> None:

@@ -89,6 +89,19 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
     setValues(values.includes(id) ? values.filter((item) => item !== id) : [...values, id]);
   }
   function applyPreset(id: string) {
+    if (id === "synthetic_logical") {
+      setExperimentType("workload_comparison");
+      setMethodSource("builtin");
+      setFormalTxCount(100);
+      setSeedCount(1);
+      setRuntimeEvidenceMode("logical_single_process");
+      setBaselineIds(["baseline_hash_serial", "metatrack_full"]);
+      setHotspotPoints("0.2");
+      setCrossShardPoints("0.1");
+      setShardPoints("1");
+      setWorkloadScenarioPoints(["scene_hotspot"]);
+      setEnableFaults(false);
+    }
     if (id === "link_check") {
       setExperimentType("workload_comparison");
       setFormalTxCount(1000);
@@ -123,6 +136,30 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
       setWorkloadScenarioPoints(["scene_hotspot", "cross_scene_migration", "mixed_metaverse"]);
       setEnableFaults(false);
     }
+    if (id === "hotspot_e2e") {
+      setExperimentType("hotspot_sensitivity");
+      setMethodSource("builtin");
+      setFormalTxCount(500);
+      setSeedCount(1);
+      setRuntimeEvidenceMode("logical_single_process");
+      setBaselineIds(["baseline_hash_serial", "metatrack_full"]);
+      setHotspotPoints("0.2, 0.4, 0.6");
+      setCrossShardPoints("0.3");
+      setShardPoints("4");
+      setEnableFaults(false);
+    }
+    if (id === "cross_shard_e2e") {
+      setExperimentType("cross_shard_sensitivity");
+      setMethodSource("builtin");
+      setFormalTxCount(500);
+      setSeedCount(1);
+      setRuntimeEvidenceMode("logical_single_process");
+      setBaselineIds(["baseline_hash_serial", "metatrack_full"]);
+      setHotspotPoints("0.4");
+      setCrossShardPoints("0.1, 0.3, 0.5");
+      setShardPoints("4");
+      setEnableFaults(false);
+    }
   }
   function applyScenarioPreset(id: string) {
     const presets: Record<string, string[]> = {
@@ -139,7 +176,7 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
   const topologyConfigs = savedConfigs.filter((config) => config.config_kind === "topology");
 
   return (
-    <section className="final-card wide formal-benchmark-panel">
+    <section className="final-card wide formal-benchmark-panel" data-testid="v3-formal-experiment-panel">
       <div className="v3-section-head">
         <div>
           <p className="eyebrow">论文实验设计</p>
@@ -160,31 +197,31 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
       <div className="topology-field-grid formal-field-grid">
         <label className="field-card">
           <span>实验类型</span>
-          <select value={experimentType} onChange={(event) => setExperimentType(event.target.value as V3FormalExperimentType)}>
+          <select data-testid="v3-formal-experiment-type" value={experimentType} onChange={(event) => setExperimentType(event.target.value as V3FormalExperimentType)}>
             {experimentTypes.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
           <small>默认单变量扫描，不做全因子组合。</small>
         </label>
         <label className="field-card">
           <span>方案来源</span>
-          <select value={methodSource} onChange={(event) => setMethodSource(event.target.value as "builtin" | "saved" | "mixed")}>
+          <select data-testid="v3-formal-method-source" value={methodSource} onChange={(event) => setMethodSource(event.target.value as "builtin" | "saved" | "mixed")}>
             <option value="builtin">内置基线</option>
             <option value="saved">已保存方案</option>
             <option value="mixed">内置基线 + 已保存方案</option>
           </select>
           <small>正式实验可直接复用配置库中的 method 方案。</small>
         </label>
-        <SliderNumberField label="交易数量" value={formalTxCount} min={1000} max={1000000} step={1000} helper="正式性能实验每组运行的交易数量，不受 Draft Smoke 限制。" onChange={setFormalTxCount} />
-        <IntegerSliderField label="随机种子数量" value={seedCount} min={1} max={10} helper="多 seed 用于受控统计聚合。" onChange={setSeedCount} />
+        <SliderNumberField label="交易数量" value={formalTxCount} min={100} max={1000000} step={100} testId="v3-formal-tx-count" helper="正式性能实验每组运行的交易数量，不受 Draft Smoke 限制。" onChange={setFormalTxCount} />
+        <IntegerSliderField label="随机种子数量" value={seedCount} min={1} max={10} testId="v3-formal-seed-count" helper="多 seed 用于受控统计聚合。" onChange={setSeedCount} />
         <label className="field-card">
           <span>seed_base</span>
-          <input type="number" value={seedBase} onChange={(event) => setSeedBase(Number(event.target.value))} />
+          <input data-testid="v3-formal-seed-base" type="number" value={seedBase} onChange={(event) => setSeedBase(Number(event.target.value))} />
           <small>seed_list: [{seedList.join(", ")}]</small>
         </label>
-        <SliderNumberField label="Zipf 偏斜参数" value={zipfAlpha} min={0} max={2} step={0.05} onChange={setZipfAlpha} />
+        <SliderNumberField label="Zipf 偏斜参数" value={zipfAlpha} min={0} max={2} step={0.05} testId="v3-formal-zipf-alpha" onChange={setZipfAlpha} />
         <label className="field-card">
           <span>运行真实性等级</span>
-          <select value={runtimeEvidenceMode} onChange={(event) => setRuntimeEvidenceMode(event.target.value as V3RuntimeEvidenceMode)}>
+          <select data-testid="v3-formal-runtime-evidence-mode" value={runtimeEvidenceMode} onChange={(event) => setRuntimeEvidenceMode(event.target.value as V3RuntimeEvidenceMode)}>
             <option value="logical_single_process">逻辑单进程：主性能实验推荐</option>
             <option value="local_multi_process_validation">本地多进程：原型真实性验证</option>
           </select>
@@ -198,7 +235,7 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
           {baselineOptions.map((id) => (
             <label key={id} className="checkbox-card field-card">
               <span>{id}</span>
-              <input type="checkbox" checked={baselineIds.includes(id)} onChange={() => toggleBaseline(id)} />
+              <input data-testid={`v3-formal-baseline-${id}`} type="checkbox" checked={baselineIds.includes(id)} onChange={() => toggleBaseline(id)} />
             </label>
           ))}
         </div>
@@ -208,7 +245,7 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
             {methodConfigs.map((config) => (
               <label key={config.config_id} className="checkbox-card field-card">
                 <span>{config.name}<small>{config.config_id}</small></span>
-                <input type="checkbox" checked={methodConfigIds.includes(config.config_id)} onChange={() => toggleSaved(config.config_id, methodConfigIds, setMethodConfigIds)} />
+                <input data-testid={`v3-formal-method-config-${config.config_id}`} type="checkbox" checked={methodConfigIds.includes(config.config_id)} onChange={() => toggleSaved(config.config_id, methodConfigIds, setMethodConfigIds)} />
               </label>
             ))}
             {methodConfigs.length === 0 && <p className="muted">暂无已保存方案；先在 11 模块下方保存完整方案。</p>}
@@ -227,22 +264,22 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
         <div className="topology-field-grid formal-field-grid">
           {experimentType === "workload_comparison" ? (
             <>
-              <RatioSliderField label="固定热点比例" value={parseFloatList(hotspotPoints)[0] ?? 0.4} onChange={(value) => setHotspotPoints(String(value))} />
-              <RatioSliderField label="固定跨片比例" value={parseFloatList(crossShardPoints)[0] ?? 0.3} onChange={(value) => setCrossShardPoints(String(value))} />
-              <IntegerSliderField label="固定分片数量" value={parseIntList(shardPoints)[0] ?? 4} min={1} max={32} onChange={(value) => setShardPoints(String(value))} />
+              <RatioSliderField label="固定热点比例" value={parseFloatList(hotspotPoints)[0] ?? 0.4} testId="v3-formal-hotspot-fixed" onChange={(value) => setHotspotPoints(String(value))} />
+              <RatioSliderField label="固定跨片比例" value={parseFloatList(crossShardPoints)[0] ?? 0.3} testId="v3-formal-cross-shard-fixed" onChange={(value) => setCrossShardPoints(String(value))} />
+              <IntegerSliderField label="固定分片数量" value={parseIntList(shardPoints)[0] ?? 4} min={1} max={32} testId="v3-formal-shard-fixed" onChange={(value) => setShardPoints(String(value))} />
               <PresetChipGroup label="负载场景快捷" items={[
                 { id: "recommended", label: "推荐三场景" },
                 { id: "all", label: "全场景" },
                 { id: "hotspot", label: "只看热点" },
                 { id: "migration", label: "只看迁移" },
               ]} onSelect={applyScenarioPreset} />
-              <MultiSelectChipGroup label="负载场景" options={workloadScenarioOptions} selected={workloadScenarioPoints} onChange={setWorkloadScenarioPoints} />
+              <MultiSelectChipGroup label="负载场景" options={workloadScenarioOptions} selected={workloadScenarioPoints} testIdPrefix="v3-formal-workload-scenario" onChange={setWorkloadScenarioPoints} />
             </>
           ) : (
             <>
-              {experimentType === "hotspot_sensitivity" && <TextList label="热点比例扫描" value={hotspotPoints} onChange={setHotspotPoints} />}
-              {experimentType === "cross_shard_sensitivity" && <TextList label="跨片比例扫描" value={crossShardPoints} onChange={setCrossShardPoints} />}
-              {experimentType === "shard_scalability" && <TextList label="分片数量扫描" value={shardPoints} onChange={setShardPoints} />}
+              {experimentType === "hotspot_sensitivity" && <TextList label="热点比例扫描" testId="v3-formal-hotspot-points" value={hotspotPoints} onChange={setHotspotPoints} />}
+              {experimentType === "cross_shard_sensitivity" && <TextList label="跨片比例扫描" testId="v3-formal-cross-shard-points" value={crossShardPoints} onChange={setCrossShardPoints} />}
+              {experimentType === "shard_scalability" && <TextList label="分片数量扫描" testId="v3-formal-shard-points" value={shardPoints} onChange={setShardPoints} />}
             </>
           )}
           <label className="field-card checkbox-card">
@@ -267,11 +304,11 @@ export default function FormalMetatrackExperimentPanel({ draft, savedConfigs = [
   );
 }
 
-function TextList({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+function TextList({ label, value, testId, onChange }: { label: string; value: string; testId?: string; onChange: (value: string) => void }) {
   return (
     <label className="field-card">
       <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} />
+      <input data-testid={testId} value={value} onChange={(event) => onChange(event.target.value)} />
       <small>逗号分隔的显式实验点。</small>
     </label>
   );

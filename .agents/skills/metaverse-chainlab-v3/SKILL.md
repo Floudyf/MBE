@@ -207,8 +207,9 @@ Allowed in this maintenance scope:
 - formal run manifest, progress, failed run index, and child artifact index
 - formal result dashboard, chart preview, data-file explanation, preview/download split, ZIP export, and Formal Run History
 - formal metric extraction and aggregation repairs for child-run summaries, latency CSVs, missing metric diagnostics, and chart preview data
-- formal runtime compatibility diagnostics, including generated Go profile normalization when a saved method uses `MetricsReport=metatrack_metrics`
-- Playwright E2E validation that starts the local backend/frontend, opens the V3 console, clicks Formal Run History, and runs a minimal formal workload-comparison workflow
+- formal runtime compatibility diagnostics, including generated Go profile normalization when a saved method uses `MetricsReport=metatrack_metrics` or `Consensus=blockemulator_aligned_pbft_preview`
+- Playwright E2E validation that starts the local backend/frontend, opens the V3 console, clicks Formal Run History, and runs multi-scenario formal validation through the frontend UI
+- E2E coverage for synthetic/logical, metaverse/local_multi_process, workload_comparison, hotspot_sensitivity, cross_shard_sensitivity, preview-only blocking, and runtime plugin compatibility warnings
 - frontend failure diagnostics that surface `failure_summary.top_errors` instead of forcing users to inspect `formal_failed_runs.csv` manually
 - slider/chip usability controls for ratios, workload comparison scenarios, and recommended local emulator presets
 - paper_candidate eligibility labels with reasons
@@ -246,6 +247,7 @@ Important boundary:
 - Formal metric extraction must not fill missing values with zero. It may derive latency from successful `latency_ms` rows and throughput from explicit success count plus positive elapsed time only.
 - Formal Run History is a local convenience view over `.cache/v3_metatrack_formal_runs/`, not a production result database.
 - Generated formal Go profiles may normalize metrics reporting to `basic_metrics` for current Go runtime compatibility, but saved configs must remain unchanged.
+- Generated formal Go profiles may normalize BlockEmulator-aligned PBFT preview consensus to a Go-supported local model for current runtime compatibility, but saved configs must remain unchanged.
 - Playwright E2E is a maintenance acceptance tool for the local console; it is not a production monitoring system or hosted test service.
 
 ## V3.13 Metaverse Experiment Suite Closure

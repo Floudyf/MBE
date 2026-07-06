@@ -470,7 +470,6 @@ export default function V3ComposerPage({ onRunCompleted }: Props) {
       showFormalResult(result);
       setDraftRunResult(null);
       setFormalHistoryRefreshKey((value) => value + 1);
-      if (result.run_id) onRunCompleted?.(result.run_id);
       setFormalError("");
       setProgressMode("success");
     } catch (caught) {

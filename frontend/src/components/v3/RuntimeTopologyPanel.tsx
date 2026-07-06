@@ -117,7 +117,7 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
   }
 
   return (
-    <section className="final-card wide topology-console">
+    <section className="final-card wide topology-console" data-testid="v3-runtime-topology-panel">
       <div className="v3-section-head">
         <div>
           <p className="eyebrow">实验配置</p>
@@ -130,9 +130,9 @@ export default function RuntimeTopologyPanel({ topology, onChange }: Props) {
 
       <div className="v3-preset-strip">
         <span>拓扑预设</span>
-        <button type="button" className="preset-chip" onClick={() => applyTopologyPreset("quick")}>逻辑快速验证</button>
-        <button type="button" className="preset-chip" onClick={() => applyTopologyPreset("realism")}>真实性优先</button>
-        <button type="button" className="preset-chip" onClick={() => applyTopologyPreset("state_realism")}>状态真实性优先</button>
+        <button type="button" className="preset-chip" data-testid="v3-topology-preset-quick" onClick={() => applyTopologyPreset("quick")}>逻辑快速验证</button>
+        <button type="button" className="preset-chip" data-testid="v3-topology-preset-realism" onClick={() => applyTopologyPreset("realism")}>真实性优先</button>
+        <button type="button" className="preset-chip" data-testid="v3-topology-preset-state-realism" onClick={() => applyTopologyPreset("state_realism")}>状态真实性优先</button>
         <small>本地 emulator 原型验证，不是生产链。</small>
       </div>
 
@@ -395,8 +395,8 @@ function NumberField({ label, id, value, min, max, step = 1, onChange, children 
   return (
     <label className="field-card">
       <span>{label} <HelpTip title={label}>{children}</HelpTip></span>
-      <input type="range" min={min} max={max} step={step} value={displayValue} onChange={(event) => handleChange(Number(event.target.value))} />
-      <input type="number" min={min} max={max} step={step} value={displayValue} onChange={(event) => handleChange(Number(event.target.value))} />
+      <input data-testid={`v3-topology-${id}-range`} type="range" min={min} max={max} step={step} value={displayValue} onChange={(event) => handleChange(Number(event.target.value))} />
+      <input data-testid={`v3-topology-${id}`} type="number" min={min} max={max} step={step} value={displayValue} onChange={(event) => handleChange(Number(event.target.value))} />
       <small>{id}{isRatio ? ` · ${Math.round(displayValue * 100)}% · 可输入 80 表示 80%` : ""}</small>
     </label>
   );
@@ -411,7 +411,7 @@ function SelectField({ label, id, value, options, onChange, children }: { label:
   return (
     <label className="field-card">
       <span>{label} <HelpTip title={label}>{children}</HelpTip></span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select data-testid={`v3-topology-${id}`} value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map(([optionValue, labelText, disabled]) => (
           <option key={optionValue} value={optionValue} disabled={disabled}>{labelText}</option>
         ))}

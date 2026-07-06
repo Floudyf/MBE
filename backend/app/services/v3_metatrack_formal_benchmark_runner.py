@@ -682,6 +682,10 @@ def normalize_formal_plugins_for_go_runtime(plugins: dict[str, str]) -> tuple[di
     if metrics_plugin and metrics_plugin != "basic_metrics":
         normalized["MetricsReport"] = "basic_metrics"
         warnings.append(f"MetricsReport={metrics_plugin} normalized to basic_metrics for Go runtime compatibility.")
+    consensus_plugin = normalized.get("Consensus")
+    if consensus_plugin == "blockemulator_aligned_pbft_preview":
+        normalized["Consensus"] = "pbft_light_model"
+        warnings.append("Consensus=blockemulator_aligned_pbft_preview normalized to pbft_light_model for Go runtime compatibility.")
     return normalized, warnings
 
 
@@ -1266,10 +1270,13 @@ def _formal_runtime_compatibility_warnings(matrix: list[dict[str, Any]]) -> list
     for row in matrix:
         plugins = row.get("plugins") or {}
         metrics_plugin = plugins.get("MetricsReport") if isinstance(plugins, dict) else None
-        if not metrics_plugin or metrics_plugin == "basic_metrics" or str(metrics_plugin) in seen:
-            continue
-        seen.add(str(metrics_plugin))
-        warnings.append(f"Formal Go runtime will normalize MetricsReport={metrics_plugin} to basic_metrics.")
+        if metrics_plugin and metrics_plugin != "basic_metrics" and f"metrics:{metrics_plugin}" not in seen:
+            seen.add(f"metrics:{metrics_plugin}")
+            warnings.append(f"Formal Go runtime will normalize MetricsReport={metrics_plugin} to basic_metrics.")
+        consensus_plugin = plugins.get("Consensus") if isinstance(plugins, dict) else None
+        if consensus_plugin == "blockemulator_aligned_pbft_preview" and f"consensus:{consensus_plugin}" not in seen:
+            seen.add(f"consensus:{consensus_plugin}")
+            warnings.append("Formal Go runtime will normalize Consensus=blockemulator_aligned_pbft_preview to pbft_light_model.")
     return warnings
 
 

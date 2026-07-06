@@ -26,7 +26,7 @@ export default function FormalExperimentMatrixPreview({ preview }: Props) {
         </span>
       </div>
       <div className="v3-matrix-kpis">
-        <div><strong>{preview.run_count}</strong><small>总运行组数</small></div>
+        <div><strong data-testid="v3-formal-preview-run-count">{preview.run_count}</strong><small>总运行组数</small></div>
         <div><strong>{preview.total_tx_count}</strong><small>总交易数</small></div>
         <div><strong>{preview.method_count ?? preview.baseline_count}</strong><small>方法数</small></div>
         <div><strong>{preview.workload_count ?? 1}</strong><small>负载数</small></div>
@@ -47,9 +47,14 @@ export default function FormalExperimentMatrixPreview({ preview }: Props) {
         <div><dt>preview/planned 插件</dt><dd>{preview.contains_preview_or_planned_plugin ? "包含" : "不包含"}</dd></div>
       </dl>
       {(preview.errors.length > 0 || preview.exceeds_recommended_range) && (
-        <div className="v3-warning-card">
+        <div className="v3-warning-card" data-testid="v3-formal-preview-errors">
           {preview.exceeds_recommended_range && <p>总运行组数或总交易数偏大，建议减少 seed_count 或扫描点。</p>}
           {preview.errors.map((error) => <p key={error}>{error}</p>)}
+        </div>
+      )}
+      {preview.warnings.length > 0 && (
+        <div className="v3-warning-card" data-testid="v3-formal-preview-warnings">
+          {preview.warnings.map((warning) => <p key={warning}>{warning}</p>)}
         </div>
       )}
       {preview.run_count > 50 && <div className="v3-warning-card">本地多进程下运行组较多，建议先使用链路确认预设。</div>}

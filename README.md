@@ -4,7 +4,7 @@ MBE is evolving from a local modular research-chain runtime toward a configurabl
 
 Current stage: V3-final Fault, Observability, and Reproducibility Closure.
 Latest runtime capability: deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping.
-Latest maintenance capability: saved configuration workflow, workload-comparison formal benchmark, formal metric extraction and aggregation repair, runtime compatibility diagnostics, Playwright E2E validation, result dashboard, chart preview, Formal Run History, preview/download split, ZIP export, explicit numeric parameters, matrix preview, resource guards, multi-seed aggregation, and formal_* paper data exports.
+Latest maintenance capability: saved configuration workflow, workload-comparison formal benchmark, formal metric extraction and aggregation repair, runtime compatibility diagnostics, multi-scenario Playwright E2E validation, result dashboard, chart preview, Formal Run History, preview/download split, ZIP export, explicit numeric parameters, matrix preview, resource guards, multi-seed aggregation, and formal_* paper data exports.
 Runtime truth: v3_final_emulator_closure_not_production_system.
 Next stage: V3 maintenance only; do not start V4 unless explicitly requested.
 
@@ -12,7 +12,7 @@ Next stage: V3 maintenance only; do not start V4 unless explicitly requested.
 
 Current stage: V3-final Fault, Observability, and Reproducibility Closure.
 Latest runtime capability: deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping.
-Latest maintenance capability: saved configuration workflow, workload-comparison formal benchmark, formal metric extraction/aggregation repair, runtime compatibility diagnostics, Playwright E2E validation, result dashboard, chart preview, Formal Run History, and one-click ZIP export. It separates Draft Smoke quick validation from controlled formal benchmark runs and keeps V3-final truth boundaries.
+Latest maintenance capability: saved configuration workflow, workload-comparison formal benchmark, formal metric extraction/aggregation repair, runtime compatibility diagnostics, multi-scenario Playwright E2E validation, result dashboard, chart preview, Formal Run History, and one-click ZIP export. It separates Draft Smoke quick validation from controlled formal benchmark runs and keeps V3-final truth boundaries.
 Current capability: deterministic fault injection, local observability summary, component health status, final artifact catalog, reproducibility bundle, experiment manual, and paper experiment mapping.
 Runtime truth: v3_final_emulator_closure_not_production_system.
 
@@ -21,7 +21,7 @@ Next stage: V3 maintenance only; do not start V4 unless explicitly requested.
 
 After V3-final, the compressed V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. New feature work should be treated as maintenance unless the user explicitly starts V4.
 
-The latest maintenance notes are `docs/v3_maintenance_metatrack_formal_benchmark_console.md`, `docs/v3_maintenance_saved_config_workflow.md`, and `docs/v3_maintenance_result_dashboard_and_usability.md`. They document the formal MetaTrack benchmark console, saved configuration workflow, workload-comparison matrix, metric extraction diagnostics, runtime compatibility diagnostics, Playwright E2E validation, result dashboard, chart preview, ZIP download, Formal Run History, explicit run parameters, resource protection, formal result artifacts, paper-candidate criteria, and the local emulator truth boundary.
+The latest maintenance notes are `docs/v3_maintenance_metatrack_formal_benchmark_console.md`, `docs/v3_maintenance_saved_config_workflow.md`, and `docs/v3_maintenance_result_dashboard_and_usability.md`. They document the formal MetaTrack benchmark console, saved configuration workflow, workload-comparison matrix, metric extraction diagnostics, runtime compatibility diagnostics, multi-scenario Playwright E2E validation, result dashboard, chart preview, ZIP download, Formal Run History, explicit run parameters, resource protection, formal result artifacts, paper-candidate criteria, and the local emulator truth boundary.
 
 ## V3.5 Route
 
