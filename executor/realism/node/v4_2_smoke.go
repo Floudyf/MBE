@@ -87,6 +87,16 @@ func RunV42FinalSmoke(ctx context.Context, opts SmokeOptionsV42) (FinalSummaryV4
 		if err := runtimes[0].GossipTx(ctx, item); err != nil {
 			return FinalSummaryV42{}, nil, err
 		}
+		if err := waitUntil(3*time.Second, func() bool {
+			for _, rt := range runtimes[1:] {
+				if !rt.node.Mempool.Has(item.TxID) {
+					return false
+				}
+			}
+			return true
+		}); err != nil {
+			return FinalSummaryV42{}, nil, fmt.Errorf("timeout waiting for ordered TX_GOSSIP admission for tx %s nonce %d", item.TxID, item.Nonce)
+		}
 	}
 	if err := waitUntil(3*time.Second, func() bool { return runtimes[1].node.Mempool.Len() == opts.TxCount }); err != nil {
 		return FinalSummaryV42{}, nil, err
