@@ -1,4 +1,11 @@
 ﻿# metaverse-chainlab-v3
+## V3 Frozen Baseline Notice
+
+V3-final is frozen as the stable light-runtime / formal experiment-console baseline. V3 work after this point is maintenance only unless the user explicitly asks for a V3 compatibility patch.
+
+For realism runtime work, use `.agents/skills/metaverse-chainlab-v4/SKILL.md` and the V4 planning documents. Do not modify V3 runtime semantics to pretend that preview/MVP components are real node, real network, real PBFT, real state durability, or real cross-shard commit.
+
+V3 components such as `local_multi_process`, `localhost_tcp_preview`, `blockemulator_aligned_pbft_preview`, `relay_mvp`, and `state_authenticity_mvp` remain valuable baselines and compatibility references, but they must not be relabeled as V4 real runtime implementations.
 
 ## 0. Current V3 Scope Realignment
 

@@ -2,28 +2,58 @@
 
 ## Project
 
-This repository implements a modular metaverse blockchain experiment platform.
+This repository implements MBE, a metaverse blockchain experiment platform. The stable baseline is V3-final: a local modular light-runtime and experiment-console baseline with reproducible artifacts, fault-observation MVP, metaverse workload suite, formal benchmark console, and explicit truth boundaries.
 
-The current implementation target is V0: platform skeleton closure.
+The next active planning direction, only when explicitly requested by the user, is V4: MBE Realism Runtime. V4 aims to upgrade the lower runtime from a configuration-driven local light runtime into a real multi-node sharded-chain emulator while preserving the V3 platform as a stable fallback and baseline.
 
-V0 means:
-- Basic frontend.
-- FastAPI backend.
-- Experiment composer.
-- Default plugin package.
-- Synthetic workload.
-- MockChain.
-- trace.jsonl.gz pipeline.
-- Go executor.
-- Virtual clock.
-- Basic metrics.
-- CI sanity test.
+## Current Baseline And Next Direction
 
-Do not implement V1/V2/V3 features unless explicitly requested.
+Stable baseline:
 
-## Runtime and language versions
+```text
+V3-final = light runtime / formal experiment console / reproducibility baseline
+```
 
-V0 must use these versions unless the user explicitly approves a change:
+Active V4 target after explicit user request:
+
+```text
+V4 = MBE Realism Runtime
+```
+
+V4 must not be developed by silently mutating V3 preview/MVP components into overclaimed features. It must add a new realism runtime path and keep truth labels clear.
+
+## Non-negotiable Workflow
+
+Every MBE work round must follow this order:
+
+1. Check the worktree state.
+2. Read the relevant README, docs, and skill file.
+3. Plan the stage boundary.
+4. Update docs/skill before code when opening a new stage.
+5. Implement only the requested stage.
+6. Run the relevant validation commands.
+7. Report changed files, validation results, git status, and whether anything was not completed.
+
+Planning comes before implementation. Do not jump into code before the stage has a clear written scope.
+
+## Git And Safety Rules
+
+Before modifying files, run:
+
+```powershell
+cd F:\Metaverse_Blockchain_Env
+git status --short
+```
+
+If the worktree is dirty, stop and report unless the user explicitly says the existing changes are expected and authorizes continuing on top of them.
+
+Codex may commit only when explicitly asked and after validation. Codex must not push unless the user explicitly asks for push.
+
+Do not overwrite user changes. Do not commit generated artifacts, caches, local run outputs, large traces, or frontend build output.
+
+## Runtime And Language Versions
+
+Keep the existing project constraints unless the user explicitly approves a change:
 
 - Python: 3.12.x
 - Go: 1.26.1
@@ -33,99 +63,134 @@ V0 must use these versions unless the user explicitly approves a change:
 - FastAPI: 0.115.x
 - Uvicorn: 0.30.x
 
-Keep dependency manifests and local development tooling aligned with these
-constraints when the corresponding V0 module is introduced.
+Keep dependency manifests and local development tooling aligned with these constraints when the corresponding module is modified.
 
-## V0 default plugins
+## V3 Boundary
 
-Use only these default plugins in V0:
+V3-final remains the stable light-runtime and experiment-console baseline. V3 may receive bounded maintenance patches only when explicitly requested. V3 must not claim:
 
-- chain_backend: mockchain
-- workload: asset_hotspot
-- trace: jsonl_gzip
-- consensus_protocol: simple_ordering
-- consensus_sharding: single_group
-- state_sharding: hash_state_sharding
-- execution_sharding: hash_execution_sharding
-- routing: hash_routing
-- cross_shard_protocol: local_only
-- cross_chain_protocol: disabled
-- execution: serial_execution
-- commit: normal_commit
-- clock: virtual_clock
-- metrics: basic_metrics
-- composer: default_composer
-- frontend_template: default_single_chain_experiment
+- production blockchain capability;
+- production PBFT / HotStuff / Raft;
+- production networking;
+- multi-server deployment;
+- Byzantine adversary security;
+- Fabric/EVM live backend;
+- BlockEmulator replacement;
+- paper-final performance superiority.
 
-## V0 forbidden scope
+V3 preview/MVP artifacts must remain labeled as preview/MVP/local emulator evidence.
 
-Do not implement these in V0:
+## V4 Direction
 
-- PBFT
-- HotStuff
-- DAG consensus
-- Fabric network
-- EVM contracts
-- co-access routing
-- dual-track execution
-- hot update aggregation
-- Block-STM-like baseline
-- Calvin-like baseline
-- MetaFlow
-- committee bridge
-- Pending Pool
-- Grafana dashboards
-- multi-user permission system
-- distributed deployment
+V4 is opened only when the user explicitly requests it. V4 must be implemented in large bounded stages, not as scattered preview additions. The four-round plan is:
 
-Only create placeholders or interfaces for future V1/V2 modules when needed.
+```text
+Round 1: docs / skill / roadmap reset only.
+Round 2: real node foundation: signed tx, client, node, per-node mempool.
+Round 3: real networking, block proposer, PBFT-style consensus runtime, block commit.
+Round 4: deterministic execution, persistent state, cross-shard state machine, recovery/faults, frontend Realism Mode.
+```
 
-## Timing rules
+V4 aims to meet and exceed BlockEmulator-style runtime realism. It should not copy BlockEmulator code. It may study BlockEmulator concepts, interfaces, logs, and acceptance targets.
 
-In executor replay mode:
-- Never use time.Sleep to simulate network latency, remote fetch latency, execution delay, commit delay, or finality delay.
-- Use virtual time and event timestamps.
-- Separate virtual latency from wall-clock runtime.
+## V4 Runtime Truth Labels
 
-## Trace rules
+Use explicit truth labels in docs, metadata, UI, and reports:
 
-Formal V0 experiments use trace.jsonl.gz.
-Small readable examples may use trace.jsonl.
-Use streaming read/write.
-Do not load the entire trace file into memory.
+```text
+v3_final_light_runtime_baseline
+v4_real_node_foundation
+v4_real_p2p_consensus_commit
+v4_real_state_cross_shard_recovery
+v4_realism_runtime_candidate
+```
 
-## Coding style
+Do not label a component as real unless its logs and tests are produced by actual runtime behavior rather than deterministic row generation.
 
-- Prefer small, testable modules.
-- Keep interfaces stable.
-- Use config-driven plugin loading.
-- Every public config field must be documented.
-- Every plugin must have a plugin.yaml declaration.
-- Update README or docs when changing config, schema, or plugin behavior.
+## V4 Target Transaction Lifecycle
 
-## Required V0 outputs
+The long-term V4 transaction lifecycle is:
 
-A successful V0 experiment must output:
+```text
+real trace / live client
+-> signed transaction
+-> node RPC submit
+-> per-node mempool admission
+-> shard routing
+-> P2P tx gossip
+-> shard leader block proposal
+-> PBFT-style PrePrepare / Prepare / Commit / ViewChange
+-> deterministic execution
+-> state db / state root / receipt
+-> durable block/state/receipt/tx-index commit
+-> cross-shard SourceLock / RelayCertificate / TargetCommit / SourceFinalize or Refund
+-> metrics / proof / receipt / frontend result
+```
 
-- config.yaml
-- trace.jsonl.gz
-- trace_meta.json
-- summary.csv
-- latency.csv
-- runtime.log
+## V4 Non-goals In Early Rounds
 
-## V0 acceptance criteria
+Do not implement everything in one round. Early V4 rounds must not overclaim:
 
-The user can:
-1. Open the basic frontend.
-2. Create a default single-chain experiment.
-3. Preview the default component composition.
-4. Start the experiment.
-5. See runtime logs.
-6. Wait for executor replay to complete.
-7. View TPS, average latency, P95, P99, success count, and failure count.
-8. Download config.yaml, summary.csv, latency.csv, and runtime.log.
+- production PBFT;
+- production Byzantine security;
+- complete Ethereum-compatible MPT;
+- Fabric/EVM live backend;
+- large-scale cloud deployment;
+- paper-final performance superiority;
+- full public-chain semantic compatibility;
+- complete metaverse platform integration.
 
-## Test command
+## Validation Commands
 
-When modifying executor, trace, plugin, or composer logic, run the V0 sanity test before finishing.
+Docs/config-only:
+
+```powershell
+git diff --check
+git status --short
+```
+
+Python/backend modified:
+
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+python -m pytest tests -q
+python -m pytest backend/tests -q
+python scripts/v0_sanity.py
+```
+
+Frontend modified:
+
+```powershell
+cd frontend
+npm.cmd run build
+cd ..
+```
+
+Go modified:
+
+```powershell
+cd executor
+go test ./...
+cd ..
+```
+
+If validation cannot be completed, do not commit. Report the blocker.
+
+## Final Report Format
+
+Every work round final report must include:
+
+```text
+1. 本轮阶段
+2. 实现内容
+3. 新增/修改文件
+4. 未实现内容
+5. 阶段边界检查
+6. Data truth / backend truth 影响
+7. Artifacts / outputs
+8. 兼容性
+9. 测试与验证结果
+10. git status
+11. commit hash
+12. 是否 push：必须说明未 push，除非用户明确要求 push
+```

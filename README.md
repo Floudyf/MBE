@@ -6,7 +6,24 @@ Current stage: V3-final Fault, Observability, and Reproducibility Closure.
 Latest runtime capability: deterministic fault injection MVP, observability summary, final artifact catalog, reproducibility guide, experiment manual, and paper experiment mapping.
 Latest maintenance capability: saved configuration workflow, workload-comparison formal benchmark, formal metric extraction and aggregation repair, runtime compatibility diagnostics, multi-scenario Playwright E2E validation, result dashboard, chart preview, Formal Run History, preview/download split, ZIP export, explicit numeric parameters, matrix preview, resource guards, multi-seed aggregation, and formal_* paper data exports.
 Runtime truth: v3_final_emulator_closure_not_production_system.
-Next stage: V3 maintenance only; do not start V4 unless explicitly requested.
+Next stage: V4 planning has been explicitly requested. V3-final remains the stable baseline; V4 Realism Runtime starts with docs/skill planning before code.
+
+## V4 Planning Status
+
+V3-final remains the stable light-runtime and formal experiment-console baseline. It is intentionally preserved as a local emulator prototype with explicit truth boundaries.
+
+The next active planning direction is V4: MBE Realism Runtime. V4 is opened to upgrade the lower runtime from a configuration-driven local light runtime into a real multi-node sharded-chain emulator. V4 must be developed in bounded stages and must not overclaim preview/MVP artifacts as real runtime behavior.
+
+Planned V4 route:
+
+1. V4 documentation and skill reset.
+2. V4.0 Real Node Foundation: signed transactions, client submitter, long-running node skeleton, per-node mempool, account/nonce checks.
+3. V4.1 Network / Consensus / Commit: real local P2P message loop, block proposer, PBFT-style real message runtime, block commit.
+4. V4.2 State / Cross-shard / Recovery: deterministic execution, persistent block/state/receipt databases, state roots/proofs, cross-shard state machine, recovery/fault injection, frontend Realism Mode.
+
+V4 aims to meet and exceed BlockEmulator-style emulator realism by combining real node/network/consensus/state/cross-shard execution with MBE's metaverse workloads, MetaTrack-aware routing, frontend experiment control, observability, and reproducibility tooling.
+
+Current truth boundary: V4 is planned until each stage is implemented and validated. Do not claim V4 capabilities as runnable before their corresponding stage is complete.
 
 ## Current Status
 
@@ -17,7 +34,7 @@ Current capability: deterministic fault injection, local observability summary, 
 Runtime truth: v3_final_emulator_closure_not_production_system.
 
 V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, V3.12, V3.13, and V3-final are closed. V3-final adds deterministic local fault injection, node failure/recovery/network delay/drop/target congestion/Relay fault observation artifacts, local observability summaries, component health status, final artifact catalog, reproducibility manifest/guide/manual, and paper experiment mapping. It is not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not production fault tolerance, not production monitoring, not a Byzantine adversary model, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
-Next stage: V3 maintenance only; do not start V4 unless explicitly requested.
+Next stage: V4 planning has been explicitly requested. V3-final remains the stable baseline; V4 Realism Runtime starts with docs/skill planning before code.
 
 After V3-final, the compressed V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. New feature work should be treated as maintenance unless the user explicitly starts V4.
 
