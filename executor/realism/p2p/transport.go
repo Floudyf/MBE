@@ -50,7 +50,7 @@ func (t *Transport) Start(ctx context.Context) error {
 	t.listener = ln
 	t.cancel = cancel
 	t.wg.Add(1)
-	go t.acceptLoop(child)
+	go t.acceptLoop(child, ln)
 	return nil
 }
 
@@ -82,16 +82,16 @@ func (t *Transport) Stop() error {
 	return nil
 }
 
-func (t *Transport) acceptLoop(ctx context.Context) {
+func (t *Transport) acceptLoop(ctx context.Context, ln net.Listener) {
 	defer t.wg.Done()
 	for {
-		conn, err := t.listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			select {
 			case <-ctx.Done():
 				return
 			default:
-				continue
+				return
 			}
 		}
 		t.wg.Add(1)

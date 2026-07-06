@@ -67,3 +67,48 @@ func TestSendReceiveAndBroadcast(t *testing.T) {
 		t.Fatalf("expected network logs")
 	}
 }
+
+func TestTransportStopDoesNotPanicAcceptLoop(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		tp := NewTransport("n0", "127.0.0.1:0", nil, nil)
+		if err := tp.Start(ctx); err != nil {
+			cancel()
+			t.Fatalf("start transport: %v", err)
+		}
+		cancel()
+		if err := tp.Stop(); err != nil {
+			t.Fatalf("stop transport: %v", err)
+		}
+		if err := tp.Stop(); err != nil {
+			t.Fatalf("second stop transport: %v", err)
+		}
+	}
+}
+
+func TestMultipleTransportConcurrentStopDoesNotPanic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transports := make([]*Transport, 0, 20)
+	for i := 0; i < 20; i++ {
+		tp := NewTransport("n-stop", "127.0.0.1:0", nil, nil)
+		if err := tp.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		transports = append(transports, tp)
+	}
+	done := make(chan struct{}, len(transports))
+	for _, tp := range transports {
+		go func(next *Transport) {
+			_ = next.Stop()
+			done <- struct{}{}
+		}(tp)
+	}
+	for range transports {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for transport stop")
+		}
+	}
+}
