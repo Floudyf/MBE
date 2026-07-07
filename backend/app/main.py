@@ -1012,10 +1012,8 @@ def v4_realism_status() -> dict:
 
 @app.post("/api/v4/realism/smoke")
 def v4_realism_smoke(payload: V4RealismSmokeRequest) -> dict:
-    result = v4_realism_runner.run_smoke(payload)
-    if result.get("status") == "failed":
-        raise HTTPException(500, detail=result)
-    return result
+	result = v4_realism_runner.run_smoke(payload)
+	return result
 
 
 @app.get("/api/v4/realism/runs/{run_id}/summary")

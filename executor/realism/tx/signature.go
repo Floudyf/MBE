@@ -20,6 +20,9 @@ func Sign(t *SignedTransaction, privateKey ed25519.PrivateKey) error {
 	}
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	t.PublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	if t.Sender == "" {
+		t.Sender = AddressFromPublicKey(publicKey)
+	}
 	if err := AssignID(t); err != nil {
 		return err
 	}
@@ -34,6 +37,9 @@ func Sign(t *SignedTransaction, privateKey ed25519.PrivateKey) error {
 func Verify(t SignedTransaction) error {
 	if err := t.ValidateBasic(); err != nil {
 		return err
+	}
+	if !IsBoundSender(t.Sender, t.PublicKey) {
+		return errors.New(ErrSenderPublicKeyMismatch)
 	}
 	publicKey, err := base64.StdEncoding.DecodeString(t.PublicKey)
 	if err != nil || len(publicKey) != ed25519.PublicKeySize {

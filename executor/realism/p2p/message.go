@@ -16,6 +16,7 @@ const (
 	MessagePBFTCommit     = "PBFT_COMMIT"
 	MessagePBFTViewChange = "PBFT_VIEW_CHANGE"
 	MessagePBFTNewView    = "PBFT_NEW_VIEW"
+	MessageXShardRelay    = "XSHARD_RELAY_CERTIFICATE"
 	MessageNodeHello      = "NODE_HELLO"
 	MessageNodeShutdown   = "NODE_SHUTDOWN"
 )

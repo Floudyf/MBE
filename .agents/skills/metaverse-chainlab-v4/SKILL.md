@@ -39,9 +39,9 @@ V4 = real node / real network / real consensus / real state / real cross-shard r
 
 V4 may reuse V3 configuration, frontend, metrics, artifact grouping, workload catalog, and profile concepts, but V4 must not mutate preview/MVP behavior into overclaimed real runtime behavior.
 
-## 3. Four-round V4 Plan
+## 3. V4 Plan
 
-V4 is developed in four large bounded rounds.
+V4 is developed in bounded rounds.
 
 ### Round 1: V4 docs and skill reset
 
@@ -163,6 +163,35 @@ Forbidden in V4.2 unless explicitly reopened:
 - claiming production bridge security;
 - claiming cloud-scale deployment;
 - claiming paper-final superiority without controlled comparisons.
+
+### Round 5: V4.3 BlockEmulator-surpass Realism Closure
+
+Target closure additions:
+
+```text
+sender/public-key binding
+-> cross-shard relay evidence over real P2P
+-> real P2P fault delay/drop
+-> BlockEmulator CSV to signed tx JSONL bridge
+-> backend/frontend V4.3 controls
+```
+
+Allowed:
+
+- enforce signed transaction sender/public-key binding;
+- reject sender/public-key mismatch in mempool admission;
+- apply delay/drop fault policy inside real P2P transport;
+- transmit cross-shard relay certificate over real localhost TCP P2P;
+- upgrade BlockEmulator bridge to signed tx JSONL import and verification;
+- add V4.3 smoke, backend parameters, frontend controls, artifacts, and docs.
+
+Forbidden:
+
+- production PBFT claims;
+- full Byzantine security claims;
+- production atomic cross-shard commit claims;
+- full BlockEmulator compatibility claims;
+- Fabric/EVM live backend claims.
 
 ## 4. V4 Target Architecture
 

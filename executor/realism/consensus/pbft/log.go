@@ -78,6 +78,18 @@ func (l *Logs) MessageCount() int {
 	return len(l.Messages)
 }
 
+func (l *Logs) MessageEntries() []MessageLogEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]MessageLogEntry(nil), l.Messages...)
+}
+
+func (l *Logs) QuorumEntries() []QuorumLogEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]QuorumLogEntry(nil), l.Quorums...)
+}
+
 func (l *Logs) WriteMessageCSV(path string) error {
 	l.mu.Lock()
 	rows := make([][]string, 0, len(l.Messages))

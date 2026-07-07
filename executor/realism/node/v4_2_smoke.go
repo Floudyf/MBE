@@ -120,12 +120,26 @@ func RunV42FinalSmoke(ctx context.Context, opts SmokeOptionsV42) (FinalSummaryV4
 	engine := execution.NewEngine()
 	var latestStateRoot string
 	var receiptRoot string
-	for i, rt := range runtimes[:3] {
+	committedRuntimes := []*RuntimeV41{}
+	committedIDs := []string{}
+	for i, rt := range runtimes {
+		if rt.Summary().CommittedBlockHash == proposed.BlockHash {
+			committedRuntimes = append(committedRuntimes, rt)
+			committedIDs = append(committedIDs, validators[i])
+		}
+		if len(committedRuntimes) == 3 {
+			break
+		}
+	}
+	if len(committedRuntimes) < 3 {
+		return FinalSummaryV42{}, nil, fmt.Errorf("expected at least 3 committed nodes for block %s, got %d", proposed.BlockHash, len(committedRuntimes))
+	}
+	for i, rt := range committedRuntimes {
 		committed, ok := rt.CommittedBlock()
 		if !ok {
-			return FinalSummaryV42{}, nil, fmt.Errorf("node %s has no committed block", validators[i])
+			return FinalSummaryV42{}, nil, fmt.Errorf("node %s has no committed block", committedIDs[i])
 		}
-		nodeDir := filepath.Join(opts.OutDir, validators[i])
+		nodeDir := filepath.Join(opts.OutDir, committedIDs[i])
 		nodeDirs = append(nodeDirs, nodeDir)
 		db, err := state.Open(nodeDir, "s0")
 		if err != nil {
@@ -142,7 +156,7 @@ func RunV42FinalSmoke(ctx context.Context, opts SmokeOptionsV42) (FinalSummaryV4
 		if _, err := store.DurableCommit(committed, result); err != nil {
 			return FinalSummaryV42{}, nil, err
 		}
-		if err := metrics.WriteCSV(filepath.Join(nodeDir, "state_root_log.csv"), []string{"node_id", "height", "block_hash", "state_root_before", "state_root_after", "receipt_root"}, [][]string{{validators[i], fmt.Sprint(committed.Height), committed.BlockHash, result.StateRootBefore, result.StateRootAfter, result.ReceiptRoot}}); err != nil {
+		if err := metrics.WriteCSV(filepath.Join(nodeDir, "state_root_log.csv"), []string{"node_id", "height", "block_hash", "state_root_before", "state_root_after", "receipt_root"}, [][]string{{committedIDs[i], fmt.Sprint(committed.Height), committed.BlockHash, result.StateRootBefore, result.StateRootAfter, result.ReceiptRoot}}); err != nil {
 			return FinalSummaryV42{}, nil, err
 		}
 		latestStateRoot = result.StateRootAfter

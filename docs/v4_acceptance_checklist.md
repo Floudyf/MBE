@@ -206,3 +206,40 @@ MBE can claim it is moving beyond BlockEmulator-style realism only after it has 
 - frontend Realism Mode and reproducibility report.
 
 Do not claim measured superiority until direct comparison experiments exist.
+
+## 7. V4.3 BlockEmulator-surpass Realism Closure
+
+Accepted when:
+
+- signed transactions bind `sender` to `address(public_key)`;
+- sender/public-key mismatch is rejected by `tx.Verify` and mempool admission;
+- cross-shard relay certificate is sent over real TCP P2P;
+- fault policy delay/drop is applied in the real P2P transport path;
+- BlockEmulator-style CSV rows are converted to signed transaction JSONL and verified;
+- backend and frontend expose V4.3 controls and artifacts;
+- V3 runtime tests remain green.
+
+Implemented/verified artifact foundation:
+
+```text
+v4_3_realism_final_summary.json
+v4_3_acceptance_report.json
+v4_3_self_check_report.md
+xshard_finality_summary.json
+xshard_network_log.csv
+xshard_certificate_log.csv
+network_fault_log.csv
+fault_policy.json
+blockemulator_import_summary.json
+blockemulator_signed_txs.jsonl
+blockemulator_mapping_log.csv
+blockemulator_v4_comparison_summary.json
+```
+
+Truth label:
+
+```text
+v4_blockemulator_surpass_realism_closure
+```
+
+Non-claims remain: production PBFT, full Byzantine security, production blockchain, production atomic cross-shard commit, Fabric/EVM live backend, and full BlockEmulator compatibility are not implemented.

@@ -122,3 +122,23 @@ Truth boundary:
 - `full_byzantine_security=false`
 
 MBE V4 can be described as matching BlockEmulator-style core runtime realism and extending it with state root, receipt/tx index, cross-shard state machine, recovery/fault injection, frontend Realism Mode, and metaverse-oriented experiment control. It must not be described as fully replacing BlockEmulator in every scenario without controlled comparison experiments.
+
+## 10. V4.3 Closure Evidence
+
+V4.3 strengthens the BlockEmulator-surpass evidence chain:
+
+- signed transaction authenticity now includes sender/public-key binding;
+- cross-shard relay certificates are transmitted over real localhost TCP P2P;
+- P2P fault injection can actually delay/drop messages and logs those events;
+- BlockEmulator selectedTxs-style CSV input is converted into verifiable MBE signed transaction JSONL;
+- backend/frontend V4.3 controls expose nodes, shards, tx count, cross-shard, faults, fault profile, and bridge parameters.
+
+The allowed claim is that MBE V4.3 matches BlockEmulator core emulator realism and surpasses it in evidence chain, frontend-controlled realism, state/receipt/tx-index observability, real cross-shard network commit MVP, real P2P fault injection, and BlockEmulator trace-to-signed-tx bridge.
+
+Non-claims remain:
+
+- `production_pbft=false`
+- `full_byzantine_security=false`
+- `production_blockchain=false`
+- `production_atomic_commit=false`
+- `full_blockemulator_compatibility=false`

@@ -25,6 +25,14 @@ func Generate(opts GenerateOptions) ([]SignedTransaction, string, string, error)
 		opts.SourceKind = "mbe_client_generate"
 	}
 	publicKey, privateKey := DeterministicKeyPair(opts.Seed + ":" + opts.Sender)
+	sender := opts.Sender
+	if sender == "" || !strings.HasPrefix(strings.ToLower(strings.TrimSpace(sender)), "0x") {
+		sender = AddressFromPublicKey(publicKey)
+	}
+	receiver := opts.Receiver
+	if receiver == "" {
+		receiver = "0x" + strings.Repeat("0", 40)
+	}
 	publicKeyText := encodeKey(publicKey)
 	privateKeyText := encodeKey(privateKey.Seed())
 	txs := make([]SignedTransaction, 0, opts.Count)
@@ -32,15 +40,15 @@ func Generate(opts GenerateOptions) ([]SignedTransaction, string, string, error)
 		nonce := opts.StartNonce + uint64(i)
 		stateKeys := append([]string(nil), opts.StateKeys...)
 		if len(stateKeys) == 0 {
-			stateKeys = DefaultStateKeys(opts.Sender, opts.Receiver)
+			stateKeys = DefaultStateKeys(sender, receiver)
 		}
 		item := SignedTransaction{
-			Sender:     opts.Sender,
-			Receiver:   opts.Receiver,
+			Sender:     sender,
+			Receiver:   receiver,
 			Nonce:      nonce,
 			Value:      opts.Value,
 			StateKeys:  stateKeys,
-			Payload:    fmt.Sprintf("mbe-client:%s:%s:%d", opts.Sender, opts.Receiver, nonce),
+			Payload:    fmt.Sprintf("mbe-client:%s:%s:%d", sender, receiver, nonce),
 			Timestamp:  opts.StartTimeMS + int64(i),
 			SourceKind: opts.SourceKind,
 		}

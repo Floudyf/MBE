@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"metaverse-chainlab/executor/realism/faults"
 )
 
 type Handler func(context.Context, MessageEnvelope) error
@@ -18,6 +20,7 @@ type Transport struct {
 	handler    Handler
 	listener   net.Listener
 	cancel     context.CancelFunc
+	faults     faults.Policy
 	wg         sync.WaitGroup
 	mu         sync.Mutex
 }
@@ -63,6 +66,12 @@ func (t *Transport) SetPeers(peers []Peer) {
 			t.Peers[p.NodeID] = p
 		}
 	}
+}
+
+func (t *Transport) SetFaultPolicy(policy faults.Policy) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.faults = policy
 }
 
 func (t *Transport) Stop() error {
@@ -112,6 +121,16 @@ func (t *Transport) handleConn(ctx context.Context, conn net.Conn) {
 		t.Log.Add(entry)
 		return
 	}
+	if decision := t.faultDecision("receive", msg.FromNode, msg); decision.FaultEvent {
+		if decision.Delay > 0 {
+			time.Sleep(decision.Delay)
+			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "fault_delay_receive", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: true, Error: decision.Reason, LatencyMS: decision.Delay.Milliseconds()})
+		}
+		if decision.Drop {
+			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "fault_drop_receive", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: decision.Reason})
+			return
+		}
+	}
 	t.Log.Add(entry)
 	if t.handler != nil {
 		if err := t.handler(ctx, msg); err != nil {
@@ -129,6 +148,16 @@ func (t *Transport) Send(ctx context.Context, peerID string, msg MessageEnvelope
 	if msg.MessageID == "" || msg.Digest == "" {
 		msg.Digest = Digest(msg)
 		msg.MessageID = MessageID(msg)
+	}
+	if decision := t.faultDecision("send", peerID, msg); decision.FaultEvent {
+		if decision.Delay > 0 {
+			time.Sleep(decision.Delay)
+			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: peerID, Direction: "fault_delay_send", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: true, Error: decision.Reason, LatencyMS: decision.Delay.Milliseconds()})
+		}
+		if decision.Drop {
+			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: peerID, Direction: "fault_drop_send", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: decision.Reason})
+			return nil
+		}
 	}
 	start := time.Now()
 	dialer := net.Dialer{Timeout: 2 * time.Second}
@@ -158,4 +187,11 @@ func (t *Transport) Broadcast(ctx context.Context, msg MessageEnvelope) []error 
 		}
 	}
 	return errs
+}
+
+func (t *Transport) faultDecision(direction, peerID string, msg MessageEnvelope) faults.Decision {
+	t.mu.Lock()
+	policy := t.faults
+	t.mu.Unlock()
+	return policy.Decide(direction, peerID, msg.MessageType, msg.MessageID)
 }

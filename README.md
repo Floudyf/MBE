@@ -2,10 +2,10 @@
 
 MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
 
-Current stage: V4.2 State, Cross-shard, Recovery, and Frontend Realism Mode verified as a research-grade real multi-node sharded blockchain emulator path.
-Latest runtime capability: signed transactions, per-node mempool, localhost TCP P2P, PBFT-style quorum commit, deterministic execution, persistent state/block/receipt/tx-index storage, state-root consistency, cross-shard state machine, recovery/fault injection, BlockEmulator bridge MVP, backend V4 realism API, and frontend Realism Mode.
+Current stage: V4.3 BlockEmulator-surpass realism closure, after local runtime and frontend build verification.
+Latest runtime capability: signed transactions with sender/public-key binding, per-node mempool, localhost TCP P2P, PBFT-style quorum commit, deterministic execution, persistent state/block/receipt/tx-index storage, state-root consistency, cross-shard state machine with real P2P relay-certificate evidence, real P2P fault delay/drop evidence, upgraded BlockEmulator CSV-to-signed-tx bridge, backend V4 realism API, and frontend Realism Mode controls.
 Stable baseline: V3-final remains preserved as the light-runtime and formal experiment-console baseline.
-Runtime truth: v4_real_state_cross_shard_recovery. Non-claims: not production PBFT, not full Byzantine security, not a production blockchain, not Fabric/EVM live backend, and not an industrial-grade chain.
+Runtime truth: v4_blockemulator_surpass_realism_closure. Non-claims: not production PBFT, not full Byzantine security, not a production blockchain, not Fabric/EVM live backend, not production atomic cross-shard commit, and not full BlockEmulator compatibility.
 
 ## V4 Planning Status
 

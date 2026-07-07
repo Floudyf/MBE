@@ -184,7 +184,7 @@ Before direct comparison artifacts exist, MBE must not claim measured superiorit
 
 ## 9. Current Implementation Status
 
-V4.0, V4.1, and V4.2 are implemented and verified in the current repository.
+V4.0, V4.1, V4.2, and V4.3 are implemented and verified in the current repository.
 
 Verified V4.2 chain segment:
 
@@ -204,13 +204,13 @@ signed tx
 Current runtime truth:
 
 ```text
-v4_real_state_cross_shard_recovery
+v4_blockemulator_surpass_realism_closure
 ```
 
 Allowed description:
 
 ```text
-MBE V4 provides a research-grade real multi-node sharded blockchain emulator.
+MBE V4.3 matches BlockEmulator core emulator realism and surpasses it in evidence chain, frontend-controlled realism, state/receipt/tx-index observability, real cross-shard network commit MVP, real P2P fault injection, and BlockEmulator trace-to-signed-tx bridge.
 ```
 
-Non-claims remain in force: V4 is not a production blockchain, not production PBFT, not full Byzantine security, not an industrial-grade chain, and not complete Ethereum/Fabric compatibility.
+Non-claims remain in force: V4 is not a production blockchain, not production PBFT, not full Byzantine security, not an industrial-grade chain, not production atomic cross-shard commit, not complete Ethereum/Fabric compatibility, and not full BlockEmulator compatibility.

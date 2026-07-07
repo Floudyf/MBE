@@ -10,21 +10,11 @@ import (
 
 func signed(t *testing.T, sender string, nonce uint64) tx.SignedTransaction {
 	t.Helper()
-	_, privateKey := tx.DeterministicKeyPair("seed:" + sender)
-	item := tx.SignedTransaction{
-		Sender:     sender,
-		Receiver:   "bob",
-		Nonce:      nonce,
-		Value:      1,
-		StateKeys:  []string{"acct:" + sender, "acct:bob"},
-		Payload:    "payload",
-		Timestamp:  int64(nonce),
-		SourceKind: "test",
-	}
-	if err := tx.Sign(&item, privateKey); err != nil {
+	items, _, _, err := tx.Generate(tx.GenerateOptions{Count: 1, Sender: sender, Receiver: "bob", StartNonce: nonce, Value: 1, Seed: "seed", StartTimeMS: int64(nonce), SourceKind: "test"})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return item
+	return items[0]
 }
 
 func TestMempoolAdmissionAndRejects(t *testing.T) {
@@ -59,6 +49,18 @@ func TestMempoolAdmissionAndRejects(t *testing.T) {
 	}
 	if result := m.Admit(signed(t, "dave", 0)); result.Accepted || result.RejectReason != ReasonCapacity {
 		t.Fatalf("expected capacity reject, got %+v", result)
+	}
+}
+
+func TestMempoolRejectsSenderPublicKeyMismatch(t *testing.T) {
+	m := New("n0", "s0", Policy{Capacity: 2, TTL: time.Minute}, account.NewNonceManager())
+	item := signed(t, "alice", 0)
+	item.Sender = "0x1111111111111111111111111111111111111111"
+	if err := tx.AssignID(&item); err != nil {
+		t.Fatal(err)
+	}
+	if result := m.Admit(item); result.Accepted || result.RejectReason != tx.ErrSenderPublicKeyMismatch {
+		t.Fatalf("expected sender/public key mismatch reject, got %+v", result)
 	}
 }
 

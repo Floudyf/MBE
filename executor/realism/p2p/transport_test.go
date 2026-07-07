@@ -5,6 +5,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"metaverse-chainlab/executor/realism/faults"
 )
 
 func TestMessageEncodeDecode(t *testing.T) {
@@ -23,6 +25,81 @@ func TestMessageEncodeDecode(t *testing.T) {
 	if got.MessageID != msg.MessageID || got.MessageType != MessageNodeHello {
 		t.Fatalf("unexpected decoded message: %+v", got)
 	}
+}
+
+func TestP2PFaultPolicyDelayLogsRealDelay(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	received := make(chan MessageEnvelope, 1)
+	b := NewTransport("n1", "127.0.0.1:0", nil, func(ctx context.Context, msg MessageEnvelope) error {
+		received <- msg
+		return nil
+	})
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop()
+	a := NewTransport("n0", "127.0.0.1:0", []Peer{{NodeID: "n1", ListenAddr: b.ListenAddr}}, nil)
+	a.SetFaultPolicy(faults.Policy{Enabled: true, DelayMS: 25, Seed: 1})
+	msg, err := NewEnvelope(MessageNodeHello, "n0", "n1", "s0", 1, 0, 1, map[string]string{"hello": "world"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := a.Send(ctx, "n1", msg); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 20*time.Millisecond {
+		t.Fatalf("expected real delay, got %s", elapsed)
+	}
+	select {
+	case <-received:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for delayed send")
+	}
+	if !hasLogDirection(a.Log.Entries(), "fault_delay_send") {
+		t.Fatalf("expected fault_delay_send log")
+	}
+}
+
+func TestP2PFaultPolicyDropByMessageType(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	received := make(chan MessageEnvelope, 1)
+	b := NewTransport("n1", "127.0.0.1:0", nil, func(ctx context.Context, msg MessageEnvelope) error {
+		received <- msg
+		return nil
+	})
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop()
+	a := NewTransport("n0", "127.0.0.1:0", []Peer{{NodeID: "n1", ListenAddr: b.ListenAddr}}, nil)
+	a.SetFaultPolicy(faults.Policy{Enabled: true, DropMessageTypes: []string{MessageNodeHello}, Seed: 1})
+	msg, err := NewEnvelope(MessageNodeHello, "n0", "n1", "s0", 1, 0, 1, map[string]string{"hello": "world"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Send(ctx, "n1", msg); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-received:
+		t.Fatalf("message should have been dropped, got %+v", got)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if !hasLogDirection(a.Log.Entries(), "fault_drop_send") {
+		t.Fatalf("expected fault_drop_send log")
+	}
+}
+
+func hasLogDirection(entries []NetworkLogEntry, direction string) bool {
+	for _, entry := range entries {
+		if entry.Direction == direction {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSendReceiveAndBroadcast(t *testing.T) {

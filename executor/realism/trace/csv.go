@@ -55,28 +55,25 @@ func readCSV(opts ImportOptions) ([]tx.SignedTransaction, [][]string, int, error
 		if len(stateKeys) == 0 {
 			stateKeys = tx.DefaultStateKeys(sender, receiver)
 		}
+		generated, _, _, err := tx.Generate(tx.GenerateOptions{Count: 1, Sender: sender, Receiver: receiver, StartNonce: nonce, Value: value, StateKeys: stateKeys, Seed: opts.Seed, SourceKind: "real_trace_to_signed_tx", StartTimeMS: timestamp})
+		if err != nil {
+			rejected++
+			logRows = append(logRows, []string{strconv.Itoa(rowNo), "false", err.Error(), "", sender, receiver, strconv.FormatUint(nonce, 10)})
+			continue
+		}
+		item := generated[0]
+		item.TraceSourceID = fmt.Sprintf("%s:%d", opts.SourceFormat, rowNo)
+		if payload := first(row, header, "payload"); payload != "" {
+			item.Payload = payload
+		}
 		_, privateKey := tx.DeterministicKeyPair(opts.Seed + ":" + sender)
-		item := tx.SignedTransaction{
-			Sender:        sender,
-			Receiver:      receiver,
-			Nonce:         nonce,
-			Value:         value,
-			StateKeys:     stateKeys,
-			Payload:       first(row, header, "payload"),
-			Timestamp:     timestamp,
-			SourceKind:    "real_trace_to_signed_tx",
-			TraceSourceID: fmt.Sprintf("%s:%d", opts.SourceFormat, rowNo),
-		}
-		if item.Payload == "" {
-			item.Payload = fmt.Sprintf("trace-row:%d", rowNo)
-		}
 		if err := tx.Sign(&item, privateKey); err != nil {
 			rejected++
 			logRows = append(logRows, []string{strconv.Itoa(rowNo), "false", err.Error(), "", sender, receiver, strconv.FormatUint(nonce, 10)})
 			continue
 		}
 		out = append(out, item)
-		logRows = append(logRows, []string{strconv.Itoa(rowNo), "true", "", item.TxID, sender, receiver, strconv.FormatUint(nonce, 10)})
+		logRows = append(logRows, []string{strconv.Itoa(rowNo), "true", "", item.TxID, item.Sender, item.Receiver, strconv.FormatUint(nonce, 10)})
 	}
 	return out, logRows, rejected, nil
 }

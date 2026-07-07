@@ -474,29 +474,50 @@ export type V4RealismStatus = {
   runtime_stage: string;
   runtime_truth: string;
   real_signed_tx: boolean;
+  sender_public_key_binding: boolean;
+  signed_tx_authenticity: boolean;
   per_node_mempool: boolean;
   real_p2p: boolean;
   pbft_style_consensus: boolean;
+  real_pbft_messages: boolean;
   production_pbft: boolean;
   full_byzantine_security: boolean;
   persistent_state_db: boolean;
   state_root_from_real_state_updates: boolean;
   real_cross_shard_state_machine: boolean;
+  real_cross_shard_network_commit: boolean;
   recovery_supported: boolean;
   fault_injection_supported: boolean;
+  real_fault_injection: boolean;
+  blockemulator_trace_to_signed_tx: boolean;
+  blockemulator_bridge_upgraded: boolean;
   frontend_realism_mode: boolean;
   fabric_evm_backend: boolean;
   production_blockchain: boolean;
+  production_atomic_commit: boolean;
+  full_blockemulator_compatibility: boolean;
 };
 
 export type V4RealismArtifact = { name: string; download_url: string; size_bytes: number };
+export type V4RealismSmokeRequest = {
+  nodes: number;
+  shards: number;
+  tx_count: number;
+  enable_cross_shard: boolean;
+  enable_faults: boolean;
+  fault_profile: string;
+  blockemulator_csv?: string;
+  blockemulator_tx_limit: number;
+  run_duration_ms: number;
+};
 export type V4RealismSmokeResponse = {
   run_id: string;
   status: string;
   output_dir: string;
-  summary: Record<string, unknown>;
-  artifacts: V4RealismArtifact[];
+  summary?: Record<string, unknown>;
+  artifacts?: V4RealismArtifact[];
   stdout?: string;
+  stderr?: string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
@@ -1027,8 +1048,12 @@ export async function fetchV4RealismStatus(): Promise<V4RealismStatus> {
   return request<V4RealismStatus>("/api/v4/realism/status");
 }
 
-export async function runV4RealismSmoke(payload = { nodes: 4, shards: 1, tx_count: 10, enable_cross_shard: true, enable_faults: true, run_duration_ms: 1000 }): Promise<V4RealismSmokeResponse> {
+export async function runV4RealismSmoke(payload: V4RealismSmokeRequest = { nodes: 4, shards: 1, tx_count: 10, enable_cross_shard: true, enable_faults: true, fault_profile: "network_delay", blockemulator_tx_limit: 10, run_duration_ms: 1000 }): Promise<V4RealismSmokeResponse> {
   return request<V4RealismSmokeResponse>("/api/v4/realism/smoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function fetchV4RealismSummary(runId: string): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>(`/api/v4/realism/runs/${encodeURIComponent(runId)}/summary`);
 }
 
 export async function fetchV4RealismArtifacts(runId: string): Promise<{ run_id: string; artifacts: V4RealismArtifact[] }> {
