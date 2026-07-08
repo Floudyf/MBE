@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
+from backend.app.services import experiment_flow_service
 
 
 client = TestClient(app)
@@ -149,3 +150,79 @@ def test_experiment_flow_derive_v4_realism_request_planned_workload_not_runnable
     payload = response.json()
     assert payload["runnable"] is False
     assert payload["warnings"]
+
+
+def test_experiment_flow_execute_selected_matrix_dry_run_quick_validation() -> None:
+    response = client.post(
+        "/api/experiment-flow/execute-selected-matrix",
+        json={"run_mode": "dry_run", "selected_rows": [_row()]},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_group_id"].startswith("run_suite_")
+    assert payload["selected_row_count"] == 1
+    assert len(payload["child_runs"]) == 1
+    assert payload["child_runs"][0]["status"] in {"dry_run", "preview_only"}
+
+
+def test_experiment_flow_execute_selected_matrix_blocks_planned_workload() -> None:
+    row = _row(workload_id="real_skew_high", runnable=False, warnings=["real_skew_high: dataset not attached yet"])
+    response = client.post(
+        "/api/experiment-flow/execute-selected-matrix",
+        json={"run_mode": "execute", "selected_rows": [row]},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["blocked_row_count"] >= 1
+    assert payload["child_runs"][0]["status"] == "blocked"
+    assert payload["child_runs"][0]["blocked_reason"]
+
+
+def test_experiment_flow_execute_selected_matrix_unsupported_formal_suite_is_preview_only() -> None:
+    response = client.post(
+        "/api/experiment-flow/execute-selected-matrix",
+        json={"run_mode": "execute", "selected_rows": [_row(suite_type="main_experiment")]},
+    )
+    assert response.status_code == 200
+    child = response.json()["child_runs"][0]
+    assert child["status"] == "preview_only"
+    assert "formal matrix execution bridge is planned" in child["warnings"][0]
+
+
+def test_experiment_flow_execute_selected_matrix_v4_realism_uses_existing_runner(monkeypatch) -> None:
+    def fake_run_smoke(payload):
+        return {
+            "run_id": "v4_fake_child",
+            "status": "completed",
+            "summary": {"ready_to_commit": True, "nodes": payload.nodes, "shards": payload.shards},
+            "artifacts": [{"name": "v4_3_realism_final_summary.json", "download_url": "/api/v4/realism/runs/v4_fake_child/artifacts/v4_3_realism_final_summary.json", "size_bytes": 2}],
+        }
+
+    monkeypatch.setattr(experiment_flow_service.v4_realism_runner, "run_smoke", fake_run_smoke)
+    response = client.post(
+        "/api/experiment-flow/execute-selected-matrix",
+        json={"run_mode": "execute", "selected_rows": [_row(suite_type="v4_realism_validation", runtime_target="v4.3")]},
+    )
+    assert response.status_code == 200
+    child = response.json()["child_runs"][0]
+    assert child["runner"] == "v4_realism_runner"
+    assert child["status"] == "completed"
+    assert child["run_id"] == "v4_fake_child"
+    assert child["summary"]["ready_to_commit"] is True
+
+
+def _row(**overrides) -> dict:
+    row = {
+        "row_id": "quick_validation:metatrack_full:small_test:local_8_nodes_2_shards:seed1",
+        "suite_type": "quick_validation",
+        "method_id": "metatrack_full",
+        "method_role": "main",
+        "workload_id": "small_test",
+        "topology_id": "local_8_nodes_2_shards",
+        "seed": 1,
+        "runtime_target": "v3-formal-preview",
+        "runnable": True,
+        "warnings": [],
+    }
+    row.update(overrides)
+    return row

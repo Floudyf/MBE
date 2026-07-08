@@ -484,3 +484,23 @@ Boundary rules:
 - Do not change `go run ./cmd/mbe-supervisor` command semantics.
 - Do not automatically commit.
 - Do not automatically push.
+
+## 16. V4.3.4 Run Suite Execution Bridge
+
+V4.3.4 adds a lightweight execution bridge from RunExperimentPage selected matrix rows to existing runners. It is not a new runtime and not a full batch scheduler.
+
+Execution bridge rules:
+
+- RunExperimentPage may execute selected rows only through existing runners.
+- This round only allows `quick_validation` and `v4_realism_validation` to perform real execution.
+- `main_experiment`, `comparison_experiment`, `ablation_experiment`, `workload_sensitivity`, and `topology_scaling` must remain preview or dry-run only.
+- Any planned workload must be blocked.
+- V4 realism execution bridge must continue to use `/api/v4/realism/smoke` behavior or `v4_realism_runner`; do not add a replacement V4 runtime path.
+
+Boundary rules:
+
+- Do not modify `executor/`.
+- Do not change formal benchmark runner semantics.
+- Do not unify the run registry.
+- Do not automatically commit.
+- Do not automatically push.

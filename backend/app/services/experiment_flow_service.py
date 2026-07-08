@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from uuid import uuid4
+
 from backend.app.models.experiment_flow import (
+    ChildRunResult,
     ExperimentMatrixRow,
     ExperimentMethod,
     ExperimentProfile,
@@ -10,9 +14,13 @@ from backend.app.models.experiment_flow import (
     ExperimentSuiteRequest,
     ExperimentTopology,
     ExperimentWorkload,
+    RunSuiteExecutionRequest,
+    RunSuiteExecutionResponse,
     V4DerivedRequestPreview,
 )
 from backend.app.models.v4_realism import V4RealismSmokeRequest
+from backend.app.services import v4_realism_runner
+from backend.app.services.v3_controlled_smoke_runner import ControlledSmokeError, run_v3_4_10_controlled_smoke
 
 
 PROFILES = {
@@ -428,6 +436,53 @@ def derive_v4_realism_request(request: ExperimentSuiteRequest) -> V4DerivedReque
     )
 
 
+def execute_selected_run_matrix(request: RunSuiteExecutionRequest) -> RunSuiteExecutionResponse:
+    if request.run_mode not in {"dry_run", "execute"}:
+        raise ValueError("run_mode must be dry_run or execute")
+    max_execute_rows = max(0, min(request.max_execute_rows, 10))
+    run_group_id = "run_suite_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:6]
+    child_runs: list[ChildRunResult] = []
+    warnings: list[str] = []
+    executed_count = 0
+
+    for row in request.selected_rows:
+        blocked_reason = _selected_row_blocked_reason(row)
+        if blocked_reason:
+            child_runs.append(_blocked_child(row, blocked_reason))
+            continue
+
+        if request.run_mode == "dry_run":
+            child = _dry_run_child(row)
+            child_runs.append(child)
+            warnings.extend(warning for warning in child.warnings if warning not in warnings)
+            continue
+
+        if executed_count >= max_execute_rows:
+            reason = f"max_execute_rows={max_execute_rows} reached; row was not started."
+            child_runs.append(_blocked_child(row, reason))
+            warnings.append(reason)
+            continue
+
+        child = _execute_supported_child(row, request)
+        child_runs.append(child)
+        if child.status not in {"blocked", "preview_only", "dry_run"}:
+            executed_count += 1
+        warnings.extend(warning for warning in child.warnings if warning not in warnings)
+
+    blocked_count = sum(1 for child in child_runs if child.status == "blocked")
+    started_count = sum(1 for child in child_runs if child.status not in {"blocked", "preview_only", "dry_run"})
+    return RunSuiteExecutionResponse(
+        run_group_id=run_group_id,
+        run_mode=request.run_mode,
+        selected_row_count=len(request.selected_rows),
+        started_row_count=started_count,
+        blocked_row_count=blocked_count,
+        child_runs=child_runs,
+        warnings=warnings,
+        next_step="Inspect child run ids and artifact hints; use V4 details or existing formal panels for deeper results.",
+    )
+
+
 def _profile(profile_id: str) -> ExperimentProfile:
     try:
         return PROFILES[profile_id]
@@ -471,3 +526,164 @@ def _matrix_row_warnings(workload: ExperimentWorkload, topology: ExperimentTopol
 
 def _warning_blocks_run(warning: str) -> bool:
     return "dataset not attached yet" in warning or "required before this workload can run" in warning or "cannot exceed node count" in warning
+
+
+def _selected_row_blocked_reason(row) -> str | None:
+    if not row.runnable:
+        return "selected row is not runnable"
+    try:
+        workload = _workload(row.workload_id)
+        topology = _topology(row.topology_id)
+    except ValueError as exc:
+        return str(exc)
+    if workload.planned:
+        return f"{workload.workload_id}: dataset not attached yet; workload is planned and blocked."
+    if topology.shards > topology.nodes:
+        return f"{topology.topology_id}: shard count cannot exceed node count."
+    if any(_warning_blocks_run(warning) for warning in row.warnings):
+        return "; ".join(row.warnings)
+    return None
+
+
+def _blocked_child(row, reason: str) -> ChildRunResult:
+    return ChildRunResult(
+        row_id=row.row_id,
+        suite_type=row.suite_type,
+        method_id=row.method_id,
+        status="blocked",
+        runner="experiment_flow_execution_bridge",
+        warnings=list(row.warnings),
+        blocked_reason=reason,
+    )
+
+
+def _dry_run_child(row) -> ChildRunResult:
+    warnings: list[str] = []
+    status = "dry_run"
+    runner = "experiment_flow_execution_bridge"
+    if row.suite_type in _FORMAL_PREVIEW_ONLY_SUITES:
+        status = "preview_only"
+        warnings.append(_FORMAL_PREVIEW_ONLY_WARNING)
+    if row.suite_type == "quick_validation":
+        runner = "v3_controlled_smoke_runner"
+    if row.suite_type == "v4_realism_validation":
+        runner = "v4_realism_runner"
+    return ChildRunResult(
+        row_id=row.row_id,
+        suite_type=row.suite_type,
+        method_id=row.method_id,
+        status=status,
+        runner=runner,
+        warnings=warnings,
+    )
+
+
+def _execute_supported_child(row, request: RunSuiteExecutionRequest) -> ChildRunResult:
+    if row.suite_type == "quick_validation":
+        return _execute_quick_validation(row)
+    if row.suite_type == "v4_realism_validation":
+        return _execute_v4_realism_validation(row, request)
+    if row.suite_type in _FORMAL_PREVIEW_ONLY_SUITES:
+        return ChildRunResult(
+            row_id=row.row_id,
+            suite_type=row.suite_type,
+            method_id=row.method_id,
+            status="preview_only",
+            runner="formal_metatrack_runner",
+            warnings=[_FORMAL_PREVIEW_ONLY_WARNING],
+        )
+    return ChildRunResult(
+        row_id=row.row_id,
+        suite_type=row.suite_type,
+        method_id=row.method_id,
+        status="preview_only",
+        runner="experiment_flow_execution_bridge",
+        warnings=[f"{row.suite_type}: execution bridge is not supported in V4.3.4."],
+    )
+
+
+def _execute_quick_validation(row) -> ChildRunResult:
+    try:
+        result = run_v3_4_10_controlled_smoke()
+        return ChildRunResult(
+            row_id=row.row_id,
+            suite_type=row.suite_type,
+            method_id=row.method_id,
+            status=str(result.get("status", "completed")),
+            runner="v3_controlled_smoke_runner",
+            run_id=str(result.get("run_id") or "") or None,
+            summary={
+                "run_mode": result.get("run_mode"),
+                "preset_count": len(result.get("preset_order", [])),
+                "backend_type": result.get("backend_type"),
+                "data_truth_label": result.get("data_truth_label"),
+            },
+            artifacts=list(result.get("artifacts", [])),
+        )
+    except (ControlledSmokeError, ValueError, RuntimeError, OSError) as exc:
+        return ChildRunResult(
+            row_id=row.row_id,
+            suite_type=row.suite_type,
+            method_id=row.method_id,
+            status="failed",
+            runner="v3_controlled_smoke_runner",
+            warnings=[str(exc)],
+        )
+
+
+def _execute_v4_realism_validation(row, request: RunSuiteExecutionRequest) -> ChildRunResult:
+    try:
+        v4_request = request.v4_request_override
+        if v4_request is None:
+            derived = derive_v4_realism_request(
+                ExperimentSuiteRequest(
+                    selected_suite_types=[row.suite_type],
+                    selected_method_ids=[row.method_id],
+                    workload_ids=[row.workload_id],
+                    topology_ids=[row.topology_id],
+                    seeds=[row.seed],
+                    include_v4_realism=True,
+                )
+            )
+            if not derived.runnable:
+                return ChildRunResult(
+                    row_id=row.row_id,
+                    suite_type=row.suite_type,
+                    method_id=row.method_id,
+                    status="blocked",
+                    runner="v4_realism_runner",
+                    warnings=derived.warnings,
+                    blocked_reason="derived V4 realism request is not runnable",
+                )
+            v4_request = derived.v4_request
+        result = v4_realism_runner.run_smoke(v4_request)
+        return ChildRunResult(
+            row_id=row.row_id,
+            suite_type=row.suite_type,
+            method_id=row.method_id,
+            status=str(result.get("status", "completed")),
+            runner="v4_realism_runner",
+            run_id=str(result.get("run_id") or "") or None,
+            summary=dict(result.get("summary") or {}),
+            artifacts=list(result.get("artifacts") or []),
+            warnings=[str(result.get("stderr") or result.get("stdout") or "")] if result.get("status") == "failed" else [],
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        return ChildRunResult(
+            row_id=row.row_id,
+            suite_type=row.suite_type,
+            method_id=row.method_id,
+            status="failed",
+            runner="v4_realism_runner",
+            warnings=[str(exc)],
+        )
+
+
+_FORMAL_PREVIEW_ONLY_SUITES = {
+    "main_experiment",
+    "comparison_experiment",
+    "ablation_experiment",
+    "workload_sensitivity",
+    "topology_scaling",
+}
+_FORMAL_PREVIEW_ONLY_WARNING = "formal matrix execution bridge is planned for a later stage; use FormalMetatrackExperimentPanel for current formal runs."

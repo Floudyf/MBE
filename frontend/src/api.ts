@@ -618,6 +618,47 @@ export type V4DerivedRequestPreview = {
   runnable: boolean;
   warnings: string[];
 };
+export type SelectedMatrixRowRequest = {
+  row_id: string;
+  suite_type: string;
+  method_id: string;
+  method_role: string;
+  workload_id: string;
+  topology_id: string;
+  seed: number;
+  runtime_target: string;
+  runnable: boolean;
+  warnings: string[];
+};
+export type RunSuiteExecutionRequest = {
+  run_mode: "dry_run" | "execute" | string;
+  selected_rows: SelectedMatrixRowRequest[];
+  include_v4_realism?: boolean;
+  v4_request_override?: V4RealismSmokeRequest | null;
+  max_execute_rows?: number;
+};
+export type ChildRunResult = {
+  row_id: string;
+  suite_type: string;
+  method_id: string;
+  status: string;
+  runner: string;
+  run_id?: string | null;
+  summary: Record<string, unknown>;
+  artifacts: Record<string, unknown>[];
+  warnings: string[];
+  blocked_reason?: string | null;
+};
+export type RunSuiteExecutionResponse = {
+  run_group_id: string;
+  run_mode: string;
+  selected_row_count: number;
+  started_row_count: number;
+  blocked_row_count: number;
+  child_runs: ChildRunResult[];
+  warnings: string[];
+  next_step: string;
+};
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
 export type V3ComposerDraftModuleRequest = {
@@ -1177,6 +1218,10 @@ export async function previewExperimentRunMatrix(payload: ExperimentSuiteRequest
 
 export async function deriveV4RealismRequest(payload: ExperimentSuiteRequest): Promise<V4DerivedRequestPreview> {
   return request<V4DerivedRequestPreview>("/api/experiment-flow/derive-v4-realism-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function executeSelectedRunMatrix(payload: RunSuiteExecutionRequest): Promise<RunSuiteExecutionResponse> {
+  return request<RunSuiteExecutionResponse>("/api/experiment-flow/execute-selected-matrix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
 }
 
 export async function fetchV4RealismStatus(): Promise<V4RealismStatus> {

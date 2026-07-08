@@ -2,15 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   deriveV4RealismRequest,
+  executeSelectedRunMatrix,
   fetchExperimentMethods,
   fetchExperimentTopologies,
   fetchExperimentWorkloads,
   previewExperimentRunMatrix,
+  type ExperimentMatrixRow,
   type ExperimentMethod,
   type ExperimentRunMatrixPreview,
   type ExperimentSuiteRequest,
   type ExperimentTopology,
   type ExperimentWorkload,
+  type RunSuiteExecutionResponse,
   type V4DerivedRequestPreview,
 } from "../api";
 
@@ -40,6 +43,10 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
   const [selectedTopologyIds, setSelectedTopologyIds] = useState<string[]>(["local_8_nodes_2_shards"]);
   const [seedText, setSeedText] = useState("1");
   const [matrix, setMatrix] = useState<ExperimentRunMatrixPreview | null>(null);
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  const [runMode, setRunMode] = useState<"dry_run" | "execute">("dry_run");
+  const [maxExecuteRows, setMaxExecuteRows] = useState(3);
+  const [executionResult, setExecutionResult] = useState<RunSuiteExecutionResponse | null>(null);
   const [derived, setDerived] = useState<V4DerivedRequestPreview | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -92,7 +99,10 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
     if (!request) return;
     try {
       setBusy(true);
-      setMatrix(await previewExperimentRunMatrix(request));
+      const response = await previewExperimentRunMatrix(request);
+      setMatrix(response);
+      setSelectedRowIds(response.rows.filter((row) => row.runnable).map((row) => row.row_id));
+      setExecutionResult(null);
       setMessage("实验矩阵已预览；本页不会启动批量运行。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -123,6 +133,36 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
     onOpenV4Details?.();
   }
 
+  async function executeRows(nextRunMode: "dry_run" | "execute") {
+    if (!matrix) {
+      setError("请先预览实验矩阵。");
+      return;
+    }
+    const selectedRows = matrix.rows.filter((row) => selectedRowIds.includes(row.row_id));
+    if (!selectedRows.length) {
+      setError("请至少选择一个 runnable row。");
+      return;
+    }
+    try {
+      setBusy(true);
+      setRunMode(nextRunMode);
+      const response = await executeSelectedRunMatrix({
+        run_mode: nextRunMode,
+        selected_rows: selectedRows.map(toSelectedRowRequest),
+        include_v4_realism: selectedRows.some((row) => row.suite_type === "v4_realism_validation"),
+        v4_request_override: derived?.v4_request ?? null,
+        max_execute_rows: maxExecuteRows,
+      });
+      setExecutionResult(response);
+      setMessage(`${nextRunMode === "execute" ? "Execute" : "Dry-run"} completed for selected rows.`);
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <section className="page-grid">
       <article className="final-card wide">
@@ -132,6 +172,11 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
         <p className="muted">正式性能实验仍使用实验设计页中的 Formal benchmark 入口运行；本页只做 preview / derive。</p>
         {error && <p className="file-error">{error}</p>}
         {message && <p className="notice">{message}</p>}
+      </article>
+
+      <article className="final-card wide">
+        <h3>执行桥能力</h3>
+        <p className="muted">当前支持真实执行：quick_validation、v4_realism_validation。main/comparison/ablation/workload_sensitivity/topology_scaling 仅 preview；正式运行仍使用实验设计页中的 Formal benchmark 入口。</p>
       </article>
 
       <article className="final-card wide">
@@ -190,14 +235,34 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
         <article className="final-card wide">
           <h3>矩阵预览</h3>
           <p className="muted">runnable={matrix.runnable_row_count} / blocked={matrix.blocked_row_count}</p>
+          <div className="topology-field-grid">
+            <label className="field-card">
+              <span>执行模式</span>
+              <select value={runMode} onChange={(event) => setRunMode(event.target.value as "dry_run" | "execute")}>
+                <option value="dry_run">dry_run</option>
+                <option value="execute">execute</option>
+              </select>
+              <small>dry_run 不调用 runner；execute 只启动受支持的少量 selected rows。</small>
+            </label>
+            <label className="field-card">
+              <span>max_execute_rows</span>
+              <input type="number" min={1} max={3} value={maxExecuteRows} onChange={(event) => setMaxExecuteRows(Number(event.target.value))} />
+              <small>本轮只做轻量执行桥，默认最多执行 3 行。</small>
+            </label>
+          </div>
+          <div className="button-row">
+            <button type="button" onClick={() => executeRows("dry_run")} disabled={busy}>Dry-run selected rows</button>
+            <button type="button" className="v3-secondary-button" onClick={() => executeRows("execute")} disabled={busy}>Execute selected supported rows</button>
+          </div>
           <div className="table-scroll">
             <table>
               <thead>
-                <tr><th>suite_type</th><th>method_id</th><th>role</th><th>workload_id</th><th>topology_id</th><th>seed</th><th>runtime_target</th><th>runnable</th><th>warnings</th></tr>
+                <tr><th>select</th><th>suite_type</th><th>method_id</th><th>role</th><th>workload_id</th><th>topology_id</th><th>seed</th><th>runtime_target</th><th>runnable</th><th>warnings</th></tr>
               </thead>
               <tbody>
                 {matrix.rows.map((row) => (
                   <tr key={row.row_id}>
+                    <td><input type="checkbox" checked={selectedRowIds.includes(row.row_id)} disabled={!row.runnable} onChange={() => toggleValue(row.row_id, selectedRowIds, setSelectedRowIds)} /></td>
                     <td>{row.suite_type}</td>
                     <td>{row.method_id}</td>
                     <td>{row.method_role}</td>
@@ -207,6 +272,40 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
                     <td>{row.runtime_target}</td>
                     <td>{String(row.runnable)}</td>
                     <td>{row.warnings.join("; ") || "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      )}
+
+      {executionResult && (
+        <article className="final-card wide">
+          <h3>执行结果</h3>
+          <dl className="v3-result-grid compact">
+            <div><dt>run_group_id</dt><dd>{executionResult.run_group_id}</dd></div>
+            <div><dt>selected_row_count</dt><dd>{executionResult.selected_row_count}</dd></div>
+            <div><dt>started_row_count</dt><dd>{executionResult.started_row_count}</dd></div>
+            <div><dt>blocked_row_count</dt><dd>{executionResult.blocked_row_count}</dd></div>
+          </dl>
+          {executionResult.warnings.length > 0 && <ul className="boundary-list">{executionResult.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr><th>row_id</th><th>suite_type</th><th>method_id</th><th>runner</th><th>status</th><th>run_id</th><th>warnings</th><th>blocked_reason</th></tr>
+              </thead>
+              <tbody>
+                {executionResult.child_runs.map((child) => (
+                  <tr key={child.row_id}>
+                    <td>{child.row_id}</td>
+                    <td>{child.suite_type}</td>
+                    <td>{child.method_id}</td>
+                    <td>{child.runner}</td>
+                    <td>{child.status}</td>
+                    <td>{child.run_id || "-"}</td>
+                    <td>{child.warnings.join("; ") || "-"}</td>
+                    <td>{child.blocked_reason || (child.suite_type === "v4_realism_validation" && child.run_id ? "可进入 V4 真实性验证详情查看 summary/artifacts。" : "-")}</td>
                   </tr>
                 ))}
               </tbody>
@@ -246,6 +345,21 @@ function MethodGroup({ title, methods, selected, onToggle }: { title: string; me
 
 function toggleValue(value: string, values: string[], setValues: (next: string[]) => void) {
   setValues(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
+}
+
+function toSelectedRowRequest(row: ExperimentMatrixRow) {
+  return {
+    row_id: row.row_id,
+    suite_type: row.suite_type,
+    method_id: row.method_id,
+    method_role: row.method_role,
+    workload_id: row.workload_id,
+    topology_id: row.topology_id,
+    seed: row.seed,
+    runtime_target: row.runtime_target,
+    runnable: row.runnable,
+    warnings: row.warnings,
+  };
 }
 
 function parseSeeds(value: string): number[] {

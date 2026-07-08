@@ -112,3 +112,48 @@ class V4DerivedRequestPreview(BaseModel):
     v4_request: V4RealismSmokeRequest
     runnable: bool
     warnings: list[str]
+
+
+class SelectedMatrixRowRequest(BaseModel):
+    row_id: str
+    suite_type: str
+    method_id: str
+    method_role: str
+    workload_id: str
+    topology_id: str
+    seed: int
+    runtime_target: str
+    runnable: bool = True
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RunSuiteExecutionRequest(BaseModel):
+    run_mode: str = "dry_run"
+    selected_rows: list[SelectedMatrixRowRequest]
+    include_v4_realism: bool = False
+    v4_request_override: V4RealismSmokeRequest | None = None
+    max_execute_rows: int = 3
+
+
+class ChildRunResult(BaseModel):
+    row_id: str
+    suite_type: str
+    method_id: str
+    status: str
+    runner: str
+    run_id: str | None = None
+    summary: dict = Field(default_factory=dict)
+    artifacts: list[dict] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    blocked_reason: str | None = None
+
+
+class RunSuiteExecutionResponse(BaseModel):
+    run_group_id: str
+    run_mode: str
+    selected_row_count: int
+    started_row_count: int
+    blocked_row_count: int
+    child_runs: list[ChildRunResult]
+    warnings: list[str]
+    next_step: str
