@@ -23,6 +23,7 @@ const truthKeys = [
 
 const nonClaims = ["production_pbft", "full_byzantine_security", "fabric_evm_backend", "production_blockchain", "production_atomic_commit", "full_blockemulator_compatibility"];
 const defaultRequest: V4RealismSmokeRequest = { nodes: 4, shards: 1, tx_count: 10, enable_cross_shard: true, enable_faults: true, fault_profile: "network_delay", blockemulator_tx_limit: 10, run_duration_ms: 1000 };
+const recommendedValidationRequest: V4RealismSmokeRequest = { nodes: 8, shards: 2, tx_count: 20, enable_cross_shard: true, enable_faults: true, fault_profile: "mixed_light", blockemulator_tx_limit: 20, run_duration_ms: 1000, blockemulator_csv: undefined };
 
 export default function RealismModePanel() {
   const [status, setStatus] = useState<V4RealismStatus | null>(null);
@@ -93,8 +94,9 @@ export default function RealismModePanel() {
 
   return <section className="page-grid">
     <article className="final-card wide">
-      <p className="eyebrow">V4 Realism Mode</p>
-      <h2>V4.3 BlockEmulator-surpass realism closure</h2>
+      <p className="eyebrow">当前步骤：② 验证 / 真实运行</p>
+      <h2>② 验证 / 真实运行</h2>
+      <p>使用 V4.3 真实运行时执行 signed tx、localhost TCP P2P、PBFT-style commit、状态执行、跨片证据、故障注入和 BlockEmulator bridge。</p>
       <p>Runtime truth: {String(summary.runtime_truth ?? "v4_real_state_cross_shard_recovery")}</p>
       <div className="button-row">
         <button type="button" onClick={runSmoke} disabled={busy}>{busy ? "Running..." : "Run V4.3 Smoke"}</button>
@@ -102,6 +104,18 @@ export default function RealismModePanel() {
       </div>
       {error && <p className="file-error">{error}</p>}
     </article>
+
+    <div className="final-card-grid">
+      <article className="final-card">
+        <h3>小规模真实节点验证</h3>
+        <p className="muted">推荐配置：nodes=8, shards=2, tx_count=20, blockemulator_tx_limit=20, fault_profile=mixed_light, enable_cross_shard=true, enable_faults=true, BlockEmulator CSV path=空。</p>
+        <button type="button" onClick={() => setForm(recommendedValidationRequest)}>使用推荐配置</button>
+      </article>
+      <article className="final-card">
+        <h3>真实负载运行</h3>
+        <p className="muted">用于后续接入已筛选的真实负载、小规模测试负载、不同偏斜度负载或 BlockEmulator CSV 子集。初期建议 small workload，确认 imported_tx_count 和 signed_tx_verify_pass_count 后再扩大规模。</p>
+      </article>
+    </div>
 
     <article className="final-card wide">
       <h3>Smoke Controls</h3>
@@ -123,17 +137,17 @@ export default function RealismModePanel() {
       </div>
     </article>
 
-    <TruthGrid title="Implemented Evidence" values={summary} keys={truthKeys} />
+    <TruthGrid title="Implemented Evidence" description="这些字段表示 V4.3 runtime 已实现或已保持的真实性证据；Non-Claims 表示当前仍不宣称生产级能力。" values={summary} keys={truthKeys} />
     <TruthGrid title="Non-Claims" values={summary} keys={nonClaims} invert />
 
     <article className="final-card wide">
       <h3>Latest Smoke Summary</h3>
       <div className="metric-grid">
-        <Metric label="Committed height" value={summary["committed_height"]} />
+        <Metric label="Ready to commit" value={summary["ready_to_commit"]} />
         <Metric label="State root mismatches" value={summary["state_root_mismatch_count"]} />
+        <Metric label="Committed height" value={summary["committed_height"]} />
         <Metric label="Cross-shard tx" value={summary["cross_shard_tx_count"]} />
         <Metric label="Fault events" value={summary["fault_event_count"]} />
-        <Metric label="Ready to commit" value={summary["ready_to_commit"]} />
       </div>
     </article>
 
@@ -148,6 +162,7 @@ export default function RealismModePanel() {
 
     <article className="final-card wide">
       <h3>Artifacts</h3>
+      <p className="muted">当前 V4.3 运行产物在本页查看；左侧“实验产物”用于通用/历史运行记录。后续会统一 run registry。</p>
       {artifacts.length === 0 ? <p>No smoke artifacts loaded yet.</p> : <div className="artifact-list">
         {artifacts.map((item) => <a key={item.name} href={v4RealismArtifactURL(item.download_url)}>{item.name} ({item.size_bytes} bytes)</a>)}
       </div>}
@@ -174,9 +189,10 @@ function validateRequest(request: V4RealismSmokeRequest): string {
   return "";
 }
 
-function TruthGrid({ title, values, keys, invert = false }: { title: string; values: Record<string, unknown>; keys: string[]; invert?: boolean }) {
+function TruthGrid({ title, description, values, keys, invert = false }: { title: string; description?: string; values: Record<string, unknown>; keys: string[]; invert?: boolean }) {
   return <article className="final-card wide">
     <h3>{title}</h3>
+    {description && <p className="muted">{description}</p>}
     <div className="final-card-grid compact-grid">
       {keys.map((key) => {
         const value = Boolean(values[key]);

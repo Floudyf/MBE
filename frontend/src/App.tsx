@@ -88,13 +88,23 @@ const defaultCustomForm: V1CustomRunRequest = {
 
 const navGroups: { title: string; items: { id: PageId; label: string }[] }[] = [
   {
-    title: "MBE",
+    title: "实验流程",
     items: [
-      { id: "v3composer", label: "实验控制台" },
-      { id: "v4realism", label: "V4 Realism Mode" },
+      { id: "v3composer", label: "① 选择方案" },
+      { id: "v4realism", label: "② 验证 / 真实运行" },
+    ],
+  },
+  {
+    title: "数据与结果",
+    items: [
       { id: "runs", label: "运行记录" },
-      { id: "artifacts", label: "产物下载" },
-      { id: "boundaries", label: "系统边界" },
+      { id: "artifacts", label: "实验产物" },
+    ],
+  },
+  {
+    title: "系统",
+    items: [
+      { id: "boundaries", label: "真实性边界" },
       { id: "advanced", label: "高级功能" },
     ],
   },
@@ -300,7 +310,7 @@ function App() {
 
   return <div className="final-shell">
     <aside className="final-sidebar">
-      <div className="brand-block"><span>MBE</span><strong>元宇宙区块链实验平台</strong><small>V3.10 实验控制台</small></div>
+      <div className="brand-block"><span>MBE</span><strong>元宇宙区块链实验平台</strong><small>方案 → 真实节点验证 → 真实负载运行</small></div>
       {navGroups.map((group) => <nav key={group.title} aria-label={group.title}>
         <p>{group.title}</p>
         {group.items.map((item) => <button key={item.id} type="button" className={activePage === item.id ? "nav-active" : ""} onClick={() => setActivePage(item.id)}>{item.label}</button>)}
@@ -320,7 +330,7 @@ function App() {
       {activePage === "protocol" && <ProtocolPage protocols={protocols} result={v2Result} artifacts={v2Artifacts} runProtocolReplay={runProtocolReplay} />}
       {activePage === "sweep" && <SweepPage sweeps={sweeps} sweepId={sweepId} setSweepId={setSweepId} result={v2Result as V2SweepRunResponse | null} artifacts={v2Artifacts} runSweepExperiment={runSweepExperiment} />}
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
-      {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} />}
+      {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} onNextToRealism={() => setActivePage("v4realism")} />}
       {activePage === "v4realism" && <RealismModePanel />}
       {(activePage === "runs" || activePage === "artifacts") && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
       {activePage === "boundaries" && <BoundariesPage />}
@@ -461,7 +471,7 @@ function DeveloperPage(props: { traceSources: V2TraceSource[]; backends: V2Chain
 function AdvancedPage(props: { setActivePage: (page: PageId) => void; traceSources: V2TraceSource[]; backends: V2ChainBackend[]; protocols: V2ProtocolInfo[]; sweeps: V2SweepInfo[]; calibrations: V2CalibrationInfo[]; v1Stages: V1StageStatus[] }) {
   const entries: Array<[PageId, string, string]> = [
     ["overview", "平台总览", "历史 V1/V2 总览入口"],
-    ["v4realism", "V4 Realism Mode", "真实 P2P / PBFT-style / state / cross-shard / recovery smoke"],
+    ["v4realism", "② 验证 / 真实运行", "真实 P2P / PBFT-style / state / cross-shard / recovery smoke"],
     ["single", "V1 单链机制实验", "MetaTrack 早期单链机制实验"],
     ["ablation", "V1 单链消融对比", "早期单链 sweep / report"],
     ["dual", "V2 双链回放实验", "本地虚拟双链回放"],

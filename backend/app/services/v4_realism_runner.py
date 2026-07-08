@@ -7,9 +7,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from backend.app.models.v4_realism import V4RealismSmokeRequest
+from backend.app.core.paths import ROOT, V4_REALISM_RUNS_ROOT
 
-ROOT = Path(__file__).resolve().parents[3]
-RUNS_ROOT = ROOT / ".cache" / "v4_realism_runs"
+RUNS_ROOT = V4_REALISM_RUNS_ROOT
 
 
 def status() -> dict:

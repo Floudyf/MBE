@@ -417,3 +417,26 @@ Do not claim persistent state before block/state/receipt storage is written and 
 Do not claim cross-shard commit before SourceLock / TargetCommit / Finalize or Refund change real state.
 
 Do not claim superiority over BlockEmulator before direct comparison artifacts exist.
+
+## 13. V4.3.1 Experiment Flow + Backend/Frontend Clarity Cleanup
+
+V4.3.1 is architecture clarity cleanup, not a new runtime.
+
+Frontend organization rules:
+
+- Organize the user path by experiment flow, not by version number.
+- The normal flow is: select plan, validate with small real nodes, run real workload, batch compare, then inspect results and artifacts.
+- Keep V1/V2/V3 historical capabilities available.
+
+Backend organization rules:
+
+- Gradually migrate backend code toward `api/`, `models/`, `services/`, and `core/`.
+- V4 routes may move to `backend/app/api/v4_realism.py`, but `/api/v4/realism/*` paths and response compatibility must remain unchanged.
+- V4 runner may receive lightweight path cleanup only.
+- Do not change Go supervisor command semantics.
+
+Validation and release rules:
+
+- All changes must keep backend pytest and frontend build passing.
+- Do not automatically commit.
+- Do not automatically push.
