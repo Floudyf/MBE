@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  fetchExperimentProfiles,
+  fetchExperimentTopologies,
+  fetchExperimentWorkloads,
   fetchV3ComposerPreview,
   fetchV3ComposerTemplates,
   createV3SavedConfig,
@@ -13,6 +16,9 @@ import {
   runV3FormalMetatrackBenchmark,
   validateV3ComposerDraft,
   type V2Artifact,
+  type ExperimentProfile,
+  type ExperimentTopology,
+  type ExperimentWorkload,
   type V3ComposerPreviewResponse,
   type V3ControlledSmokeRunResponse,
   type V3DraftModuleStatus,
@@ -93,6 +99,7 @@ const profileOptions = [
   { id: "single_chain_role_separation_smoke", label: "单链角色拆分快速验证" },
   { id: "single_chain_composer_preview", label: "单链 Composer 预览" },
 ];
+const currentRunPlanStorageKey = "mbe.currentRunPlanSelection";
 
 type Props = {
   onRunCompleted?: (runId: string) => void;
@@ -141,6 +148,11 @@ function CurrentWorkflowStatus({ draft, formalPreview, formalResult, backendVali
 
 export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Props) {
   const [profileId, setProfileId] = useState("metatrack_go_backed_ablation_smoke");
+  const [flowProfiles, setFlowProfiles] = useState<ExperimentProfile[]>([]);
+  const [flowTopologies, setFlowTopologies] = useState<ExperimentTopology[]>([]);
+  const [flowWorkloads, setFlowWorkloads] = useState<ExperimentWorkload[]>([]);
+  const [runPlanSelection, setRunPlanSelection] = useState({ profile_id: "v4_3_realism_default", topology_id: "local_8_nodes_2_shards", workload_id: "small_test" });
+  const [runPlanMessage, setRunPlanMessage] = useState("");
   const [preview, setPreview] = useState<V3ComposerPreviewResponse | null>(null);
   const [templates, setTemplates] = useState<V3TemplateSummary[]>(fallbackTemplates);
   const [artifacts, setArtifacts] = useState<V2Artifact[]>([]);
@@ -173,6 +185,42 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Prop
 
   useEffect(() => { void loadPreview(profileId); }, [profileId]);
   useEffect(() => { void refreshSavedConfigs(); }, []);
+  useEffect(() => { void loadExperimentFlowCatalog(); }, []);
+
+  async function loadExperimentFlowCatalog() {
+    try {
+      const [profiles, topologies, workloads] = await Promise.all([
+        fetchExperimentProfiles(),
+        fetchExperimentTopologies(),
+        fetchExperimentWorkloads(),
+      ]);
+      setFlowProfiles(profiles);
+      setFlowTopologies(topologies);
+      setFlowWorkloads(workloads);
+      const saved = window.localStorage.getItem(currentRunPlanStorageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as typeof runPlanSelection;
+        if (parsed.profile_id && parsed.topology_id && parsed.workload_id) setRunPlanSelection(parsed);
+      } else {
+        const profile = profiles.find((item) => item.profile_id === "v4_3_realism_default") || profiles[0];
+        if (profile) {
+          setRunPlanSelection({
+            profile_id: profile.profile_id,
+            topology_id: profile.default_topology_id,
+            workload_id: profile.default_workload_id,
+          });
+        }
+      }
+      setRunPlanMessage("");
+    } catch (caught) {
+      setRunPlanMessage(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  function saveCurrentRunPlanSelection() {
+    window.localStorage.setItem(currentRunPlanStorageKey, JSON.stringify(runPlanSelection));
+    setRunPlanMessage("Current RunPlan selection saved locally.");
+  }
 
   function showFormalResult(result: V3FormalMetatrackBenchmarkRunResponse) {
     setFormalResult(result);
@@ -533,6 +581,44 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Prop
         currentWorkloadName={currentWorkloadName}
         currentTopologyName={currentTopologyName}
       />
+
+      <section className="final-card wide">
+        <p className="eyebrow">Experiment Flow RunPlan</p>
+        <h3>Current experiment plan selection</h3>
+        <p className="muted">This lightweight selection is stored locally and used by the V4 validation page to preview a backend RunPlan.</p>
+        <div className="form-grid">
+          <label>
+            <span>Profile</span>
+            <select value={runPlanSelection.profile_id} onChange={(event) => {
+              const nextProfile = flowProfiles.find((item) => item.profile_id === event.target.value);
+              setRunPlanSelection({
+                profile_id: event.target.value,
+                topology_id: nextProfile?.default_topology_id || runPlanSelection.topology_id,
+                workload_id: nextProfile?.default_workload_id || runPlanSelection.workload_id,
+              });
+            }}>
+              {flowProfiles.map((item) => <option key={item.profile_id} value={item.profile_id}>{item.label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Topology</span>
+            <select value={runPlanSelection.topology_id} onChange={(event) => setRunPlanSelection({ ...runPlanSelection, topology_id: event.target.value })}>
+              {flowTopologies.map((item) => <option key={item.topology_id} value={item.topology_id}>{item.label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Workload</span>
+            <select value={runPlanSelection.workload_id} onChange={(event) => setRunPlanSelection({ ...runPlanSelection, workload_id: event.target.value })}>
+              {flowWorkloads.map((item) => <option key={item.workload_id} value={item.workload_id}>{item.label}{item.planned ? " - planned / dataset not attached" : ""}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="button-row">
+          <button type="button" onClick={saveCurrentRunPlanSelection}>Save as current plan</button>
+          <button type="button" className="v3-secondary-button" onClick={onNextToRealism}>Next: validation / real run</button>
+        </div>
+        {runPlanMessage && <p className="muted">{runPlanMessage}</p>}
+      </section>
 
       <section className="final-card wide console-section-title">
         <p className="eyebrow">2. 控制台入口</p>

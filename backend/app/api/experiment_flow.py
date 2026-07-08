@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException
+
+from backend.app.models.experiment_flow import ExperimentRunPlanRequest
+from backend.app.services import experiment_flow_service
+
+router = APIRouter(prefix="/api/experiment-flow")
+
+
+@router.get("/profiles")
+def experiment_flow_profiles() -> dict:
+    return {"items": experiment_flow_service.list_profiles()}
+
+
+@router.get("/topologies")
+def experiment_flow_topologies() -> dict:
+    return {"items": experiment_flow_service.list_topologies()}
+
+
+@router.get("/workloads")
+def experiment_flow_workloads() -> dict:
+    return {"items": experiment_flow_service.list_workloads()}
+
+
+@router.get("/recommended-run")
+def experiment_flow_recommended_run() -> dict:
+    return experiment_flow_service.recommended_run().model_dump()
+
+
+@router.post("/preview-run-plan")
+def experiment_flow_preview_run_plan(request: ExperimentRunPlanRequest) -> dict:
+    try:
+        return experiment_flow_service.preview_run_plan(request).model_dump()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+

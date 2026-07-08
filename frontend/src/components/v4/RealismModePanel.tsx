@@ -1,6 +1,20 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 
-import { fetchV4RealismArtifacts, fetchV4RealismStatus, fetchV4RealismSummary, runV4RealismSmoke, v4RealismArtifactURL, type V4RealismArtifact, type V4RealismSmokeRequest, type V4RealismStatus, type V4RealismSmokeResponse } from "../../api";
+import {
+  fetchRecommendedRun,
+  fetchV4RealismArtifacts,
+  fetchV4RealismStatus,
+  fetchV4RealismSummary,
+  previewExperimentRunPlan,
+  runV4RealismSmoke,
+  v4RealismArtifactURL,
+  type ExperimentRunPlanPreview,
+  type ExperimentRunPlanRequest,
+  type V4RealismArtifact,
+  type V4RealismSmokeRequest,
+  type V4RealismStatus,
+  type V4RealismSmokeResponse,
+} from "../../api";
 
 const truthKeys = [
   "real_signed_tx",
@@ -23,17 +37,21 @@ const truthKeys = [
 
 const nonClaims = ["production_pbft", "full_byzantine_security", "fabric_evm_backend", "production_blockchain", "production_atomic_commit", "full_blockemulator_compatibility"];
 const defaultRequest: V4RealismSmokeRequest = { nodes: 4, shards: 1, tx_count: 10, enable_cross_shard: true, enable_faults: true, fault_profile: "network_delay", blockemulator_tx_limit: 10, run_duration_ms: 1000 };
-const recommendedValidationRequest: V4RealismSmokeRequest = { nodes: 8, shards: 2, tx_count: 20, enable_cross_shard: true, enable_faults: true, fault_profile: "mixed_light", blockemulator_tx_limit: 20, run_duration_ms: 1000, blockemulator_csv: undefined };
+const currentRunPlanStorageKey = "mbe.currentRunPlanSelection";
 
 export default function RealismModePanel() {
   const [status, setStatus] = useState<V4RealismStatus | null>(null);
   const [result, setResult] = useState<V4RealismSmokeResponse | null>(null);
   const [form, setForm] = useState<V4RealismSmokeRequest>(defaultRequest);
+  const [runPlan, setRunPlan] = useState<ExperimentRunPlanPreview | null>(null);
   const [runIdQuery, setRunIdQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => { void loadStatus(); }, []);
+  useEffect(() => {
+    void loadStatus();
+    void loadRunPlan();
+  }, []);
 
   async function loadStatus() {
     try {
@@ -42,6 +60,25 @@ export default function RealismModePanel() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
+  }
+
+  async function loadRunPlan() {
+    try {
+      const saved = window.localStorage.getItem(currentRunPlanStorageKey);
+      if (saved) {
+        const selection = JSON.parse(saved) as ExperimentRunPlanRequest;
+        setRunPlan(await previewExperimentRunPlan(selection));
+        return;
+      }
+      setRunPlan(await fetchRecommendedRun());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  function applyRunPlanRequest() {
+    if (!runPlan) return;
+    setForm(runPlan.recommended_v4_request);
   }
 
   async function runSmoke() {
@@ -105,11 +142,30 @@ export default function RealismModePanel() {
       {error && <p className="file-error">{error}</p>}
     </article>
 
+    {runPlan && (
+      <article className="final-card wide">
+        <p className="eyebrow">Current RunPlan</p>
+        <h3>{runPlan.profile.label}</h3>
+        <dl className="metrics-grid compact">
+          <div><dt>Profile</dt><dd>{runPlan.profile.profile_id}</dd></div>
+          <div><dt>Topology</dt><dd>{runPlan.topology.label}</dd></div>
+          <div><dt>Workload</dt><dd>{runPlan.workload.label}{runPlan.workload.planned ? " / planned / dataset not attached" : ""}</dd></div>
+          <div><dt>Runnable</dt><dd>{String(runPlan.runnable)}</dd></div>
+          <div><dt>Next step</dt><dd>{runPlan.next_step}</dd></div>
+        </dl>
+        {runPlan.warnings.length > 0 && <ul className="boundary-list">{runPlan.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+        <div className="button-row">
+          <button type="button" onClick={applyRunPlanRequest}>Apply current RunPlan recommendation</button>
+          <button type="button" className="v3-secondary-button" onClick={loadRunPlan}>Refresh RunPlan</button>
+        </div>
+      </article>
+    )}
+
     <div className="final-card-grid">
       <article className="final-card">
         <h3>小规模真实节点验证</h3>
-        <p className="muted">推荐配置：nodes=8, shards=2, tx_count=20, blockemulator_tx_limit=20, fault_profile=mixed_light, enable_cross_shard=true, enable_faults=true, BlockEmulator CSV path=空。</p>
-        <button type="button" onClick={() => setForm(recommendedValidationRequest)}>使用推荐配置</button>
+        <p className="muted">Recommended values are loaded from backend experiment-flow RunPlan preview. Apply them before running the V4.3 validation smoke.</p>
+        <button type="button" onClick={applyRunPlanRequest} disabled={!runPlan}>Use backend recommended config</button>
       </article>
       <article className="final-card">
         <h3>真实负载运行</h3>
@@ -133,8 +189,9 @@ export default function RealismModePanel() {
       </div>
       <div className="button-row">
         <button type="button" onClick={() => setForm({ ...form, blockemulator_csv: undefined, blockemulator_tx_limit: 10 })}>Use sample CSV</button>
-        <button type="button" onClick={runSmoke} disabled={busy}>Run bridge + V4</button>
+        <button type="button" onClick={runSmoke} disabled={busy || runPlan?.runnable === false}>Run bridge + V4</button>
       </div>
+      {runPlan?.runnable === false && <p className="muted">Current RunPlan is not runnable; advanced parameters remain editable, but one-click real workload execution is disabled until warnings are resolved.</p>}
     </article>
 
     <TruthGrid title="Implemented Evidence" description="这些字段表示 V4.3 runtime 已实现或已保持的真实性证据；Non-Claims 表示当前仍不宣称生产级能力。" values={summary} keys={truthKeys} />

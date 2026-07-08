@@ -506,7 +506,7 @@ export type V4RealismSmokeRequest = {
   enable_cross_shard: boolean;
   enable_faults: boolean;
   fault_profile: string;
-  blockemulator_csv?: string;
+  blockemulator_csv?: string | null;
   blockemulator_tx_limit: number;
   run_duration_ms: number;
 };
@@ -518,6 +518,56 @@ export type V4RealismSmokeResponse = {
   artifacts?: V4RealismArtifact[];
   stdout?: string;
   stderr?: string;
+};
+export type ExperimentProfile = {
+  profile_id: string;
+  label: string;
+  description: string;
+  runtime_target: string;
+  mechanism_tags: string[];
+  default_topology_id: string;
+  default_workload_id: string;
+  runnable: boolean;
+};
+export type ExperimentTopology = {
+  topology_id: string;
+  label: string;
+  nodes: number;
+  shards: number;
+  validators_per_shard: number;
+  runtime_mode: string;
+  description: string;
+  runnable: boolean;
+};
+export type ExperimentWorkload = {
+  workload_id: string;
+  label: string;
+  source_type: string;
+  scale_label: string;
+  skew_label: string;
+  description: string;
+  planned: boolean;
+  default_tx_count: number;
+  default_blockemulator_tx_limit: number;
+  csv_required: boolean;
+};
+export type ExperimentRunPlanRequest = {
+  profile_id: string;
+  topology_id: string;
+  workload_id: string;
+  blockemulator_csv?: string | null;
+  tx_count_override?: number | null;
+  fault_profile_override?: string | null;
+};
+export type ExperimentRunPlanPreview = {
+  profile: ExperimentProfile;
+  topology: ExperimentTopology;
+  workload: ExperimentWorkload;
+  runtime: string;
+  recommended_v4_request: V4RealismSmokeRequest;
+  runnable: boolean;
+  warnings: string[];
+  next_step: string;
 };
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
@@ -1042,6 +1092,29 @@ export async function fetchV3DraftRuns(limit = 20): Promise<V3DraftRunSummary[]>
 
 export async function fetchV3DraftRunDetail(runId: string): Promise<V3DraftRunDetail> {
   return request<V3DraftRunDetail>(`/api/v3/composer/draft-runs/${encodeURIComponent(runId)}`);
+}
+
+export async function fetchExperimentProfiles(): Promise<ExperimentProfile[]> {
+  const response = await request<{ items: ExperimentProfile[] }>("/api/experiment-flow/profiles");
+  return response.items;
+}
+
+export async function fetchExperimentTopologies(): Promise<ExperimentTopology[]> {
+  const response = await request<{ items: ExperimentTopology[] }>("/api/experiment-flow/topologies");
+  return response.items;
+}
+
+export async function fetchExperimentWorkloads(): Promise<ExperimentWorkload[]> {
+  const response = await request<{ items: ExperimentWorkload[] }>("/api/experiment-flow/workloads");
+  return response.items;
+}
+
+export async function fetchRecommendedRun(): Promise<ExperimentRunPlanPreview> {
+  return request<ExperimentRunPlanPreview>("/api/experiment-flow/recommended-run");
+}
+
+export async function previewExperimentRunPlan(payload: ExperimentRunPlanRequest): Promise<ExperimentRunPlanPreview> {
+  return request<ExperimentRunPlanPreview>("/api/experiment-flow/preview-run-plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
 }
 
 export async function fetchV4RealismStatus(): Promise<V4RealismStatus> {

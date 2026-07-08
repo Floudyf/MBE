@@ -11,6 +11,7 @@ import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
+from backend.app.api.experiment_flow import router as experiment_flow_router
 from backend.app.api.v4_realism import router as v4_realism_router
 from backend.app.models.v3_composer_draft import V3ComposerDraftRequest
 from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest, V3SavedConfigUpdateRequest
@@ -57,6 +58,7 @@ DOWNLOADABLE_OUTPUT_FILES = frozenset({"config.yaml", "trace_meta.json", "summar
 V1_SWEEP_DOWNLOADABLE_FILES = frozenset({"report.md", "sweep_summary.csv", "sweep_summary.json"})
 V1_CUSTOM_DOWNLOADABLE_FILES = frozenset({"trace_meta.json", "summary.csv", "latency.csv", "runtime.log", "report.md", "used_config.yaml", "used_config.json", "config.yaml"})
 app = FastAPI(title="MBE Experiment API")
+app.include_router(experiment_flow_router)
 app.include_router(v4_realism_router)
 
 ABLATION_PRESETS = {

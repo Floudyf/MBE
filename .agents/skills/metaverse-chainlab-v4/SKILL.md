@@ -440,3 +440,23 @@ Validation and release rules:
 - All changes must keep backend pytest and frontend build passing.
 - Do not automatically commit.
 - Do not automatically push.
+
+## 14. V4.3.2 Experiment Flow Productization
+
+V4.3.2 is an experiment-flow productization and backend maintainability layer, not a new runtime.
+
+Experiment-flow rules:
+
+- The experiment-flow API is the long-term stable entry for selecting Profile, Topology, Workload, and RunPlan previews.
+- Frontend code must not hardcode the main recommended experiment parameters when the backend `recommended-run` or `preview-run-plan` can provide them.
+- V4 realism API paths and response compatibility must remain unchanged.
+- RunPlan only previews and generates parameters. It does not replace real V4 execution.
+- Planned workloads must be explicitly marked as planned and must not be presented as runnable real data.
+
+Boundary rules:
+
+- Do not modify `executor/`.
+- Do not change `go run ./cmd/mbe-supervisor` command semantics.
+- Do not unify the run registry in this round.
+- Do not automatically commit.
+- Do not automatically push.
