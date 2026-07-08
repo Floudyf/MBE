@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from backend.app.models.experiment_flow import (
+    ExperimentMatrixRow,
+    ExperimentMethod,
     ExperimentProfile,
+    ExperimentRunMatrixPreview,
     ExperimentRunPlanPreview,
     ExperimentRunPlanRequest,
+    ExperimentSuiteRequest,
     ExperimentTopology,
     ExperimentWorkload,
+    V4DerivedRequestPreview,
 )
 from backend.app.models.v4_realism import V4RealismSmokeRequest
 
@@ -163,6 +168,70 @@ WORKLOADS = {
     ),
 }
 
+METHODS = {
+    "metatrack_full": ExperimentMethod(
+        method_id="metatrack_full",
+        label="MetaTrack full",
+        role="main",
+        description="Full MetaTrack method using routing, execution, state access, and commit optimizations.",
+        module_overrides={
+            "Routing": "metatrack_coaccess_routing",
+            "Execution": "metatrack_dual_track_execution",
+            "StateAccess": "access_list_prefetch",
+            "Commit": "constraint_checked_aggregation",
+        },
+        runnable=True,
+    ),
+    "baseline_hash": ExperimentMethod(
+        method_id="baseline_hash",
+        label="Baseline hash",
+        role="baseline",
+        description="Hash routing baseline for comparison.",
+        module_overrides={"Routing": "hash_sharding"},
+        runnable=True,
+    ),
+    "baseline_serial": ExperimentMethod(
+        method_id="baseline_serial",
+        label="Baseline serial",
+        role="baseline",
+        description="Serial execution baseline for comparison.",
+        module_overrides={"Execution": "serial_execution"},
+        runnable=True,
+    ),
+    "baseline_no_prefetch": ExperimentMethod(
+        method_id="baseline_no_prefetch",
+        label="Baseline no prefetch",
+        role="baseline",
+        description="State access baseline without prefetch.",
+        module_overrides={"StateAccess": "direct_fetch"},
+        runnable=True,
+    ),
+    "metatrack_routing_only": ExperimentMethod(
+        method_id="metatrack_routing_only",
+        label="MetaTrack routing only",
+        role="ablation",
+        description="Ablation with MetaTrack routing enabled only.",
+        module_overrides={"Routing": "metatrack_coaccess_routing"},
+        runnable=True,
+    ),
+    "metatrack_routing_execution": ExperimentMethod(
+        method_id="metatrack_routing_execution",
+        label="MetaTrack routing + execution",
+        role="ablation",
+        description="Ablation with MetaTrack routing and dual-track execution.",
+        module_overrides={"Routing": "metatrack_coaccess_routing", "Execution": "metatrack_dual_track_execution"},
+        runnable=True,
+    ),
+    "metatrack_no_aggregation": ExperimentMethod(
+        method_id="metatrack_no_aggregation",
+        label="MetaTrack without aggregation",
+        role="ablation",
+        description="Ablation that disables commit aggregation while keeping other MetaTrack parts.",
+        module_overrides={"Commit": "normal_commit"},
+        runnable=True,
+    ),
+}
+
 
 def list_profiles() -> list[ExperimentProfile]:
     return list(PROFILES.values())
@@ -174,6 +243,10 @@ def list_topologies() -> list[ExperimentTopology]:
 
 def list_workloads() -> list[ExperimentWorkload]:
     return list(WORKLOADS.values())
+
+
+def list_default_methods() -> list[ExperimentMethod]:
+    return list(METHODS.values())
 
 
 def recommended_run() -> ExperimentRunPlanPreview:
@@ -232,6 +305,129 @@ def preview_run_plan(request: ExperimentRunPlanRequest) -> ExperimentRunPlanPrev
     )
 
 
+def preview_run_matrix(request: ExperimentSuiteRequest) -> ExperimentRunMatrixPreview:
+    suite_types = request.selected_suite_types or ["quick_validation"]
+    method_ids = request.selected_method_ids or ["metatrack_full"]
+    workload_ids = request.workload_ids or ["small_test"]
+    topology_ids = request.topology_ids or ["local_8_nodes_2_shards"]
+    seeds = request.seeds or [1]
+    methods = [_method(method_id) for method_id in method_ids]
+    warnings: list[str] = []
+    rows: list[ExperimentMatrixRow] = []
+
+    for suite_type in suite_types:
+        for method in methods:
+            for workload_id in workload_ids:
+                workload = _workload(workload_id)
+                for topology_id in topology_ids:
+                    topology = _topology(topology_id)
+                    for seed in seeds:
+                        row_warnings = _matrix_row_warnings(workload, topology, request.blockemulator_csv)
+                        runnable = method.runnable and topology.runnable and not any(_warning_blocks_run(item) for item in row_warnings)
+                        runtime_target = "v4.3" if suite_type == "v4_realism_validation" else "v3-formal-preview"
+                        rows.append(
+                            ExperimentMatrixRow(
+                                row_id=f"{suite_type}:{method.method_id}:{workload.workload_id}:{topology.topology_id}:seed{seed}",
+                                suite_type=suite_type,
+                                method_id=method.method_id,
+                                method_role=method.role,
+                                workload_id=workload.workload_id,
+                                topology_id=topology.topology_id,
+                                seed=seed,
+                                runtime_target=runtime_target,
+                                runnable=runnable,
+                                warnings=row_warnings,
+                            )
+                        )
+
+    for row in rows:
+        for warning in row.warnings:
+            if warning not in warnings:
+                warnings.append(warning)
+
+    v4_candidates = [
+        {
+            "row_id": row.row_id,
+            "method_id": row.method_id,
+            "workload_id": row.workload_id,
+            "topology_id": row.topology_id,
+            "seed": row.seed,
+        }
+        for row in rows
+        if row.suite_type == "v4_realism_validation" and row.runnable
+    ]
+    runnable_count = sum(1 for row in rows if row.runnable)
+    blocked_count = len(rows) - runnable_count
+    return ExperimentRunMatrixPreview(
+        plan_name=request.plan_name or "current_experiment_plan",
+        suite_types=suite_types,
+        methods=methods,
+        rows=rows,
+        runnable_row_count=runnable_count,
+        blocked_row_count=blocked_count,
+        warnings=warnings,
+        v4_realism_candidates=v4_candidates,
+        next_step="Run matrix preview only; use formal runner or derive V4 request for execution details.",
+    )
+
+
+def derive_v4_realism_request(request: ExperimentSuiteRequest) -> V4DerivedRequestPreview:
+    workload_ids = request.workload_ids or ["small_test"]
+    topology_ids = request.topology_ids or ["local_8_nodes_2_shards"]
+    warnings: list[str] = []
+    selected_workload: ExperimentWorkload | None = None
+    selected_topology: ExperimentTopology | None = None
+
+    for workload_id in workload_ids:
+        workload = _workload(workload_id)
+        if workload.planned:
+            warnings.append(f"{workload.workload_id}: dataset not attached yet; workload is planned and not runnable.")
+            continue
+        if workload.csv_required and not request.blockemulator_csv:
+            warnings.append(f"{workload.workload_id}: blockemulator_csv is required before this workload can run.")
+            continue
+        selected_workload = workload
+        break
+
+    for topology_id in topology_ids:
+        topology = _topology(topology_id)
+        if topology.shards > topology.nodes:
+            warnings.append(f"{topology.topology_id}: shard count cannot exceed node count.")
+            continue
+        selected_topology = topology
+        if topology.topology_id == "local_8_nodes_4_shards":
+            warnings.append("local_8_nodes_4_shards: fewer validators per shard; use as stress preview, not the default realism configuration.")
+        break
+
+    runnable = bool(selected_workload and selected_topology)
+    if not selected_workload:
+        selected_workload = WORKLOADS["small_test"]
+        runnable = False
+    if not selected_topology:
+        selected_topology = TOPOLOGIES["local_8_nodes_2_shards"]
+        runnable = False
+    if not runnable and not warnings:
+        warnings.append("No runnable topology/workload combination could be derived.")
+
+    v4_request = V4RealismSmokeRequest(
+        nodes=selected_topology.nodes,
+        shards=selected_topology.shards,
+        tx_count=selected_workload.default_tx_count,
+        enable_cross_shard=True,
+        enable_faults=True,
+        fault_profile="mixed_light",
+        blockemulator_csv=request.blockemulator_csv,
+        blockemulator_tx_limit=selected_workload.default_blockemulator_tx_limit,
+        run_duration_ms=1000,
+    )
+    return V4DerivedRequestPreview(
+        source="experiment_suite_preview",
+        v4_request=v4_request,
+        runnable=runnable,
+        warnings=warnings,
+    )
+
+
 def _profile(profile_id: str) -> ExperimentProfile:
     try:
         return PROFILES[profile_id]
@@ -252,3 +448,26 @@ def _workload(workload_id: str) -> ExperimentWorkload:
     except KeyError as exc:
         raise ValueError(f"unknown workload_id: {workload_id}") from exc
 
+
+def _method(method_id: str) -> ExperimentMethod:
+    try:
+        return METHODS[method_id]
+    except KeyError as exc:
+        raise ValueError(f"unknown method_id: {method_id}") from exc
+
+
+def _matrix_row_warnings(workload: ExperimentWorkload, topology: ExperimentTopology, blockemulator_csv: str | None) -> list[str]:
+    warnings: list[str] = []
+    if workload.planned:
+        warnings.append(f"{workload.workload_id}: dataset not attached yet; workload is planned and not runnable.")
+    if workload.csv_required and not blockemulator_csv:
+        warnings.append(f"{workload.workload_id}: blockemulator_csv is required before this workload can run.")
+    if topology.shards > topology.nodes:
+        warnings.append(f"{topology.topology_id}: shard count cannot exceed node count.")
+    if topology.topology_id == "local_8_nodes_4_shards":
+        warnings.append("local_8_nodes_4_shards: fewer validators per shard; not recommended as the default PBFT-style realism topology.")
+    return warnings
+
+
+def _warning_blocks_run(warning: str) -> bool:
+    return "dataset not attached yet" in warning or "required before this workload can run" in warning or "cannot exceed node count" in warning

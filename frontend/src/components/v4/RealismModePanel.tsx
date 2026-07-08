@@ -38,12 +38,14 @@ const truthKeys = [
 const nonClaims = ["production_pbft", "full_byzantine_security", "fabric_evm_backend", "production_blockchain", "production_atomic_commit", "full_blockemulator_compatibility"];
 const defaultRequest: V4RealismSmokeRequest = { nodes: 4, shards: 1, tx_count: 10, enable_cross_shard: true, enable_faults: true, fault_profile: "network_delay", blockemulator_tx_limit: 10, run_duration_ms: 1000 };
 const currentRunPlanStorageKey = "mbe.currentRunPlanSelection";
+const derivedV4StorageKey = "mbe.derivedV4RealismRequest";
 
 export default function RealismModePanel() {
   const [status, setStatus] = useState<V4RealismStatus | null>(null);
   const [result, setResult] = useState<V4RealismSmokeResponse | null>(null);
   const [form, setForm] = useState<V4RealismSmokeRequest>(defaultRequest);
   const [runPlan, setRunPlan] = useState<ExperimentRunPlanPreview | null>(null);
+  const [hasDerivedRequest, setHasDerivedRequest] = useState(false);
   const [runIdQuery, setRunIdQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -64,6 +66,12 @@ export default function RealismModePanel() {
 
   async function loadRunPlan() {
     try {
+      const derived = window.localStorage.getItem(derivedV4StorageKey);
+      if (derived) {
+        const parsed = JSON.parse(derived) as V4RealismSmokeRequest;
+        setForm(parsed);
+        setHasDerivedRequest(true);
+      }
       const saved = window.localStorage.getItem(currentRunPlanStorageKey);
       if (saved) {
         const selection = JSON.parse(saved) as ExperimentRunPlanRequest;
@@ -131,12 +139,13 @@ export default function RealismModePanel() {
 
   return <section className="page-grid">
     <article className="final-card wide">
-      <p className="eyebrow">当前步骤：② 验证 / 真实运行</p>
-      <h2>② 验证 / 真实运行</h2>
-      <p>使用 V4.3 真实运行时执行 signed tx、localhost TCP P2P、PBFT-style commit、状态执行、跨片证据、故障注入和 BlockEmulator bridge。</p>
+      <p className="eyebrow">V4 realism detail</p>
+      <h2>V4 真实性验证详情</h2>
+      <p>本页用于查看和运行从当前实验计划派生出的 V4 realism request，不是第二套实验配置源。</p>
+      <p className="muted">使用 V4.3 真实运行时执行 signed tx、localhost TCP P2P、PBFT-style commit、状态执行、跨片证据、故障注入和 BlockEmulator bridge。</p>
       <p>Runtime truth: {String(summary.runtime_truth ?? "v4_real_state_cross_shard_recovery")}</p>
       <div className="button-row">
-        <button type="button" onClick={runSmoke} disabled={busy}>{busy ? "Running..." : "Run V4.3 Smoke"}</button>
+        <button type="button" onClick={runSmoke} disabled={busy}>{busy ? "Running..." : "运行当前 V4 真实性验证"}</button>
         <button type="button" onClick={loadStatus}>Refresh Status</button>
       </div>
       {error && <p className="file-error">{error}</p>}
@@ -144,7 +153,7 @@ export default function RealismModePanel() {
 
     {runPlan && (
       <article className="final-card wide">
-        <p className="eyebrow">Current RunPlan</p>
+        <p className="eyebrow">Derived / fallback RunPlan</p>
         <h3>{runPlan.profile.label}</h3>
         <dl className="metrics-grid compact">
           <div><dt>Profile</dt><dd>{runPlan.profile.profile_id}</dd></div>
@@ -155,7 +164,7 @@ export default function RealismModePanel() {
         </dl>
         {runPlan.warnings.length > 0 && <ul className="boundary-list">{runPlan.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
         <div className="button-row">
-          <button type="button" onClick={applyRunPlanRequest}>Apply current RunPlan recommendation</button>
+          <button type="button" onClick={applyRunPlanRequest}>Apply fallback RunPlan recommendation</button>
           <button type="button" className="v3-secondary-button" onClick={loadRunPlan}>Refresh RunPlan</button>
         </div>
       </article>
@@ -164,7 +173,7 @@ export default function RealismModePanel() {
     <div className="final-card-grid">
       <article className="final-card">
         <h3>小规模真实节点验证</h3>
-        <p className="muted">Recommended values are loaded from backend experiment-flow RunPlan preview. Apply them before running the V4.3 validation smoke.</p>
+        <p className="muted">优先使用“运行实验”页派生出的 V4 request；如果没有派生请求，再使用 backend recommended-run fallback。</p>
         <button type="button" onClick={applyRunPlanRequest} disabled={!runPlan}>Use backend recommended config</button>
       </article>
       <article className="final-card">
@@ -174,24 +183,26 @@ export default function RealismModePanel() {
     </div>
 
     <article className="final-card wide">
-      <h3>Smoke Controls</h3>
-      <div className="form-grid">
+      <details className="v3-foldout">
+        <summary className="v3-foldout-summary">高级参数</summary>
+        <div className="form-grid">
         <NumberInput label="nodes" value={form.nodes} min={4} max={8} onChange={(value) => setForm({ ...form, nodes: value })} />
         <NumberInput label="shards" value={form.shards} min={1} max={4} onChange={(value) => setForm({ ...form, shards: value })} />
         <NumberInput label="tx_count" value={form.tx_count} min={1} max={100} onChange={(value) => setForm({ ...form, tx_count: value })} />
         <NumberInput label="blockemulator_tx_limit" value={form.blockemulator_tx_limit} min={1} max={1000} onChange={(value) => setForm({ ...form, blockemulator_tx_limit: value })} />
         <label><span>fault_profile</span><select value={form.fault_profile} onChange={(event) => setForm({ ...form, fault_profile: event.target.value })}><option value="none">none</option><option value="network_delay">network_delay</option><option value="message_drop">message_drop</option><option value="node_restart">node_restart</option><option value="mixed_light">mixed_light</option></select></label>
         <label><span>BlockEmulator CSV path</span><input value={form.blockemulator_csv ?? ""} onChange={(event) => setForm({ ...form, blockemulator_csv: event.target.value || undefined })} /></label>
-      </div>
-      <div className="toggle-row">
+        </div>
+        <div className="toggle-row">
         <label><input type="checkbox" checked={form.enable_cross_shard} onChange={(event) => setForm({ ...form, enable_cross_shard: event.target.checked })} /> enable_cross_shard</label>
         <label><input type="checkbox" checked={form.enable_faults} onChange={(event) => setForm({ ...form, enable_faults: event.target.checked })} /> enable_faults</label>
-      </div>
+        </div>
+      </details>
       <div className="button-row">
         <button type="button" onClick={() => setForm({ ...form, blockemulator_csv: undefined, blockemulator_tx_limit: 10 })}>Use sample CSV</button>
-        <button type="button" onClick={runSmoke} disabled={busy || runPlan?.runnable === false}>Run bridge + V4</button>
+        <button type="button" onClick={runSmoke} disabled={busy || (!hasDerivedRequest && runPlan?.runnable === false)}>运行当前 V4 真实性验证</button>
       </div>
-      {runPlan?.runnable === false && <p className="muted">Current RunPlan is not runnable; advanced parameters remain editable, but one-click real workload execution is disabled until warnings are resolved.</p>}
+      {!hasDerivedRequest && runPlan?.runnable === false && <p className="muted">Current RunPlan is not runnable; advanced parameters remain editable, but one-click real workload execution is disabled until warnings are resolved.</p>}
     </article>
 
     <TruthGrid title="Implemented Evidence" description="这些字段表示 V4.3 runtime 已实现或已保持的真实性证据；Non-Claims 表示当前仍不宣称生产级能力。" values={summary} keys={truthKeys} />

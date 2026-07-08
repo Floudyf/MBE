@@ -49,6 +49,7 @@ import {
 } from "./api";
 import V2Dashboard from "./components/V2Dashboard";
 import RealismModePanel from "./components/v4/RealismModePanel";
+import RunExperimentPage from "./pages/RunExperimentPage";
 import V3ComposerPage from "./pages/V3ComposerPage";
 
 type PageId =
@@ -60,9 +61,11 @@ type PageId =
   | "sweep"
   | "calibration"
   | "v3composer"
+  | "runexperiment"
   | "v4realism"
   | "runs"
   | "artifacts"
+  | "workloads"
   | "boundaries"
   | "developer"
   | "advanced";
@@ -99,6 +102,25 @@ const navGroups: { title: string; items: { id: PageId; label: string }[] }[] = [
     items: [
       { id: "runs", label: "运行记录" },
       { id: "artifacts", label: "实验产物" },
+    ],
+  },
+  {
+    title: "系统",
+    items: [
+      { id: "boundaries", label: "真实性边界" },
+      { id: "advanced", label: "高级功能" },
+    ],
+  },
+];
+
+const primaryNavGroups: { title: string; items: { id: PageId; label: string }[] }[] = [
+  {
+    title: "实验流程",
+    items: [
+      { id: "v3composer", label: "实验设计" },
+      { id: "runexperiment", label: "运行实验" },
+      { id: "runs", label: "结果与产物" },
+      { id: "workloads", label: "负载库" },
     ],
   },
   {
@@ -310,8 +332,8 @@ function App() {
 
   return <div className="final-shell">
     <aside className="final-sidebar">
-      <div className="brand-block"><span>MBE</span><strong>元宇宙区块链实验平台</strong><small>方案 → 真实节点验证 → 真实负载运行</small></div>
-      {navGroups.map((group) => <nav key={group.title} aria-label={group.title}>
+      <div className="brand-block"><span>MBE</span><strong>元宇宙区块链实验平台</strong><small>实验设计 → 运行实验 → 结果与产物</small></div>
+      {primaryNavGroups.map((group) => <nav key={group.title} aria-label={group.title}>
         <p>{group.title}</p>
         {group.items.map((item) => <button key={item.id} type="button" className={activePage === item.id ? "nav-active" : ""} onClick={() => setActivePage(item.id)}>{item.label}</button>)}
       </nav>)}
@@ -330,9 +352,11 @@ function App() {
       {activePage === "protocol" && <ProtocolPage protocols={protocols} result={v2Result} artifacts={v2Artifacts} runProtocolReplay={runProtocolReplay} />}
       {activePage === "sweep" && <SweepPage sweeps={sweeps} sweepId={sweepId} setSweepId={setSweepId} result={v2Result as V2SweepRunResponse | null} artifacts={v2Artifacts} runSweepExperiment={runSweepExperiment} />}
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
-      {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} onNextToRealism={() => setActivePage("v4realism")} />}
+      {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} onNextToRunExperiment={() => setActivePage("runexperiment")} />}
+      {activePage === "runexperiment" && <RunExperimentPage onOpenV4Details={() => setActivePage("v4realism")} />}
       {activePage === "v4realism" && <RealismModePanel />}
       {(activePage === "runs" || activePage === "artifacts") && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
+      {activePage === "workloads" && <WorkloadLibraryPage />}
       {activePage === "boundaries" && <BoundariesPage />}
       {activePage === "developer" && <DeveloperPage traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
       {activePage === "advanced" && <AdvancedPage setActivePage={setActivePage} traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
@@ -468,6 +492,16 @@ function DeveloperPage(props: { traceSources: V2TraceSource[]; backends: V2Chain
   </section>;
 }
 
+function WorkloadLibraryPage() {
+  return <section className="page-grid">
+    <InfoPanel title="负载库" note="当前负载 catalog 由 experiment-flow 提供给运行实验页使用；真实负载 real_skew_low / medium / high / extreme_hotspot 仍标注为规划中 / 数据集未接入。" />
+    <article className="final-card wide">
+      <h3>负载接入边界</h3>
+      <p className="muted">本轮不接入新数据集、不替换 runner、不统一 run registry。请在“运行实验”页预览 workload matrix，并确认 planned workload 不会作为真实数据运行。</p>
+    </article>
+  </section>;
+}
+
 function AdvancedPage(props: { setActivePage: (page: PageId) => void; traceSources: V2TraceSource[]; backends: V2ChainBackend[]; protocols: V2ProtocolInfo[]; sweeps: V2SweepInfo[]; calibrations: V2CalibrationInfo[]; v1Stages: V1StageStatus[] }) {
   const entries: Array<[PageId, string, string]> = [
     ["overview", "平台总览", "历史 V1/V2 总览入口"],
@@ -558,7 +592,7 @@ function BackendBadge({ backendType }: { backendType: string }) {
 }
 
 function pageTitle(page: PageId): string {
-  return navGroups.flatMap((group) => group.items).find((item) => item.id === page)?.label ?? "平台总览";
+  return primaryNavGroups.flatMap((group) => group.items).find((item) => item.id === page)?.label ?? (page === "v4realism" ? "V4 真实性验证详情" : "平台总览");
 }
 
 function validateCustomForm(form: V1CustomRunRequest): string {

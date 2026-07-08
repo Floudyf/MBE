@@ -569,6 +569,55 @@ export type ExperimentRunPlanPreview = {
   warnings: string[];
   next_step: string;
 };
+export type ExperimentMethod = {
+  method_id: string;
+  label: string;
+  role: string;
+  description: string;
+  module_overrides: Record<string, string>;
+  runnable: boolean;
+};
+export type ExperimentSuiteRequest = {
+  plan_name?: string | null;
+  selected_method_ids?: string[];
+  selected_suite_types?: string[];
+  workload_ids?: string[];
+  topology_ids?: string[];
+  seeds?: number[];
+  include_v4_realism?: boolean;
+  composer_draft?: Record<string, unknown> | null;
+  formal_config?: Record<string, unknown> | null;
+  blockemulator_csv?: string | null;
+};
+export type ExperimentMatrixRow = {
+  row_id: string;
+  suite_type: string;
+  method_id: string;
+  method_role: string;
+  workload_id: string;
+  topology_id: string;
+  seed: number;
+  runtime_target: string;
+  runnable: boolean;
+  warnings: string[];
+};
+export type ExperimentRunMatrixPreview = {
+  plan_name: string;
+  suite_types: string[];
+  methods: ExperimentMethod[];
+  rows: ExperimentMatrixRow[];
+  runnable_row_count: number;
+  blocked_row_count: number;
+  warnings: string[];
+  v4_realism_candidates: Record<string, unknown>[];
+  next_step: string;
+};
+export type V4DerivedRequestPreview = {
+  source: string;
+  v4_request: V4RealismSmokeRequest;
+  runnable: boolean;
+  warnings: string[];
+};
 export type V3SmokeRunResponse = Omit<V2SweepRunResponse, "summary"> & { runtime_mode?: string; summary: V3RuntimeSummary };
 export type V3DraftModuleStatus = "default" | "fixed" | "variable" | "disabled" | "planned" | "output";
 export type V3ComposerDraftModuleRequest = {
@@ -1109,12 +1158,25 @@ export async function fetchExperimentWorkloads(): Promise<ExperimentWorkload[]> 
   return response.items;
 }
 
+export async function fetchExperimentMethods(): Promise<ExperimentMethod[]> {
+  const response = await request<{ items: ExperimentMethod[] }>("/api/experiment-flow/methods");
+  return response.items;
+}
+
 export async function fetchRecommendedRun(): Promise<ExperimentRunPlanPreview> {
   return request<ExperimentRunPlanPreview>("/api/experiment-flow/recommended-run");
 }
 
 export async function previewExperimentRunPlan(payload: ExperimentRunPlanRequest): Promise<ExperimentRunPlanPreview> {
   return request<ExperimentRunPlanPreview>("/api/experiment-flow/preview-run-plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function previewExperimentRunMatrix(payload: ExperimentSuiteRequest): Promise<ExperimentRunMatrixPreview> {
+  return request<ExperimentRunMatrixPreview>("/api/experiment-flow/preview-run-matrix", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function deriveV4RealismRequest(payload: ExperimentSuiteRequest): Promise<V4DerivedRequestPreview> {
+  return request<V4DerivedRequestPreview>("/api/experiment-flow/derive-v4-realism-request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
 }
 
 export async function fetchV4RealismStatus(): Promise<V4RealismStatus> {

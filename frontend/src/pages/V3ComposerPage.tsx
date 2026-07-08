@@ -103,7 +103,7 @@ const currentRunPlanStorageKey = "mbe.currentRunPlanSelection";
 
 type Props = {
   onRunCompleted?: (runId: string) => void;
-  onNextToRealism?: () => void;
+  onNextToRunExperiment?: () => void;
 };
 
 function moduleStatusForLockedPlugin(moduleId: string, plugin: string): V3DraftModuleStatus {
@@ -146,7 +146,7 @@ function CurrentWorkflowStatus({ draft, formalPreview, formalResult, backendVali
   );
 }
 
-export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Props) {
+export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }: Props) {
   const [profileId, setProfileId] = useState("metatrack_go_backed_ablation_smoke");
   const [flowProfiles, setFlowProfiles] = useState<ExperimentProfile[]>([]);
   const [flowTopologies, setFlowTopologies] = useState<ExperimentTopology[]>([]);
@@ -219,7 +219,7 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Prop
 
   function saveCurrentRunPlanSelection() {
     window.localStorage.setItem(currentRunPlanStorageKey, JSON.stringify(runPlanSelection));
-    setRunPlanMessage("Current RunPlan selection saved locally.");
+    setRunPlanMessage("当前实验计划默认项已保存到本地。");
   }
 
   function showFormalResult(result: V3FormalMetatrackBenchmarkRunResponse) {
@@ -555,9 +555,9 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Prop
     <section className="page-grid v3-composer-page">
       <header className="final-card wide v3-composer-header console-hero">
         <div>
-          <p className="eyebrow">当前步骤：① 选择方案</p>
-          <h2>选择并保存实验方案</h2>
-          <p>先配置并保存实验方案。保存后进入“② 验证 / 真实运行”，使用 V4.3 真实节点和小规模负载验证方案是否跑通。</p>
+          <p className="eyebrow">实验设计</p>
+          <h2>实验设计</h2>
+          <p>以 11 模块区块链实验流水线作为唯一实验设计源。运行实验页只从当前设计派生矩阵和 V4 真实性验证请求。</p>
           <p className="muted">当前阶段：{stageLabel}</p>
           <p>{`运行能力：${latestRuntimeLabel}。`} <HelpTip title="真实性边界">V3-final 是本地 emulator 闭环：确定性故障注入、观测摘要和复现 bundle；不是多服务器部署、生产集群、生产共识网络或论文级性能结论。</HelpTip></p>
         </div>
@@ -568,7 +568,7 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Prop
           <span>轻量图表</span>
           <span>V3-final closure</span>
         </div>
-        <button type="button" className="v3-secondary-button" onClick={onNextToRealism}>下一步：验证 / 真实运行</button>
+        <button type="button" className="v3-secondary-button" onClick={onNextToRunExperiment}>下一步：运行实验</button>
       </header>
 
       <CurrentWorkflowStatus
@@ -583,10 +583,20 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Prop
       />
 
       <section className="final-card wide">
-        <p className="eyebrow">Experiment Flow RunPlan</p>
-        <h3>Current experiment plan selection</h3>
-        <p className="muted">This lightweight selection is stored locally and used by the V4 validation page to preview a backend RunPlan.</p>
-        <div className="form-grid">
+        <p className="eyebrow">Experiment Plan Summary</p>
+        <h3>当前实验计划摘要</h3>
+        <p className="muted">完整实验计划来自 11 模块 Composer、Formal benchmark 配置、负载、拓扑、seed 和指标设置。下面的 catalog 只是默认推荐项 / 高级兼容设置，不是第二套完整实验计划源。</p>
+        <dl className="v3-result-grid compact">
+          <div><dt>当前方法</dt><dd>{currentMethodName || selectedPreset?.preset_id || "metatrack_full / draft"}</dd></div>
+          <div><dt>当前负载</dt><dd>{currentWorkloadName || draft?.topology.workload_source || "Composer draft workload"}</dd></div>
+          <div><dt>当前拓扑</dt><dd>{currentTopologyName || draft?.topology.node_runtime_mode || "Composer draft topology"}</dd></div>
+          <div><dt>当前正式实验状态</dt><dd>{formalResult ? "已运行" : formalPreview ? "已预览" : "未预览"}</dd></div>
+          <div><dt>可派生运行类型</dt><dd>快速验证 / 正式性能实验 / V4 真实性验证</dd></div>
+        </dl>
+        <details className="v3-foldout">
+          <summary className="v3-foldout-summary">默认推荐项 / 高级兼容设置</summary>
+          <p className="muted">这些字段来自 experiment-flow 静态 catalog，用于向运行实验页提供默认项；完整实验设计仍以 11 模块 Composer 为准。</p>
+          <div className="form-grid">
           <label>
             <span>Profile</span>
             <select value={runPlanSelection.profile_id} onChange={(event) => {
@@ -612,10 +622,11 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRealism }: Prop
               {flowWorkloads.map((item) => <option key={item.workload_id} value={item.workload_id}>{item.label}{item.planned ? " - planned / dataset not attached" : ""}</option>)}
             </select>
           </label>
-        </div>
+          </div>
+        </details>
         <div className="button-row">
-          <button type="button" onClick={saveCurrentRunPlanSelection}>Save as current plan</button>
-          <button type="button" className="v3-secondary-button" onClick={onNextToRealism}>Next: validation / real run</button>
+          <button type="button" onClick={saveCurrentRunPlanSelection}>保存实验计划</button>
+          <button type="button" className="v3-secondary-button" onClick={onNextToRunExperiment}>下一步：运行实验</button>
         </div>
         {runPlanMessage && <p className="muted">{runPlanMessage}</p>}
       </section>

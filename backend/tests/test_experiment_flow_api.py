@@ -85,3 +85,67 @@ def test_experiment_flow_preview_four_shards_returns_warning() -> None:
     assert payload["runnable"] is True
     assert payload["warnings"]
 
+
+def test_experiment_flow_methods_include_main_baseline_and_ablation() -> None:
+    response = client.get("/api/experiment-flow/methods")
+    assert response.status_code == 200
+    method_ids = {item["method_id"] for item in response.json()["items"]}
+    assert "metatrack_full" in method_ids
+    assert "baseline_hash" in method_ids
+    assert "metatrack_routing_only" in method_ids
+
+
+def test_experiment_flow_preview_run_matrix_default_has_row() -> None:
+    response = client.post("/api/experiment-flow/preview-run-matrix", json={})
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["rows"]) >= 1
+    assert payload["runnable_row_count"] >= 1
+
+
+def test_experiment_flow_preview_run_matrix_planned_workload_blocks_row() -> None:
+    response = client.post(
+        "/api/experiment-flow/preview-run-matrix",
+        json={"workload_ids": ["real_skew_high"]},
+    )
+    assert response.status_code == 200
+    row = response.json()["rows"][0]
+    assert row["runnable"] is False
+    assert row["warnings"]
+
+
+def test_experiment_flow_preview_run_matrix_multiplies_dimensions() -> None:
+    response = client.post(
+        "/api/experiment-flow/preview-run-matrix",
+        json={
+            "selected_method_ids": ["metatrack_full", "baseline_hash"],
+            "workload_ids": ["small_test", "blockemulator_sample"],
+            "topology_ids": ["local_8_nodes_2_shards"],
+            "seeds": [1, 2, 3],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload["rows"]) == 2 * 2 * 1 * 3
+
+
+def test_experiment_flow_derive_v4_realism_request_uses_defaults() -> None:
+    response = client.post("/api/experiment-flow/derive-v4-realism-request", json={})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runnable"] is True
+    request = payload["v4_request"]
+    assert request["nodes"] == 8
+    assert request["shards"] == 2
+    assert request["fault_profile"] == "mixed_light"
+
+
+def test_experiment_flow_derive_v4_realism_request_planned_workload_not_runnable() -> None:
+    response = client.post(
+        "/api/experiment-flow/derive-v4-realism-request",
+        json={"workload_ids": ["real_skew_high"]},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runnable"] is False
+    assert payload["warnings"]

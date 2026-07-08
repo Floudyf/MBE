@@ -460,3 +460,27 @@ Boundary rules:
 - Do not unify the run registry in this round.
 - Do not automatically commit.
 - Do not automatically push.
+
+## 15. V4.3.3 Experiment Design and Run Suite Alignment
+
+V4.3.3 aligns the product flow around the canonical experiment design and run-suite preview. It is not a new runtime.
+
+Experiment design rules:
+
+- The 11-module Composer is the single experiment design source.
+- RunPlan, RunSuite, and RunMatrix must be derived from the current Experiment Plan.
+- The V4 realism page must not become a second configuration source.
+- The Run Experiment page selects main experiments, comparison experiments, ablation experiments, workload sensitivity experiments, topology scaling experiments, and V4 realism validation.
+
+Truth and workload rules:
+
+- Planned workloads must continue to be shown as planned and must not be run as real attached datasets.
+- Derived V4 requests are previews for V4 realism validation. They do not replace formal benchmark execution.
+
+Boundary rules:
+
+- Do not modify `executor/`.
+- Do not change `/api/v4/realism/*`.
+- Do not change `go run ./cmd/mbe-supervisor` command semantics.
+- Do not automatically commit.
+- Do not automatically push.
