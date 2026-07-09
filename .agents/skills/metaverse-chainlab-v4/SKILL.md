@@ -504,3 +504,30 @@ Boundary rules:
 - Do not unify the run registry.
 - Do not automatically commit.
 - Do not automatically push.
+
+## 17. V4.3.5 Frontend UX and Experiment Workflow Refinement
+
+V4.3.5 is a frontend UX and workflow refinement stage. It is not a new runtime and must not change runner semantics.
+
+Experiment workflow rules:
+
+- The Experiment Design page is for method template design.
+- The Experiment Design page must not treat workload, nodes, shards, or seed as main template configuration.
+- The Run Experiment page owns workload, topology, seed, transaction count, repeat count, matrix preview, and execution mode.
+- The Results and Artifacts page owns result summaries, charts, logs, and downloads.
+- V4 realism remains a validation detail page and must not become a second primary configuration source.
+
+Visualization rules:
+
+- Running process visualization may only use matrix status, child run status, summaries, log counts, or artifact presence.
+- It must not claim to be a real per-transaction event stream.
+- It must not introduce WebSocket or SSE in this round.
+- Advanced parameters should be folded by default.
+
+Truth and boundary rules:
+
+- Planned workloads must remain clearly marked as planned and must not become runnable.
+- Do not modify `executor/`.
+- Do not change `/api/v4/realism/*`.
+- Do not change formal benchmark runner semantics.
+- Do not push.

@@ -48,6 +48,8 @@ import {
   type V2TraceSource,
 } from "./api";
 import V2Dashboard from "./components/V2Dashboard";
+import ResultChartPanel from "./components/experiment/ResultChartPanel";
+import RunStageFlow from "./components/experiment/RunStageFlow";
 import RealismModePanel from "./components/v4/RealismModePanel";
 import RunExperimentPage from "./pages/RunExperimentPage";
 import V3ComposerPage from "./pages/V3ComposerPage";
@@ -472,9 +474,70 @@ function CalibrationPage({ calibrations, calibrationId, setCalibrationId, fabric
 }
 
 function RunHistoryPage({ runs, selectedRunId, artifacts, selectRun, refreshRuns }: { runs: V2RunSummary[]; selectedRunId: string; artifacts: V2Artifact[]; selectRun: (id: string) => void; refreshRuns: () => void }) {
+  const selectedRun = runs.find((run) => run.run_id === selectedRunId) || null;
+  const summary = selectedRun ? selectedRun as Record<string, unknown> : null;
+  const logArtifacts = artifacts.filter((artifact) => /runtime\.log|consensus|txpool|execution|pbft|network|log/i.test(artifact.name));
   return <section className="page-grid">
-    <InfoPanel title="运行记录与产物" note="运行记录与首页分离；下载链接统一走 artifact API，不直接暴露 .cache 绝对路径。" />
-    <article className="final-card wide"><div className="button-row"><button type="button" onClick={refreshRuns}>刷新运行记录</button></div><label><span>选择 run</span><select value={selectedRunId} onChange={(e) => selectRun(e.target.value)}><option value="">请选择</option>{runs.map((run) => <option key={run.run_id} value={run.run_id}>{run.run_id} / {run.stage} / {run.status}</option>)}</select></label></article>
+    <article className="final-card wide page-hero">
+      <p className="eyebrow">Results and Artifacts</p>
+      <h2>结果与产物</h2>
+      <p>选择 run 或 run group，查看指标图表、日志摘要和产物下载。</p>
+      <p className="muted">当前仍分为 V2/V3 历史 run artifacts 与 V4 realism artifacts；后续会通过统一 run registry 合并入口。</p>
+    </article>
+    <article className="final-card wide">
+      <div className="button-row"><button type="button" onClick={refreshRuns}>刷新运行记录</button></div>
+      <label><span>选择 run</span><select value={selectedRunId} onChange={(e) => selectRun(e.target.value)}><option value="">请选择</option>{runs.map((run) => <option key={run.run_id} value={run.run_id}>{run.run_id} / {run.stage} / {run.status}</option>)}</select></label>
+    </article>
+    <article className="final-card wide">
+      <p className="eyebrow">Summary</p>
+      <h3>摘要卡片</h3>
+      {selectedRun ? (
+        <dl className="result-summary-grid">
+          <div><dt>run_id</dt><dd>{selectedRun.run_id}</dd></div>
+          <div><dt>status</dt><dd><StatusBadge status={selectedRun.status} /></dd></div>
+          <div><dt>stage</dt><dd>{selectedRun.stage}</dd></div>
+          <div><dt>source</dt><dd>{selectedRun.source}</dd></div>
+          <div><dt>artifact_count</dt><dd>{selectedRun.artifact_count}</dd></div>
+          <div><dt>report_available</dt><dd>{String(selectedRun.report_available)}</dd></div>
+        </dl>
+      ) : <p className="muted">请选择一个 run 查看摘要。</p>}
+    </article>
+    <article className="final-card wide">
+      <ResultChartPanel summary={summary} artifacts={artifacts} />
+    </article>
+    <article className="final-card wide">
+      <RunStageFlow summary={summary} />
+    </article>
+    <article className="final-card wide">
+      <p className="eyebrow">Logs</p>
+      <h3>日志摘要</h3>
+      {logArtifacts.length ? (
+        <div className="log-summary-list">
+          {logArtifacts.map((artifact) => (
+            <div key={artifact.name}>
+              <strong>{artifact.name}</strong>
+              <small>{artifact.size_bytes} bytes</small>
+              <a href={v2ArtifactDownloadURL(artifact.download_url)}>下载</a>
+            </div>
+          ))}
+        </div>
+      ) : <p className="muted">未发现 runtime.log / consensus / txpool / execution 等日志产物。</p>}
+    </article>
+    <article className="final-card wide">
+      <p className="eyebrow">Downloads</p>
+      <h3>下载区</h3>
+      <div className="download-grid">
+        <div className="download-card">
+          <strong>单文件下载</strong>
+          <p className="muted">下方产物列表继续提供单文件下载。</p>
+        </div>
+        <div className="download-card">
+          <strong>下载全部</strong>
+          <span className="download-disabled">暂不可用</span>
+          <p className="muted">通用一键下载将在统一 run registry 后支持。</p>
+        </div>
+      </div>
+    </article>
     <div className="final-card-grid">{runs.map((run) => <article key={run.run_id} className="final-card"><StatusBadge status={run.status} /><h3>{run.run_id}</h3><p>{run.stage} / {run.source}</p><TruthBadge label={run.data_truth_label} /><p>artifacts={run.artifact_count} report={String(run.report_available)}</p></article>)}</div>
     <ArtifactList artifacts={artifacts} />
   </section>;
@@ -505,7 +568,7 @@ function WorkloadLibraryPage() {
 function AdvancedPage(props: { setActivePage: (page: PageId) => void; traceSources: V2TraceSource[]; backends: V2ChainBackend[]; protocols: V2ProtocolInfo[]; sweeps: V2SweepInfo[]; calibrations: V2CalibrationInfo[]; v1Stages: V1StageStatus[] }) {
   const entries: Array<[PageId, string, string]> = [
     ["overview", "平台总览", "历史 V1/V2 总览入口"],
-    ["v4realism", "② 验证 / 真实运行", "真实 P2P / PBFT-style / state / cross-shard / recovery smoke"],
+    ["v4realism", "V4 真实性验证详情", "从运行实验页派生的 V4 realism request 详情与 run lookup"],
     ["single", "V1 单链机制实验", "MetaTrack 早期单链机制实验"],
     ["ablation", "V1 单链消融对比", "早期单链 sweep / report"],
     ["dual", "V2 双链回放实验", "本地虚拟双链回放"],

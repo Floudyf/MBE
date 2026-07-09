@@ -16,6 +16,7 @@ import {
   type RunSuiteExecutionResponse,
   type V4DerivedRequestPreview,
 } from "../api";
+import RunStageFlow from "../components/experiment/RunStageFlow";
 
 const suiteTypes = [
   ["quick_validation", "快速验证"],
@@ -42,6 +43,11 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
   const [selectedWorkloadIds, setSelectedWorkloadIds] = useState<string[]>(["small_test"]);
   const [selectedTopologyIds, setSelectedTopologyIds] = useState<string[]>(["local_8_nodes_2_shards"]);
   const [seedText, setSeedText] = useState("1");
+  const [nodes, setNodes] = useState(8);
+  const [shards, setShards] = useState(2);
+  const [validatorsPerShard, setValidatorsPerShard] = useState(4);
+  const [txCount, setTxCount] = useState(20);
+  const [repeatCount, setRepeatCount] = useState(1);
   const [matrix, setMatrix] = useState<ExperimentRunMatrixPreview | null>(null);
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [runMode, setRunMode] = useState<"dry_run" | "execute">("dry_run");
@@ -117,7 +123,15 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
     try {
       setBusy(true);
       const response = await deriveV4RealismRequest(request);
-      setDerived(response);
+      setDerived({
+        ...response,
+        v4_request: {
+          ...response.v4_request,
+          nodes,
+          shards,
+          tx_count: txCount,
+        },
+      });
       setMessage(response.runnable ? "已派生 V4 真实性验证请求。" : "已派生请求，但当前组合不可运行，请查看 warnings。");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -165,11 +179,11 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
 
   return (
     <section className="page-grid">
-      <article className="final-card wide">
+      <article className="final-card wide page-hero">
         <p className="eyebrow">Experiment Plan to RunSuite to RunMatrix</p>
         <h2>运行实验</h2>
-        <p>当前实验计划来自 11 模块 Composer；本页不重新配置模块，只选择运行类型和运行矩阵。</p>
-        <p className="muted">正式性能实验仍使用实验设计页中的 Formal benchmark 入口运行；本页只做 preview / derive。</p>
+        <p>选择已保存方法模板、负载、拓扑和 seed，生成并执行实验矩阵。</p>
+        <p className="muted">当前实验计划来自 11 模块 Composer；本页不重新配置模块，只选择实验条件、运行类型和运行矩阵。</p>
         {error && <p className="file-error">{error}</p>}
         {message && <p className="notice">{message}</p>}
       </article>
@@ -181,12 +195,13 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
 
       <article className="final-card wide">
         <h3>运行类型</h3>
-        <div className="v3-checkbox-grid">
+        <div className="selectable-card-grid">
           {suiteTypes.map(([id, label]) => (
-            <label key={id} className="checkbox-card field-card">
-              <span>{label}<small>{id}</small></span>
-              <input type="checkbox" checked={selectedSuiteTypes.includes(id)} onChange={() => toggleValue(id, selectedSuiteTypes, setSelectedSuiteTypes)} />
-            </label>
+            <button key={id} type="button" className={`selectable-card ${selectedSuiteTypes.includes(id) ? "selected" : ""}`} onClick={() => toggleValue(id, selectedSuiteTypes, setSelectedSuiteTypes)}>
+              <strong>{label}</strong>
+              <small>{id}</small>
+              <span className={`status-badge ${id === "quick_validation" || id === "v4_realism_validation" ? "badge-runnable" : "badge-preview"}`}>{id === "quick_validation" || id === "v4_realism_validation" ? "supported execute" : "preview-only"}</span>
+            </button>
           ))}
         </div>
       </article>
@@ -199,7 +214,8 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
       </article>
 
       <article className="final-card wide">
-        <h3>负载与拓扑</h3>
+        <h3>实验条件</h3>
+        <p className="muted">Workload、nodes、shards、validators_per_shard、tx_count、seed 和 repeat_count 在运行页选择，不属于方法模板主配置。</p>
         <div className="topology-field-grid">
           <div className="field-card">
             <span>Workloads</span>
@@ -214,10 +230,30 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
             <span>Topologies</span>
             {topologies.map((item) => (
               <label key={item.topology_id} className="checkbox-card compact">
-                <span>{item.label}<small>{item.topology_id}</small></span>
-                <input type="checkbox" checked={selectedTopologyIds.includes(item.topology_id)} onChange={() => toggleValue(item.topology_id, selectedTopologyIds, setSelectedTopologyIds)} />
+                <span>{item.label}<small>{item.topology_id} / nodes={item.nodes} shards={item.shards} validators={item.validators_per_shard}</small></span>
+                <input type="checkbox" checked={selectedTopologyIds.includes(item.topology_id)} onChange={() => {
+                  toggleValue(item.topology_id, selectedTopologyIds, setSelectedTopologyIds);
+                  setNodes(item.nodes);
+                  setShards(item.shards);
+                  setValidatorsPerShard(item.validators_per_shard);
+                }} />
               </label>
             ))}
+          </div>
+          <div className="field-card">
+            <span>Topology numbers</span>
+            <div className="experiment-condition-grid compact-grid">
+              <label><span>nodes</span><input type="number" min={1} value={nodes} onChange={(event) => setNodes(Number(event.target.value))} /></label>
+              <label><span>shards</span><input type="number" min={1} value={shards} onChange={(event) => setShards(Number(event.target.value))} /></label>
+              <label><span>validators_per_shard</span><input type="number" min={1} value={validatorsPerShard} onChange={(event) => setValidatorsPerShard(Number(event.target.value))} /></label>
+            </div>
+          </div>
+          <div className="field-card">
+            <span>Scale</span>
+            <div className="experiment-condition-grid compact-grid">
+              <label><span>tx_count</span><input type="number" min={1} value={txCount} onChange={(event) => setTxCount(Number(event.target.value))} /></label>
+              <label><span>repeat_count</span><input type="number" min={1} max={10} value={repeatCount} onChange={(event) => setRepeatCount(Number(event.target.value))} /></label>
+            </div>
           </div>
           <label className="field-card">
             <span>Seeds</span>
@@ -234,7 +270,8 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
       {matrix && (
         <article className="final-card wide">
           <h3>矩阵预览</h3>
-          <p className="muted">runnable={matrix.runnable_row_count} / blocked={matrix.blocked_row_count}</p>
+          <p className="muted">runnable={matrix.runnable_row_count} / blocked={matrix.blocked_row_count} / repeat_count={repeatCount}</p>
+          <RunStageFlow rows={matrix.rows} mode="preview" />
           <div className="topology-field-grid">
             <label className="field-card">
               <span>执行模式</span>
@@ -270,8 +307,8 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
                     <td>{row.topology_id}</td>
                     <td>{row.seed}</td>
                     <td>{row.runtime_target}</td>
-                    <td>{String(row.runnable)}</td>
-                    <td>{row.warnings.join("; ") || "-"}</td>
+                    <td><span className={`status-badge ${row.runnable ? "badge-runnable" : "badge-blocked"}`}>{row.runnable ? "runnable" : "blocked"}</span></td>
+                    <td>{row.warnings.length ? row.warnings.map((warning) => <span key={warning} className="status-badge badge-preview">{warning}</span>) : "-"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -283,6 +320,7 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
       {executionResult && (
         <article className="final-card wide">
           <h3>执行结果</h3>
+          <RunStageFlow childRuns={executionResult.child_runs} rows={matrix?.rows || []} mode={runMode} />
           <dl className="v3-result-grid compact">
             <div><dt>run_group_id</dt><dd>{executionResult.run_group_id}</dd></div>
             <div><dt>selected_row_count</dt><dd>{executionResult.selected_row_count}</dd></div>
@@ -302,7 +340,7 @@ export default function RunExperimentPage({ onOpenV4Details }: Props) {
                     <td>{child.suite_type}</td>
                     <td>{child.method_id}</td>
                     <td>{child.runner}</td>
-                    <td>{child.status}</td>
+                    <td><span className={`status-badge badge-${child.status}`}>{child.status}</span></td>
                     <td>{child.run_id || "-"}</td>
                     <td>{child.warnings.join("; ") || "-"}</td>
                     <td>{child.blocked_reason || (child.suite_type === "v4_realism_validation" && child.run_id ? "可进入 V4 真实性验证详情查看 summary/artifacts。" : "-")}</td>

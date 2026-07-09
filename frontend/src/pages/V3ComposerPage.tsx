@@ -101,6 +101,13 @@ const profileOptions = [
 ];
 const currentRunPlanStorageKey = "mbe.currentRunPlanSelection";
 
+const methodPipelineStages = [
+  { title: "打包与共识", modules: ["TxPool", "BlockProducer", "Consensus"] },
+  { title: "调度与分片", modules: ["CommitteeEpoch", "Routing"] },
+  { title: "执行与状态", modules: ["Execution", "StateAccess", "StateStorage"] },
+  { title: "提交与观测", modules: ["Commit", "MetricsReport"] },
+];
+
 type Props = {
   onRunCompleted?: (runId: string) => void;
   onNextToRunExperiment?: () => void;
@@ -153,6 +160,9 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
   const [flowWorkloads, setFlowWorkloads] = useState<ExperimentWorkload[]>([]);
   const [runPlanSelection, setRunPlanSelection] = useState({ profile_id: "v4_3_realism_default", topology_id: "local_8_nodes_2_shards", workload_id: "small_test" });
   const [runPlanMessage, setRunPlanMessage] = useState("");
+  const [templateName, setTemplateName] = useState("MetaTrack method template");
+  const [templateRole, setTemplateRole] = useState("main");
+  const [templateDescription, setTemplateDescription] = useState("可复用的区块链机制模板；负载、拓扑和 seed 在运行实验页选择。");
   const [preview, setPreview] = useState<V3ComposerPreviewResponse | null>(null);
   const [templates, setTemplates] = useState<V3TemplateSummary[]>(fallbackTemplates);
   const [artifacts, setArtifacts] = useState<V2Artifact[]>([]);
@@ -553,34 +563,79 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
 
   return (
     <section className="page-grid v3-composer-page">
-      <header className="final-card wide v3-composer-header console-hero">
+      <header className="final-card wide v3-composer-header page-hero method-template-hero">
         <div>
           <p className="eyebrow">实验设计</p>
           <h2>实验设计</h2>
-          <p>以 11 模块区块链实验流水线作为唯一实验设计源。运行实验页只从当前设计派生矩阵和 V4 真实性验证请求。</p>
+          <p>设计可复用的区块链实验方法模板；负载、节点数、分片数和 seed 在“运行实验”页选择。</p>
           <p className="muted">当前阶段：{stageLabel}</p>
           <p>{`运行能力：${latestRuntimeLabel}。`} <HelpTip title="真实性边界">V3-final 是本地 emulator 闭环：确定性故障注入、观测摘要和复现 bundle；不是多服务器部署、生产集群、生产共识网络或论文级性能结论。</HelpTip></p>
         </div>
         <div className="v3-boundary-badges">
-          <span>本地快速验证</span>
-          <span>中文控制台</span>
-          <span>HelpTip 解释</span>
-          <span>轻量图表</span>
+          <span>方法模板</span>
+          <span>11 模块流水线</span>
+          <span>负载在运行页选择</span>
+          <span>拓扑在运行页选择</span>
           <span>V3-final closure</span>
         </div>
         <button type="button" className="v3-secondary-button" onClick={onNextToRunExperiment}>下一步：运行实验</button>
       </header>
 
-      <CurrentWorkflowStatus
-        draft={draft}
-        formalPreview={formalPreview}
-        formalResult={formalResult}
-        backendValidation={backendValidation}
-        draftRunResult={draftRunResult}
-        currentMethodName={currentMethodName}
-        currentWorkloadName={currentWorkloadName}
-        currentTopologyName={currentTopologyName}
-      />
+      <section className="final-card wide">
+        <p className="eyebrow">Template Basics</p>
+        <h3>模板基本信息</h3>
+        <div className="method-template-grid">
+          <label>
+            <span>模板名称</span>
+            <input value={templateName} onChange={(event) => setTemplateName(event.target.value)} />
+          </label>
+          <label>
+            <span>模板角色</span>
+            <select value={templateRole} onChange={(event) => setTemplateRole(event.target.value)}>
+              <option value="main">main</option>
+              <option value="baseline">baseline</option>
+              <option value="ablation">ablation</option>
+              <option value="custom">custom</option>
+            </select>
+          </label>
+          <label>
+            <span>模板说明</span>
+            <input value={templateDescription} onChange={(event) => setTemplateDescription(event.target.value)} />
+          </label>
+          <div className="mini-status">
+            <span className={`status-dot ${backendValidation?.is_runnable ? "ok" : "blocked"}`} />
+            <strong>{backendValidation?.is_runnable ? "verified" : backendValidation?.is_valid ? "valid draft" : "draft"}</strong>
+            <small>当前验证状态</small>
+          </div>
+        </div>
+        <p className="muted">方法模板只描述机制组合。Workload、nodes、shards、validators_per_shard、tx_count、seed 和 repeat_count 属于实验条件，已移到“运行实验”页。</p>
+      </section>
+
+      {draft && (
+        <section className="final-card wide">
+          <p className="eyebrow">Method Pipeline</p>
+          <h3>方法流水线</h3>
+          <p className="muted">主线模块不包含 Workload；Composer 内部保留的 Workload 字段仅用于历史兼容。</p>
+          <div className="method-pipeline-grid">
+            {methodPipelineStages.map((stage) => (
+              <div key={stage.title} className="method-pipeline-stage">
+                <h4>{stage.title}</h4>
+                {stage.modules.map((moduleId) => {
+                  const module = draft.modules[moduleId];
+                  return (
+                    <div key={moduleId} className="method-module-card">
+                      <strong>{moduleId}</strong>
+                      <code>{module?.plugin || "unselected"}</code>
+                      <span className={`status-badge status-${module?.status || "default"}`}>{module?.status || "default"}</span>
+                      <small>{moduleId === "MetricsReport" ? "输出指标与报告" : selectedVariableModules.includes(moduleId) ? "实验变量" : "模板机制"}</small>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="final-card wide">
         <p className="eyebrow">Experiment Plan Summary</p>
@@ -625,7 +680,7 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
           </div>
         </details>
         <div className="button-row">
-          <button type="button" onClick={saveCurrentRunPlanSelection}>保存实验计划</button>
+          <button type="button" onClick={saveCurrentRunPlanSelection}>保存实验模板</button>
           <button type="button" className="v3-secondary-button" onClick={onNextToRunExperiment}>下一步：运行实验</button>
         </div>
         {runPlanMessage && <p className="muted">{runPlanMessage}</p>}
@@ -721,13 +776,12 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
       )}
 
       {draft && (
-        <section className="final-card wide console-section-title">
-          <p className="eyebrow">3. 负载配置 / 4. 运行拓扑配置</p>
-          <h3>基础运行路径、负载语义与拓扑细节</h3>
-        </section>
+        <details className="final-card wide compat-foldout">
+          <summary>运行条件兼容字段 / 开发者详情</summary>
+          <p className="muted">Workload、节点数、分片数和 seed 不作为方法模板主配置。这里保留历史 Composer 拓扑字段，便于旧入口和快速验证兼容。</p>
+          <RuntimeTopologyPanel topology={draft.topology} onChange={(topology) => updateDraft(updateDraftTopology(draft, topology))} />
+        </details>
       )}
-
-      {draft && <RuntimeTopologyPanel topology={draft.topology} onChange={(topology) => updateDraft(updateDraftTopology(draft, topology))} />}
 
       {loading && <p className="notice">正在加载 V3 Composer 预览...</p>}
       {error && <p className="file-error">{error}</p>}
@@ -736,22 +790,25 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
         <>
           <section className="final-card wide console-section-title">
             <p className="eyebrow">5. 11 模块方案配置</p>
-            <h3>主流程保持不变</h3>
-            <p className="muted">{"Workload -> TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport"}</p>
+            <h3>详细模块参数</h3>
+            <p className="muted">{"TxPool -> BlockProducer -> ConsensusRuntime -> CommitteeEpoch -> Routing/Sharding -> Execution -> StateAccess -> StateStorage -> Commit -> MetricsReport。Workload 在运行实验页选择；底层 Composer 中的 Workload 为兼容字段。"}</p>
           </section>
-          <SingleChainComposer
-            preview={composer}
-            draft={draft}
-            onDraftChange={updateDraft}
-            variableModule={selectedTemplate?.variable_module}
-            variableModules={selectedVariableModules}
-            lockedModules={selectedLockedModules}
-            controlledExperimentEnabled={controlledExperimentEnabled}
-          />
+          <details className="final-card wide compat-foldout">
+            <summary>展开详细模块参数 / 兼容 Composer</summary>
+            <SingleChainComposer
+              preview={composer}
+              draft={draft}
+              onDraftChange={updateDraft}
+              variableModule={selectedTemplate?.variable_module}
+              variableModules={selectedVariableModules}
+              lockedModules={selectedLockedModules}
+              controlledExperimentEnabled={controlledExperimentEnabled}
+            />
+          </details>
           <section className="final-card wide console-section-title">
             <p className="eyebrow">6. 校验与快速验证当前方案</p>
             <h3>先校验，再运行当前配置快速验证</h3>
-            <p className="muted">快速验证通过后，可以把完整方案、负载或拓扑保存到配置库。</p>
+            <p className="muted">快速验证通过后，可以把当前方法模板保存到配置库；负载和拓扑建议在“运行实验”页选择。</p>
           </section>
           <div className="final-card-grid v3-post-workbench">
             <RunLevelPanel
@@ -774,7 +831,7 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
           </div>
           <section className="final-card wide console-section-title">
             <p className="eyebrow">7. 保存 / 加载配置</p>
-            <h3>配置库用于复用正式实验方案</h3>
+            <h3>配置库用于复用实验模板</h3>
           </section>
           <SavedConfigLibraryPanel
             configs={savedConfigs}
@@ -789,12 +846,9 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
       )}
 
       {draft && (
-        <>
-          <section className="final-card wide console-section-title">
-            <p className="eyebrow">8. 正式实验设计</p>
-            <h3>MetaTrack 正式性能实验矩阵</h3>
-            <p className="muted">这里配置正式性能实验；快速验证入口保留在“运行与结果”中。</p>
-          </section>
+        <details className="final-card wide compat-foldout">
+          <summary>正式实验旧入口 / 兼容入口</summary>
+          <p className="muted">推荐在“运行实验”页选择模板、负载、拓扑和 seed 后运行矩阵；正式 benchmark 旧入口仍保留用于兼容，调用语义不变。</p>
           <FormalMetatrackExperimentPanel
             draft={draft}
             savedConfigs={savedConfigs}
@@ -805,62 +859,61 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
             onPreview={previewFormalBenchmark}
             onRun={runFormalBenchmark}
           />
-        </>
+        </details>
       )}
-
-      <section className="final-card wide console-section-title">
-        <p className="eyebrow">9. 运行结果</p>
-        <h3>先看进度与核心指标，再展开详细数据</h3>
-      </section>
 
       <div className="final-card-grid v3-post-workbench">
         <FairnessScopePanel scope={composer?.fairness_scope || preview?.fairness_scope || {}} valid={Boolean(profilePreview.valid ?? preview?.runnable)} warnings={warnings} draft={draft} />
       </div>
 
-      <RunProgressPanel mode={progressMode} activeStep={progressStep} error={draftError || error} />
+      <details className="final-card wide compat-foldout">
+        <summary>开发者详情 / 历史运行反馈</summary>
+        <p className="muted">实验设计页默认不展示正式结果。历史快速验证、run history 和旧产物入口保留在这里；结果分析请进入“结果与产物”。</p>
+        <RunProgressPanel mode={progressMode} activeStep={progressStep} error={draftError || error} />
 
-      <section className="final-card wide v3-controlled-smoke">
-        <div className="v3-section-head">
-          <div>
-            <p className="eyebrow">受控快速验证</p>
-            <h3>MetaTrack 五组快速验证方案</h3>
-          </div>
-          <button type="button" className="v3-secondary-button" disabled={runningControlled} onClick={runControlledTrial}>
-            {runningControlled ? "运行中..." : "运行受控快速验证"}
-          </button>
-        </div>
-        <p className="muted">{controlledSmokeDescription}</p>
-        <details className="v3-foldout">
-          <summary className="v3-foldout-summary">真实性边界</summary>
-          <p className="muted">本地 Go-backed modular research chain 快速验证；不是 Fabric live、不是 EVM live、不是 BlockEmulator backend、不是真实 PBFT/HotStuff/Raft、不是完整跨片协议，也不是论文级证据。</p>
-        </details>
-        {controlledResult && (
-          <>
-            <dl className="v3-result-grid">
-              <div><dt>运行 ID</dt><dd>{controlledResult.run_id}</dd></div>
-              <div><dt>运行模式</dt><dd>受控快速验证</dd></div>
-              <div><dt>预设数量</dt><dd>{controlledResult.preset_order.length}</dd></div>
-              <div><dt>后端真实性</dt><dd>{controlledResult.realism_readiness?.backend_truth || "local Go-backed quick trial"}</dd></div>
-            </dl>
-            <div className="v3-summary-preview">
-              {controlledResult.aggregate_summary.map((row) => (
-                <div key={String(row.preset_id)}>
-                  <dt>{String(row.preset_id)}</dt>
-                  <dd>{String(row.ablation_stage || "-")} / cross {String(row.cross_shard_ratio ?? "-")} / exec {String(row.avg_execution_latency_ms ?? "-")}</dd>
-                </div>
-              ))}
+        <section className="final-card wide v3-controlled-smoke">
+          <div className="v3-section-head">
+            <div>
+              <p className="eyebrow">受控快速验证</p>
+              <h3>MetaTrack 五组快速验证方案</h3>
             </div>
-            <ArtifactGroups artifacts={controlledResult.artifacts} title="受控对照产物" expectedArtifacts={["run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"]} />
-          </>
-        )}
-      </section>
+            <button type="button" className="v3-secondary-button" disabled={runningControlled} onClick={runControlledTrial}>
+              {runningControlled ? "运行中..." : "运行受控快速验证"}
+            </button>
+          </div>
+          <p className="muted">{controlledSmokeDescription}</p>
+          <details className="v3-foldout">
+            <summary className="v3-foldout-summary">真实性边界</summary>
+            <p className="muted">本地 Go-backed modular research chain 快速验证；不是 Fabric live、不是 EVM live、不是 BlockEmulator backend、不是真实 PBFT/HotStuff/Raft、不是完整跨片协议，也不是论文级证据。</p>
+          </details>
+          {controlledResult && (
+            <>
+              <dl className="v3-result-grid">
+                <div><dt>运行 ID</dt><dd>{controlledResult.run_id}</dd></div>
+                <div><dt>运行模式</dt><dd>受控快速验证</dd></div>
+                <div><dt>预设数量</dt><dd>{controlledResult.preset_order.length}</dd></div>
+                <div><dt>后端真实性</dt><dd>{controlledResult.realism_readiness?.backend_truth || "local Go-backed quick trial"}</dd></div>
+              </dl>
+              <div className="v3-summary-preview">
+                {controlledResult.aggregate_summary.map((row) => (
+                  <div key={String(row.preset_id)}>
+                    <dt>{String(row.preset_id)}</dt>
+                    <dd>{String(row.ablation_stage || "-")} / cross {String(row.cross_shard_ratio ?? "-")} / exec {String(row.avg_execution_latency_ms ?? "-")}</dd>
+                  </div>
+                ))}
+              </div>
+              <ArtifactGroups artifacts={controlledResult.artifacts} title="受控对照产物" expectedArtifacts={["run_index.csv", "aggregate_summary.csv", "ablation_report.md", "realism_readiness.json", "realism_readiness.md"]} />
+            </>
+          )}
+        </section>
 
-      <FormalRunHistoryPanel refreshKey={formalHistoryRefreshKey} autoLoadLatest onSelectResult={showFormalResult} />
-      <div ref={formalResultRef}>
-        <FormalBenchmarkResultPanel result={formalResult} />
-      </div>
-      <DraftRunResultPanel result={draftRunResult} />
-      <DraftRunHistoryPanel />
+        <FormalRunHistoryPanel refreshKey={formalHistoryRefreshKey} autoLoadLatest onSelectResult={showFormalResult} />
+        <div ref={formalResultRef}>
+          <FormalBenchmarkResultPanel result={formalResult} />
+        </div>
+        <DraftRunResultPanel result={draftRunResult} />
+        <DraftRunHistoryPanel />
+      </details>
 
       {composer && (
         <section className="v3-supporting-sections">
@@ -886,13 +939,11 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
         </section>
       )}
 
-      <section className="final-card wide console-section-title">
-        <p className="eyebrow">10. 产物下载</p>
-        <h3>正式实验、快速验证与历史兼容产物</h3>
-        <p className="muted">优先查看 formal_* 论文数据表；历史 Draft Smoke 和 V3 兼容产物保留在折叠组内。</p>
-      </section>
-
-      <ArtifactGroups artifacts={artifacts} title="产物下载" expectedArtifacts={selectedPreset?.expected_artifacts} />
+      <details className="final-card wide compat-foldout">
+        <summary>历史产物下载 / 兼容入口</summary>
+        <p className="muted">结果与产物页负责主结果分析和下载；这里仅保留旧入口。</p>
+        <ArtifactGroups artifacts={artifacts} title="产物下载" expectedArtifacts={selectedPreset?.expected_artifacts} />
+      </details>
     </section>
   );
 }
