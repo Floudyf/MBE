@@ -12,7 +12,6 @@ import {
   type ComposerDraftModule,
   pluginOptionsForModule,
 } from "./composerDraft";
-import HelpTip from "./HelpTip";
 
 type Props = {
   module?: V3ComposerModule | null;
@@ -26,13 +25,21 @@ type Props = {
 
 const statusChoices: DraftModuleStatus[] = ["default", "fixed", "variable", "disabled"];
 
-export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, variableModule = "", variableModules = [], lockedModules = {}, controlledExperimentEnabled = false }: Props) {
+export default function ModuleDetailPanel({
+  module,
+  draft,
+  onDraftModuleChange,
+  variableModule = "",
+  variableModules = [],
+  lockedModules = {},
+  controlledExperimentEnabled = false,
+}: Props) {
   if (!module) {
     return (
       <aside className="v3-detail-panel">
-        <p className="eyebrow">模块配置</p>
-        <h3>请选择模块</h3>
-        <p>选择一个流程模块后，可以配置插件、实验变量状态和草稿参数。</p>
+        <p className="eyebrow">Module Config</p>
+        <h3>Select a module</h3>
+        <p>Choose a pipeline module to edit its plugin, role, and parameters.</p>
       </aside>
     );
   }
@@ -45,14 +52,14 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
   const plannedPlugins = pluginOptions.filter((plugin) => plugin.status === "planned");
   const currentPlugin = draftModule?.plugin || catalog.defaultPlugin;
   const currentStatus = draftModule?.status || "fixed";
-  const moduleStatusChoices: DraftModuleStatus[] = module.module_id === "MetricsReport" ? ["output"] : statusChoices;
+  const moduleStatusChoices: DraftModuleStatus[] = selectedModule.module_id === "MetricsReport" ? ["output"] : statusChoices;
   const selectedPlugin = pluginOptions.find((plugin) => plugin.id === currentPlugin);
   const lockedPlugin = lockedModules[selectedModule.module_id];
   const isVariable = selectedModule.module_id === variableModule || variableModules.includes(selectedModule.module_id);
   const isLocked = controlledExperimentEnabled && Boolean(lockedPlugin);
   const templateRole = controlledExperimentEnabled && isVariable ? "variable" : isLocked ? "locked" : "";
   const committeeEpochTopologyEnabled = selectedModule.module_id === "CommitteeEpoch" && Boolean(draft.topology.enable_committee_epoch);
-  const statusLabel = committeeEpochTopologyEnabled ? "拓扑启用" : statusLabels[currentStatus];
+  const statusLabel = committeeEpochTopologyEnabled ? "topology enabled" : statusLabels[currentStatus];
   const selectedPluginIsPreview = selectedPlugin?.status === "preview";
   const selectedPluginIsPlanned = selectedPlugin?.status === "planned";
   const visibleMessages = draft.validationMessages
@@ -73,7 +80,7 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
 
   return (
     <aside className="v3-detail-panel v3-config-panel">
-      <p className="eyebrow">模块配置</p>
+      <p className="eyebrow">Module Config</p>
       <div className="v3-config-title">
         <div>
           <h3>{catalog.label}</h3>
@@ -84,33 +91,25 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
 
       {selectedPluginIsPreview && (
         <div className="v3-warning-card">
-          当前选择的是仅预览插件，可查看配置但不能 Draft Smoke 运行。
+          Preview plugin: visible for configuration, but not guaranteed runnable in Draft Smoke.
         </div>
       )}
 
       <dl className="v3-detail-list compact">
-        <div><dt>当前插件</dt><dd title={currentPlugin}>{selectedPlugin?.label || currentPlugin}<small>{currentPlugin}</small></dd></div>
+        <div>
+          <dt>Current plugin</dt>
+          <dd title={currentPlugin}>{selectedPlugin?.label || currentPlugin}<small>{currentPlugin}</small></dd>
+        </div>
         {templateRole && (
           <div>
-            <dt>模板角色</dt>
-            <dd>{templateRole === "variable" ? "实验变量" : `模板固定：${lockedPlugin}`}</dd>
+            <dt>Template role</dt>
+            <dd>{templateRole === "variable" ? "experiment variable" : `locked: ${lockedPlugin}`}</dd>
           </div>
         )}
       </dl>
 
       <section className="v3-config-section">
-        <h4>编辑状态</h4>
-        <p>{editStateMessage(selectedModule.module_id, controlledExperimentEnabled, isLocked, isVariable, selectedPluginIsPlanned, committeeEpochTopologyEnabled)}</p>
-      </section>
-
-      <section className="v3-config-section">
-        <h4>模块说明 <HelpTip title={catalog.label}>{moduleHint(selectedModule.module_id)}</HelpTip></h4>
-        <p>{catalog.description}</p>
-        <p className="muted">{boundaryHint(selectedModule.module_id)}</p>
-      </section>
-
-      <section className="v3-config-section">
-        <h4>模块状态</h4>
+        <h4>Status</h4>
         <div className="v3-radio-list">
           {moduleStatusChoices.map((status) => {
             const disabled = isLocked || statusDisabled(selectedModule.module_id, status);
@@ -122,33 +121,21 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
             );
           })}
         </div>
-        {requiredModuleIds.has(selectedModule.module_id) && selectedModule.module_id !== "MetricsReport" && <p className="muted">必需模块不能关闭；模板固定项不能在当前模板中改为实验变量。</p>}
       </section>
 
       <section className="v3-config-section">
-        <h4>插件选择 <HelpTip title="插件选择">主列表只显示可运行或有展示意义的预览项；规划中插件折叠在下方，不干扰本轮试运行。</HelpTip></h4>
+        <h4>Plugin</h4>
         <PluginList plugins={primaryPlugins} currentPlugin={currentPlugin} locked={isLocked} onChange={changePlugin} />
         {plannedPlugins.length > 0 && (
-          <details className="v3-foldout">
-            <summary className="v3-foldout-summary">规划中插件</summary>
+          <details className="v3-foldout compact-foldout">
+            <summary className="v3-foldout-summary">Planned plugins</summary>
             <PluginList plugins={plannedPlugins} currentPlugin={currentPlugin} locked onChange={changePlugin} />
           </details>
         )}
       </section>
 
       <section className="v3-config-section">
-        <h4>模块操作</h4>
-        <div className="module-action-row">
-          <button type="button" className="v3-secondary-button" onClick={() => onDraftModuleChange(selectedModule.module_id, { status: currentStatus, plugin: currentPlugin, params: draftModule?.params || {} })}>应用配置</button>
-          <button type="button" className="ghost-button" onClick={() => onDraftModuleChange(selectedModule.module_id, { status: defaultStatusForModule(selectedModule.module_id), plugin: catalog.defaultPlugin, params: Object.fromEntries((catalog.params || []).map((param) => [param, ""])) })}>恢复默认</button>
-          <button type="button" className="ghost-button" disabled={statusDisabled(selectedModule.module_id, "variable") || isLocked} onClick={() => onDraftModuleChange(selectedModule.module_id, { status: "variable" })}>标记为实验变量</button>
-          <button type="button" className="ghost-button" disabled={statusDisabled(selectedModule.module_id, "disabled") || isLocked} onClick={() => onDraftModuleChange(selectedModule.module_id, { status: "disabled" })}>禁用模块</button>
-        </div>
-        <p className="muted">插件、状态和参数会即时写回当前 Composer Draft；快速验证和保存模板使用最新 Draft。</p>
-      </section>
-
-      <details className="v3-config-section v3-foldout">
-        <summary className="v3-foldout-summary">参数配置</summary>
+        <h4>Parameters</h4>
         {(catalog.params && catalog.params.length > 0) ? (
           <div className="v3-param-grid">
             {catalog.params.map((param) => (
@@ -159,16 +146,33 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
             ))}
           </div>
         ) : (
-          <p className="muted">该模块当前没有前端参数占位。</p>
+          <p className="muted">This module has no frontend parameter fields yet.</p>
         )}
-      </details>
+      </section>
 
       <section className="v3-config-section">
-        <h4>草稿校验</h4>
+        <h4>Actions</h4>
+        <div className="module-action-row primary-actions">
+          <button type="button" className="v3-secondary-button" onClick={() => onDraftModuleChange(selectedModule.module_id, { status: currentStatus, plugin: currentPlugin, params: draftModule?.params || {} })}>Apply config</button>
+          <button type="button" className="ghost-button" onClick={() => onDraftModuleChange(selectedModule.module_id, { status: defaultStatusForModule(selectedModule.module_id), plugin: catalog.defaultPlugin, params: Object.fromEntries((catalog.params || []).map((param) => [param, ""])) })}>Restore default</button>
+        </div>
+      </section>
+
+      <details className="v3-config-section v3-foldout compact-foldout">
+        <summary className="v3-foldout-summary">Guidance and validation</summary>
+        <p>{catalog.description}</p>
+        <p>{editStateMessage(selectedModule.module_id, controlledExperimentEnabled, isLocked, isVariable, selectedPluginIsPlanned, committeeEpochTopologyEnabled)}</p>
+        <p className="muted">{moduleHint(selectedModule.module_id)}</p>
+        <p className="muted">{boundaryHint(selectedModule.module_id)}</p>
+        {requiredModuleIds.has(selectedModule.module_id) && selectedModule.module_id !== "MetricsReport" && <p className="muted">Required modules cannot be disabled.</p>}
+        <div className="module-action-row">
+          <button type="button" className="ghost-button" disabled={statusDisabled(selectedModule.module_id, "variable") || isLocked} onClick={() => onDraftModuleChange(selectedModule.module_id, { status: "variable" })}>Mark variable</button>
+          <button type="button" className="ghost-button" disabled={statusDisabled(selectedModule.module_id, "disabled") || isLocked} onClick={() => onDraftModuleChange(selectedModule.module_id, { status: "disabled" })}>Disable module</button>
+        </div>
         <ul className="v3-check-list compact">
           {(visibleMessages.length ? visibleMessages : draft.validationMessages.slice(0, 3)).map((message) => <li key={message}>{message}</li>)}
         </ul>
-      </section>
+      </details>
     </aside>
   );
 }
@@ -205,9 +209,9 @@ function dedupePlugins(plugins: DraftPluginOption[]): DraftPluginOption[] {
 }
 
 function pluginAvailabilityText(status: DraftPluginOption["status"]): string {
-  if (status === "runnable") return "可运行";
-  if (status === "preview") return "仅预览，不能运行";
-  return "规划中，不能运行";
+  if (status === "runnable") return "runnable";
+  if (status === "preview") return "preview only";
+  return "planned";
 }
 
 function editStateMessage(
@@ -218,34 +222,34 @@ function editStateMessage(
   selectedPluginIsPlanned: boolean,
   committeeEpochTopologyEnabled: boolean,
 ): string {
-  if (moduleId === "MetricsReport") return "指标 / 报告是输出模块，不能作为实验变量。";
-  if (selectedPluginIsPlanned) return "规划中模块仅展示路线，不参与运行。";
+  if (moduleId === "MetricsReport") return "MetricsReport is an output module and is not used as an experiment variable.";
+  if (selectedPluginIsPlanned) return "Planned plugins are shown for roadmap clarity and cannot be run.";
   if (moduleId === "CommitteeEpoch") {
     return committeeEpochTopologyEnabled
-      ? "CommitteeEpoch 由实验配置中的启用委员会 / Epoch 开关控制，当前为拓扑启用，不通过插件列表切换。"
-      : "CommitteeEpoch 由实验配置中的启用委员会 / Epoch 开关控制，当前已关闭，不作为普通实验变量。";
+      ? "CommitteeEpoch is enabled through topology compatibility settings."
+      : "CommitteeEpoch is disabled by default and is not a normal method variable.";
   }
-  if (!controlledExperimentEnabled) return "当前为自由配置模式。该模块可在可运行插件之间切换；规划中插件不可运行。";
-  if (isLocked) return "当前为受控对照模式。该模块由模板固定，用于保证公平对照。关闭受控对照模式后可自由修改。";
-  if (isVariable) return "当前模块是受控实验变量，可以在可运行插件之间切换。";
-  return "当前为受控对照模式。未锁定的可运行插件仍可按当前模板规则调整。";
+  if (!controlledExperimentEnabled) return "Free configuration mode: choose among runnable or preview plugin options.";
+  if (isLocked) return "Controlled comparison mode: this module is locked by the selected template.";
+  if (isVariable) return "This module is a controlled experiment variable.";
+  return "This module remains editable unless locked by the selected template.";
 }
 
 function moduleHint(moduleId: string): string {
-  if (moduleId === "Routing") return "跨片协议是 Routing/Sharding 的子能力，不新增主流程卡片。";
-  if (moduleId === "StateAccess") return "状态证明和 witness 是 MVP 产物，不是完整无状态执行。";
-  if (moduleId === "StateStorage") return "状态后端通过运行拓扑面板选择，Ethereum MPT 仍是规划项。";
-  if (moduleId === "Consensus") return "PBFT 网络预览是可选 runtime，不是唯一共识，也不是生产 PBFT。";
-  if (moduleId === "MetricsReport") return "Benchmark 属于实验控制 / 结果层，不是新的主流程模块。";
-  return "当前模块用于本地 V3 快速验证和受控实验配置。";
+  if (moduleId === "Routing") return "Routing owns sharding/routing policy selection; workload and topology stay on the Run Experiment page.";
+  if (moduleId === "StateAccess") return "State proof and witness views are MVP artifacts, not full stateless execution.";
+  if (moduleId === "StateStorage") return "State backend compatibility remains local emulator scope.";
+  if (moduleId === "Consensus") return "Consensus options remain V3/V4 emulator semantics, not production PBFT.";
+  if (moduleId === "MetricsReport") return "MetricsReport controls output reporting behavior.";
+  return "This module configures the reusable method template.";
 }
 
 function boundaryHint(moduleId: string): string {
-  if (moduleId === "Routing") return "不实现完整 Relay / Broker / 2PC，不声称原子跨片提交。";
-  if (moduleId === "Commit") return "不实现真实 DB 锁、回滚或跨片原子验证提交。";
-  if (moduleId === "StateAccess" || moduleId === "StateStorage") return "Proof / Witness 为 MVP，Merkle/MPT-like root 为 MVP；非 Ethereum MPT，非完整无状态执行。";
-  if (moduleId === "Consensus") return "不声称 real PBFT、HotStuff、Raft 或生产网络。";
-  return "V3.11 增加本地 Relay MVP 观测闭环，但不代表生产级跨片协议。";
+  if (moduleId === "Routing") return "Does not claim complete Relay/Broker/2PC atomic cross-shard commit.";
+  if (moduleId === "Commit") return "Does not claim production DB locking, rollback, or atomic cross-shard validation.";
+  if (moduleId === "StateAccess" || moduleId === "StateStorage") return "Merkle/MPT-like roots remain MVP scope, not Ethereum-compatible MPT.";
+  if (moduleId === "Consensus") return "Does not claim production PBFT, HotStuff, Raft, or Byzantine security.";
+  return "V3 remains a local emulator and formal experiment console baseline.";
 }
 
 function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {

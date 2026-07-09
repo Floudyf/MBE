@@ -552,3 +552,25 @@ Boundary rules:
 - Do not change `/api/v4/realism/*`.
 - Do not change formal benchmark runner semantics.
 - Do not push.
+
+## 19. V4.3.5.3 Workbench Sidebar and Layout Polish
+
+V4.3.5.3 is a visual/layout polish stage for the Experiment Design workbench. It must preserve the V4.3.5.2 editing model.
+
+Workbench layout rules:
+
+- The Experiment Design sidebar must not show all saved templates by default.
+- Saved templates should default to a small recent list, ideally 3 to 5 items.
+- Full template lists must live in a `details`, drawer, modal, or other collapsed management area.
+- The center method pipeline must remain the visual main area.
+- The action bar must not float over or obscure the method pipeline.
+- The right module configuration panel should show core configuration first; long explanations, detailed notes, validation details, and debug-like material should be folded by default.
+- Do not break module card clicks, plugin selection, parameter editing, or Composer Draft writeback while polishing the layout.
+
+Boundary rules:
+
+- Workload, nodes, shards, seed, and transaction scale must not return to the Experiment Design main flow.
+- Do not modify `executor/`.
+- Do not change `/api/v4/realism/*`.
+- Do not change formal benchmark runner semantics.
+- Do not push.

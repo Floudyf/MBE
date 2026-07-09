@@ -30,10 +30,10 @@ export default function ComposerActionBar({
         <small>{validationStatus} / {dirtyState}</small>
       </div>
       <div className="button-row">
-        <button type="button" onClick={onQuickValidate} disabled={quickValidating}>{quickValidating ? "验证中..." : "快速验证当前模板"}</button>
-        <button type="button" className="v3-secondary-button" onClick={onSaveDraft} disabled={savingDisabled}>保存草稿模板</button>
-        <button type="button" className="v3-secondary-button" onClick={onSaveRunnable} disabled={runnableSaveDisabled}>保存为可运行模板</button>
-        <button type="button" onClick={onNext}>下一步：运行实验</button>
+        <button type="button" onClick={onQuickValidate} disabled={quickValidating}>{quickValidating ? "Validating..." : "Quick validate"}</button>
+        <button type="button" className="v3-secondary-button" onClick={onSaveDraft} disabled={savingDisabled}>Save draft</button>
+        <button type="button" className="v3-secondary-button" onClick={onSaveRunnable} disabled={runnableSaveDisabled}>Save runnable</button>
+        <button type="button" onClick={onNext}>Next: run experiment</button>
       </div>
     </section>
   );

@@ -124,3 +124,15 @@ Method template modules belong to the Experiment Design page:
 The Formal benchmark entrance remains available for compatibility, but it is not part of the default method-template design flow. Historical run results and artifacts should not appear in the default Experiment Design viewport.
 
 The Composer must remain editable: module cards must be clickable, plugin and parameter edits must update the real Composer Draft state, and validation/saving must use that updated draft.
+
+## V4.3.5.3 Workbench Sidebar and Layout Polish
+
+V4.3.5.2 restored the interactive workbench, but the default sidebar still exposed too many template sources at once. Catalog presets, Composer templates, saved templates, and creation buttons competed with the pipeline canvas and made the page feel like an internal debug console.
+
+The Experiment Design page sidebar should now show only the current template, a compact role selector, and a small recent-template list by default. Full catalog presets, Composer templates, and saved templates belong in a closed management area such as `details`, drawer, or modal. The default saved-template list should show only a few recent templates.
+
+The center method pipeline must receive the most visual space. The sidebar should be narrow and scroll internally when needed, while the right configuration panel should show core controls first and fold longer descriptions, plugin notes, validation notes, and debug-style guidance.
+
+The action bar must not float over the method pipeline. It may be sticky only when it does not obscure content; otherwise it should behave as a normal workbench footer/card below the three-column layout.
+
+This polish round keeps the same functional boundaries: workload, nodes, shards, seed, and transaction scale remain on the Run Experiment page; the design page remains focused on method modules and must not lose module click, plugin selection, or parameter writeback behavior.
