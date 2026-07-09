@@ -531,3 +531,24 @@ Truth and boundary rules:
 - Do not change `/api/v4/realism/*`.
 - Do not change formal benchmark runner semantics.
 - Do not push.
+
+## 18. V4.3.5.2 Experiment Design Workbench Declutter
+
+V4.3.5.2 turns the Experiment Design page into a focused method-template workbench.
+
+Workbench rules:
+
+- The Experiment Design page must use a workbench structure: template sidebar, method pipeline canvas, module configuration panel, action bar, and collapsed advanced compatibility area.
+- The default viewport may only serve method template design.
+- Old entrances, Formal benchmark compatibility, Draft details, historical runs, artifacts, and developer/debug areas must be folded into "Advanced and Compatibility".
+- Do not downgrade the Composer to a static summary.
+- Module cards must be clickable and must change the active module.
+- Module plugin and parameter configuration must write back to the real Composer Draft state.
+- Workload, nodes, shards, seed, and transaction scale must not return to the Experiment Design main flow.
+
+Boundary rules:
+
+- Do not modify `executor/`.
+- Do not change `/api/v4/realism/*`.
+- Do not change formal benchmark runner semantics.
+- Do not push.

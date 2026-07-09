@@ -85,3 +85,42 @@ The visualization label should stay explicit:
 ```text
 Stage statistics view; the current version is rendered from run summaries and log counts, not from a real-time per-transaction event stream.
 ```
+
+## V4.3.5.2 Experiment Design Workbench Declutter
+
+### A. Why This Change Is Needed
+
+After V4.3.5, the Experiment Design page still remains too long. It still exposes old entrances, compatibility controls, Draft details, Formal benchmark controls, historical runs, and artifacts close to the main design path.
+
+Users designing experiments need a method template designer, not a list of every available platform feature. After separating method templates from experiment conditions, the design page should focus on module mechanism configuration.
+
+### B. New Page Structure
+
+The Experiment Design page should default to a workbench layout:
+
+- left template sidebar for the current template, template role, validation state, default catalog presets, and saved templates;
+- center method pipeline canvas for clickable method modules;
+- right module configuration panel for plugin and parameter editing;
+- bottom sticky action bar for quick validation, saving draft/runnable templates, and moving to Run Experiment;
+- one bottom "Advanced and Compatibility" area, collapsed by default.
+
+### C. Functional Boundary
+
+Workload, nodes, shards, seed, and transaction scale belong to the Run Experiment page.
+
+Method template modules belong to the Experiment Design page:
+
+- TxPool;
+- BlockProducer;
+- Consensus;
+- CommitteeEpoch;
+- Routing;
+- Execution;
+- StateAccess;
+- StateStorage;
+- Commit;
+- MetricsReport.
+
+The Formal benchmark entrance remains available for compatibility, but it is not part of the default method-template design flow. Historical run results and artifacts should not appear in the default Experiment Design viewport.
+
+The Composer must remain editable: module cards must be clickable, plugin and parameter edits must update the real Composer Draft state, and validation/saving must use that updated draft.

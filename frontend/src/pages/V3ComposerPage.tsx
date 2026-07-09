@@ -48,6 +48,8 @@ import SavedConfigLibraryPanel from "../components/v3/SavedConfigLibraryPanel";
 import SingleChainComposer from "../components/v3/SingleChainComposer";
 import { createComposerDraft, summarizeDraft, toComposerDraftRequest, updateDraftTopology, type ComposerDraft } from "../components/v3/composerDraft";
 import { labelFor, profileLabels, templateLabels, yesNo } from "../components/v3/localization";
+import ComposerActionBar from "../components/experiment/ComposerActionBar";
+import MethodPipelineWorkbench from "../components/experiment/MethodPipelineWorkbench";
 
 const fallbackStageMetadata = {
   currentStage: "V3-final Fault, Observability, and Reproducibility Closure",
@@ -429,6 +431,18 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
     }
   }
 
+  async function saveDraftTemplate() {
+    await saveCurrentConfig("method", templateName || "Untitled method template", templateDescription || "Draft method template.", [templateRole, "draft"]);
+  }
+
+  async function saveRunnableTemplate() {
+    if (!backendValidation?.is_runnable) {
+      setSavedConfigError("保存为可运行模板前需要先通过快速验证 / 后端校验。");
+      return;
+    }
+    await saveCurrentConfig("method", templateName || "Runnable method template", templateDescription || "Runnable method template.", [templateRole, "runnable"]);
+  }
+
   async function copySavedConfig(config: V3SavedConfig) {
     try {
       await createV3SavedConfig({
@@ -567,19 +581,56 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
         <div>
           <p className="eyebrow">实验设计</p>
           <h2>实验设计</h2>
-          <p>设计可复用的区块链实验方法模板；负载、节点数、分片数和 seed 在“运行实验”页选择。</p>
+          <p>设计可复用的方法模板；负载、节点数、分片数、seed 和交易规模在“运行实验”页选择。</p>
           <p className="muted">当前阶段：{stageLabel}</p>
-          <p>{`运行能力：${latestRuntimeLabel}。`} <HelpTip title="真实性边界">V3-final 是本地 emulator 闭环：确定性故障注入、观测摘要和复现 bundle；不是多服务器部署、生产集群、生产共识网络或论文级性能结论。</HelpTip></p>
         </div>
         <div className="v3-boundary-badges">
-          <span>方法模板</span>
-          <span>11 模块流水线</span>
-          <span>负载在运行页选择</span>
-          <span>拓扑在运行页选择</span>
+          <span>{backendValidation?.is_runnable ? "verified" : backendValidation?.is_valid ? "valid draft" : "draft"}</span>
+          <span>{templateRole}</span>
           <span>V3-final closure</span>
         </div>
         <button type="button" className="v3-secondary-button" onClick={onNextToRunExperiment}>下一步：运行实验</button>
       </header>
+
+      {composer && draft ? (
+        <MethodPipelineWorkbench
+          preview={composer}
+          draft={draft}
+          onDraftChange={updateDraft}
+          templates={templates}
+          savedConfigs={savedConfigs}
+          templateName={templateName}
+          templateRole={templateRole}
+          templateDescription={templateDescription}
+          validation={backendValidation}
+          selectedPresetId={selectedPreset?.preset_id}
+          onTemplateNameChange={setTemplateName}
+          onTemplateRoleChange={setTemplateRole}
+          onTemplateDescriptionChange={setTemplateDescription}
+          onSelectTemplate={selectExperimentTemplate}
+          onLoadSavedConfig={loadSavedConfig}
+        />
+      ) : (
+        <p className="notice">正在加载方法模板工作台...</p>
+      )}
+
+      <ComposerActionBar
+        templateName={templateName}
+        validationStatus={backendValidation?.is_runnable ? "verified" : backendValidation?.is_valid ? "valid draft" : "draft"}
+        dirtyState={currentMethodName ? `已保存：${currentMethodName}` : "未保存"}
+        quickValidating={runningDraft || validatingDraft}
+        savingDisabled={!draft}
+        runnableSaveDisabled={!draft || !backendValidation?.is_runnable}
+        onQuickValidate={runDraftTrial}
+        onSaveDraft={() => { void saveDraftTemplate(); }}
+        onSaveRunnable={() => { void saveRunnableTemplate(); }}
+        onNext={() => onNextToRunExperiment?.()}
+      />
+
+      <details className="advanced-compat-panel final-card wide">
+        <summary>高级与兼容入口</summary>
+        <p className="muted">Formal benchmark、旧 Composer / Draft 详情、历史运行、artifacts 与开发者入口保留在这里；默认不干扰方法模板设计。</p>
+        <div className="advanced-compat-grid">
 
       <section className="final-card wide">
         <p className="eyebrow">Template Basics</p>
@@ -943,6 +994,8 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
         <summary>历史产物下载 / 兼容入口</summary>
         <p className="muted">结果与产物页负责主结果分析和下载；这里仅保留旧入口。</p>
         <ArtifactGroups artifacts={artifacts} title="产物下载" expectedArtifacts={selectedPreset?.expected_artifacts} />
+      </details>
+        </div>
       </details>
     </section>
   );

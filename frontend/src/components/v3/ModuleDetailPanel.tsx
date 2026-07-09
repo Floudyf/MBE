@@ -136,6 +136,17 @@ export default function ModuleDetailPanel({ module, draft, onDraftModuleChange, 
         )}
       </section>
 
+      <section className="v3-config-section">
+        <h4>模块操作</h4>
+        <div className="module-action-row">
+          <button type="button" className="v3-secondary-button" onClick={() => onDraftModuleChange(selectedModule.module_id, { status: currentStatus, plugin: currentPlugin, params: draftModule?.params || {} })}>应用配置</button>
+          <button type="button" className="ghost-button" onClick={() => onDraftModuleChange(selectedModule.module_id, { status: defaultStatusForModule(selectedModule.module_id), plugin: catalog.defaultPlugin, params: Object.fromEntries((catalog.params || []).map((param) => [param, ""])) })}>恢复默认</button>
+          <button type="button" className="ghost-button" disabled={statusDisabled(selectedModule.module_id, "variable") || isLocked} onClick={() => onDraftModuleChange(selectedModule.module_id, { status: "variable" })}>标记为实验变量</button>
+          <button type="button" className="ghost-button" disabled={statusDisabled(selectedModule.module_id, "disabled") || isLocked} onClick={() => onDraftModuleChange(selectedModule.module_id, { status: "disabled" })}>禁用模块</button>
+        </div>
+        <p className="muted">插件、状态和参数会即时写回当前 Composer Draft；快速验证和保存模板使用最新 Draft。</p>
+      </section>
+
       <details className="v3-config-section v3-foldout">
         <summary className="v3-foldout-summary">参数配置</summary>
         {(catalog.params && catalog.params.length > 0) ? (
@@ -242,4 +253,10 @@ function statusDisabled(moduleId: string, status: DraftModuleStatus): boolean {
   if (requiredModuleIds.has(moduleId) && status === "disabled") return true;
   if (moduleId === "CommitteeEpoch" && status === "variable") return true;
   return false;
+}
+
+function defaultStatusForModule(moduleId: string): DraftModuleStatus {
+  if (moduleId === "MetricsReport") return "output";
+  if (moduleId === "CommitteeEpoch") return "disabled";
+  return "fixed";
 }

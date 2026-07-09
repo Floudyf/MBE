@@ -2365,6 +2365,231 @@ details summary {
   padding: 0.55rem 0.8rem;
 }
 
+.composer-workbench {
+  align-items: start;
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: 220px minmax(0, 1fr) minmax(320px, 360px);
+}
+
+.template-sidebar,
+.method-canvas,
+.module-config-panel,
+.composer-action-bar,
+.advanced-compat-panel {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  min-width: 0;
+  padding: 1rem;
+}
+
+.template-sidebar {
+  display: grid;
+  gap: 0.75rem;
+  position: sticky;
+  top: 1rem;
+}
+
+.template-sidebar h3,
+.template-sidebar h4,
+.method-canvas h3,
+.method-canvas h4 {
+  margin: 0;
+}
+
+.template-sidebar textarea,
+.final-card textarea {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  font: inherit;
+  min-width: 0;
+  padding: 0.65rem 0.7rem;
+  resize: vertical;
+}
+
+.template-status-card,
+.template-role-help {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.7rem;
+}
+
+.template-status-card small,
+.template-role-help p {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.template-list-block {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.7rem;
+}
+
+.template-list-row {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: none;
+  color: var(--ink);
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.55rem;
+  text-align: left;
+}
+
+.template-list-row:hover,
+.template-list-row.active {
+  border-color: rgba(37, 99, 235, 0.45);
+  box-shadow: inset 3px 0 0 var(--blue);
+  filter: none;
+  transform: none;
+}
+
+.template-list-row small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.method-canvas {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.method-canvas-head {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.pipeline-stage-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pipeline-stage {
+  background: #f8fbff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem;
+}
+
+.module-node-card {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: none;
+  color: var(--ink);
+  display: grid;
+  gap: 0.3rem;
+  min-height: 122px;
+  padding: 0.75rem;
+  text-align: left;
+}
+
+.module-node-card.core {
+  border-left: 4px solid var(--blue);
+}
+
+.module-node-card.support {
+  border-left: 4px solid #94a3b8;
+}
+
+.module-node-card.active {
+  border-color: rgba(37, 99, 235, 0.66);
+  box-shadow: 0 14px 28px rgba(37, 99, 235, 0.13);
+}
+
+.module-node-card:hover {
+  filter: none;
+  transform: translateY(-1px);
+}
+
+.module-node-card code,
+.module-node-card small {
+  overflow-wrap: anywhere;
+}
+
+.module-node-card code {
+  color: var(--blue);
+  font-size: 0.82rem;
+}
+
+.module-node-card em {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.module-config-panel {
+  padding: 0;
+  position: sticky;
+  top: 1rem;
+}
+
+.module-config-panel .v3-detail-panel {
+  border: 0;
+  border-radius: 14px;
+  box-shadow: none;
+  height: 100%;
+}
+
+.module-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.module-action-row button {
+  border-radius: 10px;
+  padding: 0.52rem 0.68rem;
+}
+
+.composer-action-bar {
+  align-items: center;
+  bottom: 0.75rem;
+  display: flex;
+  gap: 0.9rem;
+  justify-content: space-between;
+  position: sticky;
+  z-index: 12;
+}
+
+.composer-action-bar small {
+  color: var(--muted);
+  display: block;
+  margin-top: 0.16rem;
+}
+
+.advanced-compat-panel {
+  display: block;
+}
+
+.advanced-compat-panel > summary {
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.advanced-compat-grid {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 0.8rem;
+}
+
 @media (max-width: 760px) {
   .v3-run-history-row,
   .v3-data-file-list li {
@@ -2374,5 +2599,25 @@ details summary {
   .method-template-grid,
   .result-bar-row {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1120px) {
+  .composer-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .template-sidebar,
+  .module-config-panel {
+    position: static;
+  }
+
+  .pipeline-stage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .composer-action-bar {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
