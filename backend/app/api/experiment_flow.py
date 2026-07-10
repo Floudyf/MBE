@@ -24,8 +24,8 @@ def experiment_flow_workloads() -> dict:
 
 
 @router.get("/methods")
-def experiment_flow_methods() -> dict:
-    return {"items": experiment_flow_service.list_default_methods()}
+def experiment_flow_methods(include_saved: bool = True) -> dict:
+    return {"items": experiment_flow_service.list_methods(include_saved=include_saved)}
 
 
 @router.get("/recommended-run")

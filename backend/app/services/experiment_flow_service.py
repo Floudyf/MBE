@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from backend.app.models.experiment_flow import (
     ChildRunResult,
+    ExperimentConditions,
     ExperimentMatrixRow,
     ExperimentMethod,
     ExperimentProfile,
@@ -21,6 +22,7 @@ from backend.app.models.experiment_flow import (
 from backend.app.models.v4_realism import V4RealismSmokeRequest
 from backend.app.services import v4_realism_runner
 from backend.app.services.v3_controlled_smoke_runner import ControlledSmokeError, run_v3_4_10_controlled_smoke
+from backend.app.services.v3_saved_config_store import SavedConfigNotFound, get_saved_config, list_saved_configs
 
 
 PROFILES = {
@@ -257,6 +259,15 @@ def list_default_methods() -> list[ExperimentMethod]:
     return list(METHODS.values())
 
 
+def list_methods(include_saved: bool = True) -> list[ExperimentMethod]:
+    methods = list_default_methods()
+    if not include_saved:
+        return methods
+    for config in list_saved_configs("method"):
+        methods.append(_saved_config_to_experiment_method(config))
+    return methods
+
+
 def recommended_run() -> ExperimentRunPlanPreview:
     profile = PROFILES["v4_3_realism_default"]
     return preview_run_plan(
@@ -317,9 +328,10 @@ def preview_run_matrix(request: ExperimentSuiteRequest) -> ExperimentRunMatrixPr
     suite_types = request.selected_suite_types or ["quick_validation"]
     method_ids = request.selected_method_ids or ["metatrack_full"]
     workload_ids = request.workload_ids or ["small_test"]
-    topology_ids = request.topology_ids or ["local_8_nodes_2_shards"]
     seeds = request.seeds or [1]
     methods = [_method(method_id) for method_id in method_ids]
+    topologies = _matrix_topologies(request)
+    repeat_count = request.conditions.repeat_count if request.conditions else 1
     warnings: list[str] = []
     rows: list[ExperimentMatrixRow] = []
 
@@ -327,26 +339,38 @@ def preview_run_matrix(request: ExperimentSuiteRequest) -> ExperimentRunMatrixPr
         for method in methods:
             for workload_id in workload_ids:
                 workload = _workload(workload_id)
-                for topology_id in topology_ids:
-                    topology = _topology(topology_id)
+                for topology_mode, topology in topologies:
                     for seed in seeds:
-                        row_warnings = _matrix_row_warnings(workload, topology, request.blockemulator_csv)
-                        runnable = method.runnable and topology.runnable and not any(_warning_blocks_run(item) for item in row_warnings)
-                        runtime_target = "v4.3" if suite_type == "v4_realism_validation" else "v3-formal-preview"
-                        rows.append(
-                            ExperimentMatrixRow(
-                                row_id=f"{suite_type}:{method.method_id}:{workload.workload_id}:{topology.topology_id}:seed{seed}",
-                                suite_type=suite_type,
-                                method_id=method.method_id,
-                                method_role=method.role,
-                                workload_id=workload.workload_id,
-                                topology_id=topology.topology_id,
-                                seed=seed,
-                                runtime_target=runtime_target,
-                                runnable=runnable,
-                                warnings=row_warnings,
+                        for repeat_index in range(1, repeat_count + 1):
+                            row_warnings = _matrix_row_warnings(workload, topology, request.blockemulator_csv)
+                            row_warnings.extend(_method_warnings(method))
+                            runnable = method.runnable and method.previewable and topology.runnable and not any(_warning_blocks_run(item) for item in row_warnings)
+                            runtime_target = "v4.3" if suite_type == "v4_realism_validation" else "v3-formal-preview"
+                            tx_count = request.conditions.tx_count if request.conditions else workload.default_tx_count
+                            rows.append(
+                                ExperimentMatrixRow(
+                                    row_id=f"{suite_type}:{method.method_id}:{workload.workload_id}:{topology.topology_id}:seed{seed}:repeat{repeat_index}",
+                                    suite_type=suite_type,
+                                    method_id=method.method_id,
+                                    method_role=method.role,
+                                    config_source=method.config_source,
+                                    method_config_id=method.config_id,
+                                    resolved_method_name=method.label,
+                                    validation_status=method.validation_status,
+                                    workload_id=workload.workload_id,
+                                    topology_id=topology.topology_id,
+                                    topology_mode=topology_mode,
+                                    nodes=topology.nodes,
+                                    shards=topology.shards,
+                                    validators_per_shard=topology.validators_per_shard,
+                                    tx_count=tx_count,
+                                    seed=seed,
+                                    repeat_index=repeat_index,
+                                    runtime_target=runtime_target,
+                                    runnable=runnable,
+                                    warnings=row_warnings,
+                                )
                             )
-                        )
 
     for row in rows:
         for warning in row.warnings:
@@ -359,7 +383,13 @@ def preview_run_matrix(request: ExperimentSuiteRequest) -> ExperimentRunMatrixPr
             "method_id": row.method_id,
             "workload_id": row.workload_id,
             "topology_id": row.topology_id,
+            "topology_mode": row.topology_mode,
+            "nodes": row.nodes,
+            "shards": row.shards,
+            "validators_per_shard": row.validators_per_shard,
+            "tx_count": row.tx_count,
             "seed": row.seed,
+            "repeat_index": row.repeat_index,
         }
         for row in rows
         if row.suite_type == "v4_realism_validation" and row.runnable
@@ -381,7 +411,6 @@ def preview_run_matrix(request: ExperimentSuiteRequest) -> ExperimentRunMatrixPr
 
 def derive_v4_realism_request(request: ExperimentSuiteRequest) -> V4DerivedRequestPreview:
     workload_ids = request.workload_ids or ["small_test"]
-    topology_ids = request.topology_ids or ["local_8_nodes_2_shards"]
     warnings: list[str] = []
     selected_workload: ExperimentWorkload | None = None
     selected_topology: ExperimentTopology | None = None
@@ -397,8 +426,7 @@ def derive_v4_realism_request(request: ExperimentSuiteRequest) -> V4DerivedReque
         selected_workload = workload
         break
 
-    for topology_id in topology_ids:
-        topology = _topology(topology_id)
+    for _, topology in _matrix_topologies(request):
         if topology.shards > topology.nodes:
             warnings.append(f"{topology.topology_id}: shard count cannot exceed node count.")
             continue
@@ -417,10 +445,27 @@ def derive_v4_realism_request(request: ExperimentSuiteRequest) -> V4DerivedReque
     if not runnable and not warnings:
         warnings.append("No runnable topology/workload combination could be derived.")
 
+    requested_tx_count = request.conditions.tx_count if request.conditions else selected_workload.default_tx_count
+    v4_nodes = selected_topology.nodes
+    v4_shards = selected_topology.shards
+    v4_tx_count = requested_tx_count
+    if not 4 <= v4_nodes <= 8:
+        warnings.append(f"custom nodes={v4_nodes} is outside V4 realism request range 4..8; matrix preview remains available, but V4 derivation is blocked.")
+        runnable = False
+        v4_nodes = min(max(v4_nodes, 4), 8)
+    if not 1 <= v4_shards <= 4:
+        warnings.append(f"custom shards={v4_shards} is outside V4 realism request range 1..4; V4 derivation is blocked.")
+        runnable = False
+        v4_shards = min(max(v4_shards, 1), 4)
+    if not 1 <= v4_tx_count <= 100:
+        warnings.append(f"tx_count={v4_tx_count} is outside V4 realism request range 1..100; matrix preview remains available, but V4 derivation is blocked.")
+        runnable = False
+        v4_tx_count = min(max(v4_tx_count, 1), 100)
+
     v4_request = V4RealismSmokeRequest(
-        nodes=selected_topology.nodes,
-        shards=selected_topology.shards,
-        tx_count=selected_workload.default_tx_count,
+        nodes=v4_nodes,
+        shards=v4_shards,
+        tx_count=v4_tx_count,
         enable_cross_shard=True,
         enable_faults=True,
         fault_profile="mixed_light",
@@ -505,10 +550,86 @@ def _workload(workload_id: str) -> ExperimentWorkload:
 
 
 def _method(method_id: str) -> ExperimentMethod:
-    try:
+    if method_id in METHODS:
         return METHODS[method_id]
-    except KeyError as exc:
-        raise ValueError(f"unknown method_id: {method_id}") from exc
+    if method_id.startswith("v3cfg_"):
+        try:
+            config = get_saved_config(method_id)
+        except SavedConfigNotFound as exc:
+            raise ValueError(f"unknown method_id: {method_id}") from exc
+        if config.get("config_kind") != "method":
+            raise ValueError(f"saved config is not a method: {method_id}")
+        return _saved_config_to_experiment_method(config)
+    raise ValueError(f"unknown method_id: {method_id}")
+
+
+def _saved_config_to_experiment_method(config: dict) -> ExperimentMethod:
+    validation_status = str(config.get("validation_status") or "unknown")
+    payload = config.get("payload") if isinstance(config.get("payload"), dict) else {}
+    modules = payload.get("modules") if isinstance(payload.get("modules"), dict) else {}
+    if not modules:
+        draft = payload.get("draft") if isinstance(payload.get("draft"), dict) else {}
+        modules = draft.get("modules") if isinstance(draft.get("modules"), dict) else {}
+    module_overrides = {
+        str(module_id): str(module.get("plugin"))
+        for module_id, module in modules.items()
+        if isinstance(module, dict) and module.get("plugin")
+    }
+    tags = [str(tag) for tag in config.get("tags", [])]
+    return ExperimentMethod(
+        method_id=str(config["config_id"]),
+        label=str(config.get("name") or config["config_id"]),
+        role=_saved_method_role(config),
+        description=str(config.get("description") or "Saved V3 Composer method template."),
+        module_overrides=module_overrides,
+        runnable=validation_status == "runnable",
+        config_source="saved_config",
+        config_id=str(config["config_id"]),
+        validation_status=validation_status,
+        tags=tags,
+        previewable=validation_status in {"runnable", "valid", "unknown"},
+    )
+
+
+def _saved_method_role(config: dict) -> str:
+    tags = {str(tag).strip().lower() for tag in config.get("tags", [])}
+    for role in ("main", "baseline", "ablation", "custom"):
+        if role in tags:
+            return role
+    return "custom"
+
+
+def _matrix_topologies(request: ExperimentSuiteRequest) -> list[tuple[str, ExperimentTopology]]:
+    conditions = request.conditions
+    if conditions is None:
+        topology_ids = request.topology_ids or ["local_8_nodes_2_shards"]
+        return [("preset", _topology(topology_id)) for topology_id in topology_ids]
+    if conditions.topology_mode == "preset":
+        topology_id = conditions.topology_id or (request.topology_ids[0] if request.topology_ids else "local_8_nodes_2_shards")
+        return [("preset", _topology(topology_id))]
+    if conditions.nodes is None or conditions.shards is None or conditions.validators_per_shard is None:
+        raise ValueError("custom topology requires nodes, shards, and validators_per_shard")
+    if conditions.shards > conditions.nodes:
+        raise ValueError("custom topology shard count cannot exceed node count")
+    topology_id = f"custom_{conditions.nodes}n_{conditions.shards}s_{conditions.validators_per_shard}v"
+    return [("custom", ExperimentTopology(
+        topology_id=topology_id,
+        label=f"Custom {conditions.nodes} nodes / {conditions.shards} shards / {conditions.validators_per_shard} validators",
+        nodes=conditions.nodes,
+        shards=conditions.shards,
+        validators_per_shard=conditions.validators_per_shard,
+        runtime_mode="custom_preview",
+        description="User-provided experiment-flow topology preview.",
+        runnable=True,
+    ))]
+
+
+def _method_warnings(method: ExperimentMethod) -> list[str]:
+    if method.validation_status == "blocked" or not method.previewable:
+        return ["method template is blocked."]
+    if method.validation_status in {"valid", "unknown"}:
+        return ["method template is not validated as runnable."]
+    return []
 
 
 def _matrix_row_warnings(workload: ExperimentWorkload, topology: ExperimentTopology, blockemulator_csv: str | None) -> list[str]:
@@ -525,7 +646,13 @@ def _matrix_row_warnings(workload: ExperimentWorkload, topology: ExperimentTopol
 
 
 def _warning_blocks_run(warning: str) -> bool:
-    return "dataset not attached yet" in warning or "required before this workload can run" in warning or "cannot exceed node count" in warning
+    return any(marker in warning for marker in (
+        "dataset not attached yet",
+        "required before this workload can run",
+        "cannot exceed node count",
+        "method template is not validated as runnable",
+        "method template is blocked",
+    ))
 
 
 def _selected_row_blocked_reason(row) -> str | None:
@@ -533,13 +660,22 @@ def _selected_row_blocked_reason(row) -> str | None:
         return "selected row is not runnable"
     try:
         workload = _workload(row.workload_id)
-        topology = _topology(row.topology_id)
     except ValueError as exc:
         return str(exc)
     if workload.planned:
         return f"{workload.workload_id}: dataset not attached yet; workload is planned and blocked."
-    if topology.shards > topology.nodes:
-        return f"{topology.topology_id}: shard count cannot exceed node count."
+    if row.topology_mode == "custom":
+        if min(row.nodes, row.shards, row.validators_per_shard) < 1:
+            return "custom topology values must be positive"
+        if row.shards > row.nodes:
+            return f"{row.topology_id}: shard count cannot exceed node count."
+    else:
+        try:
+            topology = _topology(row.topology_id)
+        except ValueError as exc:
+            return str(exc)
+        if topology.shards > topology.nodes:
+            return f"{topology.topology_id}: shard count cannot exceed node count."
     if any(_warning_blocks_run(warning) for warning in row.warnings):
         return "; ".join(row.warnings)
     return None
@@ -643,6 +779,15 @@ def _execute_v4_realism_validation(row, request: RunSuiteExecutionRequest) -> Ch
                     topology_ids=[row.topology_id],
                     seeds=[row.seed],
                     include_v4_realism=True,
+                    conditions=ExperimentConditions(
+                        topology_mode=row.topology_mode,
+                        topology_id=row.topology_id if row.topology_mode == "preset" else None,
+                        nodes=row.nodes if row.topology_mode == "custom" else None,
+                        shards=row.shards if row.topology_mode == "custom" else None,
+                        validators_per_shard=row.validators_per_shard if row.topology_mode == "custom" else None,
+                        tx_count=row.tx_count,
+                        repeat_count=1,
+                    ),
                 )
             )
             if not derived.runnable:

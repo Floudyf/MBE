@@ -574,3 +574,16 @@ Boundary rules:
 - Do not change `/api/v4/realism/*`.
 - Do not change formal benchmark runner semantics.
 - Do not push.
+
+## 20. V4.3.6.1 Saved Template to Run Alignment
+
+V4.3.6.1 aligns the existing saved method templates with experiment-flow matrix derivation.
+
+- Method templates must reuse `V3SavedConfig`; a parallel template store or registry is forbidden.
+- Run Experiment must be able to read runnable saved method configs through experiment-flow.
+- Editable run-condition fields must enter the backend matrix payload and derived rows.
+- Preset and custom topology modes must be mutually exclusive.
+- `repeat_count` must expand real matrix rows; otherwise it must not be shown as an active field.
+- Main, comparison, ablation, workload-sensitivity, and topology-scaling suites remain preview-only in this round.
+- Do not modify runtime, executor, formal runner semantics, or `/api/v4/realism/*` paths.
+- Do not push.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from backend.app.models.v4_realism import V4RealismSmokeRequest
@@ -67,6 +69,21 @@ class ExperimentMethod(BaseModel):
     description: str
     module_overrides: dict[str, str] = Field(default_factory=dict)
     runnable: bool = True
+    config_source: str = "builtin"
+    config_id: str | None = None
+    validation_status: str = "runnable"
+    tags: list[str] = Field(default_factory=list)
+    previewable: bool = True
+
+
+class ExperimentConditions(BaseModel):
+    topology_mode: Literal["preset", "custom"] = "preset"
+    topology_id: str | None = None
+    nodes: int | None = Field(default=None, ge=1)
+    shards: int | None = Field(default=None, ge=1)
+    validators_per_shard: int | None = Field(default=None, ge=1)
+    tx_count: int = Field(default=20, ge=1)
+    repeat_count: int = Field(default=1, ge=1, le=10)
 
 
 class ExperimentSuiteRequest(BaseModel):
@@ -80,6 +97,7 @@ class ExperimentSuiteRequest(BaseModel):
     composer_draft: dict | None = None
     formal_config: dict | None = None
     blockemulator_csv: str | None = None
+    conditions: ExperimentConditions | None = None
 
 
 class ExperimentMatrixRow(BaseModel):
@@ -87,9 +105,19 @@ class ExperimentMatrixRow(BaseModel):
     suite_type: str
     method_id: str
     method_role: str
+    config_source: str = "builtin"
+    method_config_id: str | None = None
+    resolved_method_name: str
+    validation_status: str = "runnable"
     workload_id: str
     topology_id: str
+    topology_mode: str = "preset"
+    nodes: int
+    shards: int
+    validators_per_shard: int
+    tx_count: int
     seed: int
+    repeat_index: int = 1
     runtime_target: str
     runnable: bool
     warnings: list[str]
@@ -119,9 +147,19 @@ class SelectedMatrixRowRequest(BaseModel):
     suite_type: str
     method_id: str
     method_role: str
+    config_source: str = "builtin"
+    method_config_id: str | None = None
+    resolved_method_name: str = ""
+    validation_status: str = "runnable"
     workload_id: str
     topology_id: str
+    topology_mode: str = "preset"
+    nodes: int = 0
+    shards: int = 0
+    validators_per_shard: int = 0
+    tx_count: int = 20
     seed: int
+    repeat_index: int = 1
     runtime_target: str
     runnable: bool = True
     warnings: list[str] = Field(default_factory=list)

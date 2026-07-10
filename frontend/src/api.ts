@@ -576,6 +576,20 @@ export type ExperimentMethod = {
   description: string;
   module_overrides: Record<string, string>;
   runnable: boolean;
+  config_source: "builtin" | "saved_config" | string;
+  config_id?: string | null;
+  validation_status: "unknown" | "valid" | "runnable" | "blocked" | string;
+  tags: string[];
+  previewable: boolean;
+};
+export type ExperimentConditions = {
+  topology_mode: "preset" | "custom";
+  topology_id?: string | null;
+  nodes?: number | null;
+  shards?: number | null;
+  validators_per_shard?: number | null;
+  tx_count: number;
+  repeat_count: number;
 };
 export type ExperimentSuiteRequest = {
   plan_name?: string | null;
@@ -588,15 +602,26 @@ export type ExperimentSuiteRequest = {
   composer_draft?: Record<string, unknown> | null;
   formal_config?: Record<string, unknown> | null;
   blockemulator_csv?: string | null;
+  conditions?: ExperimentConditions | null;
 };
 export type ExperimentMatrixRow = {
   row_id: string;
   suite_type: string;
   method_id: string;
   method_role: string;
+  config_source: string;
+  method_config_id?: string | null;
+  resolved_method_name: string;
+  validation_status: string;
   workload_id: string;
   topology_id: string;
+  topology_mode: string;
+  nodes: number;
+  shards: number;
+  validators_per_shard: number;
+  tx_count: number;
   seed: number;
+  repeat_index: number;
   runtime_target: string;
   runnable: boolean;
   warnings: string[];
@@ -623,9 +648,19 @@ export type SelectedMatrixRowRequest = {
   suite_type: string;
   method_id: string;
   method_role: string;
+  config_source: string;
+  method_config_id?: string | null;
+  resolved_method_name: string;
+  validation_status: string;
   workload_id: string;
   topology_id: string;
+  topology_mode: string;
+  nodes: number;
+  shards: number;
+  validators_per_shard: number;
+  tx_count: number;
   seed: number;
+  repeat_index: number;
   runtime_target: string;
   runnable: boolean;
   warnings: string[];
@@ -1199,8 +1234,8 @@ export async function fetchExperimentWorkloads(): Promise<ExperimentWorkload[]> 
   return response.items;
 }
 
-export async function fetchExperimentMethods(): Promise<ExperimentMethod[]> {
-  const response = await request<{ items: ExperimentMethod[] }>("/api/experiment-flow/methods");
+export async function fetchExperimentMethods(includeSaved = true): Promise<ExperimentMethod[]> {
+  const response = await request<{ items: ExperimentMethod[] }>(`/api/experiment-flow/methods?include_saved=${includeSaved ? "true" : "false"}`);
   return response.items;
 }
 

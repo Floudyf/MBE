@@ -62,7 +62,10 @@ export default function MethodPipelineWorkbench({
   const [activeModuleId, setActiveModuleId] = useSafeActiveModule(modulesById);
   const activeModule = modulesById.get(activeModuleId) || modulesById.get("Routing") || (preview.modules || [])[0];
   const methodSavedConfigs = savedConfigs.filter((config) => config.config_kind === "method");
-  const recentSavedConfigs = methodSavedConfigs.slice(0, 4);
+  const compatibilityConfigs = methodSavedConfigs.filter(isTestOrCompatibilityConfig);
+  const userReadableConfigs = methodSavedConfigs.filter((config) => config.source === "user_saved" && !isTestOrCompatibilityConfig(config));
+  const regularSavedConfigs = methodSavedConfigs.filter((config) => !isTestOrCompatibilityConfig(config));
+  const recentSavedConfigs = userReadableConfigs.slice(0, 4);
   const recentCatalogTemplates = templates.filter((template) => template.runnable).slice(0, 4);
   const validationStatus = validation?.is_runnable ? "verified" : validation?.is_valid ? "valid draft" : "draft";
 
@@ -147,12 +150,20 @@ export default function MethodPipelineWorkbench({
               ))}
             </TemplateList>
             <TemplateList title="Saved templates">
-              {methodSavedConfigs.length ? methodSavedConfigs.map((config) => (
+              {regularSavedConfigs.length ? regularSavedConfigs.map((config) => (
                 <button key={config.config_id} type="button" className="template-list-row" onClick={() => onLoadSavedConfig(config)}>
                   <strong>{config.name}</strong>
                   <small>{config.validation_status} / {config.config_id}</small>
                 </button>
               )) : <p className="muted">No saved method config yet.</p>}
+            </TemplateList>
+            <TemplateList title="Test / compatibility templates">
+              {compatibilityConfigs.length ? compatibilityConfigs.map((config) => (
+                <button key={config.config_id} type="button" className="template-list-row" onClick={() => onLoadSavedConfig(config)}>
+                  <strong>{config.name}</strong>
+                  <small>{config.validation_status} / {config.config_id}</small>
+                </button>
+              )) : <p className="muted">No test or compatibility templates.</p>}
             </TemplateList>
           </div>
         </details>
@@ -234,4 +245,11 @@ function paramSummary(params: Record<string, string | number | boolean>) {
   const entries = Object.entries(params).filter(([, value]) => value !== "" && value !== undefined);
   if (!entries.length) return "";
   return entries.slice(0, 2).map(([key, value]) => `${key}=${String(value)}`).join(", ");
+}
+
+function isTestOrCompatibilityConfig(config: V3SavedConfig) {
+  const tags = new Set(config.tags.map((tag) => tag.trim().toLowerCase()));
+  const normalizedName = config.name.trim().toLowerCase();
+  return ["e2e", "test", "compatibility"].some((tag) => tags.has(tag))
+    || /e2e[\s_-]+compatibility|compatibility[\s_-]+e2e|playwright[\s_-]+e2e/i.test(normalizedName);
 }
