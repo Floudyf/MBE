@@ -1,28 +1,48 @@
 # MBE - Metaverse Blockchain Experiment Platform
 
-MBE is evolving from a local modular research-chain runtime toward a configurable node-topology emulator-like runtime for metaverse blockchain experiments.
+MBE is evolving from a local modular research-chain runtime toward a fully plugin-driven real experiment platform for metaverse blockchain research.
 
-Current stage: V4.3 BlockEmulator-surpass realism closure, after local runtime and frontend build verification.
-Latest runtime capability: signed transactions with sender/public-key binding, per-node mempool, localhost TCP P2P, PBFT-style quorum commit, deterministic execution, persistent state/block/receipt/tx-index storage, state-root consistency, cross-shard state machine with real P2P relay-certificate evidence, real P2P fault delay/drop evidence, upgraded BlockEmulator CSV-to-signed-tx bridge, backend V4 realism API, and frontend Realism Mode controls.
+Current implemented baseline: V4.3.6.1 Saved Template to Run Alignment, with React + FastAPI, V3 formal logical-runtime experiments, V4 realism smoke validation, reusable `V3SavedConfig` method templates, and Run Experiment matrix preview/execution bridge.
+Latest runtime capability: signed transactions with sender/public-key binding, per-node mempool, localhost TCP P2P, PBFT-style quorum commit, deterministic execution, persistent state/block/receipt/tx-index storage, state-root consistency, cross-shard state machine evidence, real P2P relay-certificate evidence, real P2P fault delay/drop evidence, BlockEmulator CSV-to-signed-tx bridge, backend V4 realism API, and frontend Realism Mode controls.
 Stable baseline: V3-final remains preserved as the light-runtime and formal experiment-console baseline.
-Runtime truth: v4_blockemulator_surpass_realism_closure. Non-claims: not production PBFT, not full Byzantine security, not a production blockchain, not Fabric/EVM live backend, not production atomic cross-shard commit, and not full BlockEmulator compatibility.
+Runtime truth: current V3 formal runs are local modular emulator / logical runtime evidence; current V4.3 smoke is research-grade realism validation evidence, not a final independent-OS-process real cluster. Non-claims: V5 real_cluster is not implemented, not production PBFT, not full Byzantine security, not a production blockchain, not Fabric/EVM live backend, not production atomic cross-shard commit, and not full BlockEmulator compatibility.
+
+## V5 Planning Status
+
+The next planning direction is V5.0 Real Experiment Platform Planning and Skill Reset. V5 is not implemented in this README. The V5 target is a metaverse blockchain experiment platform where users design pluginized methods, save unified method templates, preview and simulate configurations, then run formal paper-candidate experiments on a real local multi-process multi-shard cluster.
+
+V5 has only two outward stages:
+
+1. V5.1 Real Plugin-Driven Multi-Process Multi-Shard Runtime.
+2. V5.2 Real Formal Experiment and Result Closure.
+
+V5.1 will define and implement a new `real_cluster` execution backend. A formal `real_cluster` run must use one independent OS process per logical node and must not fall back automatically to V4 smoke or V3 simulation. V5.2 will absorb the previously planned formal dispatch and result-center work into a unified run-group, child-run, result-registry, paper-artifact, and reproducibility closure.
+
+Planning documents:
+
+- `docs/v5_0_real_experiment_platform_master_plan.md`
+- `docs/v5_1_real_plugin_driven_multi_process_multishard_runtime.md`
+- `docs/v5_2_real_formal_experiment_and_result_closure.md`
+- `docs/v5_migration_compatibility_and_truth_boundary.md`
+
+V3 logical/formal runtime remains available as the `simulation` backend. V4 realism smoke remains available as historical realism validation and regression evidence. V5 `real_cluster` is the future formal backend and is not yet implemented.
 
 ## V4 Planning Status
 
 V3-final remains the stable light-runtime and formal experiment-console baseline. It is intentionally preserved as a local emulator prototype with explicit truth boundaries.
 
-The next active planning direction is V4: MBE Realism Runtime. V4 is opened to upgrade the lower runtime from a configuration-driven local light runtime into a real multi-node sharded-chain emulator. V4 must be developed in bounded stages and must not overclaim preview/MVP artifacts as real runtime behavior.
+V4: MBE Realism Runtime upgraded the lower runtime from a configuration-driven local light runtime into a research-grade realism validation path. The current code includes V4.3 smoke evidence, but it is not the final V5 real-cluster backend because the V4.3 smoke primarily constructs multiple runtime objects inside one Go supervisor process rather than starting one independent OS process per logical node.
 
-Planned V4 route:
+Closed V4 route summary:
 
 1. V4 documentation and skill reset.
 2. V4.0 Real Node Foundation: signed transactions, client submitter, long-running node skeleton, per-node mempool, account/nonce checks.
 3. V4.1 Network / Consensus / Commit: real local P2P message loop, block proposer, PBFT-style real message runtime, block commit.
 4. V4.2 State / Cross-shard / Recovery: deterministic execution, persistent block/state/receipt databases, state roots/proofs, cross-shard state machine, recovery/fault injection, frontend Realism Mode.
 
-V4 aims to meet and exceed BlockEmulator-style emulator realism by combining real node/network/consensus/state/cross-shard execution with MBE's metaverse workloads, MetaTrack-aware routing, frontend experiment control, observability, and reproducibility tooling.
+V4 aimed to reach BlockEmulator-style emulator realism by combining real node/network/consensus/state/cross-shard evidence with MBE's metaverse workloads, MetaTrack-aware routing, frontend experiment control, observability, and reproducibility tooling.
 
-Current truth boundary: V4.0, V4.1, and V4.2 have been implemented and validated through the standalone Go runtime, backend smoke API tests, frontend build, and V4.2 final smoke artifacts. V4 is a research-grade real emulator path, not a production blockchain system.
+Current truth boundary: V4.0, V4.1, V4.2, and V4.3 smoke capabilities have been implemented and validated through the standalone Go runtime, backend smoke API tests, frontend build, and smoke artifacts. V4 is a research-grade realism validation path, not a production blockchain system and not the V5 independent-process `real_cluster`.
 
 V4.0 implementation status: the standalone Go path now supports deterministic signed transaction generation, Ed25519 verification, account nonce checks, independent per-node mempool admission, `mbe-client`, `mbe-node` once/server skeleton, `mbe-supervisor` config skeleton, CSV trace-to-signed-JSONL import foundation, and V4.0 node summary/log artifacts. Runtime truth remains `v4_real_node_foundation`: real P2P, PBFT/HotStuff/Raft, block proposer, persistent state/block/receipt commit, cross-shard protocol, backend integration, and frontend Realism Mode are not implemented.
 
@@ -32,16 +52,16 @@ V4.2 implementation status: the V4 runtime now executes committed blocks determi
 
 ## Current Status
 
-Current stage: V4.2 Realism Runtime closure, with V3-final preserved as the stable light-runtime baseline.
-Latest runtime capability: V4.2 deterministic execution, persistent state roots, durable block/receipt/tx-index artifacts, cross-shard state machine, recovery/fault injection, backend V4 realism API, and frontend Realism Mode.
-Latest maintenance capability: saved configuration workflow, workload-comparison formal benchmark, formal metric extraction/aggregation repair, runtime compatibility diagnostics, multi-scenario Playwright E2E validation, result dashboard, chart preview, Formal Run History, and one-click ZIP export. It separates Draft Smoke quick validation from controlled formal benchmark runs and keeps V3-final truth boundaries.
-Current capability: deterministic fault injection, local observability summary, component health status, final artifact catalog, reproducibility bundle, experiment manual, and paper experiment mapping.
-Runtime truth: v3_final_emulator_closure_not_production_system.
+Current stage: V4.3.6.1 Saved Template to Run Alignment, with V3-final preserved as the stable light-runtime baseline and V4 realism smoke preserved as historical realism validation.
+Latest runtime capability: V4.3 smoke validation provides signed transaction binding, per-node mempool, localhost TCP, PBFT-style messages, deterministic execution, durable block/state/receipt/tx-index artifacts, state-root consistency, cross-shard evidence, fault delay/drop evidence, and BlockEmulator CSV bridge evidence.
+Latest product capability: saved method templates use `V3SavedConfig`, Run Experiment reads saved methods, supports preset/custom topology, `nodes`, `shards`, `validators_per_shard`, `tx_count`, `seed`, `repeat_count`, and expands real matrix rows.
+Current execution bridge: `quick_validation` and `v4_realism_validation` can execute; main/comparison/ablation/workload-sensitivity/topology-scaling remain preview-only in Run Experiment.
+Runtime truth: V3 formal runs are `v3_formal_simulation_logical_runtime`; V4 realism smoke is `v4_realism_smoke_regression`; V5 `real_cluster` is planned and not yet implemented.
 
 V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, V3.12, V3.13, and V3-final are closed. V3-final adds deterministic local fault injection, node failure/recovery/network delay/drop/target congestion/Relay fault observation artifacts, local observability summaries, component health status, final artifact catalog, reproducibility manifest/guide/manual, and paper experiment mapping. It is not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not production fault tolerance, not production monitoring, not a Byzantine adversary model, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.
-V4.2 is implemented and verified as a research-grade real multi-node sharded blockchain emulator path. It is not production PBFT, not full Byzantine security, not Fabric/EVM live backend, and not an industrial-grade chain.
+V4.3 smoke is implemented and verified as research-grade realism evidence. It is not production PBFT, not full Byzantine security, not Fabric/EVM live backend, not an industrial-grade chain, and not the final independent-OS-process V5 real cluster.
 
-After V3-final, the compressed V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. New feature work should be treated as maintenance unless the user explicitly starts V4.
+After V3-final, the compressed V3 roadmap is documented in `docs/v3_remaining_roadmap_after_v3_10_1.md`. New V5 work must follow the V5 planning documents and `.agents/skills/metaverse-chainlab-v5/SKILL.md`.
 
 The latest maintenance notes are `docs/v3_maintenance_metatrack_formal_benchmark_console.md`, `docs/v3_maintenance_saved_config_workflow.md`, and `docs/v3_maintenance_result_dashboard_and_usability.md`. They document the formal MetaTrack benchmark console, saved configuration workflow, workload-comparison matrix, metric extraction diagnostics, runtime compatibility diagnostics, multi-scenario Playwright E2E validation, result dashboard, chart preview, ZIP download, Formal Run History, explicit run parameters, resource protection, formal result artifacts, paper-candidate criteria, and the local emulator truth boundary.
 
