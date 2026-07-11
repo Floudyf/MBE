@@ -2,21 +2,21 @@
 
 MBE is evolving from a local modular research-chain runtime toward a fully plugin-driven real experiment platform for metaverse blockchain research.
 
-Current implemented baseline: V4.3.6.1 Saved Template to Run Alignment, with React + FastAPI, V3 formal logical-runtime experiments, V4 realism smoke validation, reusable `V3SavedConfig` method templates, and Run Experiment matrix preview/execution bridge.
+Current implemented baseline: V5.1 Real Plugin-Driven Multi-Process Multi-Shard Runtime, with React + FastAPI, reusable `V3SavedConfig` method templates, V3 simulation, V4 historical realism smoke, and a V5 local `real_cluster` backend.
 Latest runtime capability: signed transactions with sender/public-key binding, per-node mempool, localhost TCP P2P, PBFT-style quorum commit, deterministic execution, persistent state/block/receipt/tx-index storage, state-root consistency, cross-shard state machine evidence, real P2P relay-certificate evidence, real P2P fault delay/drop evidence, BlockEmulator CSV-to-signed-tx bridge, backend V4 realism API, and frontend Realism Mode controls.
 Stable baseline: V3-final remains preserved as the light-runtime and formal experiment-console baseline.
-Runtime truth: current V3 formal runs are local modular emulator / logical runtime evidence; current V4.3 smoke is research-grade realism validation evidence, not a final independent-OS-process real cluster. Non-claims: V5 real_cluster is not implemented, not production PBFT, not full Byzantine security, not a production blockchain, not Fabric/EVM live backend, not production atomic cross-shard commit, and not full BlockEmulator compatibility.
+Runtime truth: V3 formal runs remain local modular emulator / logical runtime evidence; V4.3 smoke remains historical research-grade realism validation; V5.1 `real_cluster` is a local independent-OS-process research runtime. Non-claims: it is not production PBFT, full Byzantine security, a production blockchain, Fabric/EVM live backend, production atomic cross-shard commit, or full BlockEmulator compatibility.
 
-## V5 Planning Status
+## V5 Status
 
-The next planning direction is V5.0 Real Experiment Platform Planning and Skill Reset. V5 is not implemented in this README. The V5 target is a metaverse blockchain experiment platform where users design pluginized methods, save unified method templates, preview and simulate configurations, then run formal paper-candidate experiments on a real local multi-process multi-shard cluster.
+V5.1 is implemented and verified as the local runtime foundation. It provides a versioned Plugin Catalog, generic schema-driven frontend configuration, `V3SavedConfig` method-template reuse, compatibility validation, immutable compiled plans, Go factory registration, one-node-one-OS-process supervision, real TCP signed client submission, continuous multi-shard PBFT-style commit, persistent artifacts, and cross-shard success/refund evidence.
 
 V5 has only two outward stages:
 
 1. V5.1 Real Plugin-Driven Multi-Process Multi-Shard Runtime.
 2. V5.2 Real Formal Experiment and Result Closure.
 
-V5.1 will define and implement a new `real_cluster` execution backend. A formal `real_cluster` run must use one independent OS process per logical node and must not fall back automatically to V4 smoke or V3 simulation. V5.2 will absorb the previously planned formal dispatch and result-center work into a unified run-group, child-run, result-registry, paper-artifact, and reproducibility closure.
+V5.1 defines the implemented `real_cluster` execution backend. Each logical node runs in an independent OS process, and a failed `real_cluster` run never falls back to V4 smoke or V3 simulation. V5.2 remains future work for formal run groups, unified results, paper artifacts, and reproducibility closure.
 
 Planning documents:
 
@@ -25,7 +25,7 @@ Planning documents:
 - `docs/v5_2_real_formal_experiment_and_result_closure.md`
 - `docs/v5_migration_compatibility_and_truth_boundary.md`
 
-V3 logical/formal runtime remains available as the `simulation` backend. V4 realism smoke remains available as historical realism validation and regression evidence. V5 `real_cluster` is the future formal backend and is not yet implemented.
+V3 logical/formal runtime remains the `simulation` backend. V4 realism smoke remains historical regression evidence. V5 `real_cluster` is the implemented local runtime backend; it is not yet the V5.2 formal paper-result closure.
 
 ## V4 Planning Status
 

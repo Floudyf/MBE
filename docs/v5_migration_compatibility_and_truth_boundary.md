@@ -99,3 +99,10 @@ Implementation rounds must preserve:
 - V4 realism regression.
 
 Docs-only rounds run `git diff --check` and status checks. Code rounds add the relevant backend, frontend, Go, and sanity validations.
+# V5.1 Implementation Status
+
+V3 remains the `simulation` backend and V4 realism smoke remains a historical regression path. V5.1 adds, rather than renames, the `real_cluster` backend: a local one-logical-node/one-OS-process runtime with real localhost TCP client submission. A failed V5 run is recorded as failed and is never downgraded to V3 simulation or V4 smoke.
+
+V5 method configurations continue to use `V3SavedConfig(config_kind="method")`; no `V5SavedConfig` store exists. Legacy payloads are adapted at compile time, retaining unmapped legacy choices as explicit blockers for `real_cluster` rather than mutating or deleting user templates.
+
+The V5.1 truth boundary is `v5_real_cluster_candidate`: it has independent process, port, persistence, state-root, cross-shard, and artifact evidence, but does not claim production PBFT, Byzantine security, production atomicity, cloud/multi-server deployment, or V5.2 paper-candidate closure.

@@ -67,6 +67,8 @@ V5.1 builds a unified `ExperimentSpec` driven runtime with:
 - real workload client submission;
 - evidence-grade process/network/state/artifact acceptance.
 
+V5.1 implementation status: complete as a local research runtime after the required 8-node, 16-node, four-method difference, backend/Go/frontend, and E2E gates pass. This does not close V5.2 and does not alter the production-security non-claims.
+
 ## 5. V5.2 Goal
 
 V5.2 uses V5.1 to execute full formal experiment matrices and close:

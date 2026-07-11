@@ -1279,6 +1279,33 @@ export function v4RealismArtifactURL(downloadURL: string): string {
   return `${requestBaseURL}${downloadURL}`;
 }
 
+export type V5PluginMetric = { key: string; type: string; unit: string; aggregation: string; visualization: string; description: string };
+export type V5PluginManifest = { plugin_id: string; category: string; version: string; display_name: string; description: string; implementation_status: string; supported_backends: string[]; config_schema: { type?: string; properties?: Record<string, V5SchemaField> }; default_config: Record<string, unknown>; capabilities: string[]; requirements: string[]; conflicts: string[]; metrics: V5PluginMetric[]; runtime_factory: string; runtime_adapter: string; truth_boundary: string };
+export type V5SchemaField = { type?: string; title?: string; description?: string; default?: unknown; minimum?: number; maximum?: number; enum?: string[]; readOnly?: boolean; advanced?: boolean };
+export type V5PluginSelection = { category: string; plugin_id: string; config: Record<string, unknown> };
+export type V5ExperimentSpec = { schema_version?: "v5_experiment_spec_v1"; name: string; execution_backend: "preview" | "simulation" | "real_cluster"; plugin_selections: V5PluginSelection[]; topology: { nodes: number; shards: number; validators_per_shard: number }; tx_count: number; seed: number; duration_ms: number; fault_policy?: Record<string, unknown>; requested_metrics?: string[]; saved_config_id?: string | null; source_composer_draft?: Record<string, unknown> };
+export type V5CompatibilityResult = { valid: boolean; blockers: string[]; warnings: string[]; resolved_plugins: V5PluginSelection[]; resource_estimate: Record<string, unknown> };
+export type V5CompiledRunPlan = Record<string, unknown> & { plan_id: string; plan_digest: string; node_configs: Record<string, unknown>[]; plugin_snapshot: V5PluginManifest[]; no_fallback: boolean };
+export type V5RealClusterResult = { run_id: string; status: string; summary: Record<string, unknown>; artifacts: V2Artifact[]; stdout: string; stderr: string; no_fallback: boolean };
+
+export async function fetchV5PluginCatalog(backend?: string): Promise<V5PluginManifest[]> {
+  const query = backend ? `?backend=${encodeURIComponent(backend)}` : "";
+  const response = await request<{ items: V5PluginManifest[] }>(`/api/v5/plugins${query}`);
+  return response.items;
+}
+
+export async function validateV5ExperimentSpec(payload: V5ExperimentSpec): Promise<V5CompatibilityResult> {
+  return request<V5CompatibilityResult>("/api/v5/experiment-spec/validate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function compileV5ExperimentSpec(payload: V5ExperimentSpec): Promise<V5CompiledRunPlan> {
+  return request<V5CompiledRunPlan>("/api/v5/experiment-spec/compile", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function runV5RealCluster(payload: V5ExperimentSpec): Promise<V5RealClusterResult> {
+  return request<V5RealClusterResult>("/api/v5/real-cluster/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${requestBaseURL}${path}`, init);
   if (!response.ok) {

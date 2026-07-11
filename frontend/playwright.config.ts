@@ -8,6 +8,8 @@ export default defineConfig({
     timeout: 15_000,
   },
   fullyParallel: false,
+  // Formal logical-runtime flows share local artifact roots and must not overlap.
+  workers: 1,
   retries: 1,
   reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
   use: {

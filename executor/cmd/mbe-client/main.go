@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"metaverse-chainlab/executor/realism/metrics"
 	"metaverse-chainlab/executor/realism/tx"
+	"metaverse-chainlab/executor/v5"
 )
 
 func main() {
@@ -25,10 +27,25 @@ func main() {
 	privateKeyOut := flag.String("private-key-out", "", "private key seed output")
 	publicKeyOut := flag.String("public-key-out", "", "public key output")
 	clientLogOut := flag.String("client-log-out", "", "client_tx_log.csv output")
+	planPath := flag.String("plan", "", "V5 compiled run plan JSON")
 	flag.Parse()
 
+	if *mode == "submit" {
+		if *planPath == "" || *out == "" {
+			fatalf("--plan and --out are required for submit")
+		}
+		plan, err := v5.LoadPlan(*planPath)
+		if err != nil {
+			fatalf("load plan: %v", err)
+		}
+		if err := v5.SubmitWorkload(context.Background(), plan, filepath.Dir(*out)); err != nil {
+			fatalf("submit workload: %v", err)
+		}
+		fmt.Printf("submitted %d signed transactions over real TCP\n", plan.WorkloadPlan.TxCount)
+		return
+	}
 	if *mode != "generate" {
-		fatalf("unsupported mode %q; V4.0 client only supports generate and does not implement RPC submit", *mode)
+		fatalf("unsupported mode %q", *mode)
 	}
 	if *out == "" {
 		fatalf("--out is required")

@@ -5,9 +5,10 @@ type Props = {
   onSelectResult: (result: V3FormalMetatrackBenchmarkRunResponse) => void;
   refreshKey?: string | number;
   autoLoadLatest?: boolean;
+  currentRunId?: string;
 };
 
-export default function FormalRunHistoryPanel({ onSelectResult, refreshKey = 0, autoLoadLatest = false }: Props) {
+export default function FormalRunHistoryPanel({ onSelectResult, refreshKey = 0, autoLoadLatest = false, currentRunId = "" }: Props) {
   const [runs, setRuns] = useState<V3FormalRunHistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingRunId, setLoadingRunId] = useState("");
@@ -63,6 +64,7 @@ export default function FormalRunHistoryPanel({ onSelectResult, refreshKey = 0, 
         </button>
       </div>
       <p className="muted">刷新页面后，可在这里找回最近的正式性能实验结果。历史结果仍是本地 emulator 受控基准实验，不是生产链证据。</p>
+      {currentRunId && !runs.some((run) => run.run_id === currentRunId) && <p className="v3-inline-ok">本次完成 {currentRunId}；历史索引正在刷新。</p>}
       {error && <p className="file-error">{error}</p>}
       {loadedRunId && <p className="v3-inline-ok">已加载 {loadedRunId}</p>}
       {runs.length === 0 && !loading && <p className="muted">暂无历史正式实验。</p>}

@@ -5,8 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"metaverse-chainlab/executor/realism/node"
+	"metaverse-chainlab/executor/v5"
 )
 
 func main() {
@@ -29,6 +33,7 @@ func main() {
 	blockIntervalMS := flag.Int("block-interval-ms", 100, "leader block interval")
 	consensus := flag.String("consensus", "pbft", "pbft")
 	runDurationMS := flag.Int("run-duration-ms", 1000, "server run duration before graceful shutdown; 0 uses default")
+	v5NodeConfig := flag.String("v5-node-config", "", "V5 node configuration JSON")
 	leaderID := flag.String("leader-id", "", "current shard leader id")
 	flag.Parse()
 	_ = *configPath
@@ -77,6 +82,28 @@ func main() {
 		err    error
 	)
 	switch *runMode {
+	case "v5-server":
+		if *v5NodeConfig == "" {
+			err = fmt.Errorf("--v5-node-config is required for v5-server")
+			break
+		}
+		plan, selectedNodeID, loadErr := v5.DecodeNodePlan(*v5NodeConfig)
+		if loadErr != nil {
+			err = loadErr
+			break
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if plan.DurationMS > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, time.Duration(plan.DurationMS)*time.Millisecond)
+			defer cancel()
+		}
+		err = v5.RunNode(ctx, plan, selectedNodeID)
+		if err == nil {
+			fmt.Printf("mbe-node %s completed V5 real-cluster runtime\n", selectedNodeID)
+			return
+		}
 	case "once":
 		result, err = node.RunOnce(cfg)
 	case "server":

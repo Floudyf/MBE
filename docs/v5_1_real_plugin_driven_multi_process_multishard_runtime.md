@@ -315,3 +315,23 @@ V5.1 does not produce final paper comparison results. It does not claim producti
 ## 12. Completion Standard
 
 V5.1 is complete when `real_cluster` satisfies the acceptance criteria with reproducible process, network, block, state, xshard, plugin-snapshot, and cleanup evidence.
+
+## 13. Implementation Evidence
+
+V5.1 is implemented as a local research runtime. The backend exposes `/api/v5/plugins`, `/api/v5/experiment-spec`, and `/api/v5/real-cluster`; the frontend renders V5 categories and schema fields from the catalog rather than plugin-id-specific pages. Method templates remain in `V3SavedConfig` payloads and are adapted at compile time.
+
+The Go supervisor builds temporary node/client binaries under the ignored run directory, allocates ports, records PID/process manifests, starts one `mbe-node --run-mode v5-server` per logical node, waits for readiness, runs a real TCP signed client, waits for clean node shutdown, and writes a `real_cluster_summary.json`. Nodes persist blocks, state, receipts, and tx index files and emit `plugin_snapshot.json`, `plugin_load_log.json`, `routing_decision_log.csv`, `execution_log.csv`, and `commit_log.csv` from runtime decisions.
+
+Verified acceptance commands on Windows:
+
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+python scripts/v5_1_real_cluster_acceptance.py --include-16
+python scripts/v5_1_plugin_difference_acceptance.py
+```
+
+The scale acceptance passed for 8 nodes / 2 shards / 4 validators / 100 signed transactions and 16 nodes / 4 shards / 4 validators / 1000 signed transactions. Both reports recorded distinct PIDs and TCP ports, multiple blocks per shard, consistent roots inside each shard, real client submission, cross-shard success plus Timeout/Refund, `no_fallback=true`, and `orphan_process_count=0`.
+
+The four-method acceptance passed with a common seed/topology/workload: MetaTrack Full used MetaTrack routing + dual-track + aggregation; Hash Serial Baseline used hash + serial + normal commit; No Aggregation retained MetaTrack routing + dual-track with normal commit; Routing Only retained MetaTrack routing with serial + normal commit. The verifier reads node/client artifacts and returns nonzero unless routing assignments, execution tracks, aggregation groups/physical updates, plugin loading, receipts, tx index, state-root consistency, no fallback, and cleanup all satisfy their checks.
+
+This is still not production PBFT, production Byzantine security, production atomic cross-shard commit, a production blockchain, or a V5.2 formal result center.

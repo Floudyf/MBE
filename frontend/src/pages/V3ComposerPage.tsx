@@ -627,7 +627,7 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
         onNext={() => onNextToRunExperiment?.()}
       />
 
-      <details className="advanced-compat-panel final-card wide">
+      <details className="advanced-compat-panel final-card wide" open>
         <summary>高级与兼容入口</summary>
         <p className="muted">Formal benchmark、旧 Composer / Draft 详情、历史运行、artifacts 与开发者入口保留在这里；默认不干扰方法模板设计。</p>
         <div className="advanced-compat-grid">
@@ -827,7 +827,7 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
       )}
 
       {draft && (
-        <details className="final-card wide compat-foldout">
+        <details className="final-card wide compat-foldout" open>
           <summary>运行条件兼容字段 / 开发者详情</summary>
           <p className="muted">Workload、节点数、分片数和 seed 不作为方法模板主配置。这里保留历史 Composer 拓扑字段，便于旧入口和快速验证兼容。</p>
           <RuntimeTopologyPanel topology={draft.topology} onChange={(topology) => updateDraft(updateDraftTopology(draft, topology))} />
@@ -897,7 +897,7 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
       )}
 
       {draft && (
-        <details className="final-card wide compat-foldout">
+        <details className="final-card wide compat-foldout" open>
           <summary>正式实验旧入口 / 兼容入口</summary>
           <p className="muted">推荐在“运行实验”页选择模板、负载、拓扑和 seed 后运行矩阵；正式 benchmark 旧入口仍保留用于兼容，调用语义不变。</p>
           <FormalMetatrackExperimentPanel
@@ -958,7 +958,7 @@ export default function V3ComposerPage({ onRunCompleted, onNextToRunExperiment }
           )}
         </section>
 
-        <FormalRunHistoryPanel refreshKey={formalHistoryRefreshKey} autoLoadLatest onSelectResult={showFormalResult} />
+        <FormalRunHistoryPanel refreshKey={formalHistoryRefreshKey} autoLoadLatest currentRunId={formalResult?.run_id || ""} onSelectResult={showFormalResult} />
         <div ref={formalResultRef}>
           <FormalBenchmarkResultPanel result={formalResult} />
         </div>

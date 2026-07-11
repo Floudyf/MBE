@@ -13,6 +13,9 @@ from fastapi.responses import FileResponse
 
 from backend.app.api.experiment_flow import router as experiment_flow_router
 from backend.app.api.v4_realism import router as v4_realism_router
+from backend.app.api.v5_plugins import router as v5_plugins_router
+from backend.app.api.v5_experiment_spec import router as v5_experiment_spec_router
+from backend.app.api.v5_real_cluster import router as v5_real_cluster_router
 from backend.app.models.v3_composer_draft import V3ComposerDraftRequest
 from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest, V3SavedConfigUpdateRequest
 from backend.app.services.config_validator_v2 import validate_planned_topology_file
@@ -60,6 +63,9 @@ V1_CUSTOM_DOWNLOADABLE_FILES = frozenset({"trace_meta.json", "summary.csv", "lat
 app = FastAPI(title="MBE Experiment API")
 app.include_router(experiment_flow_router)
 app.include_router(v4_realism_router)
+app.include_router(v5_plugins_router)
+app.include_router(v5_experiment_spec_router)
+app.include_router(v5_real_cluster_router)
 
 ABLATION_PRESETS = {
     "baseline_hash_only": {"routing_policy": "hash", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},

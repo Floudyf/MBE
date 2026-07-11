@@ -53,6 +53,7 @@ import RunStageFlow from "./components/experiment/RunStageFlow";
 import RealismModePanel from "./components/v4/RealismModePanel";
 import RunExperimentPage from "./pages/RunExperimentPage";
 import V3ComposerPage from "./pages/V3ComposerPage";
+import RealClusterWorkbench from "./components/v5/RealClusterWorkbench";
 
 type PageId =
   | "overview"
@@ -64,6 +65,7 @@ type PageId =
   | "calibration"
   | "v3composer"
   | "runexperiment"
+  | "v5realcluster"
   | "v4realism"
   | "runs"
   | "artifacts"
@@ -121,6 +123,7 @@ const primaryNavGroups: { title: string; items: { id: PageId; label: string }[] 
     items: [
       { id: "v3composer", label: "实验设计" },
       { id: "runexperiment", label: "运行实验" },
+      { id: "v5realcluster", label: "V5 Real Cluster" },
       { id: "runs", label: "结果与产物" },
       { id: "workloads", label: "负载库" },
     ],
@@ -356,6 +359,7 @@ function App() {
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
       {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} onNextToRunExperiment={() => setActivePage("runexperiment")} />}
       {activePage === "runexperiment" && <RunExperimentPage onOpenV4Details={() => setActivePage("v4realism")} />}
+      {activePage === "v5realcluster" && <RealClusterWorkbench />}
       {activePage === "v4realism" && <RealismModePanel />}
       {(activePage === "runs" || activePage === "artifacts") && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
       {activePage === "workloads" && <WorkloadLibraryPage />}
