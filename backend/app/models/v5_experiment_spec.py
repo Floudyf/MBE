@@ -27,7 +27,7 @@ class V5ExperimentSpec(BaseModel):
     topology: V5Topology
     tx_count: int = Field(default=100, ge=1, le=10000)
     seed: int = 1
-    duration_ms: int = Field(default=5000, ge=1000, le=120000)
+    duration_ms: int = Field(default=5000, ge=1000, le=3600000)
     fault_policy: dict[str, Any] = Field(default_factory=lambda: {"mode": "disabled"})
     requested_metrics: list[str] = Field(default_factory=list)
     saved_config_id: str | None = None

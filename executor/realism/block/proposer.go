@@ -19,7 +19,7 @@ func NewProposer(nodeID, shardID string) *Proposer {
 }
 
 func (p *Proposer) Build(pool *mempool.Mempool, limit int, now time.Time) (Block, error) {
-	txs := pool.PopReady(limit)
+	txs := pool.ReserveReady(limit)
 	if len(txs) == 0 {
 		return Block{}, fmt.Errorf("empty_mempool")
 	}
@@ -42,7 +42,6 @@ func (p *Proposer) Build(pool *mempool.Mempool, limit int, now time.Time) (Block
 		CrossShardProtocol: false,
 	}
 	AssignHash(&b)
-	p.PreviousHash = b.BlockHash
-	p.NextHeight++
 	return b, nil
 }
+func (p *Proposer) Confirm(b Block) { p.PreviousHash = b.BlockHash; p.NextHeight = b.Height + 1 }

@@ -58,6 +58,11 @@ func (s *BlockStore) AppendCommitted(b block.Block, record CommitRecord) error {
 
 func (s *BlockStore) ReadCommitted() ([]block.Block, error) {
 	path := filepath.Join(s.DataDir, "committed_blocks.jsonl")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		// V5 durable commits are stored in the existing blocks.jsonl artifact.
+		// Keep committed_blocks.jsonl as the legacy test/compatibility source.
+		path = filepath.Join(s.DataDir, "blocks.jsonl")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open committed block log: %w", err)
@@ -75,6 +80,42 @@ func (s *BlockStore) ReadCommitted() ([]block.Block, error) {
 		out = append(out, row.Block)
 	}
 	return out, scanner.Err()
+}
+
+func (s *BlockStore) ReadCommittedAtHeight(height uint64) (block.Block, bool, error) {
+	blocks, err := s.ReadCommitted()
+	if err != nil {
+		return block.Block{}, false, err
+	}
+	for _, item := range blocks {
+		if item.Height == height {
+			return item, true, nil
+		}
+	}
+	return block.Block{}, false, nil
+}
+
+func (s *BlockStore) HasTransaction(txID string) (bool, error) {
+	path := filepath.Join(s.DataDir, "tx_index.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var row TxIndexRecord
+		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+			return false, err
+		}
+		if row.TxID == txID {
+			return true, nil
+		}
+	}
+	return false, scanner.Err()
 }
 
 func WriteCommitCSV(path string, records []CommitRecord) error {

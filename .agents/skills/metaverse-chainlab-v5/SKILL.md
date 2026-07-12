@@ -67,7 +67,7 @@ V5.1 builds a unified `ExperimentSpec` driven runtime with:
 - real workload client submission;
 - evidence-grade process/network/state/artifact acceptance.
 
-V5.1 implementation status: complete as a local research runtime after the required 8-node, 16-node, four-method difference, backend/Go/frontend, and E2E gates pass. This does not close V5.2 and does not alter the production-security non-claims.
+V5.1 implementation status: complete as a local research runtime after the required 8-node, 16-node, four-method difference, backend/Go/frontend, and E2E gates pass. V5.2 software closure is also implemented and verified through Gate A/B, an 8-child real RunGroup, and one completed 16-node/4-shard/10000-transaction Child. This does not claim production security, production PBFT, or completion of the long-running 12-child paper matrix.
 
 ## 5. V5.2 Goal
 
@@ -81,6 +81,24 @@ V5.2 uses V5.1 to execute full formal experiment matrices and close:
 - aggregation, confidence intervals, paper table/figure data;
 - reproducibility ZIP;
 - Paper Candidate gate.
+
+Before a V5.2 formal run group or matrix may execute, close and record two
+mandatory gates:
+
+- Gate A: category-specific runtime plugin interfaces and factories drive
+  runtime behavior; plugin identifiers may occur in manifests/registration but
+  not as main-path algorithm switches in node, client, or supervisor code.
+- Gate B: finality and throughput are derived from raw real-runtime lifecycle
+  events through durable commit/finalization or refund, never from TCP send
+  latency or synthetic summary rows.
+
+Use `scripts/v5_2_plugin_behavior_gate.py` to close Gate A and
+`scripts/v5_2_finality_metric_acceptance.py` as the focused Gate B check.
+Gate A/B, the 8-child RunGroup, and the completed single-child correctness gate
+are required for V5.2 software closure. The 12-child paper matrix may be
+compiled and persisted without execution; unexecuted rows are never completed
+or Paper Candidates. A Paper Candidate still requires a completed real-cluster
+child and all per-child truth checks.
 
 ## 6. Plugin Principle
 

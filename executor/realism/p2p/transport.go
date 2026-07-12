@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net"
@@ -23,6 +24,14 @@ type Transport struct {
 	faults     faults.Policy
 	wg         sync.WaitGroup
 	mu         sync.Mutex
+	connMu     sync.Mutex
+	outbound   map[string]*outboundConn
+	inbound    map[net.Conn]struct{}
+}
+
+type outboundConn struct {
+	conn net.Conn
+	mu   sync.Mutex
 }
 
 func NewTransport(nodeID, listenAddr string, peers []Peer, handler Handler) *Transport {
@@ -32,7 +41,7 @@ func NewTransport(nodeID, listenAddr string, peers []Peer, handler Handler) *Tra
 			peerMap[p.NodeID] = p
 		}
 	}
-	return &Transport{NodeID: nodeID, ListenAddr: listenAddr, Peers: peerMap, Log: &NetworkLog{}, handler: handler}
+	return &Transport{NodeID: nodeID, ListenAddr: listenAddr, Peers: peerMap, Log: &NetworkLog{}, handler: handler, outbound: map[string]*outboundConn{}, inbound: map[net.Conn]struct{}{}}
 }
 
 func (t *Transport) Start(ctx context.Context) error {
@@ -87,6 +96,16 @@ func (t *Transport) Stop() error {
 	if ln != nil {
 		_ = ln.Close()
 	}
+	t.connMu.Lock()
+	for peerID, outbound := range t.outbound {
+		_ = outbound.conn.Close()
+		delete(t.outbound, peerID)
+	}
+	for conn := range t.inbound {
+		_ = conn.Close()
+		delete(t.inbound, conn)
+	}
+	t.connMu.Unlock()
 	t.wg.Wait()
 	return nil
 }
@@ -103,6 +122,9 @@ func (t *Transport) acceptLoop(ctx context.Context, ln net.Listener) {
 				return
 			}
 		}
+		t.connMu.Lock()
+		t.inbound[conn] = struct{}{}
+		t.connMu.Unlock()
 		t.wg.Add(1)
 		go func() {
 			defer t.wg.Done()
@@ -113,28 +135,36 @@ func (t *Transport) acceptLoop(ctx context.Context, ln net.Listener) {
 
 func (t *Transport) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	start := time.Now()
-	msg, n, err := Decode(conn)
-	entry := NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "receive", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Bytes: n, Success: err == nil, LatencyMS: time.Since(start).Milliseconds()}
-	if err != nil {
-		entry.Error = err.Error()
-		t.Log.Add(entry)
-		return
-	}
-	if decision := t.faultDecision("receive", msg.FromNode, msg); decision.FaultEvent {
-		if decision.Delay > 0 {
-			time.Sleep(decision.Delay)
-			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "fault_delay_receive", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: true, Error: decision.Reason, LatencyMS: decision.Delay.Milliseconds()})
-		}
-		if decision.Drop {
-			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "fault_drop_receive", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: decision.Reason})
+	defer func() {
+		t.connMu.Lock()
+		delete(t.inbound, conn)
+		t.connMu.Unlock()
+	}()
+	reader := bufio.NewReader(conn)
+	for {
+		start := time.Now()
+		msg, n, err := DecodeReader(reader)
+		entry := NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "receive", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Bytes: n, Success: err == nil, LatencyMS: time.Since(start).Milliseconds()}
+		if err != nil {
+			entry.Error = err.Error()
+			t.Log.Add(entry)
 			return
 		}
-	}
-	t.Log.Add(entry)
-	if t.handler != nil {
-		if err := t.handler(ctx, msg); err != nil {
-			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "handler", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: err.Error()})
+		if decision := t.faultDecision("receive", msg.FromNode, msg); decision.FaultEvent {
+			if decision.Delay > 0 {
+				time.Sleep(decision.Delay)
+				t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "fault_delay_receive", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: true, Error: decision.Reason, LatencyMS: decision.Delay.Milliseconds()})
+			}
+			if decision.Drop {
+				t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "fault_drop_receive", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: decision.Reason})
+				return
+			}
+		}
+		t.Log.Add(entry)
+		if t.handler != nil {
+			if err := t.handler(ctx, msg); err != nil {
+				t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "handler", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: err.Error()})
+			}
 		}
 	}
 }
@@ -159,27 +189,70 @@ func (t *Transport) Send(ctx context.Context, peerID string, msg MessageEnvelope
 			return nil
 		}
 	}
-	start := time.Now()
-	dialer := net.Dialer{Timeout: 2 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", peer.ListenAddr)
-	if err != nil {
-		t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: peerID, Direction: "send", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: err.Error(), LatencyMS: time.Since(start).Milliseconds()})
+	for attempt := 0; attempt < 3; attempt++ {
+		start := time.Now()
+		outbound, err := t.outboundFor(ctx, peerID, peer.ListenAddr)
+		if err == nil {
+			outbound.mu.Lock()
+			_ = outbound.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			err = Encode(outbound.conn, msg)
+			outbound.mu.Unlock()
+		}
+		if err == nil {
+			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: peerID, Direction: "send", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Bytes: len(msg.Payload), Success: true, LatencyMS: time.Since(start).Milliseconds()})
+			return nil
+		}
+		t.dropOutbound(peerID, outbound)
+		if attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 10 * time.Millisecond):
+			}
+			continue
+		}
+		t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: peerID, Direction: "send", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Bytes: len(msg.Payload), Success: false, Error: err.Error(), LatencyMS: time.Since(start).Milliseconds()})
 		return fmt.Errorf("send p2p to %s: %w", peerID, err)
 	}
-	defer conn.Close()
-	err = Encode(conn, msg)
-	bytes := len(msg.Payload)
-	entry := NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: peerID, Direction: "send", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Bytes: bytes, Success: err == nil, LatencyMS: time.Since(start).Milliseconds()}
-	if err != nil {
-		entry.Error = err.Error()
+	return fmt.Errorf("send p2p to %s failed", peerID)
+}
+
+func (t *Transport) outboundFor(ctx context.Context, peerID, address string) (*outboundConn, error) {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	if outbound := t.outbound[peerID]; outbound != nil {
+		return outbound, nil
 	}
-	t.Log.Add(entry)
-	return err
+	dialer := net.Dialer{Timeout: 2 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return nil, err
+	}
+	outbound := &outboundConn{conn: conn}
+	t.outbound[peerID] = outbound
+	return outbound, nil
+}
+
+func (t *Transport) dropOutbound(peerID string, outbound *outboundConn) {
+	if outbound == nil {
+		return
+	}
+	t.connMu.Lock()
+	if current := t.outbound[peerID]; current == outbound {
+		delete(t.outbound, peerID)
+		_ = outbound.conn.Close()
+	}
+	t.connMu.Unlock()
 }
 
 func (t *Transport) Broadcast(ctx context.Context, msg MessageEnvelope) []error {
 	var errs []error
-	for peerID := range t.Peers {
+	for peerID, peer := range t.Peers {
+		// Consensus and transaction gossip are shard-local. Cross-shard
+		// protocol messages use Send/sendToNode so their target is explicit.
+		if msg.ShardID != "" && peer.ShardID != "" && peer.ShardID != msg.ShardID {
+			continue
+		}
 		next := msg
 		next.ToNode = peerID
 		if err := t.Send(ctx, peerID, next); err != nil {

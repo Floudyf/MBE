@@ -16,6 +16,8 @@ from backend.app.api.v4_realism import router as v4_realism_router
 from backend.app.api.v5_plugins import router as v5_plugins_router
 from backend.app.api.v5_experiment_spec import router as v5_experiment_spec_router
 from backend.app.api.v5_real_cluster import router as v5_real_cluster_router
+from backend.app.api.v5_formal_experiments import router as v5_formal_experiments_router
+from backend.app.api.v5_datasets import router as v5_datasets_router
 from backend.app.models.v3_composer_draft import V3ComposerDraftRequest
 from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest, V3SavedConfigUpdateRequest
 from backend.app.services.config_validator_v2 import validate_planned_topology_file
@@ -66,6 +68,8 @@ app.include_router(v4_realism_router)
 app.include_router(v5_plugins_router)
 app.include_router(v5_experiment_spec_router)
 app.include_router(v5_real_cluster_router)
+app.include_router(v5_formal_experiments_router)
+app.include_router(v5_datasets_router)
 
 ABLATION_PRESETS = {
     "baseline_hash_only": {"routing_policy": "hash", "dual_track_enabled": False, "hot_update_aggregation_enabled": False},

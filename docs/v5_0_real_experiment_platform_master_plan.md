@@ -6,7 +6,7 @@ V5 defines the next architecture for MBE after the current V4.3.6.1 baseline. Th
 
 This is a planning and skill reset document only. It does not claim that V5.1 or V5.2 is implemented.
 
-> Status update: V5.1 has now been implemented and verified as the local real-cluster runtime foundation. V5.2 remains unimplemented. See `v5_1_real_plugin_driven_multi_process_multishard_runtime.md` and `v5_1_implementation_and_acceptance_report.md` for the implementation boundary and evidence.
+> Status update: V5.1 is implemented and verified as the local real-cluster runtime foundation. V5.2 formal software closure is implemented and verified through Gate A/B, an 8-child real RunGroup, a completed 16-node/4-shard/10000-transaction Child, and persisted 12-child matrix compilation. The 12-child high-load paper matrix remains a long-running experiment and is not represented as executed evidence.
 
 ## 2. Current Code Review
 

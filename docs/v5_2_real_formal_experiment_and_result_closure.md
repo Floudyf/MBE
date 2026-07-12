@@ -21,7 +21,49 @@ Current gaps:
 - Result Center metrics are not yet driven by plugin manifest metadata.
 - No Paper Candidate gate exists for V5 real-cluster evidence.
 
-## 3. Execution Modes
+## 3. Mandatory Entry Gates
+
+V5.2 formal run groups and matrices must not start until both gates below have
+machine-readable acceptance evidence. These gates are implementation work for
+V5.2, not claims about the V5.1 baseline.
+
+### Gate A: Behavioral Plugin Boundary
+
+V5.1 provides manifests, a catalog, and factory registration, but V5.2 must
+make the runtime behavior boundary explicit before formal comparisons rely on
+it. All 17 plugin categories use category-specific runtime interfaces. The
+node runtime, client, and supervisor select behavior through instantiated
+plugins and factory registration rather than algorithm-name branches in their
+main execution paths. At minimum, routing, execution, and commit must produce
+different observable behavior for registered test plugins and for the four
+published method compositions. Manifests and registry registration may name a
+plugin; runtime flow must not use those names as behavior switches.
+
+### Gate B: Finality Metric Truth
+
+Formal metrics must be derived from the real transaction lifecycle, not from
+TCP send latency or generated summary rows. Every real-cluster child run must
+write raw lifecycle events and derive finality, throughput, failure, and
+cross-shard outcomes from durable runtime events. The lifecycle records
+logical and physical transaction identity, submission, admission, proposal,
+quorum commit, durable commit, target commit, source finalization, refund or
+failure, shard, node, block, and timestamp. The finality acceptance script
+must fail when a lifecycle is incomplete, duplicated incorrectly, or lacks
+durable evidence.
+
+Implementation checkpoint: Gate A is closed by
+`scripts/v5_2_plugin_behavior_gate.py`: registered test factories prove
+category behavior, the V5 runtime calls instantiated routing, execution, and
+commit plugins, the four-method real-cluster regression passes, and the core
+ID-branch audit passes. Gate B is covered by
+`scripts/v5_2_finality_metric_acceptance.py`, which runs an 8-node / 2-shard
+cluster and verifies raw lifecycle, unique logical-transaction finality,
+cross-shard finalization/refund, `no_fallback`, and zero orphan processes.
+Gate B is closed for the implemented metric contract by the same script and the
+backend/Go regression suite. This does not make every future paper matrix row a
+completed result.
+
+## 4. Execution Modes
 
 Preview:
 
@@ -42,7 +84,7 @@ Real Cluster:
 - no automatic fallback to simulation or V4 smoke;
 - only this mode can produce paper-candidate formal results.
 
-## 4. Formal Experiment Types
+## 5. Formal Experiment Types
 
 V5.2 must support:
 
@@ -55,7 +97,7 @@ V5.2 must support:
 
 Each experiment type must derive rows from the same `ExperimentSpec` and `CompiledRunPlan` path, not from separate hardcoded runners.
 
-## 5. Run Group And Child Run
+## 6. Run Group And Child Run
 
 Run Group persistence:
 
@@ -87,7 +129,7 @@ create clean directory
 
 The scheduler must support cancellation and failure cleanup. A failed child run must preserve logs, process manifests, cleanup attempts, and orphan-process checks.
 
-## 6. Unified Run Registry
+## 7. Unified Run Registry
 
 The result registry must unify:
 
@@ -113,7 +155,7 @@ Every record must include:
 - status
 - `paper_candidate`
 
-## 7. Result Center
+## 8. Result Center
 
 The Result Center must display run groups and child runs as first-class objects. It must not remain a V2-only run registry view plus separate V4 pages.
 
@@ -128,7 +170,7 @@ Metrics must not all be hardcoded. Plugin manifests should expose:
 
 The frontend can then generate summary cards, table columns, time series, ratio visualizations, and artifact/log entries from metadata.
 
-## 8. Statistical And Paper Artifacts
+## 9. Statistical And Paper Artifacts
 
 Formal outputs must include at least:
 
@@ -147,7 +189,7 @@ Formal outputs must include at least:
 
 V5.2 may keep V3 artifact names for compatibility through adapters, but new V5 real-cluster outputs should use the unified names above.
 
-## 9. Paper Candidate Gate
+## 10. Paper Candidate Gate
 
 Paper Candidate requires:
 
@@ -166,9 +208,17 @@ Paper Candidate requires:
 
 Simulation, preview, and V4 smoke may be useful references but cannot be automatically marked as Paper Candidate.
 
-## 10. Final Acceptance
+## 11. Correctness, Performance, And Long-Running Matrix
 
-Minimum final V5.2 acceptance:
+The software correctness gate is separate from a performance target. A child
+passes correctness only when `terminal=submitted`, `incomplete=0`,
+`completion_reason=drain_quiescent`, all validators are height-aligned, common
+height block/state/receipt roots agree, all queues are empty, `no_fallback=true`,
+and `orphan_process_count=0`. Actual throughput and finality percentiles are
+reported as measurements; V5.2 sets no TPS pass threshold and does not claim a
+production-performance PBFT implementation.
+
+The completed single-child acceptance used:
 
 - 16 nodes;
 - 4 shards;
@@ -177,15 +227,44 @@ Minimum final V5.2 acceptance:
 - Hash Serial Baseline;
 - No Aggregation;
 - 10000+ transactions;
-- multiple seeds;
-- multiple repeats.
+- one MetaTrack Full method;
+- seed 71;
+- 10000 signed transactions;
+- 16 independent node processes;
+- 16 nodes / 4 shards / 4 validators per shard.
 
-The run must generate real method comparison, confidence intervals, run history, and complete reproducibility ZIP from real-cluster child runs.
+Observed evidence is stored in the acceptance run artifacts: 10000 submitted,
+10000 terminal, `drain_quiescent`, 16 processes, 251 blocks per shard,
+`real_cross_shard_network=true`, `state_root_consistent=true`,
+`no_fallback=true`, and zero orphan processes. The run measured 84.6009 TPS,
+P50 finality 28419 ms, P95 98987 ms, and P99 109563 ms. These are observed
+local-runtime measurements, not required performance thresholds.
 
-## 11. Non-Goals
+The batch software acceptance uses 2 methods x 2 seeds x 2 repeats = 8 real
+Child Runs and verifies sequential scheduling, persistence, reload, aggregate
+statistics, CI, cancellation/retry paths, and ZIP artifacts.
+
+The formal paper matrix is compiled and persisted as 3 methods x 2 seeds x 2
+repeats = 12 rows, each configured for 10000 transactions, with fairness and
+resource estimates. This round intentionally does not execute all twelve
+long-running real clusters. Rows not executed remain queued/unexecuted and are
+not marked completed or Paper Candidate. The same Scheduler can resume that
+matrix later; this is a workload boundary, not a relaxation of the single-child
+correctness gate.
+
+Completed RunGroups generate real method comparison, confidence intervals, run
+history, and reproducibility ZIPs from real-cluster child runs. An unexecuted
+formal matrix only produces a plan/matrix persistence record.
+
+## 12. Non-Goals
 
 V5.2 does not introduce another template store. It does not redefine V5.1 runtime semantics. It does not promote simulation results to paper evidence. It does not claim production blockchain security or performance superiority without controlled artifacts.
 
-## 12. Completion Standard
+## 13. Completion Standard
 
-V5.2 is complete when formal run groups can execute on V5.1 `real_cluster`, persist child runs, show unified metrics and artifacts, pass the Paper Candidate gate, and export paper-ready tables, figures, reports, and reproducibility bundles.
+V5.2 software closure is complete when formal run groups can execute on V5.1
+`real_cluster`, persist child runs and attempts, show unified metrics and
+artifacts, enforce fairness and the Paper Candidate gate, and export paper
+tables, figures, reports, and reproducibility bundles. A future paper claim
+still requires every included child to be independently completed and to pass
+the per-child gate. Decentraland dataset integration is not part of this stage.

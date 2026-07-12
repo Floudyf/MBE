@@ -19,7 +19,10 @@ func Encode(w io.Writer, msg MessageEnvelope) error {
 }
 
 func Decode(r io.Reader) (MessageEnvelope, int, error) {
-	reader := bufio.NewReader(r)
+	return DecodeReader(bufio.NewReader(r))
+}
+
+func DecodeReader(reader *bufio.Reader) (MessageEnvelope, int, error) {
 	line, err := reader.ReadBytes('\n')
 	if err != nil {
 		return MessageEnvelope{}, len(line), fmt.Errorf("read p2p message: %w", err)

@@ -11,7 +11,7 @@ RESOURCE_POLICY = {
     "max_nodes": 16,
     "max_total_processes": 16,
     "max_tx_count": 10000,
-    "max_runtime_seconds": 120,
+    "max_runtime_seconds": 3600,
     "max_output_bytes": 512 * 1024 * 1024,
     "graceful_shutdown_timeout": 15,
     "forced_kill_timeout": 5,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +22,8 @@ import (
 )
 
 const finalizeMessage = "V5_XSHARD_FINALIZE"
+const catchupRequestMessage = "V5_CATCHUP_REQUEST"
+const catchupBlockMessage = "V5_CATCHUP_BLOCK"
 
 type Proposal struct {
 	Block realblock.Block `json:"block"`
@@ -42,6 +43,15 @@ type Finalize struct {
 	SourceShard string `json:"source_shard"`
 	TargetShard string `json:"target_shard"`
 }
+type CatchupRequest struct {
+	ShardID    string `json:"shard_id"`
+	FromHeight uint64 `json:"from_height"`
+	ToHeight   uint64 `json:"to_height"`
+}
+type CatchupBlock struct {
+	Block      realblock.Block `json:"block"`
+	SourceNode string          `json:"source_node"`
+}
 type Event struct {
 	Timestamp   int64  `json:"timestamp"`
 	TxID        string `json:"tx_id"`
@@ -53,26 +63,35 @@ type Event struct {
 }
 
 type NodeRuntime struct {
-	plan           Plan
-	node           NodePlan
-	peers          []p2p.Peer
-	transport      *p2p.Transport
-	pool           *mempool.Mempool
-	proposer       *realblock.Proposer
-	db             *state.DB
-	store          *storage.BlockStore
-	engine         *execution.Engine
-	mu             sync.Mutex
-	proposals      map[string]realblock.Block
-	votes          map[string]map[string]bool
-	committed      map[string]bool
-	relaySource    map[string]Relay
-	events         []Event
-	consensusRows  [][]string
-	executionRows  [][]string
-	commitRows     [][]string
-	pluginSnapshot map[string]PluginConfig
-	blockCount     int
+	plan                   Plan
+	node                   NodePlan
+	peers                  []p2p.Peer
+	transport              *p2p.Transport
+	pool                   *mempool.Mempool
+	proposer               *realblock.Proposer
+	db                     *state.DB
+	store                  *storage.BlockStore
+	engine                 *execution.Engine
+	mu                     sync.Mutex
+	proposals              map[string]realblock.Block
+	votes                  map[string]map[string]bool
+	committed              map[string]bool
+	committedHeight        uint64
+	committedHash          string
+	pendingCommits         map[uint64]realblock.Block
+	proposalInFlight       bool
+	lastCatchupRequest     time.Time
+	relaySource            map[string]Relay
+	relayAdmissionFailures map[string]string
+	events                 []Event
+	lifecycle              []LifecycleEvent
+	consensusRows          [][]string
+	executionRows          [][]string
+	commitRows             [][]string
+	chainRows              [][]string
+	pluginSnapshot         map[string]PluginConfig
+	plugins                RuntimePlugins
+	blockCount             int
 }
 
 func RunNode(ctx context.Context, plan Plan, nodeID string) error {
@@ -103,36 +122,99 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 			interval = time.Duration(value) * time.Millisecond
 		}
 	}
-	if selected.Leader {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return r.WriteArtifacts()
-			case <-ticker.C:
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return r.WriteArtifacts()
+		case <-ticker.C:
+			r.retryPendingRelays()
+			if selected.Leader {
 				r.propose(ctx)
+			} else {
+				r.requestCatchup(ctx)
+			}
+			_ = r.writeRuntimeStatus()
+			if _, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(r.node.DataDir)), "stop.request")); err == nil {
+				return r.WriteArtifacts()
 			}
 		}
 	}
-	<-ctx.Done()
-	return r.WriteArtifacts()
+}
+
+func (r *NodeRuntime) retryPendingRelays() {
+	r.mu.Lock()
+	relays := make([]Relay, 0, len(r.relaySource))
+	for _, relay := range r.relaySource {
+		relays = append(relays, relay)
+	}
+	r.mu.Unlock()
+	for _, relay := range relays {
+		if r.pool.Has(relay.Tx.TxID) {
+			continue
+		}
+		result := r.pool.Admit(relay.Tx)
+		if !result.Accepted && result.RejectReason == "stale_nonce" {
+			r.reconcileCommittedRelay(context.Background(), relay)
+			continue
+		}
+		if !result.Accepted && result.RejectReason != "duplicate_tx" && result.RejectReason != "capacity" {
+			r.mu.Lock()
+			r.relayAdmissionFailures[relay.Tx.TxID] = result.RejectReason
+			r.mu.Unlock()
+			r.recordEvent(relay.Tx.TxID, relay.SourceShard, relay.TargetShard, "RelayAdmissionFailed", false, result.RejectReason)
+		}
+	}
+}
+
+func (r *NodeRuntime) reconcileCommittedRelay(ctx context.Context, relay Relay) {
+	committed, err := r.store.HasTransaction(relay.Tx.TxID)
+	if err != nil || !committed {
+		return
+	}
+	r.recordEvent(relay.Tx.TxID, relay.SourceShard, relay.TargetShard, "TargetCommit", true, "tx_index_reconciliation")
+	finish := Finalize{TxID: relay.Tx.TxID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard}
+	envelope, err := p2p.NewEnvelope(finalizeMessage, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, finish)
+	if err != nil || r.sendToNode(ctx, r.leaderID(relay.SourceShard), envelope) != nil {
+		return
+	}
+	r.mu.Lock()
+	delete(r.relaySource, relay.Tx.TxID)
+	delete(r.relayAdmissionFailures, relay.Tx.TxID)
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) requestCatchup(ctx context.Context) {
+	leader := r.leaderID(r.node.ShardID)
+	if leader == "" {
+		return
+	}
+	r.mu.Lock()
+	if !r.lastCatchupRequest.IsZero() && time.Since(r.lastCatchupRequest) < time.Second {
+		r.mu.Unlock()
+		return
+	}
+	from := r.committedHeight + 1
+	r.lastCatchupRequest = time.Now()
+	r.mu.Unlock()
+	if from == 0 {
+		return
+	}
+	envelope, err := p2p.NewEnvelope(catchupRequestMessage, r.node.NodeID, leader, r.node.ShardID, from, 0, from, CatchupRequest{ShardID: r.node.ShardID, FromHeight: from, ToHeight: from + 8})
+	if err == nil {
+		_ = r.sendToNode(ctx, leader, envelope)
+	}
 }
 
 func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
-	registry := BuiltinRegistry()
-	for _, category := range Categories {
-		item, ok := node.PluginProfile[category]
-		if !ok {
-			return nil, fmt.Errorf("missing plugin profile for %s", category)
-		}
-		if _, err := registry.Create(category, item.PluginID, item.Config); err != nil {
-			return nil, err
-		}
+	plugins, err := InstantiatePlugins(node.PluginProfile)
+	if err != nil {
+		return nil, err
 	}
 	peers := []p2p.Peer{}
 	for _, item := range plan.NodeConfigs {
-		if item.NodeID != node.NodeID && item.ShardID == node.ShardID {
+		if item.NodeID != node.NodeID {
 			peers = append(peers, p2p.Peer{NodeID: item.NodeID, ShardID: item.ShardID, ListenAddr: item.ListenAddr, Role: item.Role, Leader: item.Leader})
 		}
 	}
@@ -141,10 +223,8 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 		return nil, err
 	}
 	policy := mempool.DefaultPolicy()
-	if configured, ok := node.PluginProfile["txpool"].Config["capacity"].(float64); ok {
-		policy.Capacity = int(configured)
-	}
-	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: mempool.New(node.NodeID, node.ShardID, policy, account.NewNonceManager()), proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: storage.NewBlockStore(node.DataDir, node.NodeID, node.ShardID), engine: execution.NewEngine(), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, relaySource: map[string]Relay{}, pluginSnapshot: node.PluginProfile}
+	policy.Capacity = plugins.TxPool.Capacity()
+	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: mempool.New(node.NodeID, node.ShardID, policy, account.NewNonceManager()), proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: storage.NewBlockStore(node.DataDir, node.NodeID, node.ShardID), engine: execution.NewEngine(), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, committedHash: "genesis", relaySource: map[string]Relay{}, relayAdmissionFailures: map[string]string{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
 	r.transport = p2p.NewTransport(node.NodeID, node.ListenAddr, peers, r.handle)
 	return r, nil
 }
@@ -159,10 +239,13 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		if err != nil {
 			return err
 		}
+		r.recordLifecycle(nowLifecycle(item.TxID, "received", r.node.NodeID, r.node.ShardID))
 		result := r.pool.Admit(item)
 		if !result.Accepted && result.RejectReason != "duplicate_tx" {
+			r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "failed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, Success: false, Error: result.RejectReason})
 			return fmt.Errorf("admission %s", result.RejectReason)
 		}
+		r.recordLifecycle(nowLifecycle(item.TxID, "admitted", r.node.NodeID, r.node.ShardID))
 		if r.node.Leader && msg.FromNode == "mbe-client" {
 			return r.gossip(ctx, item)
 		}
@@ -200,12 +283,24 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		if err != nil {
 			return err
 		}
+		if committed, err := r.store.HasTransaction(relay.Tx.TxID); err == nil && committed {
+			r.reconcileCommittedRelay(ctx, relay)
+			return nil
+		}
 		r.mu.Lock()
+		if _, exists := r.relaySource[relay.Tx.TxID]; exists {
+			r.mu.Unlock()
+			return nil
+		}
 		r.relaySource[relay.Tx.TxID] = relay
 		r.events = append(r.events, Event{Timestamp: time.Now().UnixMilli(), TxID: relay.Tx.TxID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard, Stage: "RelayCertificate", Success: true})
 		r.mu.Unlock()
+		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: relay.Tx.TxID, LogicalTxID: relay.Tx.TxID, Stage: "relay_received", NodeID: r.node.NodeID, ShardID: r.node.ShardID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard, Success: true})
 		result := r.pool.Admit(relay.Tx)
 		if !result.Accepted && result.RejectReason != "duplicate_tx" {
+			r.mu.Lock()
+			r.relayAdmissionFailures[relay.Tx.TxID] = result.RejectReason
+			r.mu.Unlock()
 			return fmt.Errorf("relay admission %s", result.RejectReason)
 		}
 	case finalizeMessage:
@@ -214,6 +309,39 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 			return err
 		}
 		r.recordEvent(finish.TxID, finish.SourceShard, finish.TargetShard, "SourceFinalize", true, "")
+	case catchupRequestMessage:
+		request, err := p2p.DecodePayload[CatchupRequest](msg)
+		if err != nil {
+			return err
+		}
+		if !r.node.Leader {
+			return nil
+		}
+		for height := request.FromHeight; height <= request.ToHeight; height++ {
+			block, ok, err := r.store.ReadCommittedAtHeight(height)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				continue
+			}
+			envelope, err := p2p.NewEnvelope(catchupBlockMessage, r.node.NodeID, msg.FromNode, r.node.ShardID, height, 0, height, CatchupBlock{Block: block, SourceNode: r.node.NodeID})
+			if err != nil {
+				return err
+			}
+			if err := r.sendToNode(ctx, msg.FromNode, envelope); err != nil {
+				return err
+			}
+		}
+	case catchupBlockMessage:
+		item, err := p2p.DecodePayload[CatchupBlock](msg)
+		if err != nil {
+			return err
+		}
+		if err := r.commit(ctx, item.Block); err != nil {
+			return err
+		}
+		r.logConsensus("CATCHUP_APPLIED", item.SourceNode, item.Block.BlockHash, item.Block.Height)
 	}
 	return nil
 }
@@ -230,13 +358,23 @@ func (r *NodeRuntime) gossip(ctx context.Context, item tx.SignedTransaction) err
 	return nil
 }
 func (r *NodeRuntime) propose(ctx context.Context) {
+	r.mu.Lock()
+	if r.proposalInFlight {
+		r.mu.Unlock()
+		return
+	}
+	r.mu.Unlock()
 	block, err := r.proposer.Build(r.pool, r.blockSize(), time.Now())
 	if err != nil {
 		return
 	}
 	r.rememberProposal(block)
+	for _, item := range block.TxList {
+		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "proposed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
+	}
 	r.mu.Lock()
 	r.votes[block.BlockHash] = map[string]bool{r.node.NodeID: true}
+	r.proposalInFlight = true
 	r.mu.Unlock()
 	r.logConsensus("PBFT_PRE_PREPARE_LOCAL", r.node.NodeID, block.BlockHash, block.Height)
 	proposal := Proposal{Block: block}
@@ -256,7 +394,7 @@ func (r *NodeRuntime) acceptVote(ctx context.Context, vote Vote) {
 		r.votes[vote.BlockHash] = votes
 	}
 	votes[vote.NodeID] = true
-	reached := len(votes) >= quorum(len(r.node.Validators))
+	reached := len(votes) >= r.plugins.Consensus.Quorum(len(r.node.Validators))
 	block := r.proposals[vote.BlockHash]
 	r.mu.Unlock()
 	if reached && block.BlockHash != "" {
@@ -264,6 +402,9 @@ func (r *NodeRuntime) acceptVote(ctx context.Context, vote Vote) {
 	}
 }
 func (r *NodeRuntime) finalize(ctx context.Context, block realblock.Block) error {
+	for _, item := range block.TxList {
+		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "quorum_committed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
+	}
 	if err := r.commit(ctx, block); err != nil {
 		return err
 	}
@@ -284,6 +425,20 @@ func (r *NodeRuntime) commit(ctx context.Context, block realblock.Block) error {
 		r.mu.Unlock()
 		return nil
 	}
+	expected := r.committedHeight + 1
+	if block.Height > expected {
+		r.pendingCommits[block.Height] = block
+		r.mu.Unlock()
+		return nil
+	}
+	if block.Height < expected {
+		r.mu.Unlock()
+		return nil
+	}
+	if block.PreviousHash != r.committedHash {
+		r.mu.Unlock()
+		return fmt.Errorf("parent hash mismatch at height %d", block.Height)
+	}
 	r.committed[block.BlockHash] = true
 	r.blockCount++
 	relayItems := map[string]Relay{}
@@ -301,8 +456,33 @@ func (r *NodeRuntime) commit(ctx context.Context, block realblock.Block) error {
 	if err := r.db.Save(); err != nil {
 		return err
 	}
+	r.pool.CommitReserved(block.TxList)
+	if r.node.Leader {
+		r.proposer.Confirm(block)
+	}
+	r.mu.Lock()
+	r.chainRows = append(r.chainRows, []string{r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), "0", block.BlockHash, block.PreviousHash, fmt.Sprint(len(block.TxList)), block.TxRoot, block.StateRootBefore, result.StateRootAfter, result.ReceiptRoot, fmt.Sprint(time.Now().UnixMilli()), fmt.Sprint(time.Now().UnixMilli())})
+	r.mu.Unlock()
+	r.mu.Lock()
+	r.committedHeight = block.Height
+	r.committedHash = block.BlockHash
+	if r.node.Leader {
+		r.proposalInFlight = false
+	}
+	next := r.pendingCommits[r.committedHeight+1]
+	delete(r.pendingCommits, r.committedHeight+1)
+	r.mu.Unlock()
 	for _, item := range block.TxList {
+		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "durable_committed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
 		r.onCommittedTx(ctx, item, relayItems[item.TxID])
+		if relayItems[item.TxID].Tx.TxID != "" {
+			r.mu.Lock()
+			delete(r.relaySource, item.TxID)
+			r.mu.Unlock()
+		}
+	}
+	if next.BlockHash != "" {
+		return r.commit(ctx, next)
 	}
 	return nil
 }
@@ -321,7 +501,7 @@ func (r *NodeRuntime) onCommittedTx(ctx context.Context, item tx.SignedTransacti
 		r.recordEvent(item.TxID, r.node.ShardID, "", "Refund", true, "")
 		return
 	}
-	if strings.HasPrefix(item.Payload, "v5_cross:") {
+	if r.plugins.CrossShard.IsCrossShard(item) {
 		target := strings.TrimPrefix(item.Payload, "v5_cross:")
 		r.recordEvent(item.TxID, r.node.ShardID, target, "SourceLock", true, "")
 		relay := Relay{Tx: item, SourceShard: r.node.ShardID, TargetShard: target}
@@ -341,25 +521,10 @@ func (r *NodeRuntime) leaderID(shard string) string {
 }
 
 func (r *NodeRuntime) sendToNode(ctx context.Context, nodeID string, envelope p2p.MessageEnvelope) error {
-	for _, item := range r.plan.NodeConfigs {
-		if item.NodeID != nodeID {
-			continue
-		}
-		dialer := net.Dialer{Timeout: 2 * time.Second}
-		conn, err := dialer.DialContext(ctx, "tcp", item.ListenAddr)
-		if err != nil {
-			return err
-		}
-		defer conn.Close()
-		return p2p.Encode(conn, envelope)
-	}
-	return fmt.Errorf("unknown target node %s", nodeID)
+	return r.transport.Send(ctx, nodeID, envelope)
 }
 func (r *NodeRuntime) blockSize() int {
-	if value, ok := r.node.PluginProfile["block_producer"].Config["block_size"].(float64); ok {
-		return int(value)
-	}
-	return 10
+	return r.plugins.BlockProducer.BlockSize()
 }
 func (r *NodeRuntime) rememberProposal(block realblock.Block) {
 	r.mu.Lock()
@@ -370,6 +535,12 @@ func (r *NodeRuntime) recordEvent(txID, source, target, stage string, success bo
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, Event{Timestamp: time.Now().UnixMilli(), TxID: txID, SourceShard: source, TargetShard: target, Stage: stage, Success: success, Error: err})
+	r.lifecycle = append(r.lifecycle, LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: txID, LogicalTxID: txID, Stage: strings.ToLower(stage), NodeID: r.node.NodeID, ShardID: r.node.ShardID, SourceShard: source, TargetShard: target, Success: success, Error: err})
+}
+func (r *NodeRuntime) recordLifecycle(event LifecycleEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lifecycle = append(r.lifecycle, event)
 }
 func (r *NodeRuntime) logConsensus(kind, from, hash string, height uint64) {
 	r.mu.Lock()
@@ -384,7 +555,38 @@ func (r *NodeRuntime) writeReady() error {
 	}
 	return SaveJSON(filepath.Join(r.node.DataDir, "ready.json"), map[string]any{"node_id": r.node.NodeID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "plugins": r.pluginSnapshot, "runtime_truth": "v5_real_cluster_candidate"})
 }
+func (r *NodeRuntime) writeRuntimeStatus() error {
+	r.mu.Lock()
+	terminal := map[string]bool{}
+	for _, event := range r.lifecycle {
+		stage := strings.ToLower(event.Stage)
+		if stage == "durable_committed" || stage == "sourcefinalize" || stage == "refund" || stage == "failed" {
+			terminal[event.LogicalTxID] = true
+		}
+	}
+	terminalIDs := make([]string, 0, len(terminal))
+	for id := range terminal {
+		terminalIDs = append(terminalIDs, id)
+	}
+	pendingRelayIDs := make([]string, 0, len(r.relaySource))
+	for txID := range r.relaySource {
+		pendingRelayIDs = append(pendingRelayIDs, txID)
+	}
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": r.committedHeight, "committed_block_hash": r.committedHash, "mempool_depth": r.pool.Len(), "reserved_tx_count": 0, "proposal_in_flight": r.proposalInFlight, "pending_commit_count": len(r.pendingCommits), "pending_commit_heights": mapKeys(r.pendingCommits), "pending_future_block_count": len(r.pendingCommits), "pending_cross_shard_count": len(r.relaySource), "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": r.relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "last_progress_at": time.Now().UnixMilli(), "ready": true, "stopping": false}
+	r.mu.Unlock()
+	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
+}
+func mapKeys(items map[uint64]realblock.Block) []uint64 {
+	out := make([]uint64, 0, len(items))
+	for key := range items {
+		out = append(out, key)
+	}
+	return out
+}
 func (r *NodeRuntime) WriteArtifacts() error {
+	if err := r.writeRuntimeStatus(); err != nil {
+		return err
+	}
 	if err := r.transport.Log.WriteCSV(filepath.Join(r.node.DataDir, "network_log.csv")); err != nil {
 		return err
 	}
@@ -393,6 +595,8 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	rows := append([][]string(nil), r.consensusRows...)
 	executionRows := append([][]string(nil), r.executionRows...)
 	commitRows := append([][]string(nil), r.commitRows...)
+	chainRows := append([][]string(nil), r.chainRows...)
+	lifecycle := append([]LifecycleEvent(nil), r.lifecycle...)
 	count := r.blockCount
 	r.mu.Unlock()
 	eventRows := [][]string{}
@@ -409,6 +613,19 @@ func (r *NodeRuntime) WriteArtifacts() error {
 		return err
 	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "commit_log.csv"), []string{"timestamp", "node_id", "shard_id", "height", "commit_plugin", "aggregation_group_id", "logical_update_count", "physical_update_count", "aggregation_applied"}, commitRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "committed_chain.csv"), []string{"node_id", "shard_id", "height", "view", "block_hash", "parent_hash", "tx_count", "tx_digest", "state_root_before", "state_root_after", "receipt_root", "commit_started_at", "commit_finished_at"}, chainRows); err != nil {
+		return err
+	}
+	lifecycleRows := make([][]string, 0, len(lifecycle))
+	for _, event := range lifecycle {
+		lifecycleRows = append(lifecycleRows, lifecycleRow(event))
+	}
+	if err := writeLifecycleJSONL(filepath.Join(r.node.DataDir, "transaction_lifecycle.jsonl"), lifecycle); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "transaction_lifecycle.csv"), []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success", "error"}, lifecycleRows); err != nil {
 		return err
 	}
 	evidence := pluginEvidence(r.pluginSnapshot)
@@ -431,47 +648,16 @@ func pluginEvidence(profile map[string]PluginConfig) map[string]map[string]any {
 }
 
 func (r *NodeRuntime) recordExecutionAndCommitDecisions(block realblock.Block) {
-	executionPlugin := r.node.PluginProfile["execution"].PluginID
-	commitPlugin := r.node.PluginProfile["commit"].PluginID
-	physicalKeys := map[string]bool{}
-	aggregationGroup := ""
-	if commitPlugin == "commutative_hot_update_aggregation" {
-		aggregationGroup = fmt.Sprintf("%s:%d", r.node.ShardID, block.Height)
-	}
+	executionPlugin := r.plugins.Execution.ID()
+	commitPlugin := r.plugins.Commit.ID()
+	commitDecision := r.plugins.Commit.DecideCommit(CommitInput{ShardID: r.node.ShardID, Height: block.Height, Transactions: block.TxList})
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, item := range block.TxList {
-		track, reason := "serial", "serial_execution"
-		if executionPlugin == "dual_track_execution" {
-			if strings.Contains(item.Payload, "v5_safe") || strings.Contains(item.Payload, "v5_commutative") {
-				track, reason = "fast", "access_list_safe"
-			} else {
-				track, reason = "conservative", "conflict_or_cross_shard"
-			}
-		}
-		r.executionRows = append(r.executionRows, []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, item.TxID, fmt.Sprint(block.Height), executionPlugin, track, reason})
-		key := strings.Join(item.StateKeys, "|")
-		physicalKeys[key] = true
+		decision := r.plugins.Execution.Classify(item)
+		r.executionRows = append(r.executionRows, []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, item.TxID, fmt.Sprint(block.Height), executionPlugin, decision.Track, decision.Reason})
 	}
-	logical := len(block.TxList)
-	physical := logical
-	aggregated := false
-	if aggregationGroup != "" {
-		commutative := 0
-		for _, item := range block.TxList {
-			if strings.Contains(item.Payload, "v5_commutative") {
-				commutative++
-			}
-		}
-		if commutative >= 2 {
-			physical = len(physicalKeys)
-			aggregated = physical < logical || commutative >= 2
-		}
-		if !aggregated {
-			aggregationGroup = ""
-		}
-	}
-	r.commitRows = append(r.commitRows, []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), commitPlugin, aggregationGroup, fmt.Sprint(logical), fmt.Sprint(physical), fmt.Sprint(aggregated)})
+	r.commitRows = append(r.commitRows, []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), commitPlugin, commitDecision.AggregationGroupID, fmt.Sprint(commitDecision.LogicalUpdates), fmt.Sprint(commitDecision.PhysicalUpdates), fmt.Sprint(commitDecision.Applied)})
 }
 
 func summarizeMethodRows(executionRows, commitRows [][]string) (int, int, int, int, int) {

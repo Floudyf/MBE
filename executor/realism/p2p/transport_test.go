@@ -145,6 +145,38 @@ func TestSendReceiveAndBroadcast(t *testing.T) {
 	}
 }
 
+func TestPersistentSendReusesConnectionForBurst(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	received := make(chan MessageEnvelope, 100)
+	b := NewTransport("n1", "127.0.0.1:0", nil, func(ctx context.Context, msg MessageEnvelope) error {
+		received <- msg
+		return nil
+	})
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop()
+	a := NewTransport("n0", "127.0.0.1:0", []Peer{{NodeID: "n1", ListenAddr: b.ListenAddr}}, nil)
+	defer a.Stop()
+	for i := 0; i < 100; i++ {
+		msg, err := NewEnvelope(MessagePBFTPrepare, "n0", "n1", "s0", uint64(i+1), 0, uint64(i+1), map[string]int{"sequence": i})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := a.Send(ctx, "n1", msg); err != nil {
+			t.Fatalf("burst send %d: %v", i, err)
+		}
+	}
+	for i := 0; i < 100; i++ {
+		select {
+		case <-received:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out receiving burst message %d", i)
+		}
+	}
+}
+
 func TestTransportStopDoesNotPanicAcceptLoop(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		ctx, cancel := context.WithCancel(context.Background())

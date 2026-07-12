@@ -16,14 +16,15 @@ type entry struct {
 }
 
 type Mempool struct {
-	mu      sync.Mutex
-	nodeID  string
-	shardID string
-	policy  Policy
-	nonces  *account.NonceManager
-	byID    map[string]entry
-	order   []string
-	nextSeq int64
+	mu       sync.Mutex
+	nodeID   string
+	shardID  string
+	policy   Policy
+	nonces   *account.NonceManager
+	byID     map[string]entry
+	order    []string
+	nextSeq  int64
+	reserved map[string]bool
 }
 
 func New(nodeID, shardID string, policy Policy, nonces *account.NonceManager) *Mempool {
@@ -37,11 +38,12 @@ func New(nodeID, shardID string, policy Policy, nonces *account.NonceManager) *M
 		nonces = account.NewNonceManager()
 	}
 	return &Mempool{
-		nodeID:  nodeID,
-		shardID: shardID,
-		policy:  policy,
-		nonces:  nonces,
-		byID:    map[string]entry{},
+		nodeID:   nodeID,
+		shardID:  shardID,
+		policy:   policy,
+		nonces:   nonces,
+		byID:     map[string]entry{},
+		reserved: map[string]bool{},
 	}
 }
 
@@ -116,6 +118,43 @@ func (m *Mempool) PopReady(limit int) []tx.SignedTransaction {
 		}
 	}
 	return out
+}
+
+func (m *Mempool) ReserveReady(limit int) []tx.SignedTransaction {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if limit <= 0 {
+		return nil
+	}
+	out := []tx.SignedTransaction{}
+	for _, id := range m.order {
+		if len(out) >= limit {
+			break
+		}
+		if m.reserved[id] {
+			continue
+		}
+		if entry, ok := m.byID[id]; ok {
+			m.reserved[id] = true
+			out = append(out, entry.tx)
+		}
+	}
+	return out
+}
+func (m *Mempool) CommitReserved(items []tx.SignedTransaction) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, item := range items {
+		delete(m.reserved, item.TxID)
+		m.removeLocked(item.TxID)
+	}
+}
+func (m *Mempool) ReleaseReserved(items []tx.SignedTransaction) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, item := range items {
+		delete(m.reserved, item.TxID)
+	}
 }
 
 func (m *Mempool) Len() int {
