@@ -120,7 +120,8 @@ func runLocalhostTCPHandshake(launcher LauncherPreview) NetworkAdapterPreview {
 	if len(launcher.Addresses) > 1 {
 		sender = launcher.Addresses[1]
 	}
-	address := net.JoinHostPort(receiver.PreviewHost, strconv.Itoa(receiver.PreviewPort))
+	listenPort := receiver.PreviewPort
+	address := net.JoinHostPort(receiver.PreviewHost, strconv.Itoa(listenPort))
 	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		preview.ErrorCount++
@@ -128,7 +129,11 @@ func runLocalhostTCPHandshake(launcher LauncherPreview) NetworkAdapterPreview {
 		return preview
 	}
 	defer listener.Close()
-	preview.StatusRows = append(preview.StatusRows, TCPAdapterStatus{NodeID: receiver.NodeID, Role: receiver.Role, PreviewHost: receiver.PreviewHost, PreviewPort: receiver.PreviewPort, Adapter: NetworkAdapterLocalhostTCPPreview, Action: "listen", Status: "ok"})
+	if tcpAddress, ok := listener.Addr().(*net.TCPAddr); ok {
+		listenPort = tcpAddress.Port
+	}
+	address = net.JoinHostPort(receiver.PreviewHost, strconv.Itoa(listenPort))
+	preview.StatusRows = append(preview.StatusRows, TCPAdapterStatus{NodeID: receiver.NodeID, Role: receiver.Role, PreviewHost: receiver.PreviewHost, PreviewPort: listenPort, Adapter: NetworkAdapterLocalhostTCPPreview, Action: "listen", Status: "ok"})
 
 	received := make(chan MessageEnvelope, 1)
 	responded := make(chan MessageEnvelope, 1)
@@ -165,7 +170,7 @@ func runLocalhostTCPHandshake(launcher LauncherPreview) NetworkAdapterPreview {
 	conn, err := net.DialTimeout("tcp", address, 2*time.Second)
 	if err != nil {
 		preview.ErrorCount++
-		preview.StatusRows = append(preview.StatusRows, TCPAdapterStatus{NodeID: sender.NodeID, Role: sender.Role, PreviewHost: receiver.PreviewHost, PreviewPort: receiver.PreviewPort, Adapter: NetworkAdapterLocalhostTCPPreview, Action: "dial", Status: "error", Error: err.Error()})
+		preview.StatusRows = append(preview.StatusRows, TCPAdapterStatus{NodeID: sender.NodeID, Role: sender.Role, PreviewHost: receiver.PreviewHost, PreviewPort: listenPort, Adapter: NetworkAdapterLocalhostTCPPreview, Action: "dial", Status: "error", Error: err.Error()})
 		return preview
 	}
 	defer conn.Close()
@@ -177,7 +182,7 @@ func runLocalhostTCPHandshake(launcher LauncherPreview) NetworkAdapterPreview {
 		preview.SendRows = append(preview.SendRows, NetworkSendRecord{MessageEnvelope: ping, Status: "error", Error: err.Error()})
 		return preview
 	}
-	preview.StatusRows = append(preview.StatusRows, TCPAdapterStatus{NodeID: sender.NodeID, Role: sender.Role, PreviewHost: receiver.PreviewHost, PreviewPort: receiver.PreviewPort, Adapter: NetworkAdapterLocalhostTCPPreview, Action: "dial_send", Status: "ok"})
+	preview.StatusRows = append(preview.StatusRows, TCPAdapterStatus{NodeID: sender.NodeID, Role: sender.Role, PreviewHost: receiver.PreviewHost, PreviewPort: listenPort, Adapter: NetworkAdapterLocalhostTCPPreview, Action: "dial_send", Status: "ok"})
 	preview.SendRows = append(preview.SendRows, NetworkSendRecord{MessageEnvelope: ping, Status: "sent"})
 	preview.TypedMessages = append(preview.TypedMessages, ping)
 

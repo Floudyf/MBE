@@ -12,6 +12,7 @@ func TestLocalhostTCPPreviewSendsTypedPingPong(t *testing.T) {
 	cfg.NetworkAdapter = NetworkAdapterLocalhostTCPPreview
 	nodeRuntime := BuildLogicalNodeArtifacts(cfg, []Block{{Height: 1, CutTimeMS: 100}}, nil)
 	launcher := BuildLauncherPreview(nodeRuntime)
+	launcher.Addresses[0].PreviewPort = 0
 
 	preview := RunNetworkAdapterPreview(launcher)
 	if preview.SelectedAdapter != NetworkAdapterLocalhostTCPPreview {

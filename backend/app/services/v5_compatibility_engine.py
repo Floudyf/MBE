@@ -54,6 +54,10 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         blockers.append("tx_count exceeds max_tx_count resource policy")
     if spec.duration_ms > RESOURCE_POLICY["max_runtime_seconds"] * 1000:
         blockers.append("duration exceeds max_runtime_seconds resource policy")
+    workload_config = by_category.get("workload").config if by_category.get("workload") else {}
+    ratio = float(workload_config.get("cross_shard_ratio", 0.0) or 0.0)
+    if spec.execution_backend == "real_cluster" and ratio > 0 and _cross_shard_fault_unsupported(spec.fault_policy):
+        blockers.append("cross-shard experiments with message loss or node restart are not supported because Relay/SourceFinalize reliable retransmission is not implemented")
     scheduler = by_category.get("scheduler")
     execution = by_category.get("execution")
     if scheduler and scheduler.plugin_id == "fast_first_scheduler" and (not execution or execution.plugin_id != "dual_track_execution"):
@@ -62,6 +66,20 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         warnings.append("real_cluster is blocked and will not fall back to simulation or V4 smoke")
     estimate = {**RESOURCE_POLICY, "estimated_processes": spec.topology.nodes, "estimated_ports": spec.topology.nodes, "estimate_only": True}
     return V5CompatibilityResult(valid=not blockers, blockers=blockers, warnings=warnings, resolved_plugins=list(by_category.values()), resource_estimate=estimate)
+
+
+def _cross_shard_fault_unsupported(policy: dict[str, Any]) -> bool:
+    if not policy:
+        return False
+    drop_message_types = policy.get("drop_message_types")
+    return bool(
+        float(policy.get("drop_rate", 0) or 0) > 0
+        or int(policy.get("drop_every", 0) or 0) > 0
+        or drop_message_types
+        or int(policy.get("kill_node_after_ms", 0) or 0) > 0
+        or int(policy.get("restart_node_after_ms", 0) or 0) > 0
+        or str(policy.get("mode", "")).lower() in {"kill_node", "restart_node", "node_kill", "node_restart", "network_drop"}
+    )
 
 
 def _validate_schema(config: dict[str, Any], schema: dict[str, Any], plugin_id: str, blockers: list[str]) -> None:

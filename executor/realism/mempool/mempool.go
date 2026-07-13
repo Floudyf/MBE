@@ -52,6 +52,18 @@ func (m *Mempool) Admit(item tx.SignedTransaction) AdmissionResult {
 }
 
 func (m *Mempool) AdmitAt(item tx.SignedTransaction, now time.Time) AdmissionResult {
+	return m.admitAt(item, now, true)
+}
+
+// AdmitRelay validates and queues a transaction that was already admitted by
+// its source shard. Relay delivery is not a second account-nonce stream: the
+// target shard must not reject it because unrelated source-shard transactions
+// advanced the sender nonce before this relay arrived.
+func (m *Mempool) AdmitRelay(item tx.SignedTransaction) AdmissionResult {
+	return m.admitAt(item, time.Now(), false)
+}
+
+func (m *Mempool) admitAt(item tx.SignedTransaction, now time.Time, enforceNonce bool) AdmissionResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	nowMS := now.UnixMilli()
@@ -64,8 +76,10 @@ func (m *Mempool) AdmitAt(item tx.SignedTransaction, now time.Time) AdmissionRes
 	if len(m.byID) >= m.policy.Capacity {
 		return rejected(item, m.nodeID, m.shardID, ReasonCapacity, len(m.byID), nowMS)
 	}
-	if err := m.nonces.Accept(item.Sender, item.Nonce); err != nil {
+	if enforceNonce {
+		if err := m.nonces.Accept(item.Sender, item.Nonce); err != nil {
 		return rejected(item, m.nodeID, m.shardID, reasonOf(err), len(m.byID), nowMS)
+		}
 	}
 	m.nextSeq++
 	m.byID[item.TxID] = entry{tx: item, admittedAt: now, seq: m.nextSeq}
@@ -161,6 +175,12 @@ func (m *Mempool) Len() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.byID)
+}
+
+func (m *Mempool) ReservedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.reserved)
 }
 
 func (m *Mempool) Has(txID string) bool {

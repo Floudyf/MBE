@@ -227,6 +227,13 @@ func runV5(planPath, dataDir string) error {
 		return err
 	}
 	summary["finality_evidence"] = finality
+	if value, ok := finality["cross_shard_finalized_unique_count"].(int); ok {
+		summary["cross_shard_success_count"] = value
+		summary["real_cross_shard_network"] = value > 0
+	}
+	if value, ok := finality["cross_shard_refunded_unique_count"].(int); ok {
+		summary["cross_shard_refund_count"] = value
+	}
 	if err := v5.SaveJSON(filepath.Join(dataDir, "real_cluster_summary.json"), summary); err != nil {
 		return err
 	}
@@ -239,12 +246,21 @@ func drainV5(plan v5.Plan, dataDir string) error {
 	phase := "DRAINING"
 	deadline := started.Add(time.Duration(plan.DurationMS) * time.Millisecond)
 	progressPath := filepath.Join(dataDir, "drain_progress.csv")
-	_ = metrics.WriteCSV(progressPath, []string{"timestamp", "phase", "submitted", "terminal", "incomplete", "leader_height", "min_validator_height", "max_validator_height", "height_gap", "leader_mempool_depth", "total_mempool_depth", "total_reserved_tx", "proposal_in_flight", "pending_commit", "pending_future_block", "pending_cross_shard", "catchup_requests_sent", "catchup_blocks_received", "catchup_blocks_applied", "last_block_committed_at", "last_terminal_progress_at", "last_mempool_progress_at"}, nil)
-	lastProgress := time.Now()
+	_ = os.Remove(progressPath)
+	lastProgress := started
+	lastTerminalProgress := started
+	lastHeightProgress := started
+	lastMempoolProgress := started
+	lastPendingProgress := started
+	var previous progressSnapshot
+	initialized := false
+	var lastStatuses []map[string]any
+	var lastHeights map[string]map[string]bool
 	for time.Now().Before(deadline) {
 		statuses := []map[string]any{}
 		terminal := map[string]bool{}
 		allEmpty := true
+		fatalPersistence := ""
 		heights := map[string]map[string]bool{}
 		for _, node := range plan.NodeConfigs {
 			raw, err := os.ReadFile(filepath.Join(node.DataDir, "node_runtime_status.json"))
@@ -258,6 +274,9 @@ func drainV5(plan v5.Plan, dataDir string) error {
 				continue
 			}
 			statuses = append(statuses, status)
+			if value := fmt.Sprint(status["fatal_persistence_error"]); value != "" && value != "<nil>" {
+				fatalPersistence = value
+			}
 			for _, id := range stringSlice(status["terminal_logical_tx_ids"]) {
 				terminal[id] = true
 			}
@@ -281,42 +300,106 @@ func drainV5(plan v5.Plan, dataDir string) error {
 				aligned = false
 			}
 		}
-		writeDrainProgress(progressPath, phase, submitted, len(terminal), statuses, heights)
+		current := makeProgressSnapshot(len(terminal), statuses, heights)
+		now := time.Now()
+		if !initialized || progressChanged(previous, current) {
+			lastProgress = now
+		}
+		if !initialized || current.Terminal != previous.Terminal {
+			lastTerminalProgress = now
+		}
+		if !initialized || current.MaxHeight != previous.MaxHeight || current.MinHeight != previous.MinHeight {
+			lastHeightProgress = now
+		}
+		if !initialized || current.Mempool != previous.Mempool || current.Reserved != previous.Reserved {
+			lastMempoolProgress = now
+		}
+		if !initialized || current.Pending != previous.Pending || current.ProposalInFlight != previous.ProposalInFlight {
+			lastPendingProgress = now
+		}
+		previous = current
+		initialized = true
+		lastStatuses = statuses
+		lastHeights = heights
+		if fatalPersistence != "" {
+			phase = "FAILED"
+			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "failed_persistence_inconsistency", "fatal_persistence_error": fatalPersistence, "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli()})
+			return fmt.Errorf("failed_persistence_inconsistency: %s", fatalPersistence)
+		}
 		phase = "DRAINING"
 		if !aligned {
 			phase = "CATCHING_UP"
 		}
+		writeDrainProgress(progressPath, phase, submitted, len(terminal), current, lastTerminalProgress, lastMempoolProgress)
 		if len(terminal) >= submitted && allEmpty && aligned {
 			phase = "QUIESCENT"
-			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "drain_quiescent", "drain_started_at": started.UnixMilli(), "drain_finished_at": time.Now().UnixMilli()})
+			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "drain_quiescent", "drain_started_at": started.UnixMilli(), "drain_finished_at": now.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli()})
 			return nil
 		}
-		_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "in_progress", "drain_started_at": started.UnixMilli(), "last_progress_at": time.Now().UnixMilli(), "node_count": len(statuses)})
+		_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "in_progress", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "node_count": len(statuses)})
 		time.Sleep(250 * time.Millisecond)
 	}
-	_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": []string{"validator_height_lag", "terminal_accounting_missing"}, "submitted": submitted, "last_progress_at": lastProgress.UnixMilli()})
+	classifiers := []string{}
+	if previous.MaxHeight != previous.MinHeight {
+		classifiers = append(classifiers, "validator_height_lag")
+	}
+	if previous.Terminal < submitted {
+		classifiers = append(classifiers, "terminal_accounting_missing")
+	}
+	if len(classifiers) == 0 {
+		classifiers = append(classifiers, "unknown")
+	}
+	_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": classifiers, "submitted": submitted, "terminal": previous.Terminal, "incomplete": submitted - previous.Terminal, "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "last_snapshot": previous, "last_statuses": lastStatuses, "last_heights": lastHeights})
 	return fmt.Errorf("drain hard timeout")
 }
 
-func writeDrainProgress(path, phase string, submitted, terminal int, statuses []map[string]any, heights map[string]map[string]bool) {
-	leader, minHeight, maxHeight, mempool, reserved, pending, proposals := 0, -1, 0, 0, 0, 0, false
+type progressSnapshot struct {
+	Terminal         int  `json:"terminal"`
+	MinHeight        int  `json:"min_height"`
+	MaxHeight        int  `json:"max_height"`
+	Mempool          int  `json:"mempool"`
+	Reserved         int  `json:"reserved"`
+	Pending          int  `json:"pending"`
+	ProposalInFlight bool `json:"proposal_in_flight"`
+}
+
+func makeProgressSnapshot(terminal int, statuses []map[string]any, heights map[string]map[string]bool) progressSnapshot {
+	result := progressSnapshot{Terminal: terminal, MinHeight: -1}
 	for _, status := range statuses {
 		height := number(status["committed_height"])
-		if height > maxHeight {
-			maxHeight = height
+		if height > result.MaxHeight {
+			result.MaxHeight = height
 		}
-		if minHeight < 0 || height < minHeight {
-			minHeight = height
+		if result.MinHeight < 0 || height < result.MinHeight {
+			result.MinHeight = height
 		}
-		mempool += number(status["mempool_depth"])
-		reserved += number(status["reserved_tx_count"])
-		pending += number(status["pending_commit_count"])
-		proposals = proposals || boolValue(status["proposal_in_flight"])
-		if fmt.Sprint(status["role"]) == "leader" {
-			leader = height
-		}
+		result.Mempool += number(status["mempool_depth"])
+		result.Reserved += number(status["reserved_tx_count"])
+		result.Pending += number(status["pending_commit_count"]) + number(status["pending_future_block_count"]) + number(status["pending_cross_shard_count"])
+		result.ProposalInFlight = result.ProposalInFlight || boolValue(status["proposal_in_flight"])
 	}
-	_ = metrics.WriteCSV(path, []string{"timestamp", "phase", "submitted", "terminal", "incomplete", "leader_height", "min_validator_height", "max_validator_height", "height_gap", "leader_mempool_depth", "total_mempool_depth", "total_reserved_tx", "proposal_in_flight", "pending_commit", "pending_future_block", "pending_cross_shard", "catchup_requests_sent", "catchup_blocks_received", "catchup_blocks_applied", "last_block_committed_at", "last_terminal_progress_at", "last_mempool_progress_at"}, [][]string{{fmt.Sprint(time.Now().UnixMilli()), phase, fmt.Sprint(submitted), fmt.Sprint(terminal), fmt.Sprint(submitted - terminal), fmt.Sprint(leader), fmt.Sprint(minHeight), fmt.Sprint(maxHeight), fmt.Sprint(maxHeight - minHeight), fmt.Sprint(0), fmt.Sprint(mempool), fmt.Sprint(reserved), fmt.Sprint(proposals), fmt.Sprint(pending), fmt.Sprint(pending), fmt.Sprint(0), fmt.Sprint(0), fmt.Sprint(0), fmt.Sprint(0), "", "", ""}})
+	_ = heights
+	return result
+}
+
+func progressChanged(previous, current progressSnapshot) bool {
+	return current.Terminal > previous.Terminal || current.MaxHeight > previous.MaxHeight || current.MinHeight > previous.MinHeight || current.Mempool < previous.Mempool || current.Reserved < previous.Reserved || current.Pending < previous.Pending
+}
+
+func writeDrainProgress(path, phase string, submitted, terminal int, snapshot progressSnapshot, lastTerminalProgress, lastMempoolProgress time.Time) {
+	header := []string{"timestamp", "phase", "submitted", "terminal", "incomplete", "min_validator_height", "max_validator_height", "height_gap", "total_mempool_depth", "total_reserved_tx", "proposal_in_flight", "pending_total", "last_terminal_progress_at", "last_mempool_progress_at"}
+	row := []string{fmt.Sprint(time.Now().UnixMilli()), phase, fmt.Sprint(submitted), fmt.Sprint(terminal), fmt.Sprint(submitted - terminal), fmt.Sprint(snapshot.MinHeight), fmt.Sprint(snapshot.MaxHeight), fmt.Sprint(snapshot.MaxHeight - snapshot.MinHeight), fmt.Sprint(snapshot.Mempool), fmt.Sprint(snapshot.Reserved), fmt.Sprint(snapshot.ProposalInFlight), fmt.Sprint(snapshot.Pending), fmt.Sprint(lastTerminalProgress.UnixMilli()), fmt.Sprint(lastMempoolProgress.UnixMilli())}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	writer := csv.NewWriter(file)
+	if info, err := file.Stat(); err == nil && info.Size() == 0 {
+		_ = writer.Write(header)
+	}
+	_ = writer.Write(row)
+	writer.Flush()
 }
 func number(value any) int {
 	switch item := value.(type) {
@@ -345,6 +428,26 @@ type lifecycleRecord struct {
 }
 
 func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]any, error) {
+	classification := map[string]bool{}
+	submissionFile, err := os.Open(filepath.Join(dataDir, "client", "client_submission_log.csv"))
+	if err != nil {
+		return nil, err
+	}
+	submissionRows, err := csv.NewReader(submissionFile).ReadAll()
+	_ = submissionFile.Close()
+	if err != nil {
+		return nil, err
+	}
+	for index, row := range submissionRows {
+		if index == 0 || len(row) < 10 {
+			continue
+		}
+		isCross, err := strconv.ParseBool(row[6])
+		if err != nil {
+			return nil, fmt.Errorf("decode submitted transaction classification %q: %w", row[1], err)
+		}
+		classification[row[1]] = isCross
+	}
 	paths := []string{filepath.Join(dataDir, "client", "client_lifecycle.csv")}
 	for _, node := range nodes {
 		paths = append(paths, filepath.Join(node.DataDir, "transaction_lifecycle.csv"))
@@ -384,23 +487,39 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 	type aggregate struct {
 		submitted     int64
 		cross         bool
+		targetCommit  bool
+		crossFinal    bool
+		crossRefund   bool
+		failed        bool
 		terminal      int64
 		terminalStage string
 		success       bool
 	}
 	byLogical := map[string]*aggregate{}
+	for logicalID, isCross := range classification {
+		byLogical[logicalID] = &aggregate{cross: isCross}
+	}
 	for _, event := range all {
 		entry := byLogical[event.logicalID]
 		if entry == nil {
-			entry = &aggregate{}
+			entry = &aggregate{cross: classification[event.logicalID]}
 			byLogical[event.logicalID] = entry
 		}
 		if event.stage == "submitted" && (entry.submitted == 0 || event.timestamp < entry.submitted) {
 			entry.submitted = event.timestamp
 		}
 		stage := strings.ToLower(event.stage)
-		if stage == "sourcelock" || stage == "relaycertificate" || stage == "targetcommit" || stage == "sourcefinalize" || stage == "refund" {
-			entry.cross = true
+		if stage == "targetcommit" {
+			entry.targetCommit = true
+		}
+		if stage == "sourcefinalize" {
+			entry.crossFinal = true
+		}
+		if stage == "refund" {
+			entry.crossRefund = true
+		}
+		if stage == "failed" {
+			entry.failed = true
 		}
 	}
 	for _, event := range all {
@@ -417,6 +536,26 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 			entry.terminal = event.timestamp
 			entry.terminalStage = event.stage
 			entry.success = event.success && event.stage != "failed"
+		}
+	}
+	intraCommitted, crossRequested, crossTarget, crossFinalized, crossRefunded, crossFailed := 0, 0, 0, 0, 0, 0
+	for _, entry := range byLogical {
+		if entry.cross {
+			crossRequested++
+			if entry.targetCommit {
+				crossTarget++
+			}
+			if entry.crossFinal {
+				crossFinalized++
+			}
+			if entry.crossRefund {
+				crossRefunded++
+			}
+			if entry.failed {
+				crossFailed++
+			}
+		} else if entry.terminalStage == "durable_committed" && entry.terminal > 0 {
+			intraCommitted++
 		}
 	}
 	rows := [][]string{}
@@ -475,7 +614,8 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 	if err := metrics.WriteCSV(filepath.Join(dataDir, "throughput_windows.csv"), []string{"window_start_ms", "window_end_ms", "finalized_unique_logical_txs", "throughput_tps"}, [][]string{{fmt.Sprint(first), fmt.Sprint(last), fmt.Sprint(finalized), fmt.Sprintf("%.6f", tps)}}); err != nil {
 		return nil, err
 	}
-	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle", "logical_transaction_count": len(byLogical), "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": tps, "tcp_send_latency_excluded": true}
+	terminalUnique := intraCommitted + crossFinalized + crossRefunded + crossFailed
+	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle", "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": tps, "tcp_send_latency_excluded": true}
 	return summary, v5.SaveJSON(filepath.Join(dataDir, "finality_summary.json"), summary)
 }
 
@@ -569,6 +709,7 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	pbftCount := 0
 	crossSuccess := 0
 	crossRefund := 0
+	faultEvidence := false
 	for _, node := range plan.NodeConfigs {
 		raw, err := os.ReadFile(filepath.Join(node.DataDir, "node_summary.json"))
 		if err != nil {
@@ -589,9 +730,8 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		if item.RealPBFT {
 			pbftCount++
 		}
-		events, _ := os.ReadFile(filepath.Join(node.DataDir, "cross_shard_log.csv"))
-		crossSuccess += strings.Count(string(events), "TargetCommit")
-		crossRefund += strings.Count(string(events), "Refund")
+		network, _ := os.ReadFile(filepath.Join(node.DataDir, "network_log.csv"))
+		faultEvidence = faultEvidence || strings.Contains(string(network), "fault_")
 	}
 	if err := writeHeightRootMatrix(dataDir, plan.NodeConfigs); err != nil {
 		return nil, err
@@ -616,7 +756,9 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	clientLog := filepath.Join(dataDir, "client", "client_submission_log.csv")
 	clientInfo, _ := os.Stat(clientLog)
 	ready := len(pids) == len(plan.NodeConfigs) && len(ports) == len(plan.NodeConfigs) && consistent && allActive && pbftCount == len(plan.NodeConfigs) && clientInfo != nil
-	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "fault_injection_real": plan.FaultPlan["mode"] != "disabled", "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": processes, "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
+	faultRequested := fmt.Sprint(plan.FaultPlan["mode"]) != "" && fmt.Sprint(plan.FaultPlan["mode"]) != "disabled"
+	ready = ready && (!faultRequested || faultEvidence)
+	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "fault_injection_real": faultEvidence, "fault_injection_requested": faultRequested, "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": processes, "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
 }
 
 func writeHeightRootMatrix(dataDir string, nodes []v5.NodePlan) error {

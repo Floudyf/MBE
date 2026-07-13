@@ -13,6 +13,7 @@ import (
 	"metaverse-chainlab/executor/realism/account"
 	realblock "metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/execution"
+	"metaverse-chainlab/executor/realism/faults"
 	"metaverse-chainlab/executor/realism/mempool"
 	"metaverse-chainlab/executor/realism/metrics"
 	"metaverse-chainlab/executor/realism/p2p"
@@ -35,11 +36,13 @@ type Vote struct {
 }
 type Relay struct {
 	Tx          tx.SignedTransaction `json:"tx"`
+	LogicalTxID string               `json:"logical_tx_id"`
 	SourceShard string               `json:"source_shard"`
 	TargetShard string               `json:"target_shard"`
 }
 type Finalize struct {
 	TxID        string `json:"tx_id"`
+	LogicalTxID string `json:"logical_tx_id"`
 	SourceShard string `json:"source_shard"`
 	TargetShard string `json:"target_shard"`
 }
@@ -62,6 +65,28 @@ type Event struct {
 	Error       string `json:"error,omitempty"`
 }
 
+type CommitDisposition string
+
+const (
+	CommitApplied        CommitDisposition = "applied"
+	CommitAlreadyApplied CommitDisposition = "already_applied"
+	CommitDeferred       CommitDisposition = "deferred"
+	CommitRejected       CommitDisposition = "rejected"
+)
+
+type CommitResult struct {
+	Disposition CommitDisposition
+	Block       realblock.Block
+}
+
+type CommitOrigin string
+
+const (
+	CommitOriginConsensus    CommitOrigin = "consensus"
+	CommitOriginCatchUp      CommitOrigin = "catch_up"
+	CommitOriginRecoveryReplay CommitOrigin = "recovery_replay"
+)
+
 type NodeRuntime struct {
 	plan                   Plan
 	node                   NodePlan
@@ -73,15 +98,22 @@ type NodeRuntime struct {
 	store                  *storage.BlockStore
 	engine                 *execution.Engine
 	mu                     sync.Mutex
+	commitMu               sync.Mutex
 	proposals              map[string]realblock.Block
 	votes                  map[string]map[string]bool
 	committed              map[string]bool
+	committing             map[string]bool
 	committedHeight        uint64
 	committedHash          string
+	lastProgressAt         int64
 	pendingCommits         map[uint64]realblock.Block
+	pendingCommitErrors    map[uint64]string
 	proposalInFlight       bool
+	lastProposalError      string
+	fatalPersistenceError  string
 	lastCatchupRequest     time.Time
 	relaySource            map[string]Relay
+	crossEventSeen         map[string]bool
 	relayAdmissionFailures map[string]string
 	events                 []Event
 	lifecycle              []LifecycleEvent
@@ -154,7 +186,7 @@ func (r *NodeRuntime) retryPendingRelays() {
 		if r.pool.Has(relay.Tx.TxID) {
 			continue
 		}
-		result := r.pool.Admit(relay.Tx)
+		result := r.pool.AdmitRelay(relay.Tx)
 		if !result.Accepted && result.RejectReason == "stale_nonce" {
 			r.reconcileCommittedRelay(context.Background(), relay)
 			continue
@@ -169,19 +201,26 @@ func (r *NodeRuntime) retryPendingRelays() {
 }
 
 func (r *NodeRuntime) reconcileCommittedRelay(ctx context.Context, relay Relay) {
+	if !r.node.Leader {
+		return
+	}
 	committed, err := r.store.HasTransaction(relay.Tx.TxID)
 	if err != nil || !committed {
 		return
 	}
-	r.recordEvent(relay.Tx.TxID, relay.SourceShard, relay.TargetShard, "TargetCommit", true, "tx_index_reconciliation")
-	finish := Finalize{TxID: relay.Tx.TxID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard}
+	logicalID := relay.LogicalTxID
+	if logicalID == "" {
+		logicalID = relay.Tx.TxID
+	}
+	r.recordEvent(logicalID, relay.SourceShard, relay.TargetShard, "TargetCommit", true, "tx_index_reconciliation")
+	finish := Finalize{TxID: relay.Tx.TxID, LogicalTxID: logicalID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard}
 	envelope, err := p2p.NewEnvelope(finalizeMessage, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, finish)
 	if err != nil || r.sendToNode(ctx, r.leaderID(relay.SourceShard), envelope) != nil {
 		return
 	}
 	r.mu.Lock()
-	delete(r.relaySource, relay.Tx.TxID)
-	delete(r.relayAdmissionFailures, relay.Tx.TxID)
+	delete(r.relaySource, logicalID)
+	delete(r.relayAdmissionFailures, logicalID)
 	r.mu.Unlock()
 }
 
@@ -224,9 +263,57 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 	}
 	policy := mempool.DefaultPolicy()
 	policy.Capacity = plugins.TxPool.Capacity()
-	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: mempool.New(node.NodeID, node.ShardID, policy, account.NewNonceManager()), proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: storage.NewBlockStore(node.DataDir, node.NodeID, node.ShardID), engine: execution.NewEngine(), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, committedHash: "genesis", relaySource: map[string]Relay{}, relayAdmissionFailures: map[string]string{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
+	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: mempool.New(node.NodeID, node.ShardID, policy, account.NewNonceManager()), proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: storage.NewBlockStore(node.DataDir, node.NodeID, node.ShardID), engine: execution.NewEngine(), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
 	r.transport = p2p.NewTransport(node.NodeID, node.ListenAddr, peers, r.handle)
+	r.transport.SetFaultPolicy(faultPolicyFromPlan(plan.FaultPlan))
 	return r, nil
+}
+
+func faultPolicyFromPlan(plan map[string]any) faults.Policy {
+	mode := fmt.Sprint(plan["mode"])
+	if mode == "" || mode == "disabled" {
+		return faults.Policy{}
+	}
+	policy := faults.Policy{Enabled: true, DelayMS: intValue(plan["delay_ms"]), DropRate: floatValue(plan["drop_rate"]), Seed: int64(intValue(plan["seed"]))}
+	if policy.DelayMS == 0 {
+		policy.DelayMS = intValue(plan["network_delay_ms"])
+	}
+	if raw, ok := plan["drop_message_types"].([]any); ok {
+		for _, item := range raw {
+			policy.DropMessageTypes = append(policy.DropMessageTypes, fmt.Sprint(item))
+		}
+	}
+	if raw, ok := plan["target_peer_ids"].([]any); ok {
+		for _, item := range raw {
+			policy.TargetPeerIDs = append(policy.TargetPeerIDs, fmt.Sprint(item))
+		}
+	}
+	return policy
+}
+
+func intValue(value any) int {
+	switch item := value.(type) {
+	case int:
+		return item
+	case float64:
+		return int(item)
+	case json.Number:
+		parsed, _ := item.Int64()
+		return int(parsed)
+	default:
+		return 0
+	}
+}
+
+func floatValue(value any) float64 {
+	switch item := value.(type) {
+	case float64:
+		return item
+	case int:
+		return float64(item)
+	default:
+		return 0
+	}
 }
 
 func (r *NodeRuntime) Start(ctx context.Context) error { return r.transport.Start(ctx) }
@@ -283,32 +370,58 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		if err != nil {
 			return err
 		}
+		logicalID := relay.LogicalTxID
+		if logicalID == "" {
+			logicalID = relay.Tx.TxID
+		}
 		if committed, err := r.store.HasTransaction(relay.Tx.TxID); err == nil && committed {
 			r.reconcileCommittedRelay(ctx, relay)
 			return nil
 		}
 		r.mu.Lock()
-		if _, exists := r.relaySource[relay.Tx.TxID]; exists {
+		if _, exists := r.relaySource[logicalID]; exists {
 			r.mu.Unlock()
 			return nil
 		}
-		r.relaySource[relay.Tx.TxID] = relay
+		r.relaySource[logicalID] = relay
 		r.events = append(r.events, Event{Timestamp: time.Now().UnixMilli(), TxID: relay.Tx.TxID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard, Stage: "RelayCertificate", Success: true})
 		r.mu.Unlock()
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: relay.Tx.TxID, LogicalTxID: relay.Tx.TxID, Stage: "relay_received", NodeID: r.node.NodeID, ShardID: r.node.ShardID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard, Success: true})
-		result := r.pool.Admit(relay.Tx)
+		result := r.pool.AdmitRelay(relay.Tx)
 		if !result.Accepted && result.RejectReason != "duplicate_tx" {
 			r.mu.Lock()
 			r.relayAdmissionFailures[relay.Tx.TxID] = result.RejectReason
 			r.mu.Unlock()
 			return fmt.Errorf("relay admission %s", result.RejectReason)
 		}
+		if r.node.Leader {
+			for _, node := range r.plan.NodeConfigs {
+				if node.ShardID == r.node.ShardID && node.NodeID != r.node.NodeID {
+					_ = r.sendToNode(ctx, node.NodeID, msg)
+				}
+			}
+		}
 	case finalizeMessage:
 		finish, err := p2p.DecodePayload[Finalize](msg)
 		if err != nil {
 			return err
 		}
-		r.recordEvent(finish.TxID, finish.SourceShard, finish.TargetShard, "SourceFinalize", true, "")
+		logicalID := finish.LogicalTxID
+		if logicalID == "" {
+			logicalID = finish.TxID
+		}
+		if !r.node.Leader {
+			return nil
+		}
+		r.recordEvent(logicalID, finish.SourceShard, finish.TargetShard, "SourceFinalize", true, "")
+		// Finalization is the source-side durable acknowledgement for a relay.
+		// Remove the source reservation only after this message arrives; leaving
+		// it in relaySource makes drain report a permanently pending cross-shard
+		// operation even though TargetCommit already completed.
+		r.mu.Lock()
+		delete(r.relaySource, logicalID)
+		delete(r.relayAdmissionFailures, logicalID)
+		r.mu.Unlock()
 	case catchupRequestMessage:
 		request, err := p2p.DecodePayload[CatchupRequest](msg)
 		if err != nil {
@@ -338,7 +451,7 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		if err != nil {
 			return err
 		}
-		if err := r.commit(ctx, item.Block); err != nil {
+		if _, err := r.commitWithOrigin(ctx, item.Block, CommitOriginCatchUp); err != nil {
 			return err
 		}
 		r.logConsensus("CATCHUP_APPLIED", item.SourceNode, item.Block.BlockHash, item.Block.Height)
@@ -359,6 +472,12 @@ func (r *NodeRuntime) gossip(ctx context.Context, item tx.SignedTransaction) err
 }
 func (r *NodeRuntime) propose(ctx context.Context) {
 	r.mu.Lock()
+	fatal := r.fatalPersistenceError
+	r.mu.Unlock()
+	if fatal != "" {
+		return
+	}
+	r.mu.Lock()
 	if r.proposalInFlight {
 		r.mu.Unlock()
 		return
@@ -366,6 +485,11 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	r.mu.Unlock()
 	block, err := r.proposer.Build(r.pool, r.blockSize(), time.Now())
 	if err != nil {
+		r.mu.Lock()
+		if err.Error() != "empty_mempool" {
+			r.lastProposalError = err.Error()
+		}
+		r.mu.Unlock()
 		return
 	}
 	r.rememberProposal(block)
@@ -373,6 +497,7 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "proposed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
 	}
 	r.mu.Lock()
+	r.lastProposalError = ""
 	r.votes[block.BlockHash] = map[string]bool{r.node.NodeID: true}
 	r.proposalInFlight = true
 	r.mu.Unlock()
@@ -380,7 +505,15 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	proposal := Proposal{Block: block}
 	envelope, err := p2p.NewEnvelope(p2p.MessagePBFTPrePrepare, r.node.NodeID, "", r.node.ShardID, block.Height, 0, block.Height, proposal)
 	if err == nil {
-		_ = r.transport.Broadcast(ctx, envelope)
+		if errs := r.transport.Broadcast(ctx, envelope); len(errs) > 0 {
+			r.mu.Lock()
+			r.lastProposalError = errs[0].Error()
+			r.mu.Unlock()
+		}
+	} else {
+		r.mu.Lock()
+		r.lastProposalError = err.Error()
+		r.mu.Unlock()
 	}
 	if len(r.node.Validators) == 1 {
 		_ = r.finalize(ctx, block)
@@ -405,8 +538,30 @@ func (r *NodeRuntime) finalize(ctx context.Context, block realblock.Block) error
 	for _, item := range block.TxList {
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "quorum_committed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
 	}
-	if err := r.commit(ctx, block); err != nil {
+	result, err := r.commitWithDisposition(ctx, block)
+	if err != nil {
+		r.mu.Lock()
+		fatal := r.fatalPersistenceError != ""
+		r.mu.Unlock()
+		// A recoverable commit failure can release its reservation. A fatal
+		// persistence failure freezes the proposal and keeps evidence reserved.
+		if !fatal {
+			r.pool.ReleaseReserved(block.TxList)
+		}
+		if fatal {
+			return err
+		}
+		r.mu.Lock()
+		if r.node.Leader {
+			r.proposalInFlight = false
+		}
+		delete(r.proposals, block.BlockHash)
+		delete(r.votes, block.BlockHash)
+		r.mu.Unlock()
 		return err
+	}
+	if result.Disposition != CommitApplied && result.Disposition != CommitAlreadyApplied {
+		return fmt.Errorf("block %s commit %s", block.BlockHash, result.Disposition)
 	}
 	proposal := Proposal{Block: block}
 	envelope, err := p2p.NewEnvelope(p2p.MessagePBFTCommit, r.node.NodeID, "", r.node.ShardID, block.Height, 0, block.Height, proposal)
@@ -420,27 +575,103 @@ func (r *NodeRuntime) finalize(ctx context.Context, block realblock.Block) error
 	return nil
 }
 func (r *NodeRuntime) commit(ctx context.Context, block realblock.Block) error {
+	result, err := r.commitWithOrigin(ctx, block, CommitOriginConsensus)
+	if err != nil {
+		return err
+	}
+	if result.Disposition == CommitDeferred || result.Disposition == CommitRejected {
+		return fmt.Errorf("block %s commit %s", block.BlockHash, result.Disposition)
+	}
+	return nil
+}
+
+func (r *NodeRuntime) commitWithDisposition(ctx context.Context, block realblock.Block) (CommitResult, error) {
+	return r.commitWithOrigin(ctx, block, CommitOriginConsensus)
+}
+
+func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Block, origin CommitOrigin) (CommitResult, error) {
+	r.commitMu.Lock()
+	defer r.commitMu.Unlock()
 	r.mu.Lock()
+	if r.fatalPersistenceError != "" {
+		err := fmt.Errorf("fatal persistence freeze: %s", r.fatalPersistenceError)
+		r.mu.Unlock()
+		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
+	r.mu.Unlock()
+	result, err := r.commitOnce(ctx, block, origin)
+	if err != nil {
+		return result, err
+	}
+	if result.Disposition == CommitApplied && result.Block.BlockHash != "" {
+		r.drainPendingCommits(ctx, result.Block, origin)
+	}
+	return result, nil
+}
+
+func (r *NodeRuntime) drainPendingCommits(ctx context.Context, next realblock.Block, origin CommitOrigin) {
+	for next.BlockHash != "" {
+		result, err := r.commitOnce(ctx, next, origin)
+		if err != nil {
+			r.mu.Lock()
+			if r.pendingCommitErrors == nil {
+				r.pendingCommitErrors = map[uint64]string{}
+			}
+			r.pendingCommitErrors[next.Height] = fmt.Sprintf("%s: %v", next.BlockHash, err)
+			r.mu.Unlock()
+			return
+		}
+		if result.Disposition != CommitApplied {
+			r.mu.Lock()
+			if r.pendingCommitErrors == nil {
+				r.pendingCommitErrors = map[uint64]string{}
+			}
+			r.pendingCommitErrors[next.Height] = fmt.Sprintf("%s: %s", next.BlockHash, result.Disposition)
+			r.mu.Unlock()
+			return
+		}
+		next = result.Block
+	}
+}
+
+func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, origin CommitOrigin) (CommitResult, error) {
+	r.mu.Lock()
+	if r.fatalPersistenceError != "" {
+		err := fmt.Errorf("fatal persistence freeze: %s", r.fatalPersistenceError)
+		r.mu.Unlock()
+		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
 	if r.committed[block.BlockHash] {
 		r.mu.Unlock()
-		return nil
+		return CommitResult{Disposition: CommitAlreadyApplied, Block: realblock.Block{}}, nil
+	}
+	if r.committing == nil {
+		r.committing = map[string]bool{}
+	}
+	if r.committing[block.BlockHash] {
+		r.mu.Unlock()
+		return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("block %s is already being committed", block.BlockHash)
 	}
 	expected := r.committedHeight + 1
 	if block.Height > expected {
 		r.pendingCommits[block.Height] = block
 		r.mu.Unlock()
-		return nil
+		return CommitResult{Disposition: CommitDeferred, Block: realblock.Block{}}, nil
 	}
 	if block.Height < expected {
 		r.mu.Unlock()
-		return nil
+		return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("stale block height %d, expected %d", block.Height, expected)
 	}
 	if block.PreviousHash != r.committedHash {
 		r.mu.Unlock()
-		return fmt.Errorf("parent hash mismatch at height %d", block.Height)
+		return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("parent hash mismatch at height %d", block.Height)
 	}
-	r.committed[block.BlockHash] = true
-	r.blockCount++
+	r.committing[block.BlockHash] = true
+	defer func() {
+		r.mu.Lock()
+		delete(r.committing, block.BlockHash)
+		r.mu.Unlock()
+	}()
 	relayItems := map[string]Relay{}
 	for _, item := range block.TxList {
 		if relay, ok := r.relaySource[item.TxID]; ok {
@@ -448,24 +679,37 @@ func (r *NodeRuntime) commit(ctx context.Context, block realblock.Block) error {
 		}
 	}
 	r.mu.Unlock()
-	r.recordExecutionAndCommitDecisions(block)
+	stateBefore := r.db.Snapshot()
+	stateCheckpoint, err := r.db.Checkpoint()
+	if err != nil {
+		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
+	checkpoint, err := r.store.Checkpoint()
+	if err != nil {
+		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
 	result := r.engine.ExecuteBlock(block, r.db)
 	if _, err := r.store.DurableCommit(block, result); err != nil {
-		return err
+		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
 	if err := r.db.Save(); err != nil {
-		return err
+		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
+	r.recordExecutionAndCommitDecisions(block)
 	r.pool.CommitReserved(block.TxList)
 	if r.node.Leader {
 		r.proposer.Confirm(block)
 	}
 	r.mu.Lock()
+	r.committed[block.BlockHash] = true
+	delete(r.committing, block.BlockHash)
+	r.blockCount++
 	r.chainRows = append(r.chainRows, []string{r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), "0", block.BlockHash, block.PreviousHash, fmt.Sprint(len(block.TxList)), block.TxRoot, block.StateRootBefore, result.StateRootAfter, result.ReceiptRoot, fmt.Sprint(time.Now().UnixMilli()), fmt.Sprint(time.Now().UnixMilli())})
 	r.mu.Unlock()
 	r.mu.Lock()
 	r.committedHeight = block.Height
 	r.committedHash = block.BlockHash
+	r.lastProgressAt = time.Now().UnixMilli()
 	if r.node.Leader {
 		r.proposalInFlight = false
 	}
@@ -473,27 +717,67 @@ func (r *NodeRuntime) commit(ctx context.Context, block realblock.Block) error {
 	delete(r.pendingCommits, r.committedHeight+1)
 	r.mu.Unlock()
 	for _, item := range block.TxList {
-		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "durable_committed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
-		r.onCommittedTx(ctx, item, relayItems[item.TxID])
+		if origin == CommitOriginConsensus {
+			r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "durable_committed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
+			r.onCommittedTx(ctx, item, relayItems[item.TxID])
+		}
 		if relayItems[item.TxID].Tx.TxID != "" {
 			r.mu.Lock()
 			delete(r.relaySource, item.TxID)
 			r.mu.Unlock()
 		}
 	}
-	if next.BlockHash != "" {
-		return r.commit(ctx, next)
+	return CommitResult{Disposition: CommitApplied, Block: next}, nil
+}
+
+func (r *NodeRuntime) rollbackCommitFailure(blockHash string, stateBefore map[string]string, stateCheckpoint state.FileCheckpoint, checkpoint storage.ArtifactCheckpoint, cause error) error {
+	r.db.Restore(stateBefore)
+	stateErr := r.db.Rollback(stateCheckpoint)
+	storeErr := r.store.Rollback(checkpoint)
+	r.mu.Lock()
+	if stateErr == nil && storeErr == nil {
+		delete(r.committing, blockHash)
+	} else {
+		parts := []string{}
+		if stateErr != nil {
+			parts = append(parts, "state rollback: "+stateErr.Error())
+		}
+		if storeErr != nil {
+			parts = append(parts, "store rollback: "+storeErr.Error())
+		}
+		r.fatalPersistenceError = strings.Join(parts, "; ")
 	}
-	return nil
+	r.mu.Unlock()
+	if stateErr != nil || storeErr != nil {
+		return fmt.Errorf("%w; rollback also failed: %s", cause, r.fatalPersistenceError)
+	}
+	return cause
 }
 func (r *NodeRuntime) onCommittedTx(ctx context.Context, item tx.SignedTransaction, relay Relay) {
+	r.onCommittedTxWithOrigin(ctx, item, relay, CommitOriginConsensus)
+}
+
+func (r *NodeRuntime) onCommittedTxWithOrigin(ctx context.Context, item tx.SignedTransaction, relay Relay, origin CommitOrigin) {
+	if origin != CommitOriginConsensus {
+		return
+	}
 	if relay.Tx.TxID != "" {
-		r.recordEvent(item.TxID, relay.SourceShard, relay.TargetShard, "TargetCommit", true, "")
-		finish := Finalize{TxID: item.TxID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard}
+		if !r.node.Leader {
+			return
+		}
+		logicalID := relay.LogicalTxID
+		if logicalID == "" {
+			logicalID = item.TxID
+		}
+		r.recordEvent(logicalID, relay.SourceShard, relay.TargetShard, "TargetCommit", true, "")
+		finish := Finalize{TxID: item.TxID, LogicalTxID: logicalID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard}
 		envelope, err := p2p.NewEnvelope(finalizeMessage, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, finish)
 		if err == nil {
 			_ = r.sendToNode(ctx, r.leaderID(relay.SourceShard), envelope)
 		}
+		return
+	}
+	if !r.node.Leader {
 		return
 	}
 	if strings.Contains(item.Payload, "v5_timeout") {
@@ -501,10 +785,13 @@ func (r *NodeRuntime) onCommittedTx(ctx context.Context, item tx.SignedTransacti
 		r.recordEvent(item.TxID, r.node.ShardID, "", "Refund", true, "")
 		return
 	}
+	if item.SourceKind == "cross_shard_relay" {
+		return
+	}
 	if r.plugins.CrossShard.IsCrossShard(item) {
 		target := strings.TrimPrefix(item.Payload, "v5_cross:")
 		r.recordEvent(item.TxID, r.node.ShardID, target, "SourceLock", true, "")
-		relay := Relay{Tx: item, SourceShard: r.node.ShardID, TargetShard: target}
+		relay := Relay{Tx: item, LogicalTxID: item.TxID, SourceShard: r.node.ShardID, TargetShard: target}
 		envelope, err := p2p.NewEnvelope(p2p.MessageXShardRelay, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, relay)
 		if err == nil {
 			_ = r.sendToNode(ctx, r.leaderID(target), envelope)
@@ -534,8 +821,23 @@ func (r *NodeRuntime) rememberProposal(block realblock.Block) {
 func (r *NodeRuntime) recordEvent(txID, source, target, stage string, success bool, err string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	logicalID := txID
+	if logicalID == "" {
+		return
+	}
+	uniqueStage := strings.ToLower(stage)
+	if uniqueStage == "sourcelock" || uniqueStage == "targetcommit" || uniqueStage == "sourcefinalize" || uniqueStage == "refund" {
+		if r.crossEventSeen == nil {
+			r.crossEventSeen = map[string]bool{}
+		}
+		key := logicalID + "|" + uniqueStage
+		if r.crossEventSeen[key] {
+			return
+		}
+		r.crossEventSeen[key] = true
+	}
 	r.events = append(r.events, Event{Timestamp: time.Now().UnixMilli(), TxID: txID, SourceShard: source, TargetShard: target, Stage: stage, Success: success, Error: err})
-	r.lifecycle = append(r.lifecycle, LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: txID, LogicalTxID: txID, Stage: strings.ToLower(stage), NodeID: r.node.NodeID, ShardID: r.node.ShardID, SourceShard: source, TargetShard: target, Success: success, Error: err})
+	r.lifecycle = append(r.lifecycle, LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: txID, LogicalTxID: logicalID, Stage: strings.ToLower(stage), NodeID: r.node.NodeID, ShardID: r.node.ShardID, SourceShard: source, TargetShard: target, Success: success, Error: err})
 }
 func (r *NodeRuntime) recordLifecycle(event LifecycleEvent) {
 	r.mu.Lock()
@@ -558,9 +860,23 @@ func (r *NodeRuntime) writeReady() error {
 func (r *NodeRuntime) writeRuntimeStatus() error {
 	r.mu.Lock()
 	terminal := map[string]bool{}
+	crossLogical := map[string]bool{}
+	completedCross := map[string]bool{}
+	for _, event := range r.lifecycle {
+		stage := strings.ToLower(event.Stage)
+		if stage == "sourcelock" || stage == "relaycertificate" || stage == "targetcommit" || stage == "sourcefinalize" {
+			crossLogical[event.LogicalTxID] = true
+		}
+		if stage == "sourcefinalize" || stage == "refund" || stage == "failed" {
+			completedCross[event.LogicalTxID] = true
+		}
+	}
 	for _, event := range r.lifecycle {
 		stage := strings.ToLower(event.Stage)
 		if stage == "durable_committed" || stage == "sourcefinalize" || stage == "refund" || stage == "failed" {
+			if stage == "durable_committed" && crossLogical[event.LogicalTxID] && !completedCross[event.LogicalTxID] {
+				continue
+			}
 			terminal[event.LogicalTxID] = true
 		}
 	}
@@ -572,7 +888,7 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	for txID := range r.relaySource {
 		pendingRelayIDs = append(pendingRelayIDs, txID)
 	}
-	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": r.committedHeight, "committed_block_hash": r.committedHash, "mempool_depth": r.pool.Len(), "reserved_tx_count": 0, "proposal_in_flight": r.proposalInFlight, "pending_commit_count": len(r.pendingCommits), "pending_commit_heights": mapKeys(r.pendingCommits), "pending_future_block_count": len(r.pendingCommits), "pending_cross_shard_count": len(r.relaySource), "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": r.relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "last_progress_at": time.Now().UnixMilli(), "ready": true, "stopping": false}
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": r.committedHeight, "committed_block_hash": r.committedHash, "mempool_depth": r.pool.Len(), "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": r.proposalInFlight, "last_proposal_error": r.lastProposalError, "fatal_persistence_error": r.fatalPersistenceError, "pending_commit_count": len(r.pendingCommits), "pending_commit_heights": mapKeys(r.pendingCommits), "pending_commit_errors": r.pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": len(r.relaySource), "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": r.relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "last_progress_at": r.lastProgressAt, "ready": true, "stopping": false}
 	r.mu.Unlock()
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
 }
@@ -585,6 +901,9 @@ func mapKeys(items map[uint64]realblock.Block) []uint64 {
 }
 func (r *NodeRuntime) WriteArtifacts() error {
 	if err := r.writeRuntimeStatus(); err != nil {
+		return err
+	}
+	if err := SaveJSON(filepath.Join(r.node.DataDir, "fault_policy.json"), map[string]any{"requested": r.plan.FaultPlan, "applied": faultPolicyFromPlan(r.plan.FaultPlan)}); err != nil {
 		return err
 	}
 	if err := r.transport.Log.WriteCSV(filepath.Join(r.node.DataDir, "network_log.csv")); err != nil {

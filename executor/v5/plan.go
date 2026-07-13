@@ -21,11 +21,13 @@ type NodePlan struct {
 	PluginProfile map[string]PluginConfig `json:"plugin_profile"`
 }
 type WorkloadPlan struct {
-	PluginID        string  `json:"plugin_id"`
-	TxCount         int     `json:"tx_count"`
-	Seed            int     `json:"seed"`
-	CrossShardRatio float64 `json:"cross_shard_ratio"`
-	TimeoutEvery    int     `json:"timeout_every"`
+	PluginID                 string  `json:"plugin_id"`
+	TxCount                  int     `json:"tx_count"`
+	Seed                     int     `json:"seed"`
+	CrossShardRatio          float64 `json:"cross_shard_ratio"`
+	TimeoutEvery             int     `json:"timeout_every"`
+	RequestedCrossShardRatio float64 `json:"requested_cross_shard_ratio"`
+	RequestedCrossShardCount int     `json:"requested_cross_shard_count"`
 }
 type Plan struct {
 	PlanID           string         `json:"plan_id"`

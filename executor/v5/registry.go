@@ -155,7 +155,7 @@ func (p builtinWorkload) BuildWorkloadItem(input WorkloadInput) WorkloadItem {
 	if input.CrossShard && input.Shards > 1 {
 		payload = "v5_cross"
 	}
-	if input.TimeoutEvery > 0 && (input.Index+1)%input.TimeoutEvery == 0 {
+	if !input.CrossShard && input.TimeoutEvery > 0 && (input.Index+1)%input.TimeoutEvery == 0 {
 		payload = "v5_timeout"
 	}
 	return WorkloadItem{Payload: payload, StateKeys: keys}

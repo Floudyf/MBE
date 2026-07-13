@@ -64,6 +64,49 @@ func TestMempoolRejectsSenderPublicKeyMismatch(t *testing.T) {
 	}
 }
 
+func TestMempoolAdmitRelayDoesNotRequireSourceNonceSequence(t *testing.T) {
+	m := New("n0", "s1", DefaultPolicy(), account.NewNonceManager())
+	item := signed(t, "relay-sender", 7)
+	if result := m.AdmitRelay(item); !result.Accepted {
+		t.Fatalf("relay should not depend on target nonce sequence, got %s", result.RejectReason)
+	}
+}
+
+func TestMempoolRelayAdmissionSecurityAndIsolation(t *testing.T) {
+	m := New("n0", "s1", Policy{Capacity: 2, TTL: time.Minute}, account.NewNonceManager())
+	valid := signed(t, "relay-sender", 7)
+	if result := m.AdmitRelay(valid); !result.Accepted {
+		t.Fatalf("valid relay should be accepted, got %+v", result)
+	}
+	if result := m.AdmitRelay(valid); result.Accepted || result.RejectReason != ReasonDuplicateTx {
+		t.Fatalf("duplicate relay should be rejected, got %+v", result)
+	}
+	invalid := signed(t, "invalid-relay", 1)
+	invalid.Signature = "invalid"
+	if result := m.AdmitRelay(invalid); result.Accepted || result.RejectReason != tx.ErrInvalidSignature {
+		t.Fatalf("invalid relay signature should be rejected, got %+v", result)
+	}
+	mismatch := signed(t, "mismatch-relay", 1)
+	mismatch.Sender = "0x1111111111111111111111111111111111111111"
+	if err := tx.AssignID(&mismatch); err != nil {
+		t.Fatal(err)
+	}
+	if result := m.AdmitRelay(mismatch); result.Accepted || result.RejectReason != tx.ErrSenderPublicKeyMismatch {
+		t.Fatalf("relay sender/public-key mismatch should be rejected, got %+v", result)
+	}
+	if result := m.AdmitRelay(signed(t, "relay-second", 2)); !result.Accepted {
+		t.Fatalf("second valid relay should fit capacity, got %+v", result)
+	}
+	if result := m.AdmitRelay(signed(t, "relay-third", 3)); result.Accepted || result.RejectReason != ReasonCapacity {
+		t.Fatalf("full relay capacity should reject, got %+v", result)
+	}
+
+	ordinary := New("n1", "s1", Policy{Capacity: 2, TTL: time.Minute}, account.NewNonceManager())
+	if result := ordinary.Admit(signed(t, "ordinary", 2)); result.Accepted || result.RejectReason != account.ReasonFutureNonceNotSupported {
+		t.Fatalf("ordinary admission must retain nonce validation, got %+v", result)
+	}
+}
+
 func TestPopReadyDeterministicAndNodeIsolation(t *testing.T) {
 	a := New("n0", "s0", Policy{Capacity: 10, TTL: time.Minute}, account.NewNonceManager())
 	b := New("n1", "s0", Policy{Capacity: 10, TTL: time.Minute}, account.NewNonceManager())

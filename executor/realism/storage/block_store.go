@@ -27,9 +27,101 @@ type CommitRecord struct {
 }
 
 type BlockStore struct {
-	DataDir string
-	NodeID  string
-	ShardID string
+	DataDir           string
+	NodeID            string
+	ShardID           string
+	failpoint         string
+	rollbackFailpoint bool
+}
+
+// SetFailpointForTest is intentionally narrow and opt-in. It provides a
+// deterministic partial-write failure for rollback tests without changing the
+// normal durable commit path.
+func (s *BlockStore) SetFailpointForTest(point string) { s.failpoint = point }
+
+func (s *BlockStore) SetRollbackFailpointForTest(enabled bool) { s.rollbackFailpoint = enabled }
+
+type ArtifactCheckpoint struct {
+	appendSizes    map[string]int64
+	replaceData    map[string][]byte
+	replaceMissing map[string]bool
+}
+
+func (s *BlockStore) Checkpoint() (ArtifactCheckpoint, error) {
+	checkpoint := ArtifactCheckpoint{appendSizes: map[string]int64{}, replaceData: map[string][]byte{}, replaceMissing: map[string]bool{}}
+	for _, path := range []string{
+		filepath.Join(s.DataDir, "blocks.jsonl"),
+		filepath.Join(s.DataDir, "receipts.jsonl"),
+		filepath.Join(s.DataDir, "tx_index.jsonl"),
+	} {
+		info, err := os.Stat(path)
+		if err == nil {
+			checkpoint.appendSizes[path] = info.Size()
+		} else if os.IsNotExist(err) {
+			checkpoint.appendSizes[path] = -1
+		} else {
+			return checkpoint, fmt.Errorf("checkpoint append artifact %s: %w", path, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(s.DataDir, "commit_summary.json"),
+		filepath.Join(s.DataDir, "commit_log.csv"),
+	} {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			checkpoint.replaceData[path] = data
+		} else if os.IsNotExist(err) {
+			checkpoint.replaceMissing[path] = true
+		} else {
+			return checkpoint, err
+		}
+	}
+	return checkpoint, nil
+}
+
+func (s *BlockStore) Rollback(checkpoint ArtifactCheckpoint) error {
+	if s.rollbackFailpoint {
+		return fmt.Errorf("injected block store rollback failure")
+	}
+	for path, size := range checkpoint.appendSizes {
+		if size == -1 {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
+		if size < -1 {
+			return fmt.Errorf("invalid checkpoint size %d for %s", size, path)
+		}
+		if _, err := os.Stat(path); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("rollback missing append artifact %s", path)
+			}
+			return err
+		}
+		file, err := os.OpenFile(path, os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		if err := file.Truncate(size); err != nil {
+			_ = file.Close()
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+	}
+	for path, data := range checkpoint.replaceData {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			return err
+		}
+	}
+	for path := range checkpoint.replaceMissing {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func NewBlockStore(dataDir, nodeID, shardID string) *BlockStore {
@@ -71,13 +163,23 @@ func (s *BlockStore) ReadCommitted() ([]block.Block, error) {
 	var out []block.Block
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		var row struct {
-			Block block.Block `json:"block"`
+		row := scanner.Bytes()
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(row, &fields); err != nil {
+			return nil, fmt.Errorf("decode committed block row: %w", err)
 		}
-		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+		var raw []byte = row
+		if wrapped, ok := fields["block"]; ok {
+			raw = wrapped
+		}
+		var item block.Block
+		if err := json.Unmarshal(raw, &item); err != nil {
 			return nil, fmt.Errorf("decode committed block: %w", err)
 		}
-		out = append(out, row.Block)
+		if item.Height == 0 || item.BlockHash == "" {
+			return nil, fmt.Errorf("invalid committed block row: height=%d block_hash=%q", item.Height, item.BlockHash)
+		}
+		out = append(out, item)
 	}
 	return out, scanner.Err()
 }

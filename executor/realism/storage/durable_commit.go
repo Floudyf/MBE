@@ -46,9 +46,15 @@ func (s *BlockStore) DurableCommit(b block.Block, result execution.Result) (Comm
 	if err := appendJSON(filepath.Join(s.DataDir, "blocks.jsonl"), b); err != nil {
 		return CommitSummary{}, err
 	}
+	if s.failpoint == "after_block_append" {
+		return CommitSummary{}, fmt.Errorf("injected durable commit failure after block append")
+	}
 	for _, receipt := range result.Receipts {
 		if err := appendJSON(filepath.Join(s.DataDir, "receipts.jsonl"), receipt); err != nil {
 			return CommitSummary{}, err
+		}
+		if s.failpoint == "after_receipt_append" {
+			return CommitSummary{}, fmt.Errorf("injected durable commit failure after receipt append")
 		}
 		if err := appendJSON(filepath.Join(s.DataDir, "tx_index.jsonl"), TxIndexRecord{TxID: receipt.TxID, BlockHash: receipt.BlockHash, Height: receipt.Height, ReceiptOK: receipt.Success, ReceiptRoot: result.ReceiptRoot}); err != nil {
 			return CommitSummary{}, err

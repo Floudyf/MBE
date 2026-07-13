@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -26,4 +28,35 @@ func TestBlockStoreWritesAndReadsCommittedBlock(t *testing.T) {
 	if err := WriteCommitCSV(filepath.Join(dir, "block_commit_log.csv"), []CommitRecord{record}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestReadCommittedSupportsRawBlocksJSONL(t *testing.T) {
+	dir := t.TempDir()
+	b := block.Block{ShardID: "s0", Height: 2, PreviousHash: "h1", BlockHash: "h2"}
+	if err := os.WriteFile(filepath.Join(dir, "blocks.jsonl"), mustJSONLine(t, b), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := NewBlockStore(dir, "n0", "s0").ReadCommittedAtHeight(2)
+	if err != nil || !ok || got.BlockHash != "h2" {
+		t.Fatalf("raw block was not decoded: block=%+v ok=%v err=%v", got, ok, err)
+	}
+}
+
+func TestReadCommittedRejectsEmptyRawBlock(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "blocks.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewBlockStore(dir, "n0", "s0").ReadCommitted(); err == nil {
+		t.Fatal("empty raw block must be rejected")
+	}
+}
+
+func mustJSONLine(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(data, '\n')
 }
