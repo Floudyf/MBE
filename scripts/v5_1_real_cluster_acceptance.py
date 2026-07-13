@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,6 +22,8 @@ def build_spec(nodes: int, shards: int, tx_count: int) -> V5ExperimentSpec:
 
 
 def run_case(nodes: int, shards: int, tx_count: int, root: Path) -> dict:
+    if root.exists():
+        shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
     plan = compile_plan(build_spec(nodes, shards, tx_count), root)
     plan_path = root / "compiled_run_plan.json"
@@ -30,7 +33,16 @@ def run_case(nodes: int, shards: int, tx_count: int, root: Path) -> dict:
         raise RuntimeError(result.stderr)
     summary = json.loads((root / "real_cluster_summary.json").read_text(encoding="utf-8"))
     required = ["one_node_one_os_process", "independent_tcp_ports", "all_shards_active", "per_shard_multiple_blocks", "real_client_submission", "state_root_consistent", "real_cross_shard_network", "no_fallback"]
-    if any(summary.get(key) is not True for key in required) or summary.get("distinct_process_count") != nodes or summary.get("orphan_process_count") != 0 or summary.get("cross_shard_success_count", 0) < 1 or summary.get("cross_shard_refund_count", 0) < 1:
+    finality = summary.get("finality_evidence", {})
+    if (
+        any(summary.get(key) is not True for key in required)
+        or summary.get("distinct_process_count") != nodes
+        or summary.get("orphan_process_count") != 0
+        or finality.get("cross_shard_requested_unique_count", 0) < 1
+        or finality.get("cross_shard_finalized_unique_count", 0) < 1
+        or finality.get("terminal_unique_tx_count") != tx_count
+        or finality.get("incomplete_unique_tx_count") != 0
+    ):
         raise RuntimeError(json.dumps(summary, indent=2))
     return summary
 

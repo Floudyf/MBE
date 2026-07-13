@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,8 @@ def main() -> int:
     parser.add_argument("--output-root", default=str(ROOT / ".cache" / "v5_2_finality_acceptance"))
     args = parser.parse_args()
     root = Path(args.output_root).resolve()
+    if root.exists():
+        shutil.rmtree(root)
     root.mkdir(parents=True, exist_ok=True)
     compiled = compile_plan(spec(), root)
     plan = root / "compiled_run_plan.json"
@@ -48,7 +51,13 @@ def main() -> int:
         raise RuntimeError(f"lifecycle stages missing: {sorted(required_stages - stages)}")
     if finality.get("metric_truth") != "derived_from_raw_runtime_lifecycle" or finality.get("tcp_send_latency_excluded") is not True:
         raise RuntimeError("finality truth boundary invalid")
-    if finality.get("logical_transaction_count") != 100 or finality.get("finalized_unique_logical_tx_count", 0) < 100:
+    if (
+        finality.get("logical_transaction_count") != 100
+        or finality.get("submitted_unique_tx_count") != 100
+        or finality.get("terminal_unique_tx_count") != 100
+        or finality.get("incomplete_unique_tx_count") != 0
+        or finality.get("finalized_unique_logical_tx_count", 0) < 100
+    ):
         raise RuntimeError("logical transaction finality incomplete")
     if any(row["finality_ms"] == "-1" for row in finality_rows):
         raise RuntimeError("terminal lifecycle evidence missing")

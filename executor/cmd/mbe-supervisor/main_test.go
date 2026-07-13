@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -98,4 +99,113 @@ func TestFinalityDoesNotDrainBeforeSourceFinalize(t *testing.T) {
 	writer.Flush()
 	_ = file.Close()
 	assertSummary(1000, 0)
+}
+
+func TestDeriveLiveTerminalUsesSubmittedClassification(t *testing.T) {
+	classification := map[string]bool{"intra": false, "cross": true}
+	statuses := []map[string]any{
+		{"durable_committed_logical_tx_ids": []any{"intra", "cross"}, "source_finalized_logical_tx_ids": []any{}, "refunded_logical_tx_ids": []any{}, "failed_logical_tx_ids": []any{}, "terminal_logical_tx_ids": []any{"intra", "cross"}},
+		{"durable_committed_logical_tx_ids": []any{"cross"}, "source_finalized_logical_tx_ids": []any{}, "refunded_logical_tx_ids": []any{}, "failed_logical_tx_ids": []any{}, "terminal_logical_tx_ids": []any{"cross"}},
+	}
+	terminal, counts, err := deriveLiveTerminal(classification, statuses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(terminal) != 1 || !terminal["intra"] || counts["incomplete"] != 1 {
+		t.Fatalf("cross-shard durable commit was incorrectly terminal: terminal=%v counts=%v", terminal, counts)
+	}
+	statuses[0]["source_finalized_logical_tx_ids"] = []any{"cross"}
+	statuses[1]["source_finalized_logical_tx_ids"] = []any{"cross"}
+	terminal, counts, err = deriveLiveTerminal(classification, statuses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(terminal) != 2 || counts["incomplete"] != 0 {
+		t.Fatalf("source finalize did not close cross-shard transaction: terminal=%v counts=%v", terminal, counts)
+	}
+}
+
+func TestDeriveLiveTerminalHandlesTargetCommitAndDuplicates(t *testing.T) {
+	classification := map[string]bool{}
+	for i := 0; i < 750; i++ {
+		classification[fmt.Sprintf("intra-%d", i)] = false
+	}
+	for i := 0; i < 250; i++ {
+		classification[fmt.Sprintf("cross-%d", i)] = true
+	}
+	statuses := []map[string]any{{
+		"durable_committed_logical_tx_ids": []any{},
+		"source_finalized_logical_tx_ids": []any{},
+		"refunded_logical_tx_ids":          []any{},
+		"failed_logical_tx_ids":            []any{},
+		"target_commit_logical_tx_ids":     []any{},
+	}}
+	for i := 0; i < 750; i++ {
+		statuses[0]["durable_committed_logical_tx_ids"] = append(statuses[0]["durable_committed_logical_tx_ids"].([]any), fmt.Sprintf("intra-%d", i))
+	}
+	for i := 0; i < 250; i++ {
+		statuses[0]["durable_committed_logical_tx_ids"] = append(statuses[0]["durable_committed_logical_tx_ids"].([]any), fmt.Sprintf("cross-%d", i), fmt.Sprintf("cross-%d", i))
+		if i < 248 {
+			statuses[0]["source_finalized_logical_tx_ids"] = append(statuses[0]["source_finalized_logical_tx_ids"].([]any), fmt.Sprintf("cross-%d", i))
+		}
+	}
+	terminal, counts, err := deriveLiveTerminal(classification, statuses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(terminal) != 998 || counts["incomplete"] != 2 {
+		t.Fatalf("expected 998 terminal and 2 incomplete: terminal=%d counts=%v", len(terminal), counts)
+	}
+	for i := 248; i < 250; i++ {
+		statuses[0]["source_finalized_logical_tx_ids"] = append(statuses[0]["source_finalized_logical_tx_ids"].([]any), fmt.Sprintf("cross-%d", i))
+	}
+	terminal, counts, err = deriveLiveTerminal(classification, statuses)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(terminal) != 1000 || counts["incomplete"] != 0 {
+		t.Fatalf("expected all transactions terminal after finalize: terminal=%d counts=%v", len(terminal), counts)
+	}
+}
+
+func TestSubmissionClassificationMustMatchExpectedCount(t *testing.T) {
+	if err := validateSubmissionClassification(map[string]bool{"only": false}, 2); err == nil {
+		t.Fatal("missing submitted classification was accepted")
+	}
+}
+
+func TestFinalityCountsDurableCommitIndependentlyOfTerminalStageOrder(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path string, header []string, rows [][]string) {
+		file, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer := csv.NewWriter(file)
+		_ = writer.Write(header)
+		_ = writer.WriteAll(rows)
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			t.Fatal(err)
+		}
+		_ = file.Close()
+	}
+	id := "intra-same-timestamp"
+	write(filepath.Join(root, "client", "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, [][]string{{"100", id, "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""}})
+	header := []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success"}
+	write(filepath.Join(root, "client", "client_lifecycle.csv"), header, [][]string{
+		{"100", id, id, "submitted", "n0", "s0", "", "", "1", "true"},
+		{"200", id, id, "refund", "n0", "s0", "", "", "2", "true"},
+		{"200", id, id, "durable_committed", "n0", "s0", "", "", "2", "true"},
+	})
+	summary, err := deriveFinalityArtifacts(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary["intra_shard_committed_unique_count"] != 1 || summary["intra_shard_terminal_unique_count"] != 1 || summary["terminal_unique_tx_count"] != 1 {
+		t.Fatalf("same-timestamp stages caused metric drift: %#v", summary)
+	}
 }

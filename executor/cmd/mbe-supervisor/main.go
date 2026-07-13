@@ -243,6 +243,11 @@ func runV5(planPath, dataDir string) error {
 func drainV5(plan v5.Plan, dataDir string) error {
 	started := time.Now()
 	submitted := plan.WorkloadPlan.TxCount
+	classification, err := loadSubmissionClassification(dataDir, submitted)
+	if err != nil {
+		_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": []string{"terminal_accounting_missing"}, "phase": "FAILED", "reason": err.Error(), "submitted": submitted})
+		return err
+	}
 	phase := "DRAINING"
 	deadline := started.Add(time.Duration(plan.DurationMS) * time.Millisecond)
 	progressPath := filepath.Join(dataDir, "drain_progress.csv")
@@ -277,9 +282,6 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			if value := fmt.Sprint(status["fatal_persistence_error"]); value != "" && value != "<nil>" {
 				fatalPersistence = value
 			}
-			for _, id := range stringSlice(status["terminal_logical_tx_ids"]) {
-				terminal[id] = true
-			}
 			for _, key := range []string{"mempool_depth", "reserved_tx_count", "pending_commit_count", "pending_future_block_count", "pending_cross_shard_count"} {
 				if number(status[key]) != 0 {
 					allEmpty = false
@@ -294,6 +296,12 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			}
 			heights[shard][fmt.Sprint(status["committed_height"])] = true
 		}
+		liveTerminal, _, err := deriveLiveTerminal(classification, statuses)
+		if err != nil {
+			_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": []string{"terminal_accounting_missing"}, "phase": "FAILED", "reason": err.Error(), "submitted": submitted})
+			return err
+		}
+		terminal = liveTerminal
 		aligned := true
 		for _, values := range heights {
 			if len(values) != 1 {
@@ -427,6 +435,85 @@ type lifecycleRecord struct {
 	success                                 bool
 }
 
+func validateSubmissionClassification(classification map[string]bool, expected int) error {
+	if len(classification) != expected {
+		return fmt.Errorf("submitted transaction classification count %d does not match expected tx_count %d", len(classification), expected)
+	}
+	for logicalID := range classification {
+		if strings.TrimSpace(logicalID) == "" {
+			return fmt.Errorf("submitted transaction classification contains an empty logical_tx_id")
+		}
+	}
+	return nil
+}
+
+func loadSubmissionClassification(dataDir string, expected int) (map[string]bool, error) {
+	path := filepath.Join(dataDir, "client", "client_submission_log.csv")
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("read submitted transaction classification: %w", err)
+	}
+	defer file.Close()
+	rows, err := csv.NewReader(file).ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("parse submitted transaction classification: %w", err)
+	}
+	classification := map[string]bool{}
+	for index, row := range rows {
+		if index == 0 {
+			continue
+		}
+		if len(row) < 9 {
+			return nil, fmt.Errorf("submitted transaction classification row %d has %d fields", index+1, len(row))
+		}
+		logicalID := strings.TrimSpace(row[1])
+		if logicalID == "" {
+			return nil, fmt.Errorf("submitted transaction classification row %d has empty tx_id", index+1)
+		}
+		isCross, err := strconv.ParseBool(row[6])
+		if err != nil {
+			return nil, fmt.Errorf("submitted transaction classification row %d tx %s: %w", index+1, logicalID, err)
+		}
+		if previous, exists := classification[logicalID]; exists && previous != isCross {
+			return nil, fmt.Errorf("submitted transaction classification has conflicting cross-shard values for %s", logicalID)
+		}
+		classification[logicalID] = isCross
+	}
+	if err := validateSubmissionClassification(classification, expected); err != nil {
+		return nil, err
+	}
+	return classification, nil
+}
+
+func deriveLiveTerminal(classification map[string]bool, statuses []map[string]any) (map[string]bool, map[string]int, error) {
+	if err := validateSubmissionClassification(classification, len(classification)); err != nil {
+		return nil, nil, err
+	}
+	terminal := map[string]bool{}
+	for _, status := range statuses {
+		for _, logicalID := range stringSlice(status["durable_committed_logical_tx_ids"]) {
+			if isCross, submitted := classification[logicalID]; submitted && !isCross {
+				terminal[logicalID] = true
+			}
+		}
+		for _, key := range []string{"source_finalized_logical_tx_ids", "refunded_logical_tx_ids", "failed_logical_tx_ids"} {
+			for _, logicalID := range stringSlice(status[key]) {
+				if _, submitted := classification[logicalID]; submitted {
+					terminal[logicalID] = true
+				}
+			}
+		}
+	}
+	crossSubmitted := 0
+	for _, isCross := range classification {
+		if isCross {
+			crossSubmitted++
+		}
+	}
+	counts := map[string]int{"submitted": len(classification), "terminal": len(terminal), "incomplete": len(classification) - len(terminal), "cross_submitted": crossSubmitted, "intra_submitted": len(classification) - crossSubmitted}
+	return terminal, counts, nil
+}
+
 func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]any, error) {
 	classification := map[string]bool{}
 	submissionFile, err := os.Open(filepath.Join(dataDir, "client", "client_submission_log.csv"))
@@ -477,7 +564,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 			rawRows = append(rawRows, row)
 		}
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i].timestamp < all[j].timestamp })
+	sort.SliceStable(all, func(i, j int) bool { return all[i].timestamp < all[j].timestamp })
 	if err := metrics.WriteCSV(filepath.Join(dataDir, "transaction_lifecycle.csv"), []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success", "error"}, rawRows); err != nil {
 		return nil, err
 	}
@@ -487,6 +574,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 	type aggregate struct {
 		submitted     int64
 		cross         bool
+		durableCommitted bool
 		targetCommit  bool
 		crossFinal    bool
 		crossRefund   bool
@@ -509,6 +597,9 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 			entry.submitted = event.timestamp
 		}
 		stage := strings.ToLower(event.stage)
+		if stage == "durable_committed" {
+			entry.durableCommitted = true
+		}
 		if stage == "targetcommit" {
 			entry.targetCommit = true
 		}
@@ -538,7 +629,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 			entry.success = event.success && event.stage != "failed"
 		}
 	}
-	intraCommitted, crossRequested, crossTarget, crossFinalized, crossRefunded, crossFailed := 0, 0, 0, 0, 0, 0
+	intraCommitted, intraTerminal, crossRequested, crossTarget, crossFinalized, crossRefunded, crossFailed := 0, 0, 0, 0, 0, 0, 0
 	for _, entry := range byLogical {
 		if entry.cross {
 			crossRequested++
@@ -554,8 +645,11 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 			if entry.failed {
 				crossFailed++
 			}
-		} else if entry.terminalStage == "durable_committed" && entry.terminal > 0 {
+		} else if entry.durableCommitted {
+			intraTerminal++
 			intraCommitted++
+		} else if entry.terminal > 0 {
+			intraTerminal++
 		}
 	}
 	rows := [][]string{}
@@ -614,8 +708,8 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 	if err := metrics.WriteCSV(filepath.Join(dataDir, "throughput_windows.csv"), []string{"window_start_ms", "window_end_ms", "finalized_unique_logical_txs", "throughput_tps"}, [][]string{{fmt.Sprint(first), fmt.Sprint(last), fmt.Sprint(finalized), fmt.Sprintf("%.6f", tps)}}); err != nil {
 		return nil, err
 	}
-	terminalUnique := intraCommitted + crossFinalized + crossRefunded + crossFailed
-	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle", "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": tps, "tcp_send_latency_excluded": true}
+	terminalUnique := intraTerminal + crossFinalized + crossRefunded + crossFailed
+	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle", "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "intra_shard_terminal_unique_count": intraTerminal, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": tps, "tcp_send_latency_excluded": true}
 	return summary, v5.SaveJSON(filepath.Join(dataDir, "finality_summary.json"), summary)
 }
 

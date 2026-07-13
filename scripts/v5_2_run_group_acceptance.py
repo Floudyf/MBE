@@ -45,7 +45,14 @@ def _validate(group_id: str, current: dict, items: list[dict], directory: Path) 
     if current.get("status")!="completed": blockers.append(f"group status {current.get('status')}")
     if len(items)!=8 or not all(item.get("status")=="completed" for item in items): blockers.append("children incomplete")
     if any(not (directory/name).is_file() or (directory/name).stat().st_size==0 for name in required): blockers.append("artifacts incomplete")
-    if any(item.get("result",{}).get("summary",{}).get("orphan_process_count")!=0 or item.get("result",{}).get("summary",{}).get("no_fallback") is not True for item in items): blockers.append("runtime cleanup/no fallback evidence failed")
+    for item in items:
+        summary = item.get("result", {}).get("summary", {})
+        finality = summary.get("finality_evidence", {})
+        expected_tx_count = item.get("estimated_transactions")
+        if finality.get("submitted_unique_tx_count") != expected_tx_count or finality.get("terminal_unique_tx_count") != finality.get("submitted_unique_tx_count") or finality.get("incomplete_unique_tx_count") != 0:
+            blockers.append(f"child {item.get('child_run_id')} finality incomplete: terminal={finality.get('terminal_unique_tx_count')} incomplete={finality.get('incomplete_unique_tx_count')}")
+        if summary.get("orphan_process_count") != 0 or summary.get("no_fallback") is not True:
+            blockers.append(f"child {item.get('child_run_id')} runtime cleanup/no fallback evidence failed")
     report={"acceptance_passed":not blockers,"run_group_id":group_id,"child_count":len(items),"blockers":blockers}
     (directory/"v5_2_run_group_acceptance.json").write_text(json.dumps(report,indent=2)+"\n",encoding="utf-8")
     print(json.dumps(report)); return 0 if not blockers else 1

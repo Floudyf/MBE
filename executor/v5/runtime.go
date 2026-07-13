@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -860,15 +861,35 @@ func (r *NodeRuntime) writeReady() error {
 func (r *NodeRuntime) writeRuntimeStatus() error {
 	r.mu.Lock()
 	terminal := map[string]bool{}
+	durableCommitted := map[string]bool{}
+	sourceFinalized := map[string]bool{}
+	refunded := map[string]bool{}
+	failed := map[string]bool{}
 	crossLogical := map[string]bool{}
 	completedCross := map[string]bool{}
 	for _, event := range r.lifecycle {
 		stage := strings.ToLower(event.Stage)
+		logicalID := event.LogicalTxID
+		if logicalID == "" {
+			logicalID = event.TxID
+		}
+		if logicalID != "" {
+			switch stage {
+			case "durable_committed":
+				durableCommitted[logicalID] = true
+			case "sourcefinalize":
+				sourceFinalized[logicalID] = true
+			case "refund":
+				refunded[logicalID] = true
+			case "failed":
+				failed[logicalID] = true
+			}
+		}
 		if stage == "sourcelock" || stage == "relaycertificate" || stage == "targetcommit" || stage == "sourcefinalize" {
-			crossLogical[event.LogicalTxID] = true
+			crossLogical[logicalID] = true
 		}
 		if stage == "sourcefinalize" || stage == "refund" || stage == "failed" {
-			completedCross[event.LogicalTxID] = true
+			completedCross[logicalID] = true
 		}
 	}
 	for _, event := range r.lifecycle {
@@ -884,13 +905,25 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	for id := range terminal {
 		terminalIDs = append(terminalIDs, id)
 	}
+	durableIDs := mapIDs(durableCommitted)
+	sourceFinalizedIDs := mapIDs(sourceFinalized)
+	refundedIDs := mapIDs(refunded)
+	failedIDs := mapIDs(failed)
 	pendingRelayIDs := make([]string, 0, len(r.relaySource))
 	for txID := range r.relaySource {
 		pendingRelayIDs = append(pendingRelayIDs, txID)
 	}
-	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": r.committedHeight, "committed_block_hash": r.committedHash, "mempool_depth": r.pool.Len(), "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": r.proposalInFlight, "last_proposal_error": r.lastProposalError, "fatal_persistence_error": r.fatalPersistenceError, "pending_commit_count": len(r.pendingCommits), "pending_commit_heights": mapKeys(r.pendingCommits), "pending_commit_errors": r.pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": len(r.relaySource), "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": r.relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "last_progress_at": r.lastProgressAt, "ready": true, "stopping": false}
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": r.committedHeight, "committed_block_hash": r.committedHash, "mempool_depth": r.pool.Len(), "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": r.proposalInFlight, "last_proposal_error": r.lastProposalError, "fatal_persistence_error": r.fatalPersistenceError, "pending_commit_count": len(r.pendingCommits), "pending_commit_heights": mapKeys(r.pendingCommits), "pending_commit_errors": r.pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": len(r.relaySource), "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": r.relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "last_progress_at": r.lastProgressAt, "ready": true, "stopping": false}
 	r.mu.Unlock()
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
+}
+func mapIDs(items map[string]bool) []string {
+	out := make([]string, 0, len(items))
+	for key := range items {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 func mapKeys(items map[uint64]realblock.Block) []uint64 {
 	out := make([]uint64, 0, len(items))
