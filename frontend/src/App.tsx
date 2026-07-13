@@ -54,6 +54,7 @@ import RealismModePanel from "./components/v4/RealismModePanel";
 import V3ComposerPage from "./pages/V3ComposerPage";
 import RealClusterWorkbench from "./components/v5/RealClusterWorkbench";
 import V5FormalRunPage from "./pages/V5FormalRunPage";
+import V5ResultsPage from "./pages/V5ResultsPage";
 
 type PageId =
   | "overview"
@@ -358,10 +359,11 @@ function App() {
       {activePage === "sweep" && <SweepPage sweeps={sweeps} sweepId={sweepId} setSweepId={setSweepId} result={v2Result as V2SweepRunResponse | null} artifacts={v2Artifacts} runSweepExperiment={runSweepExperiment} />}
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
       {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} onNextToRunExperiment={() => setActivePage("runexperiment")} />}
-      {activePage === "runexperiment" && <V5FormalRunPage />}
+      {activePage === "runexperiment" && <V5FormalRunPage onOpenResults={(groupId) => { window.localStorage.setItem("mbe.v5FormalRunGroupId", groupId); setActivePage("runs"); }} />}
       {activePage === "v5realcluster" && <RealClusterWorkbench />}
       {activePage === "v4realism" && <RealismModePanel />}
-      {(activePage === "runs" || activePage === "artifacts") && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
+      {activePage === "runs" && <V5ResultsPage />}
+      {activePage === "artifacts" && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
       {activePage === "workloads" && <WorkloadLibraryPage />}
       {activePage === "boundaries" && <BoundariesPage />}
       {activePage === "developer" && <DeveloperPage traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}

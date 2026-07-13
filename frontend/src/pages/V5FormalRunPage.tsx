@@ -31,8 +31,9 @@ const suites: Array<{ id: V5FormalSuite; label: string }> = [
 ];
 
 type Topology = { nodes: number; shards: number; validators_per_shard: number };
+type Props = { onOpenResults?: (groupId: string) => void };
 
-export default function V5FormalRunPage() {
+export default function V5FormalRunPage({ onOpenResults }: Props) {
   const [catalog, setCatalog] = useState<V5PluginManifest[]>([]);
   const [savedMethods, setSavedMethods] = useState<V5FormalMethod[]>([]);
   const [selectedMethods, setSelectedMethods] = useState<string[]>(["v5_catalog_default"]);
@@ -211,7 +212,7 @@ export default function V5FormalRunPage() {
 
     <article className="final-card wide">
       <div className="section-heading"><div><h3>RunGroup status</h3><p className="muted">The latest RunGroup ID is persisted locally for query-after-refresh; it is never re-created automatically.</p></div><button type="button" onClick={() => void queryGroup()} disabled={!groupId || busy}>重新查询</button></div>
-      {groupId && <p><strong>run_group_id:</strong> <code>{groupId}</code></p>}
+      {groupId && <p><strong>run_group_id:</strong> <code>{groupId}</code> {onOpenResults && <button type="button" onClick={() => onOpenResults(groupId)}>Open Results</button>}</p>}
       {groupDetail && <GroupStatus detail={groupDetail} />}
     </article>
   </section>;

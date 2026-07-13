@@ -1314,6 +1314,7 @@ export type V5FormalMatrixRow = {
   repeat_index: number;
   scan_variable: string;
   scan_value: string;
+  comparison_group_id?: string;
   execution_backend: string;
   estimated_processes: number;
   estimated_transactions: number;
@@ -1322,11 +1323,18 @@ export type V5FormalMatrixRow = {
   warnings: string[];
 };
 export type V5FormalPreviewResponse = { execution_backend: string; rows: V5FormalMatrixRow[]; paper_candidate: boolean };
+export type V5FormalAggregate = { count?: number | null; mean?: number | null; median?: number | null; std?: number | null; min?: number | null; max?: number | null; ci95_low?: number | null; ci95_high?: number | null; completed_count?: number | null; failed_count?: number | null; missing_count?: number | null };
+export type V5FinalityEvidence = { [key: string]: unknown; logical_transaction_count?: number; submitted_unique_tx_count?: number; terminal_unique_tx_count?: number; incomplete_unique_tx_count?: number; finalized_unique_logical_tx_count?: number; intra_shard_committed_unique_count?: number; intra_shard_terminal_unique_count?: number; cross_shard_requested_unique_count?: number; cross_shard_target_committed_unique_count?: number; cross_shard_finalized_unique_count?: number; cross_shard_refunded_unique_count?: number; cross_shard_failed_unique_count?: number; throughput_tps?: number; p50_finality_ms?: number; p95_finality_ms?: number; p99_finality_ms?: number; metric_truth?: string; tcp_send_latency_excluded?: boolean };
+export type V5RealClusterSummary = Record<string, unknown> & { runtime_stage?: string; runtime_truth?: string; ready_to_commit?: boolean; one_node_one_os_process?: boolean; independent_tcp_ports?: boolean; all_shards_active?: boolean; per_shard_multiple_blocks?: boolean; real_client_submission?: boolean; real_cross_shard_network?: boolean; real_pbft_style_messages?: boolean; real_signed_tx?: boolean; persistent_state?: boolean; plugin_driven_runtime?: boolean; state_root_consistent?: boolean; no_fallback?: boolean; orphan_process_count?: number; distinct_process_count?: number; expected_process_count?: number; shard_count?: number; shard_blocks?: Record<string, number>; finality_evidence?: V5FinalityEvidence };
+export type V5RuntimeArtifact = { name: string; size_bytes: number; truth_category: string; download_url: string };
+export type V5FormalChildResult = { run_id?: string; status?: string; output_dir?: string; summary?: V5RealClusterSummary; artifacts?: V5RuntimeArtifact[]; no_fallback?: boolean; stdout?: string; stderr?: string };
 export type V5FormalChildRun = V5FormalMatrixRow & {
   run_group_id: string;
   status: string;
+  attempt?: number;
+  paper_candidate?: boolean;
   error?: string;
-  result?: { status?: string; summary?: Record<string, unknown> };
+  result?: V5FormalChildResult;
   metrics?: Record<string, unknown>;
 };
 export type V5FormalRunGroup = {
@@ -1336,10 +1344,17 @@ export type V5FormalRunGroup = {
   runtime_truth: string;
   total_child_runs: number;
   completed_child_runs: number;
+  plan?: V5FormalExperimentPlan;
+  matrix?: V5FormalMatrixRow[];
+  aggregate?: V5FormalAggregate;
+  cancel_requested?: boolean;
+  plan_config_id?: string;
+  bundle_path?: string;
   created_at?: string;
   updated_at?: string;
 };
 export type V5FormalRunGroupDetail = { group: V5FormalRunGroup; children: V5FormalChildRun[] };
+export type V5FormalArtifactCatalog = { run_group_id: string; status: "ready" | "pending"; bundle_ready: boolean; bundle_size_bytes: number; file_count: number; files: Array<{ name: string; size_bytes: number }> };
 
 export async function fetchV5PluginCatalog(backend?: string): Promise<V5PluginManifest[]> {
   const query = backend ? `?backend=${encodeURIComponent(backend)}` : "";
@@ -1369,6 +1384,30 @@ export async function createV5FormalRunGroup(payload: V5FormalRunRequest): Promi
 
 export async function fetchV5FormalRunGroup(groupId: string): Promise<V5FormalRunGroupDetail> {
   return request<V5FormalRunGroupDetail>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}`);
+}
+
+export async function listV5FormalRunGroups(): Promise<V5FormalRunGroup[]> {
+  return request<V5FormalRunGroup[]>("/api/v5/formal/run-groups");
+}
+
+export async function fetchV5FormalChildRun(groupId: string, childId: string): Promise<V5FormalChildRun> {
+  return request<V5FormalChildRun>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/children/${encodeURIComponent(childId)}`);
+}
+
+export async function fetchV5FormalGroupMetrics(groupId: string): Promise<V5FormalAggregate> {
+  return request<V5FormalAggregate>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/metrics`);
+}
+
+export async function fetchV5FormalArtifactCatalog(groupId: string): Promise<V5FormalArtifactCatalog> {
+  return request<V5FormalArtifactCatalog>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/artifacts`);
+}
+
+export function v5FormalBundleURL(groupId: string): string {
+  return `${requestBaseURL}/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/bundle`;
+}
+
+export function v5RealClusterArtifactURL(downloadURL: string): string {
+  return `${requestBaseURL}${downloadURL}`;
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {

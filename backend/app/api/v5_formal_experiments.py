@@ -7,6 +7,7 @@ from backend.app.services.v5_formal_run_store import ROOT_DIR, group_dir
 from backend.app.models.v5_formal_experiment import V5FormalRunRequest
 from backend.app.services.v5_formal_run_store import children, create_group, read_child, read_group, write_group
 from backend.app.services.v5_formal_scheduler import expand, start
+from backend.app.services.v5_formal_artifact_catalog import read_catalog
 from backend.app.services.v3_saved_config_store import create_saved_config
 from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest
 
@@ -58,6 +59,15 @@ def child_detail(group_id: str, child_id: str) -> dict:
 def group_metrics(group_id: str) -> dict:
     try: return read_group(group_id).get("aggregate", {})
     except (FileNotFoundError, ValueError) as exc: raise HTTPException(404, "unknown formal run group") from exc
+
+
+@router.get("/run-groups/{group_id}/artifacts")
+def group_artifacts(group_id: str) -> dict:
+    try:
+        read_group(group_id)
+        return read_catalog(group_dir(group_id), group_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
 
 
 @router.get("/run-groups/{group_id}/bundle")
