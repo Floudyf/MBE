@@ -1287,6 +1287,59 @@ export type V5ExperimentSpec = { schema_version?: "v5_experiment_spec_v1"; name:
 export type V5CompatibilityResult = { valid: boolean; blockers: string[]; warnings: string[]; resolved_plugins: V5PluginSelection[]; resource_estimate: Record<string, unknown> };
 export type V5CompiledRunPlan = Record<string, unknown> & { plan_id: string; plan_digest: string; node_configs: Record<string, unknown>[]; plugin_snapshot: V5PluginManifest[]; no_fallback: boolean };
 export type V5RealClusterResult = { run_id: string; status: string; summary: Record<string, unknown>; artifacts: V2Artifact[]; stdout: string; stderr: string; no_fallback: boolean };
+export type V5FormalSuite = "main_experiment" | "comparison_experiment" | "ablation_experiment" | "workload_sensitivity" | "topology_scaling" | "fault_recovery_experiment";
+export type V5FormalMethod = { method_id: string; display_name: string; plugin_overrides: Record<string, string> };
+export type V5FormalExperimentPlan = {
+  name: string;
+  saved_config_id?: string;
+  base_spec: V5ExperimentSpec;
+  suites: V5FormalSuite[];
+  methods: V5FormalMethod[];
+  seeds: number[];
+  repeats: number;
+  topology_points?: Array<Record<string, number>>;
+  workload_points?: Array<Record<string, number>>;
+  fault_points?: Array<Record<string, unknown>>;
+};
+export type V5FormalRunRequest = { execution_backend: "preview" | "simulation" | "real_cluster"; plan: V5FormalExperimentPlan };
+export type V5FormalMatrixRow = {
+  child_run_id: string;
+  suite_type: V5FormalSuite;
+  method: V5FormalMethod;
+  method_config_id: string;
+  workload_point: Record<string, unknown>;
+  topology_point: { nodes?: number; shards?: number; validators_per_shard?: number };
+  fault_point: Record<string, unknown>;
+  seed: number;
+  repeat_index: number;
+  scan_variable: string;
+  scan_value: string;
+  execution_backend: string;
+  estimated_processes: number;
+  estimated_transactions: number;
+  runnable: boolean;
+  blockers: string[];
+  warnings: string[];
+};
+export type V5FormalPreviewResponse = { execution_backend: string; rows: V5FormalMatrixRow[]; paper_candidate: boolean };
+export type V5FormalChildRun = V5FormalMatrixRow & {
+  run_group_id: string;
+  status: string;
+  error?: string;
+  result?: { status?: string; summary?: Record<string, unknown> };
+  metrics?: Record<string, unknown>;
+};
+export type V5FormalRunGroup = {
+  run_group_id: string;
+  status: string;
+  execution_backend: string;
+  runtime_truth: string;
+  total_child_runs: number;
+  completed_child_runs: number;
+  created_at?: string;
+  updated_at?: string;
+};
+export type V5FormalRunGroupDetail = { group: V5FormalRunGroup; children: V5FormalChildRun[] };
 
 export async function fetchV5PluginCatalog(backend?: string): Promise<V5PluginManifest[]> {
   const query = backend ? `?backend=${encodeURIComponent(backend)}` : "";
@@ -1304,6 +1357,18 @@ export async function compileV5ExperimentSpec(payload: V5ExperimentSpec): Promis
 
 export async function runV5RealCluster(payload: V5ExperimentSpec): Promise<V5RealClusterResult> {
   return request<V5RealClusterResult>("/api/v5/real-cluster/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function previewV5FormalRun(payload: V5FormalRunRequest): Promise<V5FormalPreviewResponse> {
+  return request<V5FormalPreviewResponse>("/api/v5/formal/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function createV5FormalRunGroup(payload: V5FormalRunRequest): Promise<V5FormalRunGroup> {
+  return request<V5FormalRunGroup>("/api/v5/formal/run-groups", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+}
+
+export async function fetchV5FormalRunGroup(groupId: string): Promise<V5FormalRunGroupDetail> {
+  return request<V5FormalRunGroupDetail>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}`);
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {

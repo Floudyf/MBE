@@ -51,9 +51,9 @@ import V2Dashboard from "./components/V2Dashboard";
 import ResultChartPanel from "./components/experiment/ResultChartPanel";
 import RunStageFlow from "./components/experiment/RunStageFlow";
 import RealismModePanel from "./components/v4/RealismModePanel";
-import RunExperimentPage from "./pages/RunExperimentPage";
 import V3ComposerPage from "./pages/V3ComposerPage";
 import RealClusterWorkbench from "./components/v5/RealClusterWorkbench";
+import V5FormalRunPage from "./pages/V5FormalRunPage";
 
 type PageId =
   | "overview"
@@ -358,7 +358,7 @@ function App() {
       {activePage === "sweep" && <SweepPage sweeps={sweeps} sweepId={sweepId} setSweepId={setSweepId} result={v2Result as V2SweepRunResponse | null} artifacts={v2Artifacts} runSweepExperiment={runSweepExperiment} />}
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
       {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} onNextToRunExperiment={() => setActivePage("runexperiment")} />}
-      {activePage === "runexperiment" && <RunExperimentPage onOpenV4Details={() => setActivePage("v4realism")} />}
+      {activePage === "runexperiment" && <V5FormalRunPage />}
       {activePage === "v5realcluster" && <RealClusterWorkbench />}
       {activePage === "v4realism" && <RealismModePanel />}
       {(activePage === "runs" || activePage === "artifacts") && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}

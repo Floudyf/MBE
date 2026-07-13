@@ -1,0 +1,38 @@
+import { expect, test } from "@playwright/test";
+
+test("previews and runs a V5 real-cluster Formal RunGroup", async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto("/");
+  await page.locator(".final-sidebar").getByRole("button", { name: "运行实验", exact: true }).click();
+  await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Preview Formal Matrix" })).toBeEnabled();
+  await page.getByLabel("nodes").fill("4");
+  await page.getByLabel("shards").fill("1");
+  await page.getByLabel("validators per shard").fill("4");
+  await page.getByLabel("tx_count").fill("20");
+  await page.getByLabel("cross_shard_ratio").fill("0");
+  await page.getByLabel("seeds").fill("11");
+  await page.getByLabel("repeats").fill("1");
+  await page.getByRole("button", { name: "Preview Formal Matrix" }).click();
+  await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("matrix rows: 1");
+  await expect(page.getByText("runnable", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start Real-Cluster RunGroup" })).toBeEnabled();
+  await page.getByLabel("tx_count").fill("21");
+  await expect(page.getByRole("button", { name: "Start Real-Cluster RunGroup" })).toBeDisabled();
+  await page.getByRole("button", { name: "Preview Formal Matrix" }).click();
+  await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("matrix rows: 1");
+  await expect(page.getByRole("button", { name: "Start Real-Cluster RunGroup" })).toBeEnabled();
+  await page.getByLabel("tx_count").fill("20");
+  await expect(page.getByRole("button", { name: "Start Real-Cluster RunGroup" })).toBeDisabled();
+  await page.getByRole("button", { name: "Preview Formal Matrix" }).click();
+  await expect(page.getByRole("button", { name: "Start Real-Cluster RunGroup" })).toBeEnabled();
+  await page.getByRole("button", { name: "Start Real-Cluster RunGroup" }).click();
+  await expect(page.getByText("run_group_id:", { exact: false })).toBeVisible();
+  await expect.poll(async () => page.getByTestId("v5-formal-group-summary").innerText(), { timeout: 180_000 }).toContain("status: completed");
+  const child = page.getByTestId("v5-formal-child-table").locator("tbody tr").first().locator("td");
+  await expect(child.nth(7)).toHaveText("completed");
+  await expect(child.nth(8)).toHaveText("20");
+  await expect(child.nth(9)).toHaveText("0");
+  await expect(child.nth(10)).toHaveText("0");
+  await expect(child.nth(11)).toHaveText("true");
+});
