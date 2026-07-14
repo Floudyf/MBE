@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   API_BASE_URL,
@@ -55,6 +55,7 @@ import V3ComposerPage from "./pages/V3ComposerPage";
 import RealClusterWorkbench from "./components/v5/RealClusterWorkbench";
 import V5FormalRunPage from "./pages/V5FormalRunPage";
 import V5ResultsPage from "./pages/V5ResultsPage";
+import V5MethodDesignPage from "./pages/V5MethodDesignPage";
 
 type PageId =
   | "overview"
@@ -73,7 +74,8 @@ type PageId =
   | "workloads"
   | "boundaries"
   | "developer"
-  | "advanced";
+  | "advanced"
+  | "v5design";
 
 const defaultCustomForm: V1CustomRunRequest = {
   workload: "asset_hotspot_v1",
@@ -122,13 +124,12 @@ const primaryNavGroups: { title: string; items: { id: PageId; label: string }[] 
   {
     title: "实验流程",
     items: [
-      { id: "v3composer", label: "实验设计" },
-      { id: "runexperiment", label: "运行实验" },
-      { id: "v5realcluster", label: "V5 Real Cluster" },
-      { id: "runs", label: "结果与产物" },
-      { id: "workloads", label: "负载库" },
+      { id: "v5design", label: "① 实验设计" },
+      { id: "runexperiment", label: "② 运行实验" },
+      { id: "runs", label: "③ 结果与产物" },
     ],
   },
+  { title: "数据", items: [{ id: "workloads", label: "负载库" }] },
   {
     title: "系统",
     items: [
@@ -139,7 +140,10 @@ const primaryNavGroups: { title: string; items: { id: PageId; label: string }[] 
 ];
 
 function App() {
-  const [activePage, setActivePage] = useState<PageId>("v3composer");
+  const [activePage, setActivePage] = useState<PageId>("v5design");
+  const [preferredMethodId, setPreferredMethodId] = useState(() => window.localStorage.getItem("mbe.v5PreferredMethodId") ?? "");
+  const [preferredGroupId, setPreferredGroupId] = useState(() => window.localStorage.getItem("mbe.v5FormalRunGroupId") ?? "");
+  const legacyLoadedRef = useRef(false);
   const [v1Stages, setV1Stages] = useState<V1StageStatus[]>([]);
   const [workloads, setWorkloads] = useState<V1WorkloadOption[]>([]);
   const [presets, setPresets] = useState<V1AblationPreset[]>([]);
@@ -164,10 +168,10 @@ function App() {
   const [v2Artifacts, setV2Artifacts] = useState<V2Artifact[]>([]);
   const [sweepId, setSweepId] = useState("v2_baseline_sweep");
   const [calibrationId, setCalibrationId] = useState("v2_synthetic_calibration_sample");
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
+  const [legacyBusy, setLegacyBusy] = useState("");
+  const [legacyError, setLegacyError] = useState("");
 
-  useEffect(() => { void loadAll(); }, []);
+  useEffect(() => { if (isLegacyPage(activePage) && !legacyLoadedRef.current) { legacyLoadedRef.current = true; void loadAll(); } }, [activePage]);
 
   const runnableV2 = useMemo(() => ({
     dual: backends.some((item) => item.backend_type === "local_virtual" && item.status === "runnable"),
@@ -178,7 +182,7 @@ function App() {
 
   async function loadAll() {
     try {
-      setBusy("正在加载平台状态...");
+      setLegacyBusy("正在加载平台状态...");
       const [status, workloadItems, presetItems, fabricStatus, latestCustom, customFileList, sweepSummary, sweepReport, sweepFileList, runs, sources, backendItems, protocolItems, sweepItems, calibrationItems, fabricSmoke] = await Promise.all([
         fetchV1Status(),
         fetchV1Workloads(),
@@ -213,11 +217,11 @@ function App() {
       setSweeps(sweepItems);
       setCalibrations(calibrationItems);
       setFabricSmokeStatus(fabricSmoke);
-      setError("");
+      setLegacyError("");
     } catch (caught) {
-      setError(errorMessage(caught));
+      setLegacyError(errorMessage(caught));
     } finally {
-      setBusy("");
+      setLegacyBusy("");
     }
   }
 
@@ -228,33 +232,33 @@ function App() {
       return;
     }
     try {
-      setBusy("正在运行单链机制实验...");
+      setLegacyBusy("正在运行单链机制实验...");
       const result = await runV1CustomExperiment(customForm);
       setCustomSummary(result.summary);
       setCustomFiles(result.files);
       setCustomMessage(`运行完成：${result.run_id || result.output_dir}`);
       await refreshRuns(result.run_id);
-      setError("");
+      setLegacyError("");
     } catch (caught) {
       setCustomMessage(`运行失败：${errorMessage(caught)}`);
     } finally {
-      setBusy("");
+      setLegacyBusy("");
     }
   }
 
   async function runAblationSweep() {
     try {
-      setBusy("正在运行 V1 sweep/report...");
+      setLegacyBusy("正在运行 V1 sweep/report...");
       await runV1Sweep();
       const [summary, report, files] = await Promise.all([fetchV1SweepSummary(), fetchV1SweepReport(), fetchV1SweepFiles()]);
       setSweepRows(summary.rows);
       setV1Report(report.content || "");
       setSweepFiles(files.files);
-      setError("");
+      setLegacyError("");
     } catch (caught) {
-      setError(errorMessage(caught));
+      setLegacyError(errorMessage(caught));
     } finally {
-      setBusy("");
+      setLegacyBusy("");
     }
   }
 
@@ -276,27 +280,27 @@ function App() {
 
   async function runV2Action(message: string, action: () => Promise<Record<string, unknown>>) {
     try {
-      setBusy(message);
+      setLegacyBusy(message);
       const result = await action();
       setV2Result(result);
       const artifacts = Array.isArray(result.artifacts) ? result.artifacts as V2Artifact[] : [];
       setV2Artifacts(artifacts);
       const runId = typeof result.run_id === "string" ? result.run_id : "";
       if (runId) await refreshRuns(runId);
-      setError("");
+      setLegacyError("");
     } catch (caught) {
-      setError(errorMessage(caught));
+      setLegacyError(errorMessage(caught));
     } finally {
-      setBusy("");
+      setLegacyBusy("");
     }
   }
 
   async function refreshFabricSmoke() {
     try {
       setFabricSmokeStatus(await fetchV2FabricSmokeStatus());
-      setError("");
+      setLegacyError("");
     } catch (caught) {
-      setError(errorMessage(caught));
+      setLegacyError(errorMessage(caught));
     }
   }
 
@@ -319,9 +323,9 @@ function App() {
     }
     try {
       setSelectedArtifacts((await fetchV2RunArtifacts(runId)).artifacts);
-      setError("");
+      setLegacyError("");
     } catch (caught) {
-      setError(errorMessage(caught));
+      setLegacyError(errorMessage(caught));
     }
   }
 
@@ -337,7 +341,7 @@ function App() {
   }
 
   return <div className="final-shell">
-    <aside className="final-sidebar">
+    <aside className="final-sidebar" data-testid="primary-navigation">
       <div className="brand-block"><span>MBE</span><strong>元宇宙区块链实验平台</strong><small>实验设计 → 运行实验 → 结果与产物</small></div>
       {primaryNavGroups.map((group) => <nav key={group.title} aria-label={group.title}>
         <p>{group.title}</p>
@@ -347,10 +351,10 @@ function App() {
     <main className="final-main">
       <header className="final-topbar">
         <div><p className="eyebrow">当前后端：{API_BASE_URL}</p><h1>{pageTitle(activePage)}</h1></div>
-        <button type="button" onClick={loadAll}>刷新平台状态</button>
+        {isLegacyPage(activePage) && <button type="button" onClick={loadAll}>刷新历史平台状态</button>}
       </header>
-      {busy && <p className="notice">{busy}</p>}
-      {error && <p className="file-error">{error}</p>}
+      {isLegacyPage(activePage) && legacyBusy && <p className="notice">{legacyBusy}</p>}
+      {isLegacyPage(activePage) && legacyError && <p className="file-error">{legacyError}</p>}
       {activePage === "overview" && <OverviewPage runnableV2={runnableV2} setActivePage={setActivePage} fabricSmokeStatus={fabricSmokeStatus} />}
       {activePage === "single" && <SingleChainPage form={customForm} setForm={setCustomForm} presets={presets} workloads={workloads} fabricTrace={fabricTrace} customSummary={customSummary} customFiles={customFiles} customMessage={customMessage} applyPreset={applyPreset} runSingleChain={runSingleChain} />}
       {activePage === "ablation" && <AblationPage rows={sweepRows} files={sweepFiles} report={v1Report} runAblationSweep={runAblationSweep} />}
@@ -358,11 +362,12 @@ function App() {
       {activePage === "protocol" && <ProtocolPage protocols={protocols} result={v2Result} artifacts={v2Artifacts} runProtocolReplay={runProtocolReplay} />}
       {activePage === "sweep" && <SweepPage sweeps={sweeps} sweepId={sweepId} setSweepId={setSweepId} result={v2Result as V2SweepRunResponse | null} artifacts={v2Artifacts} runSweepExperiment={runSweepExperiment} />}
       {activePage === "calibration" && <CalibrationPage calibrations={calibrations} calibrationId={calibrationId} setCalibrationId={setCalibrationId} fabricSmokeStatus={fabricSmokeStatus} refreshFabricSmoke={refreshFabricSmoke} result={v2Result as V2CalibrationRunResponse | null} artifacts={v2Artifacts} runCalibrationExperiment={runCalibrationExperiment} />}
+      {activePage === "v5design" && <V5MethodDesignPage onOpenRun={(configId) => { setPreferredMethodId(configId); window.localStorage.setItem("mbe.v5PreferredMethodId", configId); setActivePage("runexperiment"); }} />}
       {activePage === "v3composer" && <V3ComposerPage onRunCompleted={(runId) => { void refreshRuns(runId); }} onNextToRunExperiment={() => setActivePage("runexperiment")} />}
-      {activePage === "runexperiment" && <V5FormalRunPage onOpenResults={(groupId) => { window.localStorage.setItem("mbe.v5FormalRunGroupId", groupId); setActivePage("runs"); }} />}
+      {activePage === "runexperiment" && <V5FormalRunPage preferredMethodId={preferredMethodId} onPreferredMethodUnavailable={() => { setPreferredMethodId(""); window.localStorage.removeItem("mbe.v5PreferredMethodId"); }} onOpenResults={(groupId) => { setPreferredGroupId(groupId); window.localStorage.setItem("mbe.v5FormalRunGroupId", groupId); setActivePage("runs"); }} />}
       {activePage === "v5realcluster" && <RealClusterWorkbench />}
       {activePage === "v4realism" && <RealismModePanel />}
-      {activePage === "runs" && <V5ResultsPage />}
+      {activePage === "runs" && <V5ResultsPage preferredGroupId={preferredGroupId} />}
       {activePage === "artifacts" && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
       {activePage === "workloads" && <WorkloadLibraryPage />}
       {activePage === "boundaries" && <BoundariesPage />}
@@ -550,7 +555,7 @@ function RunHistoryPage({ runs, selectedRunId, artifacts, selectRun, refreshRuns
 }
 
 function BoundariesPage() {
-  return <section className="page-grid"><InfoPanel title="系统边界" note="V2 是 V3-ready 本地模块化实验平台。" /><article className="final-card wide"><ul className="boundary-list"><li>V2 不从网页启动 Docker / Fabric / network.sh。</li><li>V2 不连接公网链实时节点。</li><li>local_virtual backend 不是真实链。</li><li>protocol baseline 不是生产级跨链桥。</li><li>Fabric smoke trace replay 不是网页实时控制 Fabric。</li><li>MetaFlow 当前未实现。</li><li>FabricLiveBackend / EVMLiveBackend 属于 V3。</li></ul></article></section>;
+  return <section className="page-grid"><InfoPanel title="真实性边界" note="V5 real_cluster is a local research runtime, not a production chain." /><article className="final-card wide"><ul className="boundary-list"><li>Implemented: independent OS process per logical node, localhost TCP, signed transactions, per-node mempool, PBFT-style quorum messages, deterministic execution, persistent local state/block/receipt/tx index, state-root evidence, cross-shard relay/finality evidence, runtime artifacts, and no silent fallback.</li><li>production blockchain = false; production PBFT = false; full Byzantine security = false; multi-server deployment = false.</li><li>Fabric/EVM live backend = false; production exactly-once = false; reliable cross-shard retransmission/restart closure = false.</li><li>Public-chain datasets and Decentraland are not connected.</li></ul></article></section>;
 }
 
 function DeveloperPage(props: { traceSources: V2TraceSource[]; backends: V2ChainBackend[]; protocols: V2ProtocolInfo[]; sweeps: V2SweepInfo[]; calibrations: V2CalibrationInfo[]; v1Stages: V1StageStatus[] }) {
@@ -563,18 +568,22 @@ function DeveloperPage(props: { traceSources: V2TraceSource[]; backends: V2Chain
 
 function WorkloadLibraryPage() {
   return <section className="page-grid">
-    <InfoPanel title="负载库" note="当前负载 catalog 由 experiment-flow 提供给运行实验页使用；真实负载 real_skew_low / medium / high / extreme_hotspot 仍标注为规划中 / 数据集未接入。" />
+    <InfoPanel title="负载库" note="V5 Formal uses deterministic_signed_synthetic: signed synthetic transactions with intra-shard, cross-shard, and timeout-refund scenarios." />
+    <article className="final-card wide"><p>cross_shard_ratio and timeout_every are configured in Run Experiment. tx_count and seed also belong to Run Experiment.</p><p>Decentraland and public-chain raw traces are not connected to V5 Formal. Historical V1/V2 trace replay remains in Advanced.</p></article>
     <article className="final-card wide">
       <h3>负载接入边界</h3>
-      <p className="muted">本轮不接入新数据集、不替换 runner、不统一 run registry。请在“运行实验”页预览 workload matrix，并确认 planned workload 不会作为真实数据运行。</p>
+      <p className="muted">V5 Formal currently runs only the deterministic signed synthetic workload. It is synthetic input, not a real metaverse or public-chain dataset. Preview the formal matrix in Run Experiment before execution.</p>
     </article>
   </section>;
 }
 
 function AdvancedPage(props: { setActivePage: (page: PageId) => void; traceSources: V2TraceSource[]; backends: V2ChainBackend[]; protocols: V2ProtocolInfo[]; sweeps: V2SweepInfo[]; calibrations: V2CalibrationInfo[]; v1Stages: V1StageStatus[] }) {
   const entries: Array<[PageId, string, string]> = [
+    ["v5realcluster", "V5 Real Cluster 单次调试", "Single-run development and diagnostic tool; Formal RunGroup is the main path."],
+    ["v3composer", "V3 Composer（历史兼容）", "Historical compatibility and regression entry."],
+    ["v4realism", "V4 真实性验证（历史）", "Historical realism validation evidence."],
+    ["artifacts", "V1/V2 运行记录与产物（历史）", "Historical V1/V2 RunHistory and artifacts."],
     ["overview", "平台总览", "历史 V1/V2 总览入口"],
-    ["v4realism", "V4 真实性验证详情", "从运行实验页派生的 V4 realism request 详情与 run lookup"],
     ["single", "V1 单链机制实验", "MetaTrack 早期单链机制实验"],
     ["ablation", "V1 单链消融对比", "早期单链 sweep / report"],
     ["dual", "V2 双链回放实验", "本地虚拟双链回放"],
@@ -584,8 +593,8 @@ function AdvancedPage(props: { setActivePage: (page: PageId) => void; traceSourc
     ["developer", "开发者模式", "Raw JSON 与旧调试面板"],
   ];
   return (
-    <section className="page-grid">
-      <InfoPanel title="高级功能" note="旧 V1/V2/开发者入口仍然保留，但默认不铺在左侧导航，避免干扰 V3 实验控制台主流程。" />
+    <section className="page-grid" data-testid="advanced-navigation">
+      <InfoPanel title="高级功能" note="旧 V1/V2/V3/V4 与单次 V5 Workbench 保留为历史兼容、回归和开发调试入口，但不干扰当前 V5 Design → Run → Results 主流程。" />
       <div className="final-card-grid">
         {entries.map(([page, title, note]) => (
           <article key={page} className="final-card">
@@ -662,6 +671,10 @@ function BackendBadge({ backendType }: { backendType: string }) {
 
 function pageTitle(page: PageId): string {
   return primaryNavGroups.flatMap((group) => group.items).find((item) => item.id === page)?.label ?? (page === "v4realism" ? "V4 真实性验证详情" : "平台总览");
+}
+
+function isLegacyPage(page: PageId): boolean {
+  return ["overview", "single", "ablation", "dual", "protocol", "sweep", "calibration", "artifacts", "developer", "advanced", "v3composer", "v4realism", "v5realcluster"].includes(page);
 }
 
 function validateCustomForm(form: V1CustomRunRequest): string {

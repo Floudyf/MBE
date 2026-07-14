@@ -29,6 +29,11 @@ export function collectBrowserDiagnostics(page: Page) {
 
 export async function openV3Console(page: Page) {
   await page.goto("/");
+  const navigation = page.getByTestId("primary-navigation");
+  await navigation.getByRole("button", { name: "高级功能", exact: true }).click();
+  const advanced = page.getByTestId("advanced-navigation");
+  const composer = advanced.locator("article").filter({ hasText: "V3 Composer（历史兼容）" });
+  await composer.getByRole("button", { name: "进入", exact: true }).click();
   await expect(page.getByTestId("v3-runtime-topology-panel")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("v3-formal-experiment-panel")).toBeVisible({ timeout: 30_000 });
   await openAllDetails(page);

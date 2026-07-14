@@ -18,6 +18,8 @@ V5 has only two outward stages:
 
 V5.1 defines the implemented `real_cluster` execution backend. Each logical node runs in an independent OS process, and a failed `real_cluster` run never falls back to V4 smoke or V3 simulation. V5.2 formal software closure is implemented and verified with Gate A/B, an 8-child real RunGroup, statistics/ZIP artifacts, and a completed 16-node/4-shard/10000-transaction Child. The 12-child 10000-transaction paper matrix is compiled and persisted but intentionally not executed in this software-validation round.
 
+The primary product workflow is V5 Method Design -> saved runnable V5 Method Profile -> Formal RunGroup -> Results and artifacts. Profiles reuse `V3SavedConfig`; V3 Composer and V4 smoke remain historical compatibility and regression entries. The local `real_cluster` backend has no silent fallback. No production blockchain, production PBFT, or public dataset claim is made; Decentraland and other external datasets are not connected.
+
 Planning documents:
 
 - `docs/v5_0_real_experiment_platform_master_plan.md`
@@ -54,7 +56,7 @@ V4.2 implementation status: the V4 runtime now executes committed blocks determi
 
 Current stage: V5.2 Real Formal Experiment and Result Closure, with V3-final preserved as the stable light-runtime baseline and V4 realism smoke preserved as historical realism validation.
 Latest runtime capability: V4.3 smoke validation provides signed transaction binding, per-node mempool, localhost TCP, PBFT-style messages, deterministic execution, durable block/state/receipt/tx-index artifacts, state-root consistency, cross-shard evidence, fault delay/drop evidence, and BlockEmulator CSV bridge evidence.
-Latest product capability: saved method templates use `V3SavedConfig`, Run Experiment reads saved methods, supports preset/custom topology, `nodes`, `shards`, `validators_per_shard`, `tx_count`, `seed`, `repeat_count`, and expands real matrix rows.
+Latest product capability: V5 Method Design saves runnable V5 Method Profiles through `V3SavedConfig`; Formal RunGroups execute the selected profile and Results exposes the persisted Group, Child, runtime artifacts, and real ZIP bundle.
 Current execution bridge: Preview, Simulation, and Real Cluster are distinct V5 backends; formal RunGroups execute sequentially through the persistent scheduler without fallback. Runtime truth: V3 formal runs are `v3_formal_simulation_logical_runtime`; V4 realism smoke is `v4_realism_smoke_regression`; V5 `real_cluster` is `v5_real_cluster_candidate` until the per-child Paper Candidate gate passes.
 
 V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, V3.12, V3.13, and V3-final are closed. V3-final adds deterministic local fault injection, node failure/recovery/network delay/drop/target congestion/Relay fault observation artifacts, local observability summaries, component health status, final artifact catalog, reproducibility manifest/guide/manual, and paper experiment mapping. It is not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not production fault tolerance, not production monitoring, not a Byzantine adversary model, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.

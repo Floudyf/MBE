@@ -7,7 +7,6 @@ import {
   listV3SavedConfigs,
   previewV5FormalRun,
   validateV5ExperimentSpec,
-  type V3SavedConfig,
   type V5CompatibilityResult,
   type V5ExperimentSpec,
   type V5FormalChildRun,
@@ -19,6 +18,7 @@ import {
   type V5PluginManifest,
   type V5PluginSelection,
 } from "../api";
+import { applyV5MethodSelections, defaultV5PluginSelections, parseSavedV5Method } from "../v5MethodProfile";
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
 const suites: Array<{ id: V5FormalSuite; label: string }> = [
@@ -31,9 +31,9 @@ const suites: Array<{ id: V5FormalSuite; label: string }> = [
 ];
 
 type Topology = { nodes: number; shards: number; validators_per_shard: number };
-type Props = { onOpenResults?: (groupId: string) => void };
+type Props = { onOpenResults?: (groupId: string) => void; onPreferredMethodUnavailable?: (methodId: string) => void; preferredMethodId?: string };
 
-export default function V5FormalRunPage({ onOpenResults }: Props) {
+export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavailable, preferredMethodId = "" }: Props) {
   const [catalog, setCatalog] = useState<V5PluginManifest[]>([]);
   const [savedMethods, setSavedMethods] = useState<V5FormalMethod[]>([]);
   const [selectedMethods, setSelectedMethods] = useState<string[]>(["v5_catalog_default"]);
@@ -54,11 +54,12 @@ export default function V5FormalRunPage({ onOpenResults }: Props) {
   const [busy, setBusy] = useState(false);
   const pollTimer = useRef<number | null>(null);
   const formRevision = useRef(0);
+  const preferredConsumed = useRef(false);
 
   const catalogDefault = useMemo<V5FormalMethod>(() => ({ method_id: "v5_catalog_default", display_name: "V5 Catalog Default", plugin_overrides: {} }), []);
   const methods = useMemo(() => [catalogDefault, ...savedMethods], [catalogDefault, savedMethods]);
   const seeds = useMemo(() => parseSeeds(seedText), [seedText]);
-  const catalogReady = useMemo(() => defaultSelections(catalog).length === 17, [catalog]);
+  const catalogReady = useMemo(() => defaultV5PluginSelections(catalog).length === 17, [catalog]);
   const previewRunnable = preview?.rows.length && preview.rows.every((row) => row.runnable && row.blockers.length === 0);
 
   useEffect(() => {
@@ -79,7 +80,14 @@ export default function V5FormalRunPage({ onOpenResults }: Props) {
     try {
       const [items, saved] = await Promise.all([fetchV5PluginCatalog("real_cluster"), listV3SavedConfigs("method")]);
       setCatalog(items);
-      setSavedMethods(saved.flatMap((item) => parseSavedV5Method(item, items)));
+      const parsed = saved.map((item) => parseSavedV5Method(item, items)).filter((item): item is V5FormalMethod => item !== null);
+      setSavedMethods(parsed);
+      if (!preferredConsumed.current && preferredMethodId) {
+        preferredConsumed.current = true;
+        const preferred = parsed.find((item) => item.method_id === preferredMethodId);
+        if (preferred) { setSelectedMethods([preferred.method_id]); invalidatePreview(); setMessage(`Method received from Design: ${preferred.display_name}`); }
+        else { setSelectedMethods(["v5_catalog_default"]); onPreferredMethodUnavailable?.(preferredMethodId); setError(`Preferred Method ${preferredMethodId} is unavailable or incompatible; V5 Catalog Default was selected instead.`); }
+      }
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -175,6 +183,7 @@ export default function V5FormalRunPage({ onOpenResults }: Props) {
       <p>正式执行使用独立 OS 进程和 localhost TCP。当前数据源为 Deterministic Signed Synthetic；Real Cluster 启动失败会直接失败，不会回退到 Simulation 或 V4 smoke。</p>
       {error && <p className="file-error">{error}</p>}
       {message && <p className="notice">{message}</p>}
+      {preferredMethodId && <p data-testid="v5-run-preferred-method">{preferredMethodId} {methods.find((item) => item.method_id === preferredMethodId)?.display_name ?? "unavailable"}</p>}
     </article>
 
     <article className="final-card wide">
@@ -185,7 +194,7 @@ export default function V5FormalRunPage({ onOpenResults }: Props) {
     <article className="final-card wide">
       <h3>Methods</h3>
       <p className="muted">Catalog Default uses the real-cluster catalog selection. Saved methods are shown only when their V5 plugin profile is parseable; formal methods currently override plugin IDs while the base ExperimentSpec supplies shared plugin parameters.</p>
-      <div className="selectable-card-grid">{methods.map((method) => <label key={method.method_id} className={`checkbox-card compact ${selectedMethods.includes(method.method_id) ? "selected" : ""}`}><span><strong>{method.display_name}</strong><small>{method.method_id}</small><small>{Object.keys(method.plugin_overrides).length ? `${Object.keys(method.plugin_overrides).length} plugin override(s)` : "catalog defaults"}</small></span><input type="checkbox" checked={selectedMethods.includes(method.method_id)} onChange={() => { setSelectedMethods((current) => toggle(method.method_id, current)); invalidatePreview(); }} /></label>)}</div>
+      <div className="selectable-card-grid">{methods.map((method) => <label key={method.method_id} data-testid={`v5-run-method-${method.method_id}`} className={`checkbox-card compact ${selectedMethods.includes(method.method_id) ? "selected" : ""}`}><span><strong>{method.display_name}</strong><small>{method.method_id}</small><small>{Object.keys(method.plugin_overrides).length ? `${Object.keys(method.plugin_overrides).length} plugin override(s)` : "catalog defaults"}</small></span><input type="checkbox" checked={selectedMethods.includes(method.method_id)} onChange={() => { setSelectedMethods((current) => toggle(method.method_id, current)); invalidatePreview(); }} /></label>)}</div>
       {!savedMethods.length && <p className="muted">No compatible saved V5 method profiles are currently available.</p>}
     </article>
 
@@ -219,20 +228,14 @@ export default function V5FormalRunPage({ onOpenResults }: Props) {
 }
 
 function requestFor(catalog: V5PluginManifest[], methods: V5FormalMethod[], suites: V5FormalSuite[], topology: Topology, txCount: number, crossShardRatio: number, timeoutEvery: number, seeds: number[], repeats: number): V5FormalRunRequest {
-  const plugin_selections: V5PluginSelection[] = defaultSelections(catalog).map((selection) => selection.category === "workload" ? { ...selection, config: { ...selection.config, cross_shard_ratio: crossShardRatio, timeout_every: timeoutEvery } } : selection);
+  const plugin_selections: V5PluginSelection[] = defaultV5PluginSelections(catalog).map((selection) => selection.category === "workload" ? { ...selection, config: { ...selection.config, cross_shard_ratio: crossShardRatio, timeout_every: timeoutEvery } } : selection);
   const base_spec: V5ExperimentSpec = { name: "v5_formal_real_cluster", execution_backend: "real_cluster", plugin_selections, topology, tx_count: txCount, seed: seeds[0], duration_ms: 6000, fault_policy: { mode: "disabled" }, requested_metrics: [] };
   return { execution_backend: "real_cluster" as const, plan: { name: "v5_formal_real_cluster", base_spec, suites, methods, seeds, repeats, topology_points: [], workload_points: [], fault_points: [] } };
 }
 
-function defaultSelections(catalog: V5PluginManifest[]): V5PluginSelection[] {
-  return Array.from(new Set(catalog.map((item) => item.category))).map((category) => {
-    const plugin = catalog.find((item) => item.category === category)!;
-    return { category, plugin_id: plugin.plugin_id, config: { ...plugin.default_config } };
-  });
-}
 
 function formError(input: { catalog: V5PluginManifest[]; selectedMethods: string[]; selectedSuites: V5FormalSuite[]; topology: Topology; txCount: number; crossShardRatio: number; timeoutEvery: number; seeds: number[]; repeats: number }): string | null {
-  if (!input.catalog.length || defaultSelections(input.catalog).length !== 17) return "The real_cluster plugin catalog is incomplete; wait for the catalog to load before previewing.";
+  if (!input.catalog.length || defaultV5PluginSelections(input.catalog).length !== 17) return "The real_cluster plugin catalog is incomplete; wait for the catalog to load before previewing.";
   if (!input.selectedMethods.length) return "Select at least one method before previewing.";
   if (!input.selectedSuites.length) return "Select at least one experiment suite before previewing.";
   if (!input.seeds.length) return "Seeds must be one to ten unique integers, for example 11,12,13.";
@@ -244,25 +247,8 @@ function formError(input: { catalog: V5PluginManifest[]; selectedMethods: string
   return null;
 }
 
-function parseSavedV5Method(saved: V3SavedConfig, catalog: V5PluginManifest[]): V5FormalMethod[] {
-  const payload = saved.payload;
-  if (saved.validation_status !== "runnable" || payload.schema_version !== "v5_plugin_profile_v1" || !isRecord(payload.compatibility_snapshot) || payload.compatibility_snapshot.valid !== true || !Array.isArray(payload.plugin_selections) || !payload.plugin_selections.length) return [];
-  const overrides: Record<string, string> = {};
-  for (const item of payload.plugin_selections) {
-    if (!isRecord(item) || typeof item.category !== "string" || !item.category.trim() || typeof item.plugin_id !== "string" || !item.plugin_id.trim() || overrides[item.category] || !catalog.some((plugin) => plugin.category === item.category && plugin.plugin_id === item.plugin_id)) return [];
-    overrides[item.category] = item.plugin_id;
-  }
-  return [{ method_id: saved.config_id, display_name: saved.name, plugin_overrides: overrides }];
-}
-
 function effectiveSpecFor(base: V5ExperimentSpec, method: V5FormalMethod): V5ExperimentSpec {
-  return {
-    ...base,
-    topology: { ...base.topology },
-    fault_policy: { ...(base.fault_policy ?? {}) },
-    requested_metrics: [...(base.requested_metrics ?? [])],
-    plugin_selections: base.plugin_selections.map((selection) => ({ ...selection, plugin_id: method.plugin_overrides[selection.category] ?? selection.plugin_id, config: { ...selection.config } })),
-  };
+  return applyV5MethodSelections(base, method);
 }
 
 function mergeCompatibility(response: V5FormalPreviewResponse, compatibility: Record<string, V5CompatibilityResult>): V5FormalPreviewResponse {
@@ -295,7 +281,7 @@ function isRecord(value: unknown): value is Record<string, unknown> { return typ
 function isTerminalGroup(status: string): boolean { return ["completed", "failed", "cancelled", "completed_with_failures"].includes(status); }
 
 function PreviewTable({ preview }: { preview: V5FormalPreviewResponse }) {
-  return <div className="table-wrap"><p data-testid="v5-formal-preview-summary"><strong>execution backend:</strong> {preview.execution_backend}; <strong>matrix rows:</strong> {preview.rows.length}</p><table><thead><tr><th>Suite</th><th>Method</th><th>Seed</th><th>Repeat</th><th>Topology</th><th>tx_count</th><th>Runtime</th><th>Compatibility</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.child_run_id}><td>{row.suite_type}</td><td>{row.method.display_name}</td><td>{row.seed}</td><td>{row.repeat_index + 1}</td><td>{row.topology_point.nodes}/{row.topology_point.shards}/{row.topology_point.validators_per_shard}</td><td>{row.estimated_transactions}</td><td>{row.execution_backend}</td><td>{row.runnable ? "runnable" : row.blockers.join("; ") || "blocked"}{row.warnings.length ? ` ${row.warnings.join("; ")}` : ""}</td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><p data-testid="v5-formal-preview-summary"><strong>execution backend:</strong> {preview.execution_backend}; <strong>matrix rows:</strong> {preview.rows.length}</p><table><thead><tr><th>Suite</th><th>Method</th><th>Method config ID</th><th>Seed</th><th>Repeat</th><th>Topology</th><th>tx_count</th><th>Runtime</th><th>Compatibility</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.child_run_id} data-method-config-id={row.method_config_id}><td>{row.suite_type}</td><td>{row.method.display_name}</td><td>{row.method_config_id}</td><td>{row.seed}</td><td>{row.repeat_index + 1}</td><td>{row.topology_point.nodes}/{row.topology_point.shards}/{row.topology_point.validators_per_shard}</td><td>{row.estimated_transactions}</td><td>{row.execution_backend}</td><td>{row.runnable ? "runnable" : row.blockers.join("; ") || "blocked"}{row.warnings.length ? ` ${row.warnings.join("; ")}` : ""}</td></tr>)}</tbody></table></div>;
 }
 
 function GroupStatus({ detail }: { detail: V5FormalRunGroupDetail }) {

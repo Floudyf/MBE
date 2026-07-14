@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("previews and runs a V5 real-cluster Formal RunGroup", async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto("/");
-  await page.locator(".final-sidebar").getByRole("button", { name: "运行实验", exact: true }).click();
+  await page.locator(".final-sidebar").getByRole("button", { name: "② 运行实验", exact: true }).click();
   await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
   await expect(page.getByRole("button", { name: "Preview Formal Matrix" })).toBeEnabled();
   await page.getByLabel("nodes").fill("4");

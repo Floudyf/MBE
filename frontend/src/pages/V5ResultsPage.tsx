@@ -18,7 +18,7 @@ import V5GroupSummary from "../components/v5/V5GroupSummary";
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
 
-export default function V5ResultsPage() {
+export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGroupId?: string }) {
   const [groups, setGroups] = useState<V5FormalRunGroup[]>([]);
   const [detail, setDetail] = useState<V5FormalRunGroupDetail | null>(null);
   const [aggregate, setAggregate] = useState<V5FormalAggregate | null>(null);
@@ -26,6 +26,7 @@ export default function V5ResultsPage() {
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [selectedChildId, setSelectedChildId] = useState("");
   const [selectedChild, setSelectedChild] = useState<V5FormalChildRun | null>(null);
+  const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const groupRevision = useRef(0);
@@ -42,10 +43,17 @@ export default function V5ResultsPage() {
       setBusy(true);
       const next = (await listV5FormalRunGroups()).sort((a, b) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
       setGroups(next);
-      const stored = preferredId ?? window.localStorage.getItem(recentGroupKey) ?? "";
+      const stored = preferredId || preferredGroupId || window.localStorage.getItem(recentGroupKey) || "";
       const choice = next.some((item) => item.run_group_id === stored) ? stored : next[0]?.run_group_id ?? "";
-      if (choice) await loadGroup(choice);
-      else clearSelection();
+      const preferredMissing = Boolean(stored && !next.some((item) => item.run_group_id === stored));
+      if (choice) {
+        if (preferredMissing) setNotice(`Preferred RunGroup ${stored} was not found; selected the newest available record.`);
+        else if (stored) setNotice("");
+        await loadGroup(choice);
+      } else {
+        if (preferredMissing) setNotice(`Preferred RunGroup ${stored} was not found and no persisted RunGroup is available.`);
+        clearSelection();
+      }
     } catch (caught) { setError(message(caught)); } finally { setBusy(false); }
   }
 
@@ -97,7 +105,7 @@ export default function V5ResultsPage() {
 
   const selectedGroup = detail?.group;
   return <section className="page-grid" data-testid="v5-results-page">
-    <article className="final-card wide page-hero"><p className="eyebrow">V5 Formal Results</p><h2>Results and Artifacts</h2><p>Results use persisted V5 Formal RunGroup records and real runtime artifacts. No local output path is exposed as a browser download.</p>{error && <p className="file-error">{error}</p>}</article>
+    <article className="final-card wide page-hero"><p className="eyebrow">V5 Formal Results</p><h2>Results and Artifacts</h2><p>Results use persisted V5 Formal RunGroup records and real runtime artifacts. No local output path is exposed as a browser download.</p>{notice && <p className="notice">{notice}</p>}{error && <p className="file-error">{error}</p>}</article>
     <article className="final-card wide" data-testid="v5-run-group-list"><div className="section-heading"><div><h2>RunGroup History</h2><p className="muted">{groups.length ? `${groups.length} persisted RunGroup(s)` : "No V5 Formal RunGroups yet."}</p></div><button type="button" onClick={() => void refreshGroups(selectedGroupId)} disabled={busy}>Refresh RunGroup</button></div>
       {groups.length ? <div className="table-wrap"><table><thead><tr><th>ID</th><th>Status</th><th>Plan</th><th>Backend</th><th>Truth</th><th>Created</th><th>Updated</th><th>Children</th><th>Failed</th><th>Suites</th><th>Methods</th></tr></thead><tbody>{groups.map((group) => <tr key={group.run_group_id} className={group.run_group_id === selectedGroupId ? "selected-row" : ""}><td><button type="button" data-testid="v5-run-group-select" onClick={() => void loadGroup(group.run_group_id)}>{group.run_group_id}</button></td><td>{group.status}</td><td>{group.plan?.name ?? "-"}</td><td>{group.execution_backend}</td><td>{group.runtime_truth}</td><td>{group.created_at ?? "-"}</td><td>{group.updated_at ?? "-"}</td><td>{group.completed_child_runs}/{group.total_child_runs}</td><td>{metric(group.aggregate?.failed_count)}</td><td>{group.plan?.suites.length ?? "-"}</td><td>{group.plan?.methods.length ?? "-"}</td></tr>)}</tbody></table></div> : <p className="muted">Start a V5 Formal RunGroup from Run Experiment to populate this history.</p>}
     </article>
