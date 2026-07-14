@@ -20,12 +20,33 @@ V5.1 defines the implemented `real_cluster` execution backend. Each logical node
 
 The primary product workflow is V5 Method Design -> saved runnable V5 Method Profile -> Formal RunGroup -> Results and artifacts. Profiles reuse `V3SavedConfig`; V3 Composer and V4 smoke remain historical compatibility and regression entries. The local `real_cluster` backend has no silent fallback. No production blockchain, production PBFT, or public dataset claim is made; Decentraland and other external datasets are not connected.
 
+### Workload Data Plane Status
+
+The V5 Formal Workflow is the current stable product baseline. Its synthetic
+formal workflow is complete and still runs only
+`deterministic_signed_synthetic`. Decentraland dataset provenance is confirmed,
+and its workload data-plane design is complete, but dataset replay and derived
+contract-skew workloads are not implemented. A future implementation remains
+research-grade modelling/replay, not instruction-level Polygon or Decentraland
+contract execution.
+
+| Capability | Status |
+| --- | --- |
+| V5 synthetic Formal RunGroup | Complete |
+| V5 real local multi-process runtime | Complete |
+| V5 result/artifact workflow | Complete |
+| Decentraland dataset provenance | Confirmed |
+| Decentraland workload data plane design | Designed |
+| Decentraland Formal replay | Not implemented |
+| Derived contract-skew workloads | Not implemented |
+
 Planning documents:
 
 - `docs/v5_0_real_experiment_platform_master_plan.md`
 - `docs/v5_1_real_plugin_driven_multi_process_multishard_runtime.md`
 - `docs/v5_2_real_formal_experiment_and_result_closure.md`
 - `docs/v5_migration_compatibility_and_truth_boundary.md`
+- `docs/v5_workload_data_plane_design.md`
 
 V3 logical/formal runtime remains the `simulation` backend. V4 realism smoke remains historical regression evidence. V5 `real_cluster` is the implemented local runtime backend. Preview, Simulation, and unexecuted formal rows are never Paper Candidates; only completed real-cluster children can pass that gate.
 
