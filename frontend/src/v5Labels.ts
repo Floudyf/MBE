@@ -15,6 +15,7 @@ export const statusLabel = (value: string) => ({ queued: "排队中", starting: 
 export const backendLabel = (value: string) => value === "real_cluster" ? "真实多进程集群" : value;
 export const truthLabel = (value: string) => value === "v5_real_cluster_candidate" ? "本地真实集群研究运行时" : value;
 export const booleanLabel = (value: unknown) => value === true ? "是" : value === false ? "否" : "—";
+export const faultModeLabel = (value: string) => ({ disabled: "无故障", delay_only: "网络延迟", network_drop: "随机丢包" }[value] ?? value);
 export const missingLabel = (value: unknown) => value === undefined || value === null || value === "" ? "—" : String(value);
 export const blockerLabel = (value: string) => value
   .replace("cross-shard experiments with message loss or node restart are not supported because Relay/SourceFinalize reliable retransmission is not implemented", "跨片实验不支持丢包或节点重启，因为尚未实现 Relay/SourceFinalize 的可靠重传。")

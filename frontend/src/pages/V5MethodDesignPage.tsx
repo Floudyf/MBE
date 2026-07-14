@@ -3,10 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createV3SavedConfig, fetchV5PluginCatalog, listV3SavedConfigs, validateV5ExperimentSpec, type V3SavedConfig, type V5CompatibilityResult, type V5PluginManifest, type V5PluginSelection } from "../api";
 import { V5_METHOD_PROFILE_SCHEMA_VERSION, buildV5MethodValidationSpec, parseSavedV5Method, v5MethodSelectionsFromCatalog } from "../v5MethodProfile";
 
-type Props = { onOpenRun: (configId: string) => void; onDirtyChange?: (dirty: boolean) => void; saveRequestToken?: number };
+type Props = { onOpenRun: (configId: string) => void; onDirtyChange?: (dirty: boolean) => void; saveRequestToken?: number; onSaveRequestHandled?: (token: number) => void };
 const roles = ["main", "baseline", "ablation", "custom"];
 
-export default function V5MethodDesignPage({ onOpenRun, onDirtyChange, saveRequestToken = 0 }: Props) {
+export default function V5MethodDesignPage({ onOpenRun, onDirtyChange, saveRequestToken = 0, onSaveRequestHandled }: Props) {
   const [catalog, setCatalog] = useState<V5PluginManifest[]>([]);
   const [selections, setSelections] = useState<V5PluginSelection[]>([]);
   const [saved, setSaved] = useState<V3SavedConfig[]>([]);
@@ -15,6 +15,7 @@ export default function V5MethodDesignPage({ onOpenRun, onDirtyChange, saveReque
   const [savedConfigId, setSavedConfigId] = useState("");
   const [validatedSnapshot, setValidatedSnapshot] = useState(""); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [busy, setBusy] = useState(false);
   const revision = useRef(0);
+  const lastHandledSaveRequestToken = useRef(0);
   const initialSnapshot = useRef("");
   const snapshot = useMemo(() => JSON.stringify(selections.map((item) => [item.category, item.plugin_id]).sort()), [selections]);
   const validCurrent = Boolean(name.trim() && compatibility?.valid && validatedSnapshot === snapshot);
@@ -22,7 +23,7 @@ export default function V5MethodDesignPage({ onOpenRun, onDirtyChange, saveReque
 
   useEffect(() => { void load(); }, []);
   useEffect(() => { if (!initialSnapshot.current && selections.length) initialSnapshot.current = designSnapshot; onDirtyChange?.(Boolean(initialSnapshot.current && initialSnapshot.current !== designSnapshot)); }, [designSnapshot, onDirtyChange, selections.length]);
-  useEffect(() => { if (saveRequestToken > 0) void save(true); }, [saveRequestToken]);
+  useEffect(() => { if (saveRequestToken > 0 && saveRequestToken !== lastHandledSaveRequestToken.current) { lastHandledSaveRequestToken.current = saveRequestToken; onSaveRequestHandled?.(saveRequestToken); void save(true); } }, [saveRequestToken, onSaveRequestHandled]);
   async function load() { const [catalogResult, savedResult] = await Promise.allSettled([fetchV5PluginCatalog("real_cluster"), listV3SavedConfigs("method")]); if (catalogResult.status === "fulfilled") { setCatalog(catalogResult.value); setSelections(v5MethodSelectionsFromCatalog(catalogResult.value)); } else { setError(text(catalogResult.reason)); } if (savedResult.status === "fulfilled") setSaved(savedResult.value); else setMessage("已保存方法暂时无法读取；仍可设计新的目录方法。"); }
   function change(category: string, pluginId: string) { const plugin = catalog.find((item) => item.category === category && item.plugin_id === pluginId); if (!plugin) { setError(`Plugin ${pluginId} is not available for ${category}.`); return; } revision.current += 1; setSelections((current) => current.map((item) => item.category === category ? { ...item, plugin_id: pluginId, config: { ...plugin.default_config } } : item)); setCompatibility(null); setValidatedSnapshot(""); setMessage(""); setError(""); }
   async function validate() { const current = snapshot; const requestRevision = revision.current; setBusy(true); try { const result = await validateV5ExperimentSpec(buildV5MethodValidationSpec(catalog, selections)); if (requestRevision !== revision.current || current !== snapshot) return; setCompatibility(result); setValidatedSnapshot(current); setError(""); } catch (caught) { if (requestRevision === revision.current) setError(text(caught)); } finally { setBusy(false); } }

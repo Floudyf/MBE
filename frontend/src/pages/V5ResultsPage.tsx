@@ -34,6 +34,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   const [selectedChild, setSelectedChild] = useState<V5FormalChildRun | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [childError, setChildError] = useState("");
   const [busy, setBusy] = useState(false);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState("");
@@ -48,6 +49,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   const groupRevision = useRef(0);
   const childRevision = useRef(0);
   const historyRevision = useRef(0);
+  const initializationRevision = useRef(0);
   const selectedGroupRef = useRef("");
   const selectedChildRef = useRef("");
   const detailRef = useRef<V5FormalRunGroupDetail | null>(null);
@@ -68,20 +70,20 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   }, [includeTests, offset, statusFilter, methodFilter, suiteFilter, search]);
 
   async function initializeCurrentGroup() {
+    const revision = ++initializationRevision.current;
     const requested = preferredGroupId || window.localStorage.getItem(recentGroupKey) || "";
     if (requested) {
-      try {
-        await fetchV5FormalRunGroup(requested);
-        setNotice("");
-        await loadGroup(requested);
-        return;
-      } catch {
-        setNotice(`指定的实验组 ${requested} 不存在，已选择最新可用记录。`);
-      }
+      setNotice("");
+      const loaded = await loadGroup(requested);
+      if (revision !== initializationRevision.current || selectedGroupRef.current !== requested) return;
+      if (loaded) return;
+      setNotice(`指定的实验组 ${requested} 不存在，已选择最新可用记录。`);
+      clearSelection();
     }
 
     try {
       const page = await listV5FormalRunGroupSummaries({ limit: 1, offset: 0, include_tests: false });
+      if (revision !== initializationRevision.current || selectedGroupRef.current) return;
       if (page.items[0]) await loadGroup(page.items[0].run_group_id);
       else clearSelection();
     } catch (caught) {
@@ -114,7 +116,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     }
   }
 
-  async function loadGroup(groupId: string, quiet = false) {
+  async function loadGroup(groupId: string, quiet = false): Promise<boolean> {
     const revision = ++groupRevision.current;
     stopPolling();
     const switched = selectedGroupRef.current !== groupId;
@@ -129,7 +131,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
         fetchV5FormalArtifactCatalog(groupId),
         fetchV5FormalGroupAnalysis(groupId),
       ]);
-      if (revision !== groupRevision.current) return;
+      if (revision !== groupRevision.current) return false;
       detailRef.current = groupDetail;
       setDetail(groupDetail);
       setAggregate(groupAggregate);
@@ -149,16 +151,18 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
         ? retainedChild
         : groupDetail.children[0]?.child_run_id;
       if (childId) await loadChild(groupId, childId, revision);
-      if (revision !== groupRevision.current) return;
+      if (revision !== groupRevision.current) return false;
       setError("");
       if (terminal(groupDetail.group.status)) stopPolling();
       else schedulePolling(groupId);
+      return true;
     } catch (caught) {
-      if (revision !== groupRevision.current) return;
+      if (revision !== groupRevision.current) return false;
       setError(message(caught));
       if (quiet && selectedGroupRef.current === groupId && detailRef.current && !terminal(detailRef.current.group.status)) {
         schedulePolling(groupId);
       }
+      return false;
     } finally {
       if (revision === groupRevision.current) setBusy(false);
     }
@@ -172,9 +176,10 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       const child = await fetchV5FormalChildRun(groupId, childId);
       if (parentRevision === groupRevision.current && revision === childRevision.current && selectedGroupRef.current === groupId && selectedChildRef.current === childId) {
         setSelectedChild(child);
+        setChildError("");
       }
     } catch (caught) {
-      if (parentRevision === groupRevision.current && revision === childRevision.current) setError(message(caught));
+      if (parentRevision === groupRevision.current && revision === childRevision.current) setChildError(message(caught));
     }
   }
 
@@ -195,6 +200,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     selectedChildRef.current = "";
     setSelectedChildId("");
     setSelectedChild(null);
+    setChildError("");
   }
 
   function clearSelection() {
@@ -221,6 +227,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       <p>结果来自已持久化的 V5 Formal RunGroup 与真实运行产物；浏览器不会获得本地输出路径。</p>
       {notice && <p className="notice">{notice}</p>}
       {error && <p className="file-error">{error}</p>}
+      {childError && <p className="file-error">子实验详情错误：{childError}</p>}
     </article>
     {selectedGroup && <V5GroupSummary group={selectedGroup} aggregate={aggregate} children={detail?.children ?? []} />}
     <V5AnalysisPanel analysis={analysis} />

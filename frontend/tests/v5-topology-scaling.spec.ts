@@ -11,6 +11,9 @@ test("topology scaling expands explicit topology points and blocks invalid topol
   const fields = editor.locator('input[type="number"]');
   await fields.nth(0).fill("4"); await fields.nth(1).fill("1"); await fields.nth(2).fill("4");
   await fields.nth(3).fill("8"); await fields.nth(4).fill("2"); await fields.nth(5).fill("4");
+  await expect(page.getByTestId("v5-estimated-children")).toHaveText("2");
+  await expect(page.getByTestId("v5-estimated-process-starts")).toHaveText("12");
+  await expect(page.getByTestId("v5-estimated-transactions")).toHaveText("40");
   const preview = page.waitForResponse((response) => response.url().includes("/api/v5/formal/preview") && response.request().method() === "POST");
   await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
   const body = await (await preview).json();
