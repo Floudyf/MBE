@@ -48,4 +48,4 @@ function AnalysisTable({ groups }: { groups: AnalysisRow[] }) { return <div clas
 function compareScanValue(a: AnalysisRow, b: AnalysisRow) { const left = Number(a.scan_value); const right = Number(b.scan_value); return Number.isFinite(left) && Number.isFinite(right) ? left - right : 0; }
 function chartTitle(chart: AnalysisChart) { return chart.kind === "bar" ? "方法性能对比" : chart.kind === "line" ? "扫描点性能趋势" : "实验摘要"; }
 function numeric(value: unknown) { const result = Number(value); return Number.isFinite(result) ? result : 0; }
-function format(value: unknown) { const number = numeric(value); return Number.isFinite(number) ? number.toFixed(2) : "—"; }
+function format(value: unknown) { if (value === null || value === undefined || value === "") return "—"; const number = Number(value); return Number.isFinite(number) ? number.toFixed(2) : "—"; }
