@@ -31,6 +31,8 @@ class V5ExperimentSpec(BaseModel):
     fault_policy: dict[str, Any] = Field(default_factory=lambda: {"mode": "disabled"})
     requested_metrics: list[str] = Field(default_factory=list)
     saved_config_id: str | None = None
+    formal_plan_config_id: str | None = None
+    method_config_id: str | None = None
     source_composer_draft: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -1,297 +1,117 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import {
-  createV5FormalRunGroup,
-  fetchV5FormalRunGroup,
-  fetchV5PluginCatalog,
-  listV3SavedConfigs,
-  previewV5FormalRun,
-  validateV5ExperimentSpec,
-  type V5CompatibilityResult,
-  type V5ExperimentSpec,
-  type V5FormalChildRun,
-  type V5FormalMethod,
-  type V5FormalPreviewResponse,
-  type V5FormalRunRequest,
-  type V5FormalRunGroupDetail,
-  type V5FormalSuite,
-  type V5PluginManifest,
-  type V5PluginSelection,
-} from "../api";
+import { createV5FormalRunGroup, fetchV5FormalRunGroup, fetchV5PluginCatalog, listV3SavedConfigs, previewV5FormalRun, validateV5ExperimentSpec, type V5CompatibilityResult, type V5ExperimentSpec, type V5FormalMethod, type V5FormalPreviewResponse, type V5FormalRunRequest, type V5FormalRunGroupDetail, type V5FormalSuite, type V5PluginManifest, type V5PluginSelection } from "../api";
+import { backendLabel, blockerLabel, categoryLabel, roleLabel, statusLabel, suiteLabel } from "../v5Labels";
 import { applyV5MethodSelections, defaultV5PluginSelections, parseSavedV5Method } from "../v5MethodProfile";
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
-const suites: Array<{ id: V5FormalSuite; label: string }> = [
-  { id: "main_experiment", label: "Main experiment" },
-  { id: "comparison_experiment", label: "Comparison" },
-  { id: "ablation_experiment", label: "Ablation" },
-  { id: "workload_sensitivity", label: "Workload sensitivity" },
-  { id: "topology_scaling", label: "Topology scaling" },
-  { id: "fault_recovery_experiment", label: "Fault / recovery" },
-];
-
+const suites: V5FormalSuite[] = ["main_experiment", "comparison_experiment", "ablation_experiment", "workload_sensitivity", "topology_scaling", "fault_recovery_experiment"];
 type Topology = { nodes: number; shards: number; validators_per_shard: number };
+type WorkloadPoint = { tx_count: number; cross_shard_ratio: number; timeout_every: number };
+type FaultPoint = { mode: string; delay_ms?: number; drop_every?: number; drop_rate?: number; kill_node_after_ms?: number; restart_node_after_ms?: number };
 type Props = { onOpenResults?: (groupId: string) => void; onPreferredMethodUnavailable?: (methodId: string) => void; preferredMethodId?: string };
 
 export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavailable, preferredMethodId = "" }: Props) {
   const [catalog, setCatalog] = useState<V5PluginManifest[]>([]);
   const [savedMethods, setSavedMethods] = useState<V5FormalMethod[]>([]);
-  const [selectedMethods, setSelectedMethods] = useState<string[]>(["v5_catalog_default"]);
+  const [selectedMethods, setSelectedMethods] = useState<string[]>([]);
   const [selectedSuites, setSelectedSuites] = useState<V5FormalSuite[]>(["main_experiment"]);
   const [topology, setTopology] = useState<Topology>({ nodes: 4, shards: 1, validators_per_shard: 4 });
-  const [txCount, setTxCount] = useState(20);
-  const [crossShardRatio, setCrossShardRatio] = useState(0);
-  const [timeoutEvery, setTimeoutEvery] = useState(17);
-  const [seedText, setSeedText] = useState("11");
-  const [repeats, setRepeats] = useState(1);
+  const [txCount, setTxCount] = useState(20); const [crossShardRatio, setCrossShardRatio] = useState(0);
+  const [timeoutEvery, setTimeoutEvery] = useState(0); const [timeoutEnabled, setTimeoutEnabled] = useState(false);
+  const [seedText, setSeedText] = useState("11"); const [repeats, setRepeats] = useState(1);
+  const [workloadPoints, setWorkloadPoints] = useState<WorkloadPoint[]>([]);
+  const [topologyPoints, setTopologyPoints] = useState<Topology[]>([]);
+  const [faultPoints, setFaultPoints] = useState<FaultPoint[]>([]);
   const [preview, setPreview] = useState<V5FormalPreviewResponse | null>(null);
   const [previewRequest, setPreviewRequest] = useState<V5FormalRunRequest | null>(null);
   const [methodCompatibility, setMethodCompatibility] = useState<Record<string, V5CompatibilityResult>>({});
-  const [groupDetail, setGroupDetail] = useState<V5FormalRunGroupDetail | null>(null);
-  const [groupId, setGroupId] = useState("");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const pollTimer = useRef<number | null>(null);
-  const formRevision = useRef(0);
-  const preferredConsumed = useRef(false);
-
-  const catalogDefault = useMemo<V5FormalMethod>(() => ({ method_id: "v5_catalog_default", display_name: "V5 Catalog Default", plugin_overrides: {} }), []);
+  const [groupDetail, setGroupDetail] = useState<V5FormalRunGroupDetail | null>(null); const [groupId, setGroupId] = useState("");
+  const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [catalogError, setCatalogError] = useState(""); const [savedError, setSavedError] = useState(""); const [busy, setBusy] = useState(false);
+  const pollTimer = useRef<number | null>(null); const formRevision = useRef(0); const preferredConsumed = useRef(false); const lastKnownNonterminal = useRef(false);
+  const catalogDefault = useMemo<V5FormalMethod>(() => ({ method_id: "v5_catalog_default", display_name: "目录默认基线", plugin_overrides: {}, role: "baseline" }), []);
   const methods = useMemo(() => [catalogDefault, ...savedMethods], [catalogDefault, savedMethods]);
   const seeds = useMemo(() => parseSeeds(seedText), [seedText]);
   const catalogReady = useMemo(() => defaultV5PluginSelections(catalog).length === 17, [catalog]);
-  const previewRunnable = preview?.rows.length && preview.rows.every((row) => row.runnable && row.blockers.length === 0);
+  const previewRunnable = Boolean(preview?.rows.length && preview.rows.every((row) => row.runnable && !row.blockers.length));
+  const selected = methods.filter((method) => selectedMethods.includes(method.method_id));
+  const variants = selectedSuites.reduce((count, suite) => count + (suite === "workload_sensitivity" ? workloadPoints.length : suite === "topology_scaling" ? topologyPoints.length : suite === "fault_recovery_experiment" ? faultPoints.length : 1), 0);
+  const estimatedChildren = selected.length * seeds.length * repeats * variants;
 
-  useEffect(() => {
-    void loadCatalog();
-    const stored = window.localStorage.getItem(recentGroupKey);
-    if (stored) void queryGroup(stored, true);
-    return () => stopPolling();
-  }, []);
-
-  useEffect(() => {
-    if (!groupId || !groupDetail || isTerminalGroup(groupDetail.group.status)) return;
-    stopPolling();
-    pollTimer.current = window.setTimeout(() => void queryGroup(groupId, true), 1500);
-    return () => stopPolling();
-  }, [groupId, groupDetail]);
+  useEffect(() => { void loadCatalog(); const stored = window.localStorage.getItem(recentGroupKey); if (stored) void queryGroup(stored, true); return stopPolling; }, []);
+  useEffect(() => { if (groupId && groupDetail && !terminal(groupDetail.group.status)) schedulePolling(groupId); else stopPolling(); return stopPolling; }, [groupId, groupDetail?.group.status]);
 
   async function loadCatalog() {
-    try {
-      const [items, saved] = await Promise.all([fetchV5PluginCatalog("real_cluster"), listV3SavedConfigs("method")]);
-      setCatalog(items);
-      const parsed = saved.map((item) => parseSavedV5Method(item, items)).filter((item): item is V5FormalMethod => item !== null);
-      setSavedMethods(parsed);
+    const [catalogResult, savedResult] = await Promise.allSettled([fetchV5PluginCatalog("real_cluster"), listV3SavedConfigs("method")]);
+    if (catalogResult.status === "fulfilled") { setCatalog(catalogResult.value); setCatalogError(""); }
+    else { setCatalogError(errorMessage(catalogResult.reason)); return; }
+    if (savedResult.status === "fulfilled") {
+      const parsed = savedResult.value.map((item) => parseSavedV5Method(item, catalogResult.value)).filter((item): item is V5FormalMethod => item !== null);
+      setSavedMethods(parsed); setSavedError("");
       if (!preferredConsumed.current && preferredMethodId) {
-        preferredConsumed.current = true;
-        const preferred = parsed.find((item) => item.method_id === preferredMethodId);
-        if (preferred) { setSelectedMethods([preferred.method_id]); invalidatePreview(); setMessage(`Method received from Design: ${preferred.display_name}`); }
-        else { setSelectedMethods(["v5_catalog_default"]); onPreferredMethodUnavailable?.(preferredMethodId); setError(`Preferred Method ${preferredMethodId} is unavailable or incompatible; V5 Catalog Default was selected instead.`); }
+        preferredConsumed.current = true; const preferred = parsed.find((item) => item.method_id === preferredMethodId);
+        if (preferred) { setSelectedMethods([preferred.method_id]); invalidatePreview(); setMessage(`来自实验设计：${preferred.display_name}`); }
+        else { setSelectedMethods([]); onPreferredMethodUnavailable?.(preferredMethodId); setError(`实验设计传入的方法 ${preferredMethodId} 已不存在或不兼容，未自动选择目录默认基线。`); }
       }
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
+    } else { setSavedMethods([]); setSavedError("已保存方法暂时无法读取；目录默认基线仍可使用。"); }
   }
-
-  function invalidatePreview() {
-    formRevision.current += 1;
-    setPreview(null);
-    setPreviewRequest(null);
-    setMethodCompatibility({});
-    setError("");
+  function invalidatePreview() { formRevision.current += 1; setPreview(null); setPreviewRequest(null); setMethodCompatibility({}); }
+  function update<T>(fn: () => void) { fn(); invalidatePreview(); }
+  function buildRequest(): V5FormalRunRequest | null {
+    const problem = formError({ catalogReady, selected, selectedSuites, topology, txCount, crossShardRatio, timeoutEvery: timeoutEnabled || selectedSuites.includes("fault_recovery_experiment") ? timeoutEvery : 0, seeds, repeats, workloadPoints, topologyPoints, faultPoints, estimatedChildren });
+    if (problem) { setError(problem); return null; }
+    const pluginSelections: V5PluginSelection[] = defaultV5PluginSelections(catalog).map((item) => item.category === "workload" ? { ...item, config: { ...item.config, cross_shard_ratio: crossShardRatio, timeout_every: timeoutEnabled || selectedSuites.includes("fault_recovery_experiment") ? timeoutEvery : 0 } } : item);
+    const base_spec: V5ExperimentSpec = { name: "v5_formal_real_cluster", execution_backend: "real_cluster", plugin_selections: pluginSelections, topology, tx_count: txCount, seed: seeds[0], duration_ms: 6000, fault_policy: { mode: "disabled" }, requested_metrics: [] };
+    const e2e = new URLSearchParams(window.location.search).get("e2e") === "1";
+    return { execution_backend: "real_cluster", plan: { name: "v5_formal_real_cluster", base_spec, suites: selectedSuites, methods: selected, seeds, repeats, workload_points: workloadPoints, topology_points: topologyPoints, fault_points: faultPoints, source_label: e2e ? "e2e" : "user", tags: e2e ? ["e2e"] : [] } };
   }
-
-  function buildRequest(): ReturnType<typeof requestFor> | null {
-    const problem = formError({ catalog, selectedMethods, selectedSuites, topology, txCount, crossShardRatio, timeoutEvery, seeds, repeats });
-    if (problem) {
-      setError(problem);
-      return null;
-    }
-    const byId = new Map(methods.map((method) => [method.method_id, method]));
-    const selected = selectedMethods.map((id) => byId.get(id)).filter((method): method is V5FormalMethod => Boolean(method));
-    return requestFor(catalog, selected, selectedSuites, topology, txCount, crossShardRatio, timeoutEvery, seeds, repeats);
-  }
-
   async function previewMatrix() {
-    const request = buildRequest();
-    if (!request) return;
-    const revision = formRevision.current;
-    setBusy(true);
+    const request = buildRequest(); if (!request) return; const revision = formRevision.current; setBusy(true);
     try {
-      const compatibilityEntries = await Promise.all(request.plan.methods.map(async (method) => [method.method_id, await validateV5ExperimentSpec(effectiveSpecFor(request.plan.base_spec, method))] as const));
-      const compatibility = Object.fromEntries(compatibilityEntries);
-      const response = await previewV5FormalRun(request);
-      if (revision !== formRevision.current) return;
-      const merged = mergeCompatibility(response, compatibility);
-      setMethodCompatibility(compatibility);
-      setPreview(merged);
-      setPreviewRequest(request);
-      setMessage(`Formal matrix contains ${merged.rows.length} real_cluster child run(s).`);
-      setError("");
-    } catch (caught) {
-      if (revision === formRevision.current) setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
+      const entries = await Promise.all(request.plan.methods.map(async (method) => [method.method_id, await validateV5ExperimentSpec(applyV5MethodSelections(request.plan.base_spec, method))] as const));
+      const compatibility = Object.fromEntries(entries); const response = await previewV5FormalRun(request); if (revision !== formRevision.current) return;
+      const merged = { ...response, rows: response.rows.map((row) => { const result = compatibility[row.method_config_id]; return result ? { ...row, runnable: row.runnable && result.valid, blockers: [...new Set([...row.blockers, ...result.blockers])], warnings: [...new Set([...row.warnings, ...result.warnings])] } : row; }) };
+      setMethodCompatibility(compatibility); setPreview(merged); setPreviewRequest(request); setMessage(`后端正式矩阵包含 ${merged.rows.length} 个真实集群子实验。`); setError("");
+    } catch (caught) { if (revision === formRevision.current) setError(blockerLabel(errorMessage(caught))); } finally { setBusy(false); }
   }
-
-  async function startGroup() {
-    if (!previewRequest || !previewRunnable) {
-      setError("Preview the current form before starting a RunGroup.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const group = await createV5FormalRunGroup(previewRequest);
-      window.localStorage.setItem(recentGroupKey, group.run_group_id);
-      setGroupId(group.run_group_id);
-      setGroupDetail({ group, children: [] });
-      setMessage(`Started V5 Formal RunGroup ${group.run_group_id}.`);
-      setError("");
-      await queryGroup(group.run_group_id, true);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function queryGroup(id = groupId, quiet = false) {
-    if (!id) return;
-    try {
-      const detail = await fetchV5FormalRunGroup(id);
-      setGroupId(id);
-      setGroupDetail(detail);
-      if (!quiet) setMessage(`Refreshed RunGroup ${id}.`);
-      setError("");
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  }
-
-  function stopPolling() {
-    if (pollTimer.current !== null) {
-      window.clearTimeout(pollTimer.current);
-      pollTimer.current = null;
-    }
-  }
-
+  async function startGroup() { if (!previewRequest || !previewRunnable) { setError("请先预览当前配置，并确保所有矩阵行可运行。"); return; } setBusy(true); try { const group = await createV5FormalRunGroup(previewRequest); window.localStorage.setItem(recentGroupKey, group.run_group_id); setGroupId(group.run_group_id); setGroupDetail({ group, children: [] }); setMessage(`已启动真实集群实验组 ${group.run_group_id}。`); setError(""); await queryGroup(group.run_group_id, true); } catch (caught) { setError(errorMessage(caught)); } finally { setBusy(false); } }
+  function schedulePolling(id: string) { stopPolling(); pollTimer.current = window.setTimeout(() => void queryGroup(id, true), 1500); }
+  async function queryGroup(id = groupId, quiet = false) { if (!id) return; try { const detail = await fetchV5FormalRunGroup(id); setGroupId(id); setGroupDetail(detail); lastKnownNonterminal.current = !terminal(detail.group.status); if (!quiet) setMessage(`已刷新实验组 ${id}。`); setError(""); if (lastKnownNonterminal.current) schedulePolling(id); else stopPolling(); } catch (caught) { setError(errorMessage(caught)); if (lastKnownNonterminal.current) schedulePolling(id); } }
+  function stopPolling() { if (pollTimer.current !== null) { window.clearTimeout(pollTimer.current); pollTimer.current = null; } }
+  const showTimeout = timeoutEnabled || selectedSuites.includes("fault_recovery_experiment");
   return <section className="page-grid" data-testid="v5-formal-run-page">
-    <article className="final-card wide page-hero">
-      <p className="eyebrow">V5 Formal Experiment / real_cluster</p>
-      <h2>运行实验</h2>
-      <p>正式执行使用独立 OS 进程和 localhost TCP。当前数据源为 Deterministic Signed Synthetic；Real Cluster 启动失败会直接失败，不会回退到 Simulation 或 V4 smoke。</p>
-      {error && <p className="file-error">{error}</p>}
-      {message && <p className="notice">{message}</p>}
-      {preferredMethodId && <p data-testid="v5-run-preferred-method">{preferredMethodId} {methods.find((item) => item.method_id === preferredMethodId)?.display_name ?? "unavailable"}</p>}
-    </article>
-
-    <article className="final-card wide">
-      <h3>Experiment Suite</h3>
-      <div className="selectable-card-grid">{suites.map((suite) => <label key={suite.id} className={`checkbox-card compact ${selectedSuites.includes(suite.id) ? "selected" : ""}`}><span><strong>{suite.label}</strong><small>{suite.id}</small></span><input type="checkbox" checked={selectedSuites.includes(suite.id)} onChange={() => { setSelectedSuites((current) => toggle(suite.id, current)); invalidatePreview(); }} /></label>)}</div>
-    </article>
-
-    <article className="final-card wide">
-      <h3>Methods</h3>
-      <p className="muted">Catalog Default uses the real-cluster catalog selection. Saved methods are shown only when their V5 plugin profile is parseable; formal methods currently override plugin IDs while the base ExperimentSpec supplies shared plugin parameters.</p>
-      <div className="selectable-card-grid">{methods.map((method) => <label key={method.method_id} data-testid={`v5-run-method-${method.method_id}`} className={`checkbox-card compact ${selectedMethods.includes(method.method_id) ? "selected" : ""}`}><span><strong>{method.display_name}</strong><small>{method.method_id}</small><small>{Object.keys(method.plugin_overrides).length ? `${Object.keys(method.plugin_overrides).length} plugin override(s)` : "catalog defaults"}</small></span><input type="checkbox" checked={selectedMethods.includes(method.method_id)} onChange={() => { setSelectedMethods((current) => toggle(method.method_id, current)); invalidatePreview(); }} /></label>)}</div>
-      {!savedMethods.length && <p className="muted">No compatible saved V5 method profiles are currently available.</p>}
-    </article>
-
-    <article className="final-card wide">
-      <h3>Workload and topology</h3>
-      <p className="muted">Data source: Deterministic Signed Synthetic</p>
-      <div className="experiment-condition-grid">
-        <label><span>nodes</span><input aria-label="nodes" type="number" min={1} max={16} value={topology.nodes} onChange={(event) => { setTopology({ ...topology, nodes: Number(event.target.value) }); invalidatePreview(); }} /></label>
-        <label><span>shards</span><input aria-label="shards" type="number" min={1} max={4} value={topology.shards} onChange={(event) => { setTopology({ ...topology, shards: Number(event.target.value) }); invalidatePreview(); }} /></label>
-        <label><span>validators per shard</span><input aria-label="validators per shard" type="number" min={1} max={16} value={topology.validators_per_shard} onChange={(event) => { setTopology({ ...topology, validators_per_shard: Number(event.target.value) }); invalidatePreview(); }} /></label>
-        <label><span>tx_count</span><input aria-label="tx_count" type="number" min={1} max={10000} value={txCount} onChange={(event) => { setTxCount(Number(event.target.value)); invalidatePreview(); }} /></label>
-        <label><span>cross_shard_ratio</span><input aria-label="cross_shard_ratio" type="number" min={0} max={1} step={0.01} value={crossShardRatio} onChange={(event) => { setCrossShardRatio(Number(event.target.value)); invalidatePreview(); }} /></label>
-        <label><span>timeout_every</span><input aria-label="timeout_every" type="number" min={0} max={1000} value={timeoutEvery} onChange={(event) => { setTimeoutEvery(Number(event.target.value)); invalidatePreview(); }} /></label>
-        <label><span>seeds</span><input aria-label="seeds" value={seedText} onChange={(event) => { setSeedText(event.target.value); invalidatePreview(); }} /><small>Comma-separated integers, up to 10.</small></label>
-        <label><span>repeats</span><input aria-label="repeats" type="number" min={1} max={20} value={repeats} onChange={(event) => { setRepeats(Number(event.target.value)); invalidatePreview(); }} /></label>
-      </div>
-    </article>
-
-    <article className="final-card wide">
-      <div className="button-row"><button type="button" onClick={() => void previewMatrix()} disabled={busy || !catalogReady}>Preview Formal Matrix</button><button type="button" className="v3-secondary-button" onClick={() => void startGroup()} disabled={busy || !previewRunnable}>Start Real-Cluster RunGroup</button></div>
-      {Object.entries(methodCompatibility).map(([methodId, result]) => <p key={methodId} className={result.valid ? "muted" : "file-error"}>Method {methodId}: {result.valid ? "compatible" : result.blockers.join("; ") || "blocked"}{result.warnings.length ? ` (${result.warnings.join("; ")})` : ""}</p>)}
-      {preview && <PreviewTable preview={preview} />}
-    </article>
-
-    <article className="final-card wide">
-      <div className="section-heading"><div><h3>RunGroup status</h3><p className="muted">The latest RunGroup ID is persisted locally for query-after-refresh; it is never re-created automatically.</p></div><button type="button" onClick={() => void queryGroup()} disabled={!groupId || busy}>重新查询</button></div>
-      {groupId && <p><strong>run_group_id:</strong> <code>{groupId}</code> {onOpenResults && <button type="button" onClick={() => onOpenResults(groupId)}>Open Results</button>}</p>}
-      {groupDetail && <GroupStatus detail={groupDetail} />}
-    </article>
+    <article className="final-card wide page-hero"><p className="eyebrow">V5 正式实验 / real_cluster</p><h2>运行实验</h2><p>正式执行使用独立 OS 进程和 localhost TCP。当前数据源为确定性签名合成负载；真实集群失败会直接失败，不会回退到 Simulation 或 V4 smoke。</p>{catalogError && <p className="file-error">{catalogError}</p>}{savedError && <p className="notice">{savedError}</p>}{error && <p className="file-error">{error}</p>}{message && <p className="notice">{message}</p>}<CurrentMethods methods={selected} preferredMethodId={preferredMethodId} /></article>
+    <article className="final-card wide"><h3>实验类型</h3><div className="selectable-card-grid">{suites.map((suite) => <label key={suite} data-testid={`v5-suite-${suite}`} className={`checkbox-card compact ${selectedSuites.includes(suite) ? "selected" : ""}`}><span><strong>{suiteLabel(suite)}</strong><small>{suite}</small></span><input type="checkbox" checked={selectedSuites.includes(suite)} onChange={() => update(() => setSelectedSuites((current) => toggle(suite, current)))} /></label>)}</div></article>
+    <article className="final-card wide"><h3>实验方法</h3><p className="muted">正式矩阵当前只支持方法级插件 ID 覆盖；插件参数由基础 ExperimentSpec 统一提供。</p><div className="selectable-card-grid">{methods.map((method) => <label key={method.method_id} data-testid={`v5-run-method-${method.method_id}`} className={`checkbox-card compact ${selectedMethods.includes(method.method_id) ? "selected" : ""}`}><span><strong>{method.display_name}</strong><small>方法 ID：{method.method_id}</small><small>角色：{roleLabel(method.role ?? "custom")}</small></span><input type="checkbox" checked={selectedMethods.includes(method.method_id)} onChange={() => update(() => setSelectedMethods((current) => toggle(method.method_id, current)))} /></label>)}</div>{!selected.length && <p className="file-error">尚未选择执行方法，请选择已保存方法或主动选择目录默认基线。</p>}</article>
+    <article className="final-card wide"><h3>负载与拓扑</h3><p className="muted">数据来源：确定性签名合成负载</p><div className="experiment-condition-grid"><Number label="节点数" aria="nodes" value={topology.nodes} onChange={(value) => update(() => setTopology({ ...topology, nodes: value }))} /><Number label="分片数" aria="shards" value={topology.shards} onChange={(value) => update(() => setTopology({ ...topology, shards: value }))} /><Number label="每片验证节点数" aria="validators per shard" value={topology.validators_per_shard} onChange={(value) => update(() => setTopology({ ...topology, validators_per_shard: value }))} /><Number label="交易数量" aria="tx_count" value={txCount} onChange={(value) => update(() => setTxCount(value))} /><Number label="跨片交易比例" aria="cross_shard_ratio" value={crossShardRatio} step={0.01} onChange={(value) => update(() => setCrossShardRatio(value))} />{showTimeout && <Number label="每隔多少笔跨片交易触发一次超时" aria="timeout_every" value={timeoutEvery} onChange={(value) => update(() => setTimeoutEvery(value))} />}<label><span>随机种子</span><input aria-label="seeds" value={seedText} onChange={(event) => update(() => setSeedText(event.target.value))} /><small>逗号分隔的整数，最多 10 个。</small></label><Number label="重复次数" aria="repeats" value={repeats} onChange={(value) => update(() => setRepeats(value))} /></div>{!selectedSuites.includes("fault_recovery_experiment") && <label><input type="checkbox" checked={timeoutEnabled} onChange={(event) => update(() => setTimeoutEnabled(event.target.checked))} /> 启用超时/退款工况</label>}</article>
+    {selectedSuites.includes("workload_sensitivity") && <PointEditor title="负载扫描点" onAdd={() => update(() => setWorkloadPoints((items) => [...items, { tx_count: txCount, cross_shard_ratio: crossShardRatio, timeout_every: 0 }]))}>{workloadPoints.map((point, index) => <div key={index} className="experiment-condition-grid"><Number label="交易数量" value={point.tx_count} onChange={(value) => update(() => setWorkloadPoints(replace(workloadPoints, index, { ...point, tx_count: value })))} /><Number label="跨片交易比例" value={point.cross_shard_ratio} step={0.01} onChange={(value) => update(() => setWorkloadPoints(replace(workloadPoints, index, { ...point, cross_shard_ratio: value })))} /><Number label="timeout_every" value={point.timeout_every} onChange={(value) => update(() => setWorkloadPoints(replace(workloadPoints, index, { ...point, timeout_every: value })))} /><button type="button" onClick={() => update(() => setWorkloadPoints(workloadPoints.filter((_, item) => item !== index)))}>删除点</button></div>)}</PointEditor>}
+    {selectedSuites.includes("topology_scaling") && <PointEditor title="拓扑扫描点" onAdd={() => update(() => setTopologyPoints((items) => [...items, { ...topology }]))}>{topologyPoints.map((point, index) => <div key={index} className="experiment-condition-grid"><Number label="节点数" value={point.nodes} onChange={(value) => update(() => setTopologyPoints(replace(topologyPoints, index, { ...point, nodes: value })))} /><Number label="分片数" value={point.shards} onChange={(value) => update(() => setTopologyPoints(replace(topologyPoints, index, { ...point, shards: value })))} /><Number label="每片验证节点数" value={point.validators_per_shard} onChange={(value) => update(() => setTopologyPoints(replace(topologyPoints, index, { ...point, validators_per_shard: value })))} /><button type="button" onClick={() => update(() => setTopologyPoints(topologyPoints.filter((_, item) => item !== index)))}>删除点</button></div>)}</PointEditor>}
+    {selectedSuites.includes("fault_recovery_experiment") && <PointEditor title="故障扫描点" onAdd={() => update(() => setFaultPoints((items) => [...items, { mode: "disabled" }]))}>
+      {faultPoints.map((point, index) => <div key={index} className="experiment-condition-grid">
+        <label><span>故障模式</span><select value={point.mode} onChange={(event) => update(() => setFaultPoints(replace(faultPoints, index, { mode: event.target.value })))}><option value="disabled">disabled</option><option value="delay_only">delay_only</option><option value="network_drop">network_drop</option><option value="kill_node">kill_node</option><option value="restart_node">restart_node</option></select></label>
+        {point.mode === "delay_only" && <Number label="delay_ms" value={point.delay_ms ?? 5} onChange={(value) => update(() => setFaultPoints(replace(faultPoints, index, { ...point, delay_ms: value })))} />}
+        {point.mode === "network_drop" && <Number label="drop_every" value={point.drop_every ?? 1} onChange={(value) => update(() => setFaultPoints(replace(faultPoints, index, { ...point, drop_every: value })))} />}
+        {point.mode === "kill_node" && <Number label="kill_node_after_ms" value={point.kill_node_after_ms ?? 1000} onChange={(value) => update(() => setFaultPoints(replace(faultPoints, index, { ...point, kill_node_after_ms: value })))} />}
+        {point.mode === "restart_node" && <Number label="restart_node_after_ms" value={point.restart_node_after_ms ?? 1000} onChange={(value) => update(() => setFaultPoints(replace(faultPoints, index, { ...point, restart_node_after_ms: value })))} />}
+        <button type="button" onClick={() => update(() => setFaultPoints(faultPoints.filter((_, item) => item !== index)))}>删除点</button>
+      </div>)}
+    </PointEditor>}
+    <article className="final-card wide"><p>预计子实验：<strong>{estimatedChildren}</strong>；预计节点进程启动次数：<strong>{estimatedChildren * topology.nodes}</strong>；预计交易总量：<strong>{estimatedChildren * txCount}</strong>{estimatedChildren > 20 && "。超过 20 个子实验，建议分批执行。"}{estimatedChildren > 100 && <span className="file-error">。超过后端 100 个子实验硬上限。</span>}</p><div className="button-row"><button type="button" onClick={() => void previewMatrix()} disabled={busy || !catalogReady || !selected.length}>预览正式实验矩阵</button><button type="button" className="v3-secondary-button" onClick={() => void startGroup()} disabled={busy || !previewRunnable}>启动真实集群实验组</button></div>{Object.entries(methodCompatibility).map(([id, result]) => <p key={id} className={result.valid ? "muted" : "file-error"}>方法 {id}：{result.valid ? "兼容" : result.blockers.map(blockerLabel).join("；")}</p>)}{preview && <PreviewTable preview={preview} />}</article>
+    <article className="final-card wide"><div className="section-heading"><div><h3>实验组状态</h3><p className="muted">最近的实验组 ID 保存于浏览器，仅用于刷新后的查询，不会自动重新执行。</p></div><button type="button" onClick={() => void queryGroup()} disabled={!groupId || busy}>重新查询</button></div>{groupId && <p><strong>run_group_id：</strong><code>{groupId}</code> {onOpenResults && <button type="button" onClick={() => onOpenResults(groupId)}>查看结果与产物</button>}</p>}{groupDetail && <GroupStatus detail={groupDetail} />}</article>
   </section>;
 }
 
-function requestFor(catalog: V5PluginManifest[], methods: V5FormalMethod[], suites: V5FormalSuite[], topology: Topology, txCount: number, crossShardRatio: number, timeoutEvery: number, seeds: number[], repeats: number): V5FormalRunRequest {
-  const plugin_selections: V5PluginSelection[] = defaultV5PluginSelections(catalog).map((selection) => selection.category === "workload" ? { ...selection, config: { ...selection.config, cross_shard_ratio: crossShardRatio, timeout_every: timeoutEvery } } : selection);
-  const base_spec: V5ExperimentSpec = { name: "v5_formal_real_cluster", execution_backend: "real_cluster", plugin_selections, topology, tx_count: txCount, seed: seeds[0], duration_ms: 6000, fault_policy: { mode: "disabled" }, requested_metrics: [] };
-  return { execution_backend: "real_cluster" as const, plan: { name: "v5_formal_real_cluster", base_spec, suites, methods, seeds, repeats, topology_points: [], workload_points: [], fault_points: [] } };
+function CurrentMethods({ methods, preferredMethodId }: { methods: V5FormalMethod[]; preferredMethodId: string }) { return <div data-testid="v5-run-preferred-method"><strong>当前执行方法：</strong>{methods.length ? methods.map((method) => <span key={method.method_id}> {method.display_name}（{method.method_id}，{method.method_id === preferredMethodId ? "来源：实验设计" : method.method_id === "v5_catalog_default" ? "来源：目录默认基线" : "来源：已保存方法"}，{roleLabel(method.role ?? "custom")}）</span>) : "未选择"}</div>; }
+function NumberInput({ label, aria, value, onChange, step = 1 }: { label: string; aria?: string; value: number; onChange: (value: number) => void; step?: number }) { return <label><span>{label}</span><input aria-label={aria ?? label} type="number" min={0} step={step} value={value} onChange={(event) => onChange(globalThis.Number(event.target.value))} /></label>; }
+const Number = NumberInput;
+function PointEditor({ title, onAdd, children }: { title: string; onAdd: () => void; children: ReactNode }) { return <article className="final-card wide" data-testid={`v5-point-editor-${title}`}><div className="section-heading"><h3>{title}</h3><button type="button" onClick={onAdd}>添加扫描点</button></div>{children}</article>; }
+function PreviewTable({ preview }: { preview: V5FormalPreviewResponse }) { return <div className="table-wrap"><p data-testid="v5-formal-preview-summary"><strong>执行后端：</strong>{preview.execution_backend}；<strong>矩阵行数：</strong>{preview.rows.length}</p><table><thead><tr><th>实验类型</th><th>方法</th><th>方法配置 ID</th><th>种子</th><th>重复</th><th>拓扑</th><th>交易数量</th><th>后端</th><th>兼容性</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.child_run_id} data-method-config-id={row.method_config_id}><td>{suiteLabel(row.suite_type)}</td><td>{row.method.display_name}</td><td>{row.method_config_id}</td><td>{row.seed}</td><td>{row.repeat_index + 1}</td><td>{row.topology_point.nodes}/{row.topology_point.shards}/{row.topology_point.validators_per_shard}</td><td>{row.estimated_transactions}</td><td>{row.execution_backend}</td><td>{row.runnable ? "可运行" : row.blockers.map(blockerLabel).join("；") || "已阻止"}</td></tr>)}</tbody></table></div>; }
+function GroupStatus({ detail }: { detail: V5FormalRunGroupDetail }) { const failed = detail.children.filter((child) => ["failed", "blocked"].includes(child.status)).length; return <><p data-testid="v5-formal-group-summary"><strong>状态：</strong>{statusLabel(detail.group.status)}；<strong>执行后端：</strong>{backendLabel(detail.group.execution_backend)}；<strong>子实验：</strong>{detail.group.completed_child_runs}/{detail.group.total_child_runs}；<strong>失败：</strong>{failed}</p><div className="table-wrap"><table data-testid="v5-formal-child-table"><thead><tr><th>子实验</th><th>实验类型</th><th>方法</th><th>种子</th><th>重复</th><th>拓扑</th><th>交易</th><th>状态</th><th>终态</th><th>未完成</th><th>孤儿进程</th><th>无回退</th></tr></thead><tbody>{detail.children.map((child) => { const finality = child.result?.summary?.finality_evidence; return <tr key={child.child_run_id}><td>{child.child_run_id}</td><td>{suiteLabel(child.suite_type)}</td><td>{child.method.display_name}</td><td>{child.seed}</td><td>{child.repeat_index + 1}</td><td>{child.topology_point.nodes}/{child.topology_point.shards}/{child.topology_point.validators_per_shard}</td><td>{child.estimated_transactions}</td><td>{child.status}</td><td>{finality?.terminal_unique_tx_count ?? "—"}</td><td>{finality?.incomplete_unique_tx_count ?? "—"}</td><td>{child.result?.summary?.orphan_process_count ?? "—"}</td><td>{child.result?.summary?.no_fallback === undefined ? "—" : String(child.result.summary.no_fallback)}</td></tr>; })}</tbody></table></div></>; }
+function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; selectedSuites: V5FormalSuite[]; topology: Topology; txCount: number; crossShardRatio: number; timeoutEvery: number; seeds: number[]; repeats: number; workloadPoints: WorkloadPoint[]; topologyPoints: Topology[]; faultPoints: FaultPoint[]; estimatedChildren: number }): string | null {
+  if (!input.catalogReady) return "真实集群插件目录不完整，无法预览。"; if (!input.selected.length) return "请至少选择一个执行方法。"; if (!input.selectedSuites.length) return "请至少选择一种实验类型。"; if (!input.seeds.length) return "随机种子必须是一到十个不重复整数。"; if (input.topology.nodes < 1 || input.topology.shards < 1 || input.topology.validators_per_shard < 1 || input.topology.nodes !== input.topology.shards * input.topology.validators_per_shard) return "拓扑要求：节点数 = 分片数 × 每片验证节点数。"; if (input.txCount < 1 || !globalThis.Number.isInteger(input.txCount)) return "交易数量必须为正整数。"; if (input.crossShardRatio < 0 || input.crossShardRatio > 1) return "跨片交易比例必须在 0 到 1 之间。"; if (input.selectedSuites.includes("comparison_experiment") && input.selected.length < 2) return "方法对比实验至少需要两个方法。"; if (input.selectedSuites.includes("ablation_experiment") && (!input.selected.some((item) => item.role === "main") || !input.selected.some((item) => item.role === "ablation" || item.role === "baseline"))) return "消融实验需要一个完整方法和至少一个消融或基线方法。"; if (input.selectedSuites.includes("workload_sensitivity") && input.workloadPoints.length < 2) return "负载敏感性实验至少需要两个负载扫描点。"; if (input.selectedSuites.includes("topology_scaling") && input.topologyPoints.length < 2) return "拓扑扩展性实验至少需要两个拓扑扫描点。"; if (input.selectedSuites.includes("fault_recovery_experiment") && (input.faultPoints.length < 2 || !input.faultPoints.some((item) => item.mode === "disabled"))) return "故障与恢复实验至少需要两个点，且必须包含 disabled 基准点。"; if (input.estimatedChildren > 100) return "正式矩阵超过 100 个子实验硬上限。"; return null;
 }
-
-
-function formError(input: { catalog: V5PluginManifest[]; selectedMethods: string[]; selectedSuites: V5FormalSuite[]; topology: Topology; txCount: number; crossShardRatio: number; timeoutEvery: number; seeds: number[]; repeats: number }): string | null {
-  if (!input.catalog.length || defaultV5PluginSelections(input.catalog).length !== 17) return "The real_cluster plugin catalog is incomplete; wait for the catalog to load before previewing.";
-  if (!input.selectedMethods.length) return "Select at least one method before previewing.";
-  if (!input.selectedSuites.length) return "Select at least one experiment suite before previewing.";
-  if (!input.seeds.length) return "Seeds must be one to ten unique integers, for example 11,12,13.";
-  if (input.topology.nodes < 1 || input.topology.shards < 1 || input.topology.validators_per_shard < 1 || input.topology.nodes !== input.topology.shards * input.topology.validators_per_shard) return "Topology requires nodes = shards × validators per shard.";
-  if (!Number.isInteger(input.txCount) || input.txCount < 1 || input.txCount > 10000) return "tx_count must be an integer between 1 and 10000.";
-  if (!Number.isFinite(input.crossShardRatio) || input.crossShardRatio < 0 || input.crossShardRatio > 1) return "cross_shard_ratio must be between 0 and 1.";
-  if (!Number.isInteger(input.timeoutEvery) || input.timeoutEvery < 0 || input.timeoutEvery > 1000) return "timeout_every must be an integer between 0 and 1000.";
-  if (!Number.isInteger(input.repeats) || input.repeats < 1 || input.repeats > 20) return "repeats must be an integer between 1 and 20.";
-  return null;
-}
-
-function effectiveSpecFor(base: V5ExperimentSpec, method: V5FormalMethod): V5ExperimentSpec {
-  return applyV5MethodSelections(base, method);
-}
-
-function mergeCompatibility(response: V5FormalPreviewResponse, compatibility: Record<string, V5CompatibilityResult>): V5FormalPreviewResponse {
-  return {
-    ...response,
-    rows: response.rows.map((row) => {
-      const result = compatibility[row.method_config_id];
-      if (!result) return row;
-      return {
-        ...row,
-        runnable: row.runnable && result.valid,
-        blockers: [...new Set([...row.blockers, ...result.blockers])],
-        warnings: [...new Set([...row.warnings, ...result.warnings])],
-      };
-    }),
-  };
-}
-
-function parseSeeds(value: string): number[] {
-  const raw = value.split(",").map((item) => item.trim()).filter(Boolean);
-  if (!raw.length || raw.length > 10) return [];
-  const values = raw.map(Number);
-  if (values.some((item) => !Number.isInteger(item))) return [];
-  return [...new Set(values)];
-}
-
-function toggle<T>(value: T, values: T[]): T[] { return values.includes(value) ? values.filter((item) => item !== value) : [...values, value]; }
-function errorMessage(caught: unknown): string { return caught instanceof Error ? caught.message : String(caught); }
-function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
-function isTerminalGroup(status: string): boolean { return ["completed", "failed", "cancelled", "completed_with_failures"].includes(status); }
-
-function PreviewTable({ preview }: { preview: V5FormalPreviewResponse }) {
-  return <div className="table-wrap"><p data-testid="v5-formal-preview-summary"><strong>execution backend:</strong> {preview.execution_backend}; <strong>matrix rows:</strong> {preview.rows.length}</p><table><thead><tr><th>Suite</th><th>Method</th><th>Method config ID</th><th>Seed</th><th>Repeat</th><th>Topology</th><th>tx_count</th><th>Runtime</th><th>Compatibility</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.child_run_id} data-method-config-id={row.method_config_id}><td>{row.suite_type}</td><td>{row.method.display_name}</td><td>{row.method_config_id}</td><td>{row.seed}</td><td>{row.repeat_index + 1}</td><td>{row.topology_point.nodes}/{row.topology_point.shards}/{row.topology_point.validators_per_shard}</td><td>{row.estimated_transactions}</td><td>{row.execution_backend}</td><td>{row.runnable ? "runnable" : row.blockers.join("; ") || "blocked"}{row.warnings.length ? ` ${row.warnings.join("; ")}` : ""}</td></tr>)}</tbody></table></div>;
-}
-
-function GroupStatus({ detail }: { detail: V5FormalRunGroupDetail }) {
-  const failed = detail.children.filter((child) => ["failed", "blocked"].includes(child.status)).length;
-  return <><p data-testid="v5-formal-group-summary"><strong>status:</strong> {detail.group.status}; <strong>execution backend:</strong> {detail.group.execution_backend}; <strong>runtime truth:</strong> {detail.group.runtime_truth}; <strong>children:</strong> {detail.group.completed_child_runs}/{detail.group.total_child_runs}; <strong>failed:</strong> {failed}</p><div className="table-wrap"><table data-testid="v5-formal-child-table"><thead><tr><th>Child</th><th>Suite</th><th>Method</th><th>Seed</th><th>Repeat</th><th>Topology</th><th>tx_count</th><th>Status</th><th>Terminal</th><th>Incomplete</th><th>Orphans</th><th>No fallback</th></tr></thead><tbody>{detail.children.map((child) => <ChildRow key={child.child_run_id} child={child} />)}</tbody></table></div></>;
-}
-
-function ChildRow({ child }: { child: V5FormalChildRun }) {
-  const summary = child.result?.summary ?? {};
-  const finality = isRecord(summary.finality_evidence) ? summary.finality_evidence : {};
-  const metric = (name: string) => typeof finality[name] === "number" || typeof summary[name] === "number" || typeof summary[name] === "boolean" ? String(finality[name] ?? summary[name]) : "—";
-  return <tr><td>{child.child_run_id}</td><td>{child.suite_type}</td><td>{child.method.display_name}</td><td>{child.seed}</td><td>{child.repeat_index + 1}</td><td>{child.topology_point.nodes}/{child.topology_point.shards}/{child.topology_point.validators_per_shard}</td><td>{child.estimated_transactions}</td><td>{child.status}{child.error ? `: ${child.error}` : ""}</td><td>{metric("terminal_unique_tx_count")}</td><td>{metric("incomplete_unique_tx_count")}</td><td>{metric("orphan_process_count")}</td><td>{metric("no_fallback")}</td></tr>;
-}
+function parseSeeds(value: string): number[] { const values = value.split(",").map((item) => item.trim()).filter(Boolean).map(globalThis.Number); return !values.length || values.length > 10 || values.some((item) => !globalThis.Number.isInteger(item)) ? [] : [...new Set(values)]; }
+function toggle<T>(item: T, values: T[]): T[] { return values.includes(item) ? values.filter((value) => value !== item) : [...values, item]; }
+function replace<T>(items: T[], index: number, value: T): T[] { return items.map((item, current) => current === index ? value : item); }
+function terminal(status: string): boolean { return ["completed", "completed_with_failures", "failed", "cancelled"].includes(status); }
+function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

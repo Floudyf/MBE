@@ -39,4 +39,13 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
     if ratio > 0 and spec.topology.shards < 2:
         raise ValueError("cross_shard_ratio requires at least 2 shards")
     workload = workload_config | {"plugin_id": profile["workload"]["plugin_id"], "tx_count": spec.tx_count, "seed": spec.seed, "requested_cross_shard_ratio": ratio, "requested_cross_shard_count": requested_cross_shard_count(spec.tx_count, ratio)}
-    return V5CompiledRunPlan(plan_id=f"v5plan_{digest[:16]}", plan_digest=digest, execution_backend=spec.execution_backend, duration_ms=spec.duration_ms, source_saved_config_id=source_saved_config_id, experiment_spec=normalized, plugin_snapshot=snapshot, node_configs=nodes, workload_plan=workload, fault_plan=spec.fault_policy, expected_artifacts=EXPECTED_ARTIFACTS, resource_estimate=compatibility.resource_estimate)
+    return V5CompiledRunPlan(
+        plan_id=f"v5plan_{digest[:16]}", plan_digest=digest,
+        execution_backend=spec.execution_backend, duration_ms=spec.duration_ms,
+        source_saved_config_id=source_saved_config_id,
+        formal_plan_config_id=spec.formal_plan_config_id,
+        method_config_id=spec.method_config_id,
+        experiment_spec=normalized, plugin_snapshot=snapshot, node_configs=nodes,
+        workload_plan=workload, fault_plan=spec.fault_policy,
+        expected_artifacts=EXPECTED_ARTIFACTS, resource_estimate=compatibility.resource_estimate,
+    )

@@ -6,7 +6,7 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
   let configId = "";
 
   try {
-    await page.goto("/");
+    await page.goto("/?e2e=1");
     await expect(page.getByTestId("v5-method-design-page")).toBeVisible();
     const navigation = page.getByTestId("primary-navigation");
     await expect(navigation.getByRole("button", { name: "① 实验设计", exact: true })).toBeVisible();
@@ -39,26 +39,26 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
     await expect(page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox")).not.toBeChecked();
 
     await page.getByLabel("nodes").fill("8"); await page.getByLabel("shards").fill("2"); await page.getByLabel("validators per shard").fill("4");
-    await page.getByLabel("tx_count").fill("40"); await page.getByLabel("cross_shard_ratio").fill("0.25"); await page.getByLabel("timeout_every").fill("0"); await page.getByLabel("seeds").fill("47"); await page.getByLabel("repeats").fill("1");
-    await page.getByRole("button", { name: "Preview Formal Matrix" }).click();
-    await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("matrix rows: 1");
+    await page.getByLabel("tx_count").fill("40"); await page.getByLabel("cross_shard_ratio").fill("0.25"); await page.getByLabel("seeds").fill("47"); await page.getByLabel("repeats").fill("1");
+    await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+    await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("矩阵行数：1");
     const previewRow = page.locator(`[data-method-config-id="${configId}"]`);
     await expect(previewRow).toHaveCount(1);
     await expect(previewRow.locator("td").nth(1)).toHaveText(methodName);
     await expect(previewRow.locator("td").nth(2)).toHaveText(configId);
     await expect(previewRow.locator("td").nth(7)).toHaveText("real_cluster");
-    await expect(previewRow.locator("td").nth(8)).toContainText("runnable");
-    await expect(page.getByRole("button", { name: "Start Real-Cluster RunGroup" })).toBeEnabled();
-    await page.getByRole("button", { name: "Start Real-Cluster RunGroup" }).click();
-    await expect.poll(async () => page.getByTestId("v5-formal-group-summary").innerText(), { timeout: 180_000 }).toContain("status: completed");
+    await expect(previewRow.locator("td").nth(8)).toContainText("可运行");
+    await expect(page.getByRole("button", { name: "启动真实集群实验组" })).toBeEnabled();
+    await page.getByRole("button", { name: "启动真实集群实验组" }).click();
+    await expect.poll(async () => page.getByTestId("v5-formal-group-summary").innerText(), { timeout: 180_000 }).toContain("已完成");
     const groupId = await page.locator("code").filter({ hasText: "v5grp_" }).innerText();
 
-    await page.getByRole("button", { name: "Open Results" }).click();
+    await page.getByRole("button", { name: "查看结果与产物" }).click();
     await expect(page.getByTestId("v5-group-rungroup").locator("dd")).toHaveText(groupId);
     await expect(page.getByTestId("v5-group-backend").locator("dd")).toHaveText("real_cluster");
     await expect(page.getByTestId("v5-group-children").locator("dd")).toHaveText("1/1");
     const child = page.getByTestId("v5-child-table").locator("tbody tr").first().locator("td");
-    await expect(child.nth(2)).toHaveText(methodName); await expect(child.nth(7)).toHaveText("completed");
+    await expect(child.nth(2)).toHaveText(methodName); await expect(child.nth(7)).toHaveText("已完成completed");
     await child.nth(0).getByRole("button").click();
     await expect(page.getByTestId("v5-metric-method-config-id").locator("dd")).toHaveText(configId);
     await expect(page.getByTestId("v5-metric-terminal").locator("dd")).toHaveText("40"); await expect(page.getByTestId("v5-metric-incomplete").locator("dd")).toHaveText("0");
@@ -68,8 +68,8 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
 
     await navigation.getByRole("button", { name: "高级功能", exact: true }).click();
     const advanced = page.getByTestId("advanced-navigation");
-    for (const entry of ["V5 Real Cluster 单次调试", "V3 Composer（历史兼容）", "V4 真实性验证（历史）", "V1/V2 运行记录与产物（历史）"]) await expect(advanced.getByText(entry, { exact: true })).toBeVisible();
-    const workbench = advanced.locator("article").filter({ hasText: "V5 Real Cluster 单次调试" });
+    for (const entry of ["V5 真实集群单次调试", "V3 Composer（历史兼容）", "V4 真实性验证（历史）", "V1/V2 运行记录与产物（历史）"]) await expect(advanced.getByText(entry, { exact: true })).toBeVisible();
+    const workbench = advanced.locator("article").filter({ hasText: "V5 真实集群单次调试" });
     await workbench.getByRole("button", { name: "进入", exact: true }).click();
     await expect(page.getByText("V5.1 Real Cluster", { exact: true })).toBeVisible();
   } finally {

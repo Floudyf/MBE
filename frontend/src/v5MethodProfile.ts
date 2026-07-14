@@ -22,7 +22,9 @@ export function parseSavedV5Method(saved: V3SavedConfig, catalog: V5PluginManife
     if (!record(item) || typeof item.category !== "string" || !item.category || typeof item.plugin_id !== "string" || !item.plugin_id || V5_METHOD_EXCLUDED_CATEGORIES.has(item.category) || overrides[item.category] || !catalog.some((plugin) => plugin.category === item.category && plugin.plugin_id === item.plugin_id)) return null;
     overrides[item.category] = item.plugin_id;
   }
-  return { method_id: saved.config_id, display_name: saved.name, plugin_overrides: overrides };
+  const draft = record(payload.source_composer_draft) ? payload.source_composer_draft : {};
+  const role = typeof draft.role === "string" && ["main", "baseline", "ablation", "custom"].includes(draft.role) ? draft.role : saved.tags.find((tag) => ["main", "baseline", "ablation", "custom"].includes(tag)) ?? "custom";
+  return { method_id: saved.config_id, display_name: saved.name, plugin_overrides: overrides, role: role as V5FormalMethod["role"] };
 }
 
 export function buildV5MethodValidationSpec(catalog: V5PluginManifest[], methodSelections: V5PluginSelection[]): V5ExperimentSpec {

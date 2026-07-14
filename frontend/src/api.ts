@@ -1280,15 +1280,15 @@ export function v4RealismArtifactURL(downloadURL: string): string {
 }
 
 export type V5PluginMetric = { key: string; type: string; unit: string; aggregation: string; visualization: string; description: string };
-export type V5PluginManifest = { plugin_id: string; category: string; version: string; display_name: string; description: string; implementation_status: string; supported_backends: string[]; config_schema: { type?: string; properties?: Record<string, V5SchemaField> }; default_config: Record<string, unknown>; capabilities: string[]; requirements: string[]; conflicts: string[]; metrics: V5PluginMetric[]; runtime_factory: string; runtime_adapter: string; truth_boundary: string };
+export type V5PluginManifest = { plugin_id: string; category: string; version: string; display_name: string; description: string; display_name_zh?: string; description_zh?: string; implementation_status: string; supported_backends: string[]; config_schema: { type?: string; properties?: Record<string, V5SchemaField> }; default_config: Record<string, unknown>; capabilities: string[]; requirements: string[]; conflicts: string[]; metrics: V5PluginMetric[]; runtime_factory: string; runtime_adapter: string; truth_boundary: string };
 export type V5SchemaField = { type?: string; title?: string; description?: string; default?: unknown; minimum?: number; maximum?: number; enum?: string[]; readOnly?: boolean; advanced?: boolean };
 export type V5PluginSelection = { category: string; plugin_id: string; config: Record<string, unknown> };
-export type V5ExperimentSpec = { schema_version?: "v5_experiment_spec_v1"; name: string; execution_backend: "preview" | "simulation" | "real_cluster"; plugin_selections: V5PluginSelection[]; topology: { nodes: number; shards: number; validators_per_shard: number }; tx_count: number; seed: number; duration_ms: number; fault_policy?: Record<string, unknown>; requested_metrics?: string[]; saved_config_id?: string | null; source_composer_draft?: Record<string, unknown> };
+export type V5ExperimentSpec = { schema_version?: "v5_experiment_spec_v1"; name: string; execution_backend: "preview" | "simulation" | "real_cluster"; plugin_selections: V5PluginSelection[]; topology: { nodes: number; shards: number; validators_per_shard: number }; tx_count: number; seed: number; duration_ms: number; fault_policy?: Record<string, unknown>; requested_metrics?: string[]; saved_config_id?: string | null; formal_plan_config_id?: string | null; method_config_id?: string | null; source_composer_draft?: Record<string, unknown> };
 export type V5CompatibilityResult = { valid: boolean; blockers: string[]; warnings: string[]; resolved_plugins: V5PluginSelection[]; resource_estimate: Record<string, unknown> };
 export type V5CompiledRunPlan = Record<string, unknown> & { plan_id: string; plan_digest: string; node_configs: Record<string, unknown>[]; plugin_snapshot: V5PluginManifest[]; no_fallback: boolean };
 export type V5RealClusterResult = { run_id: string; status: string; summary: Record<string, unknown>; artifacts: V2Artifact[]; stdout: string; stderr: string; no_fallback: boolean };
 export type V5FormalSuite = "main_experiment" | "comparison_experiment" | "ablation_experiment" | "workload_sensitivity" | "topology_scaling" | "fault_recovery_experiment";
-export type V5FormalMethod = { method_id: string; display_name: string; plugin_overrides: Record<string, string> };
+export type V5FormalMethod = { method_id: string; display_name: string; plugin_overrides: Record<string, string>; role?: "main" | "baseline" | "ablation" | "custom" };
 export type V5FormalExperimentPlan = {
   name: string;
   saved_config_id?: string;
@@ -1300,6 +1300,8 @@ export type V5FormalExperimentPlan = {
   topology_points?: Array<Record<string, number>>;
   workload_points?: Array<Record<string, number>>;
   fault_points?: Array<Record<string, unknown>>;
+  source_label?: "user" | "e2e" | "script";
+  tags?: string[];
 };
 export type V5FormalRunRequest = { execution_backend: "preview" | "simulation" | "real_cluster"; plan: V5FormalExperimentPlan };
 export type V5FormalMatrixRow = {
@@ -1307,6 +1309,8 @@ export type V5FormalMatrixRow = {
   suite_type: V5FormalSuite;
   method: V5FormalMethod;
   method_config_id: string;
+  method_role?: string;
+  changed_plugin_categories?: string[];
   workload_point: Record<string, unknown>;
   topology_point: { nodes?: number; shards?: number; validators_per_shard?: number };
   fault_point: Record<string, unknown>;
@@ -1327,7 +1331,7 @@ export type V5FormalAggregate = { count?: number | null; mean?: number | null; m
 export type V5FinalityEvidence = { [key: string]: unknown; logical_transaction_count?: number; submitted_unique_tx_count?: number; terminal_unique_tx_count?: number; incomplete_unique_tx_count?: number; finalized_unique_logical_tx_count?: number; intra_shard_committed_unique_count?: number; intra_shard_terminal_unique_count?: number; cross_shard_requested_unique_count?: number; cross_shard_target_committed_unique_count?: number; cross_shard_finalized_unique_count?: number; cross_shard_refunded_unique_count?: number; cross_shard_failed_unique_count?: number; throughput_tps?: number; p50_finality_ms?: number; p95_finality_ms?: number; p99_finality_ms?: number; metric_truth?: string; tcp_send_latency_excluded?: boolean };
 export type V5RealClusterSummary = Record<string, unknown> & { runtime_stage?: string; runtime_truth?: string; ready_to_commit?: boolean; one_node_one_os_process?: boolean; independent_tcp_ports?: boolean; all_shards_active?: boolean; per_shard_multiple_blocks?: boolean; real_client_submission?: boolean; real_cross_shard_network?: boolean; real_pbft_style_messages?: boolean; real_signed_tx?: boolean; persistent_state?: boolean; plugin_driven_runtime?: boolean; state_root_consistent?: boolean; no_fallback?: boolean; orphan_process_count?: number; distinct_process_count?: number; expected_process_count?: number; shard_count?: number; shard_blocks?: Record<string, number>; finality_evidence?: V5FinalityEvidence };
 export type V5RuntimeArtifact = { name: string; size_bytes: number; truth_category: string; download_url: string };
-export type V5FormalChildResult = { run_id?: string; status?: string; output_dir?: string; summary?: V5RealClusterSummary; artifacts?: V5RuntimeArtifact[]; no_fallback?: boolean; stdout?: string; stderr?: string };
+export type V5FormalChildResult = { run_id?: string; status?: string; summary?: V5RealClusterSummary; artifacts?: V5RuntimeArtifact[]; no_fallback?: boolean };
 export type V5FormalChildRun = V5FormalMatrixRow & {
   run_group_id: string;
   status: string;
@@ -1352,9 +1356,21 @@ export type V5FormalRunGroup = {
   bundle_path?: string;
   created_at?: string;
   updated_at?: string;
+  finished_at?: string;
+  plan_name?: string;
+  suite_names?: string[];
+  method_names?: string[];
+  method_ids?: string[];
+  failed_child_runs?: number | null;
+  source_label?: "user" | "e2e" | "script";
+  tags?: string[];
+  is_test?: boolean;
 };
 export type V5FormalRunGroupDetail = { group: V5FormalRunGroup; children: V5FormalChildRun[] };
 export type V5FormalArtifactCatalog = { run_group_id: string; status: "ready" | "pending"; bundle_ready: boolean; bundle_size_bytes: number; file_count: number; files: Array<{ name: string; size_bytes: number }> };
+export type V5FormalRunGroupSummary = { run_group_id: string; status: string; plan_name: string; execution_backend: string; runtime_truth: string; created_at?: string; updated_at?: string; finished_at?: string | null; total_child_runs: number; completed_child_runs: number; failed_child_runs: number; suite_names: string[]; method_names: string[]; method_ids: string[]; aggregate?: V5FormalAggregate; source_label: "user" | "e2e" | "script"; tags: string[]; is_test: boolean };
+export type V5FormalRunGroupSummaryPage = { items: V5FormalRunGroupSummary[]; total: number; next_cursor: string | null };
+export type V5FormalAnalysis = { run_group_id: string; groups: Array<Record<string, unknown>>; charts: Array<{ suite_type: string; kind: "summary" | "bar" | "line"; rows: Array<Record<string, unknown>> }> };
 
 export async function fetchV5PluginCatalog(backend?: string): Promise<V5PluginManifest[]> {
   const query = backend ? `?backend=${encodeURIComponent(backend)}` : "";
@@ -1390,12 +1406,22 @@ export async function listV5FormalRunGroups(): Promise<V5FormalRunGroup[]> {
   return request<V5FormalRunGroup[]>("/api/v5/formal/run-groups");
 }
 
+export async function listV5FormalRunGroupSummaries(params: { limit?: number; offset?: number; status?: string; method_id?: string; suite?: string; search?: string; include_tests?: boolean } = {}): Promise<V5FormalRunGroupSummaryPage> {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => { if (value !== undefined && value !== "") query.set(key, String(value)); });
+  return request<V5FormalRunGroupSummaryPage>(`/api/v5/formal/run-groups/summaries?${query.toString()}`);
+}
+
 export async function fetchV5FormalChildRun(groupId: string, childId: string): Promise<V5FormalChildRun> {
   return request<V5FormalChildRun>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/children/${encodeURIComponent(childId)}`);
 }
 
 export async function fetchV5FormalGroupMetrics(groupId: string): Promise<V5FormalAggregate> {
   return request<V5FormalAggregate>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/metrics`);
+}
+
+export async function fetchV5FormalGroupAnalysis(groupId: string): Promise<V5FormalAnalysis> {
+  return request<V5FormalAnalysis>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/analysis`);
 }
 
 export async function fetchV5FormalArtifactCatalog(groupId: string): Promise<V5FormalArtifactCatalog> {

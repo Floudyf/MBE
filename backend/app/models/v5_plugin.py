@@ -24,6 +24,8 @@ class V5PluginManifest(BaseModel):
     version: str = "1.0.0"
     display_name: str
     description: str
+    display_name_zh: str = ""
+    description_zh: str = ""
     implementation_status: V5PluginStatus = "implemented"
     supported_backends: list[V5Backend] = Field(default_factory=lambda: ["preview"])
     config_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})

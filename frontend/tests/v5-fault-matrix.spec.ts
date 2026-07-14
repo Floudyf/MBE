@@ -1,0 +1,31 @@
+import { expect, test } from "@playwright/test";
+import { selectOnlySuite } from "./v5-formal-test-helpers";
+
+test("fault preview accepts disabled and delay but blocks cross-shard message loss", async ({ page }) => {
+  await page.goto("/");
+  await page.getByTestId("primary-navigation").getByRole("button", { name: "② 运行实验" }).click();
+  await page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox").check();
+  await selectOnlySuite(page, "fault_recovery_experiment");
+  const editor = page.getByTestId("v5-point-editor-故障扫描点");
+  await editor.getByRole("button", { name: "添加扫描点" }).click(); await editor.getByRole("button", { name: "添加扫描点" }).click();
+  const modes = editor.locator("select");
+  await modes.nth(0).selectOption("disabled"); await modes.nth(1).selectOption("delay_only");
+  await editor.locator('input[type="number"]').nth(0).fill("5");
+  const allowed = page.waitForResponse((response) => response.url().includes("/api/v5/formal/preview") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+  const allowedBody = await (await allowed).json();
+  expect(allowedBody.rows).toHaveLength(2);
+  expect(allowedBody.rows.map((row: { fault_point: { mode: string } }) => row.fault_point.mode).sort()).toEqual(["delay_only", "disabled"]);
+  expect(allowedBody.rows.every((row: { runnable: boolean; blockers: unknown[]; execution_backend: string }) => row.runnable && row.blockers.length === 0 && row.execution_backend === "real_cluster")).toBe(true);
+  await page.getByLabel("nodes").fill("8"); await page.getByLabel("shards").fill("2"); await page.getByLabel("validators per shard").fill("4"); await page.getByLabel("cross_shard_ratio").fill("0.25");
+  await modes.nth(1).selectOption("network_drop");
+  await editor.locator('input[type="number"]').nth(0).fill("3");
+  let createCount = 0; page.on("request", (request) => { if (request.url().includes("/api/v5/formal/run-groups") && request.method() === "POST") createCount += 1; });
+  const blocked = page.waitForResponse((response) => response.url().includes("/api/v5/formal/preview") && response.request().method() === "POST");
+  await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+  const blockedBody = await (await blocked).json();
+  expect(blockedBody.rows.some((row: { runnable: boolean; blockers: string[] }) => !row.runnable && row.blockers.some((blocker) => blocker.includes("retransmission")))).toBe(true);
+  await expect(page.getByTestId("v5-formal-run-page")).toContainText("可靠重传");
+  await expect(page.getByRole("button", { name: "启动真实集群实验组" })).toBeDisabled();
+  expect(createCount).toBe(0);
+});

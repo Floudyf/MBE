@@ -25,6 +25,8 @@ class V5CompiledRunPlan(BaseModel):
     execution_backend: str
     duration_ms: int
     source_saved_config_id: str | None = None
+    formal_plan_config_id: str | None = None
+    method_config_id: str | None = None
     experiment_spec: dict[str, Any]
     plugin_snapshot: list[dict[str, Any]]
     node_configs: list[V5CompiledNodeConfig]

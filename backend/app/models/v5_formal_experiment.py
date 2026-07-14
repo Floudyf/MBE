@@ -13,6 +13,7 @@ class V5FormalMethod(BaseModel):
     method_id: str = Field(min_length=1, max_length=120)
     display_name: str = Field(min_length=1, max_length=160)
     plugin_overrides: dict[str, str] = Field(default_factory=dict)
+    role: Literal["main", "baseline", "ablation", "custom"] = "custom"
 
 
 class V5FormalExperimentPlan(BaseModel):
@@ -26,6 +27,8 @@ class V5FormalExperimentPlan(BaseModel):
     topology_points: list[dict[str, int]] = Field(default_factory=list)
     workload_points: list[dict[str, int | float]] = Field(default_factory=list)
     fault_points: list[dict[str, object]] = Field(default_factory=list)
+    source_label: Literal["user", "e2e", "script"] = "user"
+    tags: list[str] = Field(default_factory=list)
 
 
 class V5FormalRunRequest(BaseModel):

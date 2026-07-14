@@ -62,7 +62,8 @@ def test_topology_workload_and_fault_points_propagate_from_natural_rows(tmp_path
         ],
     )
     topology_rows = expand(topology_plan, "real_cluster")
-    topology_a, topology_b = topology_rows
+    topology_a = next(row for row in topology_rows if row["method_config_id"] == "method_a" and row["topology_point"]["nodes"] == 8)
+    topology_b = next(row for row in topology_rows if row["method_config_id"] == "method_a" and row["topology_point"]["nodes"] == 16)
     plan_a = compiled(topology_plan, topology_a, tmp_path / "topology-a")
     plan_b = compiled(topology_plan, topology_b, tmp_path / "topology-b")
     assert plan_a.experiment_spec["topology"] != plan_b.experiment_spec["topology"]
@@ -75,7 +76,8 @@ def test_topology_workload_and_fault_points_propagate_from_natural_rows(tmp_path
         ],
     )
     workload_rows = expand(workload_plan, "real_cluster")
-    workload_a, workload_b = workload_rows
+    workload_a = next(row for row in workload_rows if row["method_config_id"] == "method_a" and row["estimated_transactions"] == 100)
+    workload_b = next(row for row in workload_rows if row["method_config_id"] == "method_a" and row["estimated_transactions"] == 500)
     workload_plan_a = compiled(workload_plan, workload_a, tmp_path / "workload-a")
     workload_plan_b = compiled(workload_plan, workload_b, tmp_path / "workload-b")
     assert workload_plan_a.workload_plan["tx_count"] == 100
@@ -87,8 +89,22 @@ def test_topology_workload_and_fault_points_propagate_from_natural_rows(tmp_path
         fault_points=[{"mode": "disabled"}, {"mode": "network_delay_drop", "delay_ms": 5}],
     )
     fault_rows = expand(fault_plan, "real_cluster")
-    fault_a, fault_b = fault_rows
+    fault_a = next(row for row in fault_rows if row["method_config_id"] == "method_a" and row["fault_point"]["mode"] == "disabled")
+    fault_b = next(row for row in fault_rows if row["method_config_id"] == "method_a" and row["fault_point"]["mode"] == "network_delay_drop")
     assert compiled(fault_plan, fault_a, tmp_path / "fault-a").fault_plan != compiled(fault_plan, fault_b, tmp_path / "fault-b").fault_plan
+
+
+def test_scan_suites_expand_every_selected_method_without_base_fallback() -> None:
+    workload = method_plan(suites=["workload_sensitivity"], workload_points=[{"tx_count": 10}, {"tx_count": 20}])
+    workload_rows = expand(workload, "real_cluster")
+    assert len(workload_rows) == 4
+    assert all(row["runnable"] for row in workload_rows)
+    assert len({row["comparison_group_id"] for row in workload_rows}) == 2
+    topology = method_plan(suites=["topology_scaling"], topology_points=[{"nodes": 8, "shards": 2, "validators_per_shard": 4}, {"nodes": 16, "shards": 4, "validators_per_shard": 4}])
+    assert len(expand(topology, "real_cluster")) == 4
+    faults = method_plan(suites=["fault_recovery_experiment"], fault_points=[{"mode": "disabled"}, {"mode": "delay_only", "delay_ms": 5}])
+    assert len(expand(faults, "real_cluster")) == 4
+    assert expand(method_plan(suites=["workload_sensitivity"], workload_points=[]), "real_cluster") == []
 
 
 def test_comparison_rows_change_only_method(tmp_path: Path) -> None:
@@ -100,6 +116,15 @@ def test_comparison_rows_change_only_method(tmp_path: Path) -> None:
     assert first.workload_plan == second.workload_plan
     assert first.fault_plan == second.fault_plan
     assert first.plugin_snapshot != second.plugin_snapshot
+
+
+def test_compiled_plan_keeps_formal_and_method_profile_ids(tmp_path: Path) -> None:
+    plan = method_plan(suites=["comparison_experiment"])
+    rows = expand(plan, "real_cluster")
+    first = compile_plan(_spec_for(plan, rows[0], formal_plan_config_id="v3cfg_formal_plan"), tmp_path / "first")
+    second = compile_plan(_spec_for(plan, rows[1], formal_plan_config_id="v3cfg_formal_plan"), tmp_path / "second")
+    assert first.formal_plan_config_id == second.formal_plan_config_id == "v3cfg_formal_plan"
+    assert first.method_config_id != second.method_config_id
 
 
 def test_unknown_workload_point_is_blocked_and_not_silently_compiled() -> None:
@@ -117,6 +142,7 @@ def test_single_shard_cross_shard_ratio_is_blocked() -> None:
         name="single-shard-ratio",
         base_spec=spec,
         suites=["workload_sensitivity"],
+        methods=[V5FormalMethod(method_id="method_a", display_name="A", plugin_overrides={})],
         workload_points=[{"cross_shard_ratio": 0.25}],
         seeds=[1],
         repeats=1,

@@ -11,16 +11,37 @@ client = TestClient(app)
 
 def _payload() -> dict:
     selections = [{"category": category, "plugin_id": next(item.plugin_id for item in STORE.list() if item.category == category)} for category in CATEGORIES]
-    return {"execution_backend": "preview", "plan": {"name": "formal preview", "base_spec": {"execution_backend": "real_cluster", "plugin_selections": selections, "topology": {"nodes": 8, "shards": 2, "validators_per_shard": 4}, "tx_count": 100, "seed": 7, "duration_ms": 9000}, "suites": ["main_experiment"], "methods": [{"method_id": "saved", "display_name": "Saved", "plugin_overrides": {}}], "seeds": [7], "repeats": 1}}
+    return {"execution_backend": "real_cluster", "plan": {"name": "formal preview", "base_spec": {"execution_backend": "real_cluster", "plugin_selections": selections, "topology": {"nodes": 8, "shards": 2, "validators_per_shard": 4}, "tx_count": 100, "seed": 7, "duration_ms": 9000}, "suites": ["main_experiment"], "methods": [{"method_id": "v5_catalog_default", "display_name": "V5 Catalog Default", "plugin_overrides": {}}], "seeds": [7], "repeats": 1}}
 
 
 def test_v5_formal_preview_expands_persistent_shape_without_running_cluster():
     response = client.post("/api/v5/formal/preview", json=_payload())
     assert response.status_code == 200
     body = response.json()
-    assert body["execution_backend"] == "preview"
+    assert body["execution_backend"] == "real_cluster"
     assert len(body["rows"]) == 1
     assert body["paper_candidate"] is False
+
+
+def test_v5_formal_preview_rejects_backend_mismatch_and_suite_degradation():
+    mismatch = _payload()
+    mismatch["execution_backend"] = "preview"
+    assert client.post("/api/v5/formal/preview", json=mismatch).status_code == 422
+    sensitivity = _payload()
+    sensitivity["plan"]["suites"] = ["workload_sensitivity"]
+    assert client.post("/api/v5/formal/preview", json=sensitivity).status_code == 422
+
+
+def test_catalog_default_role_is_canonicalized_and_fault_points_are_strictly_validated():
+    forged = _payload()
+    forged["plan"]["methods"][0]["role"] = "main"
+    body = client.post("/api/v5/formal/preview", json=forged).json()
+    assert body["rows"][0]["method_role"] == "baseline"
+    for point in ({"mode": "unknown"}, {"mode": "disabled", "delay_ms": 1}, {"mode": "delay_only", "delay_ms": 1001}, {"mode": "network_drop", "drop_rate": 2}, {"mode": "restart_node", "drop_every": 1}):
+        payload = _payload()
+        payload["plan"]["suites"] = ["fault_recovery_experiment"]
+        payload["plan"]["fault_points"] = [{"mode": "disabled"}, point]
+        assert client.post("/api/v5/formal/preview", json=payload).status_code == 422
 
 
 def test_v5_formal_artifact_catalog_reads_only_real_manifest_and_bundle(tmp_path, monkeypatch):
@@ -65,3 +86,14 @@ def test_v5_formal_artifact_catalog_filters_unsafe_manifest_items(tmp_path):
 def test_v5_formal_artifact_catalog_unknown_group_is_not_found():
     response = client.get("/api/v5/formal/run-groups/v5grp_missing_catalog/artifacts")
     assert response.status_code == 404
+
+
+def test_v5_formal_dto_strips_internal_paths_and_process_details():
+    from backend.app.services.v5_formal_dto import child_detail, group_detail
+
+    group = {"run_group_id": "v5grp_test", "worker_pid": 11, "bundle_path": "C:/secret.zip", "plan": {"name": "safe"}}
+    child = {"child_run_id": "v5child_test", "output_dir": "C:/secret", "stdout": "private", "stderr": "private", "result": {"output_dir": "C:/secret", "stdout": "private", "stderr": "private", "summary": {"ok": True}}}
+    assert "worker_pid" not in group_detail(group, [child])["group"]
+    body = child_detail(child)
+    assert "output_dir" not in body and "stdout" not in body and "stderr" not in body
+    assert "output_dir" not in body["result"] and body["result"]["summary"] == {"ok": True}

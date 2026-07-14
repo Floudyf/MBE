@@ -17,12 +17,40 @@ def _schema(properties: dict) -> dict:
     return {"type": "object", "properties": properties}
 
 
+_ZH = {
+    "deterministic_signed_synthetic": ("确定性签名合成负载", "生成带签名的确定性片内、跨片及超时退款交易。"),
+    "signature_nonce_admission": ("签名与随机数准入", "校验 Ed25519 签名、发送方公钥绑定和随机数。"),
+    "fifo_per_node_mempool": ("每节点 FIFO 交易池", "每个节点维护独立的 FIFO 交易池。"),
+    "deterministic_state_key_sharding": ("确定性状态键分片", "将账户和状态键映射到配置的分片。"),
+    "hash_routing_baseline": ("哈希路由基线", "稳定的哈希路由基线。"),
+    "metatrack_coaccess_routing": ("MetaTrack 共访存路由", "带确定性分片偏移的共访问感知路由配置。"),
+    "time_or_count_block_producer": ("时间或数量出块器", "Leader 按时间间隔或交易池数量持续提议区块。"),
+    "pbft_style_consensus": ("PBFT 风格共识", "基于本地 TCP 的 PrePrepare、Prepare 和 Commit 法定人数消息流程。"),
+    "localhost_tcp_typed_network": ("本地 TCP 类型化网络", "在独立 localhost TCP 监听器上传输类型化消息。"),
+    "serial_execution_baseline": ("串行执行基线", "确定性的串行执行基线。"),
+    "dual_track_execution": ("双轨执行", "记录快速轨与保守轨执行证据的确定性执行插件。"),
+    "fifo_serial_scheduler": ("FIFO 串行调度器", "对已准入交易进行 FIFO 调度。"),
+    "fast_first_scheduler": ("快速优先调度器", "用于双轨执行的快速优先调度器。"),
+    "direct_state_access": ("直接状态访问", "直接访问确定性状态数据库。"),
+    "persistent_local_state_store": ("本地持久化状态存储", "每个节点持久化状态、区块、回执和交易索引。"),
+    "relay_certificate_protocol": ("中继证书跨片协议", "提供 SourceLock、中继证书、TargetCommit、SourceFinalize 与超时退款证据。"),
+    "normal_commit": ("普通提交", "确定性的持久化提交。"),
+    "commutative_hot_update_aggregation": ("可交换热点更新聚合", "记录热点更新聚合决策的提交配置。"),
+    "faults_disabled": ("禁用故障注入", "不施加网络故障策略。"),
+    "network_delay_drop": ("网络延迟与丢包", "确定性的真实 TCP 延迟和丢包策略。"),
+    "runtime_core_metrics": ("运行时核心指标", "运行时计数器和状态根汇总。"),
+    "node_network_consensus_observer": ("节点网络共识观测器", "生成节点、TCP、共识日志和产物目录。"),
+}
+
+
 def _manifest(category: str, plugin_id: str, display_name: str, description: str, *,
               config: dict | None = None, schema: dict | None = None, capabilities: list[str] | None = None,
               requirements: list[str] | None = None, metrics: list[dict] | None = None,
               aliases: list[str] | None = None) -> V5PluginManifest:
+    display_name_zh, description_zh = _ZH[plugin_id]
     return V5PluginManifest(
         plugin_id=plugin_id, category=category, display_name=display_name, description=description,
+        display_name_zh=display_name_zh, description_zh=description_zh,
         supported_backends=["preview", "simulation", "real_cluster"],
         config_schema=schema or _schema({}), default_config=config or {}, capabilities=capabilities or [],
         requirements=requirements or [], metrics=metrics or [], runtime_factory=f"builtin:{plugin_id}",
