@@ -9,7 +9,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1920, height: 108
       await nav.getByRole("button", { name: label }).click();
       for (const text of texts) await expect(page.getByText(text, { exact: false }).first()).toBeVisible();
       const overflow = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, clientWidth: document.documentElement.clientWidth }));
-      expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
+      expect(overflow.scrollWidth, `${label} 页面横向溢出：scrollWidth=${overflow.scrollWidth}, clientWidth=${overflow.clientWidth}`).toBeLessThanOrEqual(overflow.clientWidth + 1);
     }
   });
 }
