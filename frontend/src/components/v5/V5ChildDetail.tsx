@@ -1,8 +1,10 @@
 import { useState } from "react";
 
 import { v5RealClusterArtifactURL, type V5FinalityEvidence, type V5FormalChildRun, type V5RealClusterSummary, type V5RuntimeArtifact } from "../../api";
+import { formatHash, truthText, valueText } from "../../workloadUi";
 
-const preferred = ["real_cluster_summary.json", "finality_summary.json", "transaction_lifecycle.csv", "transaction_lifecycle.jsonl", "transaction_finality.csv", "latency_distribution.csv", "throughput_windows.csv", "drain_status.json", "client_receipt_log.csv", "compiled_run_plan.json", "supervisor_stdout.log", "supervisor_stderr.log"];
+const workloadArtifacts = ["workload_manifest_snapshot.json", "workload_source_spec.json", "workload_selection.json", "workload_skew_report.json", "workload_materialization_summary.json", "workload_identity_mapping_summary.json", "workload_replay_summary.json"];
+const preferred = [...workloadArtifacts, "real_cluster_summary.json", "finality_summary.json", "transaction_lifecycle.csv", "transaction_lifecycle.jsonl", "transaction_finality.csv", "latency_distribution.csv", "throughput_windows.csv", "drain_status.json", "client_receipt_log.csv", "compiled_run_plan.json", "supervisor_stdout.log", "supervisor_stderr.log"];
 type Row = [label: string, value: unknown, testId?: string];
 
 export default function V5ChildDetail({ child }: { child: V5FormalChildRun | null }) {
@@ -16,6 +18,7 @@ export default function V5ChildDetail({ child }: { child: V5FormalChildRun | nul
     <h2>子实验详情</h2>
     <h3>运行标识</h3><Grid values={[["子实验 ID", child.child_run_id], ["运行 ID", child.result?.run_id], ["实验类型", child.suite_type], ["方法", child.method.display_name], ["方法配置 ID", child.method_config_id, "v5-metric-method-config-id"], ["随机种子", child.seed], ["重复序号", child.repeat_index + 1], ["尝试次数", child.attempt], ["拓扑", `${child.topology_point.nodes}/${child.topology_point.shards}/${child.topology_point.validators_per_shard}`], ["交易数量", child.estimated_transactions], ["状态", child.status], ["论文候选", child.paper_candidate], ["对比组", child.comparison_group_id], ["扫描点", `${child.scan_variable || "—"}: ${child.scan_value || "—"}`]]} />
     <h3>性能指标</h3><Grid values={[["吞吐量 TPS", metrics.throughput_tps ?? finality?.throughput_tps], ["P50", metrics.p50_latency_ms ?? finality?.p50_finality_ms], ["P95", metrics.p95_latency_ms ?? finality?.p95_finality_ms], ["P99", metrics.p99_latency_ms ?? finality?.p99_finality_ms], ["已最终确认", metrics.finalized_tx_count], ["生命周期完整", metrics.lifecycle_complete], ["缺失指标", Array.isArray(metrics.missing) ? metrics.missing.join(", ") : metrics.missing]]} />
+    <WorkloadTruth summary={summary} child={child} />
     <div data-testid="v5-finality-summary"><h3>最终确认指标</h3><Grid values={finalityRows(finality)} /></div>
     <div data-testid="v5-runtime-evidence"><h3>运行真实性证据</h3><Grid values={runtimeRows(summary)} /><p className="muted">运行阶段：{value(summary?.runtime_stage)}；运行真实性：{value(summary?.runtime_truth)}。production_blockchain=false；production_pbft=false。</p></div>
     {child.error && <p className="file-error">子实验错误：{child.error}</p>}
@@ -36,5 +39,39 @@ function ArtifactCatalog({ artifacts }: { artifacts: V5RuntimeArtifact[] }) {
 function ArtifactTable({ title, artifacts }: { title: string; artifacts: V5RuntimeArtifact[] }) { return <section><h4>{title}</h4><div className="table-wrap"><table><thead><tr><th>产物</th><th>真实性类别</th><th>字节数</th><th>下载</th></tr></thead><tbody>{artifacts.map((item) => <tr key={item.download_url}><td>{item.name}</td><td>{item.truth_category}</td><td>{item.size_bytes}</td><td><a href={v5RealClusterArtifactURL(item.download_url)}>下载</a></td></tr>)}</tbody></table></div></section>; }
 function rank(name: string): number { const index = preferred.indexOf(name); return index >= 0 ? index : Number.MAX_SAFE_INTEGER; }
 function grouped(items: V5RuntimeArtifact[]): Array<[string, V5RuntimeArtifact[]]> { const labels = ["客户端", "节点", "日志 / Supervisor", "其他"]; return labels.map((label) => [label, items.filter((item) => category(item.name) === label)] as [string, V5RuntimeArtifact[]]).filter(([, current]) => current.length); }
-function category(name: string): string { if (name.startsWith("client/")) return "客户端"; if (name.startsWith("nodes/")) return "节点"; if (name.startsWith("logs/") || name.startsWith("supervisor")) return "日志 / Supervisor"; return "其他"; }
+function category(name: string): string { if (workloadArtifacts.includes(name) || workloadArtifacts.some((item) => name.endsWith(`/${item}`))) return "Workload Evidence"; if (name.startsWith("client/")) return "客户端"; if (name.startsWith("nodes/")) return "节点"; if (name.startsWith("logs/") || name.startsWith("supervisor")) return "日志 / Supervisor"; return "其他"; }
 function slug(value: string): string { return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""); }
+
+function WorkloadTruth({ summary, child }: { summary: V5RealClusterSummary | undefined; child: V5FormalChildRun }) {
+  const replay = record(summary?.workload_replay_summary) ? summary?.workload_replay_summary as Record<string, unknown> : {};
+  const plan = record(child.result?.summary) ? child.result?.summary as Record<string, unknown> : {};
+  const truth = replay.truth_label ?? child.result?.summary?.runtime_truth;
+  return <div data-testid="v5-workload-truth"><h3>Workload Truth</h3>
+    <p className="muted">{truthText(truth)}</p>
+    <WorkloadGrid values={[
+      ["workload plugin", replay.dataset_id ? "canonical_trace_replay" : "deterministic_signed_synthetic"],
+      ["source type", replay.dataset_id ? "dataset" : "synthetic"],
+      ["dataset_id", replay.dataset_id],
+      ["variant", replay.variant_id],
+      ["truth label", truth],
+      ["requested / actual tx count", `${valueText(replay.expected_count ?? child.estimated_transactions)} / ${valueText(replay.read_count ?? child.estimated_transactions)}`],
+      ["seed", child.seed],
+      ["source hash", formatHash(replay.source_sha256)],
+      ["canonical hash", formatHash(plan.canonical_sha256)],
+      ["materialized hash", formatHash(replay.materialized_sha256)],
+      ["target alpha", plan.target_alpha],
+      ["realized skew", JSON.stringify(plan.realized_skew ?? {})],
+      ["category distribution", JSON.stringify(plan.category_counts ?? {})],
+      ["duplicate source-row ratio", plan.duplicate_source_row_ratio],
+      ["expected cross-shard", `${valueText(replay.expected_cross_shard_count)} / ${valueText(replay.expected_cross_shard_ratio)}`],
+      ["actual cross-shard", `${valueText(replay.actual_cross_shard_count)} / ${valueText(replay.actual_cross_shard_ratio)}`],
+      ["signature verification", replay.signature_pass_count],
+      ["nonce continuity", replay.nonce_continuity],
+      ["identity count", replay.identity_count],
+      ["no_fallback", replay.no_fallback ?? summary?.no_fallback],
+    ]} />
+  </div>;
+}
+
+function WorkloadGrid({ values }: { values: Row[] }) { return <dl className="stage-flow-kpis">{values.map(([label, item]) => <div key={label} data-testid={`v5-workload-metric-${slug(label)}`}><dt>{label}</dt><dd>{value(item)}</dd></div>)}</dl>; }
+function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }

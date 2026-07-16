@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"MBE Materialized Workload Record v1","type":"object","required":["materialized_index","logical_event_id","occurrence_index","schema_version","dataset_id","source_row_index","source_event_id"]}

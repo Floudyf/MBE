@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MBE Workload Record v1",
+  "type": "object",
+  "required": ["schema_version", "dataset_id", "source_row_index", "source_event_id", "source_tx_hash", "timestamp_ms", "category", "buyer_address", "seller_address", "contract_address", "price_raw", "price_bucket", "runtime_value", "state_keys", "provenance"],
+  "properties": {
+    "schema_version": {"const": "mbe_workload_record_v1"},
+    "source_row_index": {"type": "integer", "minimum": 0},
+    "timestamp_ms": {"type": "integer", "minimum": 0},
+    "category": {"enum": ["wearable", "emote"]},
+    "price_raw": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
+    "runtime_value": {"const": 1}
+  }
+}

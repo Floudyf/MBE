@@ -24,7 +24,12 @@ class SavedConfigStoreError(ValueError):
 
 def list_saved_configs(kind: V3SavedConfigKind | None = None, root: Path = SAVED_CONFIG_ROOT) -> list[dict[str, Any]]:
     root.mkdir(parents=True, exist_ok=True)
-    configs = [_read(path) for path in sorted(root.glob("v3cfg_*.json"))]
+    configs: list[dict[str, Any]] = []
+    for path in sorted(root.glob("v3cfg_*.json")):
+        try:
+            configs.append(_read(path))
+        except FileNotFoundError:
+            continue
     if kind:
         configs = [config for config in configs if config["config_kind"] == kind]
     configs.sort(key=lambda item: (item.get("updated_at", ""), item.get("created_at", "")), reverse=True)

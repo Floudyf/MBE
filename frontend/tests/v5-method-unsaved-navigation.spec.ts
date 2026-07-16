@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("protects unsaved V5 method changes before entering Run", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByTestId("v5-method-category-routing").locator("select")).toContainText("MetaTrack");
   await page.getByTestId("v5-method-name").fill("未保存方法");
   await page.getByTestId("v5-method-category-routing").locator("select").selectOption("metatrack_coaccess_routing");
   await page.getByTestId("primary-navigation").getByRole("button", { name: "② 运行实验" }).click();
@@ -25,6 +26,7 @@ test("consumes a save-and-run navigation command only once", async ({ page, requ
   let configId = "";
   try {
     await page.goto("/");
+    await expect(page.getByTestId("v5-method-category-routing").locator("select")).toContainText("MetaTrack");
     await page.getByTestId("v5-method-name").fill(`stale save ${Date.now()}`);
     const validation = page.waitForResponse((response) => response.url().includes("/api/v5/experiment-spec/validate") && response.request().method() === "POST");
     await page.getByTestId("v5-method-validate").click();

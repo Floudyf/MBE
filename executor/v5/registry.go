@@ -1,6 +1,7 @@
 package v5
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,7 @@ type Plugin interface {
 type WorkloadPlugin interface {
 	Plugin
 	BuildWorkloadItem(WorkloadInput) WorkloadItem
+	NewIterator(WorkloadPlan, int, string) (WorkloadIterator, error)
 }
 type AdmissionPlugin interface {
 	Plugin
@@ -92,6 +94,51 @@ type WorkloadItem struct {
 	Payload   string
 	StateKeys []string
 }
+type WorkloadRecord struct {
+	Index         int
+	LogicalID     string
+	BuyerAddress  string
+	SellerAddress string
+	Contract      string
+	Category      string
+	Payload       string
+	StateKeys     []string
+	CrossShard    bool
+	SourceShard   string
+	TargetShard   string
+	SourceEventID string
+	TimestampMS   int64
+	Value         int64
+}
+type WorkloadReplaySummary struct {
+	DatasetID                string         `json:"dataset_id,omitempty"`
+	VariantID                string         `json:"variant_id,omitempty"`
+	TruthLabel               string         `json:"truth_label,omitempty"`
+	SourceSHA256             string         `json:"source_sha256,omitempty"`
+	MaterializedSHA256       string         `json:"materialized_sha256,omitempty"`
+	ExpectedCount            int            `json:"expected_count"`
+	ReadCount                int            `json:"read_count"`
+	SubmittedCount           int            `json:"submitted_count"`
+	RejectedCount            int            `json:"rejected_count"`
+	IdentityCount            int            `json:"identity_count"`
+	MappingDigest            string         `json:"mapping_digest,omitempty"`
+	NonceContinuity          bool           `json:"nonce_continuity"`
+	SignaturePassCount       int            `json:"signature_pass_count"`
+	ExpectedCrossShardCount  int            `json:"expected_cross_shard_count"`
+	ActualCrossShardCount    int            `json:"actual_cross_shard_count"`
+	ExpectedCrossShardRatio  float64        `json:"expected_cross_shard_ratio"`
+	ActualCrossShardRatio    float64        `json:"actual_cross_shard_ratio"`
+	ReplayMode               string         `json:"replay_mode"`
+	NoFallback               bool           `json:"no_fallback"`
+	ShardLoadDistribution    map[string]int `json:"shard_load_distribution,omitempty"`
+	MaxAverageShardLoadRatio float64        `json:"max_average_shard_load_ratio,omitempty"`
+	IdentityMappingVersion   string         `json:"identity_mapping_version,omitempty"`
+}
+type WorkloadIterator interface {
+	Next(context.Context) (WorkloadRecord, error)
+	Close() error
+	Summary() WorkloadReplaySummary
+}
 type RoutingInput struct {
 	Index               int
 	StateKeys, ShardIDs []string
@@ -159,6 +206,20 @@ func (p builtinWorkload) BuildWorkloadItem(input WorkloadInput) WorkloadItem {
 		payload = "v5_timeout"
 	}
 	return WorkloadItem{Payload: payload, StateKeys: keys}
+}
+
+func (p builtinWorkload) NewIterator(plan WorkloadPlan, shards int, dataDir string) (WorkloadIterator, error) {
+	return NewSyntheticIterator(p, plan, shards), nil
+}
+
+type canonicalTraceWorkload struct{ basicPlugin }
+
+func (p canonicalTraceWorkload) BuildWorkloadItem(WorkloadInput) WorkloadItem {
+	return WorkloadItem{Payload: "dataset_replay_unavailable", StateKeys: []string{"dataset:invalid"}}
+}
+
+func (p canonicalTraceWorkload) NewIterator(plan WorkloadPlan, shards int, dataDir string) (WorkloadIterator, error) {
+	return NewCanonicalTraceIterator(plan, shards, dataDir)
 }
 
 type builtinAdmission struct{ basicPlugin }
@@ -315,6 +376,9 @@ func BuiltinRegistry() *Registry {
 	}
 	register("workload", "deterministic_signed_synthetic", func(c map[string]any) (Plugin, error) {
 		return builtinWorkload{makeBasic("workload", "deterministic_signed_synthetic", c)}, nil
+	})
+	register("workload", "canonical_trace_replay", func(c map[string]any) (Plugin, error) {
+		return canonicalTraceWorkload{makeBasic("workload", "canonical_trace_replay", c)}, nil
 	})
 	register("transaction_admission", "signature_nonce_admission", func(c map[string]any) (Plugin, error) {
 		return builtinAdmission{makeBasic("transaction_admission", "signature_nonce_admission", c)}, nil

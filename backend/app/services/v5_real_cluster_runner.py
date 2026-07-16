@@ -53,7 +53,16 @@ def run(spec: V5ExperimentSpec) -> dict:
     (run_dir / "supervisor_stderr.log").write_text(result.stderr, encoding="utf-8")
     summary = v5_real_cluster_artifacts.read_summary(run_dir)
     status_value = "completed" if result.returncode == 0 and summary.get("ready_to_commit") is True else "failed"
-    return {"run_id": run_id, "status": status_value, "output_dir": str(run_dir), "summary": summary, "artifacts": v5_real_cluster_artifacts.list_artifacts(run_dir, run_id), "stdout": result.stdout, "stderr": result.stderr, "no_fallback": True}
+    return {
+        "run_id": run_id,
+        "status": status_value,
+        "output_dir": str(run_dir.relative_to(ROOT)),
+        "summary": summary,
+        "artifacts": v5_real_cluster_artifacts.list_artifacts(run_dir, run_id),
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "no_fallback": True,
+    }
 
 
 def run_dir(run_id: str) -> Path:

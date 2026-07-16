@@ -2207,6 +2207,90 @@ details summary {
   overflow-wrap: anywhere;
 }
 
+.workload-library-grid,
+.workload-detail-grid,
+.workload-kpis,
+.workload-source-grid,
+.workload-preview-grid {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.workload-library-grid {
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+}
+
+.workload-detail-grid,
+.workload-kpis,
+.workload-preview-grid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.workload-source-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.workload-source-grid .selectable-card,
+.workload-library-grid .final-card,
+.workload-detail-grid > div,
+.workload-kpis > div,
+.workload-preview-grid > div,
+.result-summary-grid > div,
+.stage-flow-kpis > div {
+  min-width: 0;
+}
+
+.workload-library-grid code,
+.workload-detail-grid code,
+.workload-preview-grid code,
+.result-summary-grid code,
+.stage-flow-kpis dd,
+.artifact-table td,
+.table-wrap td,
+.table-wrap code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.workload-library-grid ul,
+.workload-preview-grid ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.workload-library-grid li,
+.workload-preview-grid li {
+  overflow-wrap: anywhere;
+}
+
+.workload-mode-toolbar,
+.segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.workload-mode-toolbar button,
+.segmented-control button {
+  min-width: 0;
+  white-space: normal;
+}
+
+.workload-preview-dirty {
+  background: var(--orange-soft);
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  color: var(--orange);
+  font-weight: 800;
+  padding: 0.65rem 0.75rem;
+}
+
+.artifact-table table {
+  min-width: 560px;
+}
+
 .method-template-hero {
   align-items: start;
   min-height: 0;

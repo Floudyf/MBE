@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"MBE Workload Preview v1","type":"object","required":["dataset_id","available","selectable","blockers"],"properties":{"dataset_id":{"type":"string"},"available":{"type":"boolean"},"selectable":{"type":"boolean"},"blockers":{"type":"array","items":{"type":"string"}}}}

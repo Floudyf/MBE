@@ -135,7 +135,7 @@ func TestDeriveLiveTerminalHandlesTargetCommitAndDuplicates(t *testing.T) {
 	}
 	statuses := []map[string]any{{
 		"durable_committed_logical_tx_ids": []any{},
-		"source_finalized_logical_tx_ids": []any{},
+		"source_finalized_logical_tx_ids":  []any{},
 		"refunded_logical_tx_ids":          []any{},
 		"failed_logical_tx_ids":            []any{},
 		"target_commit_logical_tx_ids":     []any{},
@@ -171,6 +171,28 @@ func TestDeriveLiveTerminalHandlesTargetCommitAndDuplicates(t *testing.T) {
 func TestSubmissionClassificationMustMatchExpectedCount(t *testing.T) {
 	if err := validateSubmissionClassification(map[string]bool{"only": false}, 2); err == nil {
 		t.Fatal("missing submitted classification was accepted")
+	}
+}
+
+func TestHasNonTerminalMempoolIgnoresTerminalResidue(t *testing.T) {
+	terminal := map[string]bool{"done": true}
+	statuses := []map[string]any{
+		{"mempool_depth": float64(1), "mempool_logical_tx_ids": []any{"done"}},
+	}
+	if hasNonTerminalMempool(statuses, terminal) {
+		t.Fatal("terminal mempool residue should not block drain")
+	}
+	statuses = []map[string]any{
+		{"mempool_depth": float64(1), "mempool_logical_tx_ids": []any{"waiting"}},
+	}
+	if !hasNonTerminalMempool(statuses, terminal) {
+		t.Fatal("non-terminal mempool item should block drain")
+	}
+	statuses = []map[string]any{
+		{"mempool_depth": float64(1)},
+	}
+	if !hasNonTerminalMempool(statuses, terminal) {
+		t.Fatal("legacy status without mempool IDs should remain conservative")
 	}
 }
 

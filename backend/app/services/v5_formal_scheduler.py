@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from backend.app.core.paths import ROOT
 from backend.app.models.v5_experiment_spec import V5PluginSelection, V5Topology
 from backend.app.models.v5_formal_experiment import V5FormalExperimentPlan
 from backend.app.services import v5_real_cluster_runner
@@ -17,16 +18,20 @@ from backend.app.services.v5_plugin_manifest_store import STORE
 from backend.app.services.v5_paper_exporter import export as export_paper
 from backend.app.services.v5_reproducibility_bundle import build as build_bundle
 
-SUPPORTED_WORKLOAD_POINT_FIELDS = {"tx_count", "cross_shard_ratio", "timeout_every"}
+SUPPORTED_SYNTHETIC_WORKLOAD_POINT_FIELDS = {"tx_count", "cross_shard_ratio", "timeout_every"}
+SUPPORTED_DATASET_WORKLOAD_POINT_FIELDS = {"tx_count", "target_alpha"}
 
 
-def _workload_blockers(point: dict, topology: dict) -> list[str]:
+def _workload_blockers(point: dict, topology: dict, source_type: str = "synthetic") -> list[str]:
     blockers = []
-    unknown = sorted(set(point) - SUPPORTED_WORKLOAD_POINT_FIELDS)
+    supported = SUPPORTED_DATASET_WORKLOAD_POINT_FIELDS if source_type == "dataset" else SUPPORTED_SYNTHETIC_WORKLOAD_POINT_FIELDS
+    unknown = sorted(set(point) - supported)
     if unknown:
         blockers.append(f"unsupported workload point fields: {unknown}")
     if "tx_count" in point and (not isinstance(point["tx_count"], int) or isinstance(point["tx_count"], bool) or point["tx_count"] < 1):
         blockers.append("workload tx_count must be a positive integer")
+    if source_type == "dataset" and "target_alpha" in point and point["target_alpha"] not in {0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4}:
+        blockers.append("dataset target_alpha must be one of the supported contract Zipf alpha values")
     if "cross_shard_ratio" in point and (not isinstance(point["cross_shard_ratio"], (int, float)) or not 0 <= point["cross_shard_ratio"] <= 1):
         blockers.append("workload cross_shard_ratio must be between 0 and 1")
     if "timeout_every" in point and (not isinstance(point["timeout_every"], int) or isinstance(point["timeout_every"], bool) or point["timeout_every"] < 0):
@@ -46,6 +51,7 @@ def _fault_blockers(fault: dict, workload: dict, backend: str) -> list[str]:
 def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
     methods = plan.methods or []
     rows = []
+    base_workload_identity = _workload_identity(plan)
     for suite in plan.suites:
         variants = _variants(plan, suite)
         # Every selected method participates in every suite.  A suite validator owns
@@ -57,13 +63,15 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
                   for variant in variants:
                     item = method if isinstance(method, dict) else method.model_dump()
                     snapshot = {selection.category: STORE.get(item.get("plugin_overrides", {}).get(selection.category, selection.plugin_id)).plugin_id for selection in plan.base_spec.plugin_selections}
-                    full_snapshot = {"plugins": snapshot, "workload": variant["workload_point"], "topology": variant["topology_point"], "fault": variant["fault_point"]}
-                    blockers = _workload_blockers(variant["workload_point"], variant["topology_point"])
+                    workload_identity = {**base_workload_identity, "point": variant["workload_point"]}
+                    full_snapshot = {"plugins": snapshot, "workload": variant["workload_point"], "workload_identity": workload_identity, "topology": variant["topology_point"], "fault": variant["fault_point"]}
+                    source_type = plan.base_spec.workload_source.source_type if plan.base_spec.workload_source else "synthetic"
+                    blockers = _workload_blockers(variant["workload_point"], variant["topology_point"], source_type)
                     base_workload = next((selection.config for selection in plan.base_spec.plugin_selections if selection.category == "workload"), {})
-                    effective_workload = {**base_workload, **variant["workload_point"]}
+                    effective_workload = {**base_workload, **variant["workload_point"]} if source_type != "dataset" else {}
                     blockers.extend(_fault_blockers(variant["fault_point"], effective_workload, backend))
                     rows.append({
-                        "child_run_id": "v5child_" + hashlib.sha256(json.dumps({"suite": suite, "method": item["method_id"], "seed": seed, "repeat": repeat, "variant": variant}, sort_keys=True).encode()).hexdigest()[:16],
+                        "child_run_id": "v5child_" + hashlib.sha256(json.dumps({"suite": suite, "method": item["method_id"], "seed": seed, "repeat": repeat, "variant": variant, "workload_identity": workload_identity}, sort_keys=True, default=str).encode()).hexdigest()[:16],
                         "suite_type": suite, "method": item, "method_config_id": item["method_id"], "method_role": item.get("role", "custom"),
                         "changed_plugin_categories": _changed_categories(plan, item),
                         "method_snapshot_digest": hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(),
@@ -89,6 +97,33 @@ def _variants(plan: V5FormalExperimentPlan, suite: str) -> list[dict]:
     if suite == "fault_recovery_experiment":
         return [{**base, "fault_point": point, "scan_variable": "fault_policy", "scan_value": json.dumps(point, sort_keys=True, default=str), "group": "fault"} for point in plan.fault_points]
     return [base]
+
+
+def _workload_identity(plan: V5FormalExperimentPlan) -> dict:
+    source = plan.base_spec.workload_source
+    if not source:
+        return {"source_type": "synthetic"}
+    data = source.model_dump(mode="json")
+    return {
+        key: data.get(key)
+        for key in (
+            "source_type",
+            "plugin_id",
+            "dataset_id",
+            "variant_id",
+            "variant_mode",
+            "materialized_id",
+            "source_sha256",
+            "requested_tx_count",
+            "use_full_dataset",
+            "seed",
+            "selection_mode",
+            "replay_mode",
+            "skew_axis",
+            "target_alpha",
+        )
+        if data.get(key) is not None
+    }
 
 
 def _scan_variable(point: dict, default: str) -> str:
@@ -176,7 +211,10 @@ def _run_worker(group_id: str) -> None:
                 child.update({"status": "completed", "result": result, "paper_candidate": False})
             elif backend == "real_cluster":
                 result = v5_real_cluster_runner.run(spec)
-                metrics = extract_metrics(__import__("pathlib").Path(result["output_dir"]))
+                result_dir = __import__("pathlib").Path(result["output_dir"])
+                if not result_dir.is_absolute():
+                    result_dir = ROOT / result_dir
+                metrics = extract_metrics(result_dir)
                 child.update({"status": result["status"], "result": result, "metrics": metrics, "paper_candidate": result["status"] == "completed" and result["summary"].get("no_fallback") is True and not metrics.get("missing")})
             else:
                 child.update({"status": "blocked", "error": "simulation dispatch is not yet bound to the V3 logical runtime adapter", "paper_candidate": False})
@@ -218,12 +256,20 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
         spec.topology = V5Topology(**(spec.topology.model_dump() | topology_point))
 
     workload_point = dict(row.get("workload_point") or {})
-    workload_blockers = _workload_blockers(workload_point, topology_point)
+    source_type = spec.workload_source.source_type if spec.workload_source else "synthetic"
+    workload_blockers = _workload_blockers(workload_point, topology_point, source_type)
     if workload_blockers:
         raise ValueError("; ".join(workload_blockers))
     if "tx_count" in workload_point:
         spec.tx_count = int(workload_point.pop("tx_count"))
-    if workload_point:
+        if spec.workload_source:
+            spec.workload_source.requested_tx_count = spec.tx_count
+    if source_type == "dataset" and "target_alpha" in workload_point:
+        if spec.workload_source:
+            spec.workload_source.variant_mode = "contract_zipf"
+            spec.workload_source.skew_axis = "contract"
+            spec.workload_source.target_alpha = float(workload_point.pop("target_alpha"))
+    if workload_point and source_type != "dataset":
         spec.plugin_selections = [
             V5PluginSelection(
                 category=item.category,
@@ -238,6 +284,8 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
         spec.fault_policy = spec.fault_policy | dict(fault_point)
 
     spec.seed = row["seed"]
+    if spec.workload_source:
+        spec.workload_source.seed = spec.seed
     method = row["method"]
     overrides = method.get("plugin_overrides", {})
     spec.plugin_selections = [V5PluginSelection(category=item.category, plugin_id=overrides.get(item.category, item.plugin_id), config=item.config) for item in spec.plugin_selections]

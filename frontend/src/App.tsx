@@ -56,6 +56,7 @@ import RealClusterWorkbench from "./components/v5/RealClusterWorkbench";
 import V5FormalRunPage from "./pages/V5FormalRunPage";
 import V5ResultsPage from "./pages/V5ResultsPage";
 import V5MethodDesignPage from "./pages/V5MethodDesignPage";
+import V5WorkloadLibraryPage from "./pages/WorkloadLibraryPage";
 
 type PageId =
   | "overview"
@@ -381,7 +382,7 @@ function App() {
       {activePage === "v4realism" && <RealismModePanel />}
       {activePage === "runs" && <V5ResultsPage preferredGroupId={preferredGroupId} />}
       {activePage === "artifacts" && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
-      {activePage === "workloads" && <WorkloadLibraryPage />}
+      {activePage === "workloads" && <V5WorkloadLibraryPage />}
       {activePage === "boundaries" && <BoundariesPage />}
       {activePage === "developer" && <DeveloperPage traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
       {activePage === "advanced" && <AdvancedPage setActivePage={navigate} traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
