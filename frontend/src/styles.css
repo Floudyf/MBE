@@ -2221,6 +2221,39 @@ details summary {
   grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
 }
 
+.workload-library-page,
+.workload-library-page * {
+  min-width: 0;
+}
+
+.workload-library-page .dataset-choice {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--ink);
+  display: grid;
+  gap: 0.35rem;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  padding: 0.85rem;
+  text-align: left;
+  white-space: normal;
+  width: 100%;
+}
+
+.workload-library-page .dataset-choice.selected {
+  border-color: rgba(37, 99, 235, 0.48);
+  box-shadow: inset 4px 0 0 var(--blue);
+}
+
+.workload-library-page .boundary-list li,
+.workload-library-page .workload-detail-grid section,
+.workload-library-page .stage-flow-kpis dd {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .workload-detail-grid,
 .workload-kpis,
 .workload-preview-grid {

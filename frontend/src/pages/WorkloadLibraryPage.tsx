@@ -39,7 +39,7 @@ export default function WorkloadLibraryPage() {
       setDetailLoading(false);
     }
   }
-  return <section className="page-grid" data-testid="v5-workload-library-page">
+  return <section className="page-grid workload-library-page" data-testid="v5-workload-library-page">
     <article className="final-card wide page-hero">
       <p className="eyebrow">V5 Workload Library</p>
       <h2>负载数据集注册表</h2>

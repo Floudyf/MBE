@@ -54,7 +54,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   const [catalog, setCatalog] = useState<V5PluginManifest[]>([]);
   const [datasets, setDatasets] = useState<V5WorkloadDatasetSummary[]>([]);
   const [savedMethods, setSavedMethods] = useState<V5FormalMethod[]>([]);
-  const [selectedMethods, setSelectedMethods] = useState<string[]>([]);
+  const [selectedMethods, setSelectedMethods] = useState<string[]>(["v5_catalog_default"]);
   const [selectedSuites, setSelectedSuites] = useState<V5FormalSuite[]>(["main_experiment"]);
   const [topology, setTopology] = useState<Topology>({ nodes: 4, shards: 1, validators_per_shard: 4 });
   const [workload, setWorkload] = useState<WorkloadEditorState>(defaultWorkload);
