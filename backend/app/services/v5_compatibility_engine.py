@@ -61,8 +61,10 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
             blockers.append("dataset workload_source requires canonical_trace_replay workload plugin")
         if source.variant_mode == "original_window" and source.target_alpha is not None:
             blockers.append("original_window workload_source does not allow target_alpha")
-        if source.variant_mode == "contract_zipf" and source.target_alpha is None:
-            blockers.append("contract_zipf workload_source requires target_alpha")
+        if source.variant_mode in {"contract_zipf", "key_zipf"} and source.target_alpha is None:
+            blockers.append("derived workload_source requires target_alpha")
+        if source.variant_mode in {"contract_zipf", "key_zipf"} and not source.skew_axis:
+            blockers.append("derived workload_source requires skew_axis")
         if float(workload_config.get("cross_shard_ratio", 0.0) or 0.0) != 0:
             blockers.append("dataset workload_source does not allow cross_shard_ratio")
         if int(workload_config.get("timeout_every", 0) or 0) != 0:

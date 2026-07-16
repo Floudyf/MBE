@@ -31,7 +31,7 @@ def _workload_blockers(point: dict, topology: dict, source_type: str = "syntheti
     if "tx_count" in point and (not isinstance(point["tx_count"], int) or isinstance(point["tx_count"], bool) or point["tx_count"] < 1):
         blockers.append("workload tx_count must be a positive integer")
     if source_type == "dataset" and "target_alpha" in point and point["target_alpha"] not in {0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4}:
-        blockers.append("dataset target_alpha must be one of the supported contract Zipf alpha values")
+        blockers.append("dataset target_alpha must be one of the supported key Zipf alpha values")
     if "cross_shard_ratio" in point and (not isinstance(point["cross_shard_ratio"], (int, float)) or not 0 <= point["cross_shard_ratio"] <= 1):
         blockers.append("workload cross_shard_ratio must be between 0 and 1")
     if "timeout_every" in point and (not isinstance(point["timeout_every"], int) or isinstance(point["timeout_every"], bool) or point["timeout_every"] < 0):
@@ -266,8 +266,8 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
             spec.workload_source.requested_tx_count = spec.tx_count
     if source_type == "dataset" and "target_alpha" in workload_point:
         if spec.workload_source:
-            spec.workload_source.variant_mode = "contract_zipf"
-            spec.workload_source.skew_axis = "contract"
+            if spec.workload_source.variant_mode == "original_window":
+                spec.workload_source.variant_mode = "key_zipf"
             spec.workload_source.target_alpha = float(workload_point.pop("target_alpha"))
     if workload_point and source_type != "dataset":
         spec.plugin_selections = [

@@ -38,7 +38,7 @@ func TestRelayDerivedTransactionCannotStartAnotherSourceLock(t *testing.T) {
 
 func TestSameShardCrossPayloadDoesNotStartSourceLock(t *testing.T) {
 	runtime := &NodeRuntime{node: NodePlan{NodeID: "leader", ShardID: "s1", Leader: true}, plugins: RuntimePlugins{CrossShard: builtinCrossShard{basicPlugin: basicPlugin{category: "cross_shard", id: "relay_certificate_protocol"}}}, crossEventSeen: map[string]bool{}}
-	item := tx.SignedTransaction{TxID: "same-shard", Payload: "v5_cross:s1:dcl_sale:wearable"}
+	item := tx.SignedTransaction{TxID: "same-shard", Payload: "v5_cross:s1:dataset_event:asset_sale"}
 	runtime.onCommittedTx(context.Background(), item, Relay{})
 	if len(runtime.events) != 0 || len(runtime.lifecycle) != 0 {
 		t.Fatal("same-shard cross payload started cross-shard side effects")
@@ -55,7 +55,7 @@ func TestCatchUpCommitSuppressesCrossShardSideEffects(t *testing.T) {
 }
 
 func TestCrossTargetShardAcceptsDatasetPayloadLabels(t *testing.T) {
-	if got := crossTargetShard("v5_cross:s1:dcl_sale:wearable"); got != "s1" {
+	if got := crossTargetShard("v5_cross:s1:dataset_event:asset_sale"); got != "s1" {
 		t.Fatalf("dataset cross-shard payload target = %q, want s1", got)
 	}
 	if got := crossTargetShard("v5_cross:s0"); got != "s0" {

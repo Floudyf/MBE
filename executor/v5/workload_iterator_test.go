@@ -46,29 +46,30 @@ func writeCanonicalFixture(t *testing.T, root string, records []map[string]any) 
 }
 
 func canonicalPlan(relative, hash string, count int) WorkloadPlan {
-	return WorkloadPlan{PluginID: "canonical_trace_replay", SourceType: "dataset", DatasetID: "dcl_sales_polygon_271868", VariantID: "original", VariantMode: "original_window", MaterializedRelativePath: relative, SourceSHA256: "sourcehash", MaterializedSHA256: hash, TruthLabel: "real_observed", ReplayMode: "max_throughput", IdentityMappingVersion: "mbe_dataset_identity_v1", NoFallback: true, TxCount: count, ActualTxCount: count, Seed: 7}
+	return WorkloadPlan{PluginID: "canonical_trace_replay", SourceType: "dataset", DatasetID: "generic_fixture_dataset", VariantID: "original", VariantMode: "original_window", MaterializedRelativePath: relative, SourceSHA256: "sourcehash", MaterializedSHA256: hash, TruthLabel: "real_observed", ReplayMode: "max_throughput", IdentityMappingVersion: "mbe_dataset_identity_v1", NoFallback: true, TxCount: count, ActualTxCount: count, Seed: 7}
 }
 
-func canonicalRecord(index int, buyer, contract string) map[string]any {
-	return map[string]any{"schema_version": "mbe_workload_record_v1", "dataset_id": "dcl_sales_polygon_271868", "source_row_index": index, "source_event_id": "sale", "timestamp_ms": int64(1700000000000 + index), "category": "wearable", "buyer_address": buyer, "seller_address": "0x00000000000000000000000000000000000000ff", "contract_address": contract, "runtime_value": 1, "state_keys": []string{"account:buyer:" + buyer, "account:seller:0x00000000000000000000000000000000000000ff", "contract:" + contract}, "materialized_index": index, "logical_event_id": "logical"}
+func canonicalRecord(index int, sender, targetKey string) map[string]any {
+	receiver := "user:receiver:ff"
+	return map[string]any{"schema_version": "mbe_workload_record_v1", "dataset_id": "generic_fixture_dataset", "source_row_index": index, "source_event_id": "sale", "timestamp_ms": int64(1700000000000 + index), "sender_id": sender, "receiver_id": receiver, "operation_type": "asset_sale", "runtime_value": 1, "state_keys": []string{"account:sender:" + sender, "account:receiver:" + receiver, targetKey}, "routing_source_key": "account:sender:" + sender, "routing_target_key": targetKey, "skew_keys": map[string]any{"contract": targetKey}, "provenance": map[string]any{"adapter_id": "test_generic"}, "metadata": map[string]any{}, "materialized_index": index, "logical_event_id": "logical"}
 }
 
 func crossShardPair(shards int) (string, string) {
-	buyer := "0x0000000000000000000000000000000000000001"
+	sender := "user:sender:1"
 	for index := 2; index < 100; index++ {
-		contract := "0x" + strings.Repeat("0", 40-len(fmt.Sprint(index))) + fmt.Sprint(index)
-		if stableShard([]string{"account:buyer:" + buyer}, shards) != stableShard([]string{"contract:" + contract}, shards) {
-			return buyer, contract
+		targetKey := "contract:" + strings.Repeat("0", 4-len(fmt.Sprint(index))) + fmt.Sprint(index)
+		if stableShard([]string{"account:sender:" + sender}, shards) != stableShard([]string{targetKey}, shards) {
+			return sender, targetKey
 		}
 	}
-	return buyer, "0x0000000000000000000000000000000000000002"
+	return sender, "contract:2"
 }
 
 func TestCanonicalTraceIteratorSignsStableIdentityAndContinuousNonce(t *testing.T) {
 	dataDir := t.TempDir()
 	root := filepath.Join(dataDir, ".cache", "workloads")
-	buyer, contract := crossShardPair(2)
-	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalRecord(0, buyer, contract), canonicalRecord(1, buyer, contract)})
+	sender, targetKey := crossShardPair(2)
+	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalRecord(0, sender, targetKey), canonicalRecord(1, sender, targetKey)})
 	iter, err := NewCanonicalTraceIterator(canonicalPlan(relative, hash, 2), 2, dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +112,7 @@ func TestCanonicalTraceIteratorSignsStableIdentityAndContinuousNonce(t *testing.
 func TestCanonicalTraceIteratorRejectsHashMismatchAndEarlyEOF(t *testing.T) {
 	dataDir := t.TempDir()
 	root := filepath.Join(dataDir, ".cache", "workloads")
-	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalRecord(0, "0x0000000000000000000000000000000000000001", "0x0000000000000000000000000000000000000002")})
+	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalRecord(0, "user:sender:1", "contract:2")})
 	if _, err := NewCanonicalTraceIterator(canonicalPlan(relative, "bad"+hash, 1), 2, dataDir); err == nil {
 		t.Fatal("hash mismatch was not rejected")
 	}

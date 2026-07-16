@@ -2,13 +2,38 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "MBE Workload Record v1",
   "type": "object",
-  "required": ["schema_version", "dataset_id", "source_row_index", "source_event_id", "source_tx_hash", "timestamp_ms", "category", "buyer_address", "seller_address", "contract_address", "price_raw", "price_bucket", "runtime_value", "state_keys", "provenance"],
+  "required": [
+    "schema_version",
+    "dataset_id",
+    "source_row_index",
+    "source_event_id",
+    "timestamp_ms",
+    "sender_id",
+    "operation_type",
+    "runtime_value",
+    "state_keys",
+    "routing_source_key",
+    "skew_keys",
+    "provenance",
+    "metadata"
+  ],
   "properties": {
     "schema_version": {"const": "mbe_workload_record_v1"},
+    "dataset_id": {"type": "string", "minLength": 1},
     "source_row_index": {"type": "integer", "minimum": 0},
+    "source_event_id": {"type": "string", "minLength": 1},
+    "source_tx_hash": {"type": ["string", "null"]},
     "timestamp_ms": {"type": "integer", "minimum": 0},
-    "category": {"enum": ["wearable", "emote"]},
-    "price_raw": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"},
-    "runtime_value": {"const": 1}
-  }
+    "sender_id": {"type": "string", "minLength": 1},
+    "receiver_id": {"type": ["string", "null"]},
+    "operation_type": {"type": "string", "minLength": 1},
+    "runtime_value": {"type": "integer", "minimum": 1},
+    "state_keys": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1},
+    "routing_source_key": {"type": "string", "minLength": 1},
+    "routing_target_key": {"type": ["string", "null"]},
+    "skew_keys": {"type": "object", "additionalProperties": {"type": "string"}},
+    "provenance": {"type": "object"},
+    "metadata": {"type": "object"}
+  },
+  "additionalProperties": true
 }

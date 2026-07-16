@@ -9,33 +9,33 @@ select, materialize, compile, execute, and evidence a real-observed dataset
 without changing V5 consensus, finality definitions, or the cross-shard state
 machine.
 
-This is a design-only document. No dataset registry, converter, materializer,
-dataset API, trace iterator, or frontend selector is implemented by this
-round. The next implementation round is named **V5 Workload Data Plane Full
-Implementation**, not V5.3, V5.2.1, or V6.
+The workload data plane is implemented as a run-level extension of the V5
+Formal Workflow. It provides a dataset registry, adapter-driven validation,
+deterministic canonical conversion, materialization, compiler propagation, Go
+streaming replay, frontend selection, result/artifact display, and local
+real-cluster acceptance. The current closure round is **V5 Generic Workload
+Interface and Data Adapter Closure**, not V5.3, V5.2.1, or V6.
 
 ## 2. Current gap
 
-Today the V5 plugin catalog contains only `workload/deterministic_signed_synthetic`.
-`V5FormalRunPage` writes `tx_count`, `cross_shard_ratio`, `timeout_every`, and
-`seed` into the synthetic workload config. The compiler emits this as
-`workload_plan`; the Go client calls `WorkloadPlugin.BuildWorkloadItem` and
-signs generated transactions. The Workload Library is explanatory only.
+The V5 plugin catalog keeps `workload/deterministic_signed_synthetic` and adds
+`workload/canonical_trace_replay`. `V5FormalRunPage` writes a normalized
+`workload_source` for either synthetic or dataset mode. The compiler emits an
+immutable workload plan; the Go client consumes only generic workload records.
+The Workload Library is backed by the dataset registry API.
 
-There is no V5 dataset registry, selector, canonical trace conversion,
-materialization cache, real trace replay, derived skew workload, or dataset
-artifact contract. V1 trace replay and the V4 BlockEmulator CSV bridge are
-historical paths and are not V5 Formal workload sources.
+V1 trace replay and the V4 BlockEmulator CSV bridge are historical paths and
+are not V5 Formal workload sources.
 
 ## 3. Scope and non-goals
 
-The implementation will add a V5 run-level `workload_source`, canonical
-dataset conversion, deterministic original-window and contract-Zipf variants,
+The implementation adds a V5 run-level `workload_source`, adapter-driven
+canonical conversion, deterministic original-window and key-Zipf variants,
 streaming replay, evidence artifacts, and frontend selection/preview.
 
 It will not add arbitrary browser CSV upload, live Marketplace crawling, live
 Polygon RPC execution, Polygon EVM opcode replay, storage-slot reconstruction,
-price/balance settlement, buyer/seller skew, multi-axis skew, target-TPS or
+price/balance settlement, target-TPS or
 wall-clock replay, a production blockchain claim, production PBFT, multi-server
 deployment, exactly-once production semantics, or changes to consensus,
 finality, and cross-shard protocol definitions.
@@ -90,18 +90,19 @@ these ignore rules:
 /.cache/workloads/
 ```
 
-## 6. Dataset Manifest contract
+## 6. Dataset Manifest And Adapter Contract
 
 `DatasetManifest` is versioned JSON with required fields:
 
 ```text
 schema_version, dataset_id, display_name, description,
 source_platform, source_endpoint, source_chain, dataset_type,
+adapter_id, supported_variants, supported_skew_axes, default_skew_axis,
 included_categories, excluded_categories, source_format,
-local_raw_path, canonical_path, source_sha256, canonical_sha256,
+local_raw_relative_path, canonical_sha256, source_sha256,
 row_count, unique_source_tx_hash_count, time_start_ms, time_end_ms,
 collection_date, processing_date, verification_date, fields,
-category_counts, natural_skew_metrics, truth_label, collection_method,
+operation_counts, natural_skew_metrics, truth_label, collection_method,
 processing_pipeline, processing_scripts, raw_fetch_script_archive,
 verification_method, verification_sample_count, verification_results,
 provenance, usage_note, available, validation_status, generator_version.
@@ -114,6 +115,7 @@ resolved path, repository root, or `local_raw_relative_path` resolution.
 
 For the initial manifest: `source_platform=decentraland_marketplace`,
 `source_chain=polygon_mainnet`, `dataset_type=marketplace_sales`,
+`adapter_id=decentraland_sales_v1`,
 `truth_label=real_observed`, `collection_method=self_crawled_marketplace_api`,
 and `raw_fetch_script_archive=partial`. Public responses redact `local_raw_path`.
 A manifest is selectable only when its schema, hashes, count, availability, and
@@ -121,6 +123,24 @@ validation status pass. An initial static manifest may be
 `available=false, validation_status=unvalidated`; only the runtime registry may
 report `selectable=true` after validator success. Failure blocks the child
 rather than selecting synthetic.
+
+Adapters implement:
+
+```python
+validate_source(path, manifest) -> SourceValidationSummary
+iter_canonical_records(path, manifest) -> Iterator[dict]
+```
+
+The core data plane reads manifests, resolves `adapter_id`, validates source
+hash/count/schema, writes canonical cache, selects windows, performs generic
+key-Zipf materialization, and emits compiled workload plans. Source-specific
+columns and semantics stay inside adapters and record `metadata`.
+
+Implemented adapters:
+
+- `decentraland_sales_v1`: maps Decentraland sales CSV rows into generic MBE
+  workload records.
+- `canonical_csv_v1`: accepts already-normalized generic canonical CSV files.
 
 ## 7. Canonical and Materialized Workload Records
 
@@ -135,25 +155,24 @@ schema:
   "source_event_id": "sale-id",
   "source_tx_hash": "0x...",
   "timestamp_ms": 0,
-  "category": "wearable",
-  "buyer_address": "0x...",
-  "seller_address": "0x...",
-  "contract_address": "0x...",
-  "price_raw": "decimal string",
-  "price_bucket": 0,
+  "sender_id": "stable-source-actor",
+  "receiver_id": "optional-target-actor",
+  "operation_type": "asset_sale",
   "runtime_value": 1,
-  "state_keys": ["account:buyer:0x...", "account:seller:0x...", "contract:0x..."],
-  "provenance": {"source": "decentraland_marketplace_api"}
+  "state_keys": ["account:sender:...", "account:receiver:...", "contract:..."],
+  "routing_source_key": "account:sender:...",
+  "routing_target_key": "contract:...",
+  "skew_keys": {"contract": "contract:...", "receiver": "account:receiver:..."},
+  "provenance": {"source_platform": "...", "source_chain": "...", "adapter_id": "..."},
+  "metadata": {}
 }
 ```
 
-`source_event_id` is the source CSV `id` and is unique. `source_tx_hash` may
-repeat. Addresses use `*_address` names; `price_raw` remains a string;
-`price_bucket` uses deterministic decimal magnitude buckets; and v1 fixes
-`runtime_value=1`. `state_keys` are generated during canonical conversion.
-`raw_contract_candidates` remains source-CSV-only and is not duplicated in the
-canonical public schema. Each row must resolve exactly one `contract_address`;
-failure is a conversion error, never a skipped row.
+`sender_id`, `source_event_id`, `operation_type`, `state_keys`, and
+`routing_source_key` are required. `receiver_id`, `source_tx_hash`, and
+`routing_target_key` may be null or empty. When `routing_target_key` is empty,
+the runtime models the transaction as non-cross-shard. `skew_keys` is an
+extensible dictionary. Data-source-specific fields belong in `metadata`.
 
 A materialized record contains all canonical fields plus
 `materialized_index`, `logical_event_id`, `occurrence_index`, and its retained

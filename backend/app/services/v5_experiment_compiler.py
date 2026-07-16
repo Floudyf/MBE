@@ -92,6 +92,7 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         seed=source.seed,
         variant_mode=source.variant_mode,
         target_alpha=source.target_alpha,
+        skew_axis=source.skew_axis,
         source_sha256=source.source_sha256,
     )
     materialized = workload_plane.materialize_request(request)
@@ -122,7 +123,7 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         "truth_label": "real_observed" if materialized.variant_mode == "original_window" else "real_derived_resampled",
         "selection_mode": source.selection_mode,
         "replay_mode": source.replay_mode,
-        "skew_axis": source.skew_axis,
+        "skew_axis": materialized.summary.get("skew_axis") or source.skew_axis,
         "target_alpha": materialized.target_alpha,
         "realized_skew": {
             "gini": materialized.summary.get("gini"),

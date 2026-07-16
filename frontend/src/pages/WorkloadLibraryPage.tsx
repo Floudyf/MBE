@@ -87,7 +87,8 @@ function DatasetDetail({ detail }: { detail: V5WorkloadDatasetDetail }) {
     <div className="workload-detail-grid">
       <Info title="Included categories" values={detail.included_categories} />
       <Info title="Excluded categories" values={detail.excluded_categories} />
-      <Info title="Category counts" values={Object.entries(detail.category_counts).map(([key, value]) => `${key}: ${value}`)} />
+      <Info title="Operation counts" values={Object.entries(detail.operation_counts ?? detail.category_counts).map(([key, value]) => `${key}: ${value}`)} />
+      <Info title="Adapter" values={[detail.adapter_id ?? "未提供", ...(detail.supported_skew_axes ?? []).map((axis) => `skew_axis: ${axis}`)]} />
       <Info title="Supported variants" values={detail.variants.map((item) => `${String(item.variant_mode)} ${Array.isArray(item.target_alpha_values) ? `alpha=${item.target_alpha_values.join(",")}` : ""}`)} />
       <Info title="Truth boundary" values={[detail.usage_note, ...detail.warnings]} />
     </div>

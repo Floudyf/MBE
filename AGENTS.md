@@ -22,12 +22,21 @@ V5 Workload Data Plane implementation
 
 This is not V5.3, V5.2.1, or V6. It must preserve V3/V4 truth boundaries and must not silently route dataset work to the synthetic workload.
 
+The implemented workload data plane uses a generic `mbe_workload_record_v1`
+canonical contract. Decentraland is the first formal real-data adapter, and
+additional sources should be added by manifest + adapter or by providing a
+file accepted by `canonical_csv_v1`. Runtime nodes, consensus, state storage,
+cross-shard protocol, and result collection consume only the generic workload
+record and do not know the original source format.
+
 ## V5 Workload Data Plane Safety
 
 - Workload is a Run condition, not a Method Design variable. Saved V5 methods continue to exclude `workload` and `fault_injection`.
 - Full CSV, canonical traces, and materialized workloads do not enter Git. Raw data is read-only; materializer output belongs in `.cache/workloads`.
 - Artifacts expose dataset IDs or relative logical paths only, never local absolute paths. API/RPC credentials never enter code, documentation, data, manifests, or artifacts.
 - Dataset open/hash/schema/count failures fail the Child. There is no fallback to `deterministic_signed_synthetic`, V4 smoke, V1 replay, or Simulation.
+- Source-specific fields belong in dataset adapters and record `metadata`, not
+  in the core Go iterator or compiler contract.
 - Implement in order: dataset validation -> canonical conversion -> materialization -> ExperimentSpec -> compiler -> Go iterator -> frontend -> E2E. Read `docs/v5_workload_data_plane_design.md` before implementation.
 
 ## Non-negotiable Workflow

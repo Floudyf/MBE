@@ -47,7 +47,7 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
     await expect(previewRow.locator("td").nth(1)).toHaveText(methodName);
     await expect(previewRow.locator("td").nth(2)).toHaveText("synthetic");
     await expect(previewRow.locator("td").nth(5)).toHaveText("40");
-    await expect(previewRow.locator("td").nth(10)).toContainText("可运行");
+    await expect(previewRow.locator("td").nth(11)).toContainText("可运行");
     await expect(page.getByTestId("v5-start-run-group-button")).toBeEnabled();
     await page.getByTestId("v5-start-run-group-button").click();
     await expect.poll(async () => page.getByTestId("v5-formal-group-summary").innerText(), { timeout: 180_000 }).toContain("已完成");

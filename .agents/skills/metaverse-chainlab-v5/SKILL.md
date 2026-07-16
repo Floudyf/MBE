@@ -143,20 +143,22 @@ Avoid large `if (pluginId === "...")` branches in core pages. UI extensions are 
 
 ## 7.1 Workload Data Plane Rule
 
-The V5 workload data plane is a Run-level concern, never a Method Design variable. Method profiles continue to exclude `workload` and `fault_injection`. The current runnable workload is only `deterministic_signed_synthetic`; dataset work is governed by `docs/v5_workload_data_plane_design.md` until its complete implementation round passes all checkpoints.
+The V5 workload data plane is a Run-level concern, never a Method Design variable. Method profiles continue to exclude `workload` and `fault_injection`. Runnable workloads include `deterministic_signed_synthetic` and registered dataset sources compiled through `canonical_trace_replay`.
 
-Dataset selection must be driven by a dataset registry and generic workload configuration, not dataset-ID conditionals in `V5FormalRunPage`. A dataset source must carry provenance, deterministic selection, materialized hash, no-fallback status, and artifact snapshot. Open/hash/schema/count failure must fail the Child; it must not fall back to synthetic, V4 smoke, V1 replay, or Simulation. Full raw/canonical/materialized data is never committed to Git, and artifacts must not expose local absolute paths or credentials.
+Dataset selection must be driven by a dataset registry, manifest, adapter, and generic workload configuration, not dataset-ID conditionals in `V5FormalRunPage`. A dataset source must carry provenance, deterministic selection, materialized hash, no-fallback status, and artifact snapshot. Open/hash/schema/count failure must fail the Child; it must not fall back to synthetic, V4 smoke, V1 replay, or Simulation. Full raw/canonical/materialized data is never committed to Git, and artifacts must not expose local absolute paths or credentials.
+
+The implemented canonical contract is `mbe_workload_record_v1`. Source-specific fields belong in dataset adapters or canonical record `metadata`; the compiler and Go iterator consume generic sender, operation, state key, routing key, and skew key fields. Decentraland is the first formal real-data adapter, and future data sources should be added by manifest + adapter or by files accepted by `canonical_csv_v1`.
 
 Paper Candidates using a dataset must record dataset ID, source hash, variant, materialized hash, realized skew, and actual cross-shard ratio. Keep the Go Interface + Factory Registry model. Do not modify consensus, finality definitions, or cross-shard protocol semantics unless a minimal replay adapter is proven necessary and tested.
 
-The one future implementation round may use internal sequential checkpoints:
+The completed workload data plane implementation used internal sequential checkpoints:
 
 - Checkpoint A: Dataset and Materialization
 - Checkpoint B: Compiler and Real Runtime
 - Checkpoint C: Frontend, Results, and Artifacts
 - Checkpoint D: Full Acceptance
 
-A checkpoint must pass before the next starts. It is not an outward V5.3/V5.2.1/V6 stage.
+These checkpoints are not outward V5.3/V5.2.1/V6 stages.
 
 The UI must show implementation status, backend support, parameter ranges, dependencies, conflicts, truth boundary, and metrics. Formal Real Cluster requires all selected plugins to support `real_cluster`.
 

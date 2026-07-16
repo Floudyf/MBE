@@ -26,7 +26,7 @@ export default function WorkloadPreviewPanel({ preview, dirty, error, onPreview,
         <Metric label="derived skew" value={JSON.stringify(preview.derived_skew)} />
       </dl>
       <div className="workload-detail-grid">
-        {Object.entries(preview.category_counts).map(([key, value]) => <section key={key}><h4>{key}</h4><p>{valueText(value)} tx</p><p className="muted">{preview.tx_count ? ((value / preview.tx_count) * 100).toFixed(2) : "0.00"}%</p></section>)}
+        {Object.entries(preview.operation_counts ?? preview.category_counts).map(([key, value]) => <section key={key}><h4>{key}</h4><p>{valueText(value)} tx</p><p className="muted">{preview.tx_count ? ((value / preview.tx_count) * 100).toFixed(2) : "0.00"}%</p></section>)}
       </div>
     </> : <p className="muted">尚未预览。</p>}
   </article>;

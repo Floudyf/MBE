@@ -40,13 +40,14 @@ type Props = { onOpenResults?: (groupId: string) => void; onPreferredMethodUnava
 const defaultWorkload: WorkloadEditorState = {
   mode: "synthetic",
   datasetId: "",
-  txCount: 100_000,
+  txCount: 10_000,
   useFullDataset: false,
   seedText: "11",
   targetAlpha: 1,
   crossShardRatio: 0,
   timeoutEvery: 0,
   timeoutEnabled: false,
+  skewAxis: "contract",
 };
 
 export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavailable, preferredMethodId = "" }: Props) {
@@ -131,17 +132,19 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
     }
     const dataset = datasets.find((item) => item.dataset_id === workload.datasetId);
     if (!dataset?.selectable) return null;
+    const datasetWithAxes = dataset as V5WorkloadDatasetSummary & { default_skew_axis?: string | null; supported_skew_axes?: string[] };
+    const skewAxis = workload.skewAxis || datasetWithAxes.default_skew_axis || datasetWithAxes.supported_skew_axes?.[0] || "contract";
     return {
       source_type: "dataset",
       plugin_id: "canonical_trace_replay",
       dataset_id: dataset.dataset_id,
-      variant_mode: workload.mode === "dataset_derived" ? "contract_zipf" : "original_window",
+      variant_mode: workload.mode === "dataset_derived" ? "key_zipf" : "original_window",
       requested_tx_count: workload.useFullDataset ? dataset.row_count : workload.txCount,
       use_full_dataset: workload.useFullDataset,
       seed,
       selection_mode: "contiguous_window",
       replay_mode: "max_throughput",
-      skew_axis: workload.mode === "dataset_derived" ? "contract" : undefined,
+      skew_axis: workload.mode === "dataset_derived" ? skewAxis : undefined,
       target_alpha: workload.mode === "dataset_derived" ? workload.targetAlpha : undefined,
       source_sha256: dataset.source_sha256,
     };
@@ -332,7 +335,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
 }
 
 function PreviewTable({ preview, source }: { preview: V5FormalPreviewResponse; source: V5WorkloadSourceSpec | null }) {
-  return <div className="table-wrap"><p data-testid="v5-formal-preview-summary"><strong>执行后端：</strong>{preview.execution_backend}；<strong>矩阵行数：</strong>{preview.rows.length}</p><table><thead><tr><th>实验类型</th><th>方法</th><th>source_type</th><th>dataset_id</th><th>variant</th><th>count</th><th>seed</th><th>alpha</th><th>truth</th><th>materialization</th><th>兼容性</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.child_run_id} data-method-config-id={row.method_config_id}><td>{suiteLabel(row.suite_type)}</td><td>{row.method.display_name}</td><td>{source?.source_type ?? "synthetic"}</td><td>{source?.dataset_id ?? "synthetic"}</td><td>{source?.variant_mode ?? "synthetic"}</td><td>{row.estimated_transactions}</td><td>{row.seed}</td><td>{stringValue(row.workload_point.target_alpha ?? source?.target_alpha)}</td><td>{source?.source_type === "dataset" ? (source.variant_mode === "contract_zipf" ? "real_derived_resampled" : "real_observed") : "synthetic_generated"}</td><td>{source?.source_type === "dataset" ? "child_start_before_materialization" : "not_required"}</td><td>{row.runnable ? "可运行" : row.blockers.map(blockerLabel).join("；") || "已阻止"}</td></tr>)}</tbody></table></div>;
+    return <div className="table-wrap"><p data-testid="v5-formal-preview-summary"><strong>执行后端：</strong>{preview.execution_backend}；<strong>矩阵行数：</strong>{preview.rows.length}</p><table><thead><tr><th>实验类型</th><th>方法</th><th>source_type</th><th>dataset_id</th><th>variant</th><th>count</th><th>seed</th><th>axis</th><th>alpha</th><th>truth</th><th>materialization</th><th>兼容性</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.child_run_id} data-method-config-id={row.method_config_id}><td>{suiteLabel(row.suite_type)}</td><td>{row.method.display_name}</td><td>{source?.source_type ?? "synthetic"}</td><td>{source?.dataset_id ?? "synthetic"}</td><td>{source?.variant_mode ?? "synthetic"}</td><td>{row.estimated_transactions}</td><td>{row.seed}</td><td>{stringValue(source?.skew_axis)}</td><td>{stringValue(row.workload_point.target_alpha ?? source?.target_alpha)}</td><td>{source?.source_type === "dataset" ? (source.variant_mode === "key_zipf" || source.variant_mode === "contract_zipf" ? "real_derived_resampled" : "real_observed") : "synthetic_generated"}</td><td>{source?.source_type === "dataset" ? "child_start_before_materialization" : "not_required"}</td><td>{row.runnable ? "可运行" : row.blockers.map(blockerLabel).join("；") || "已阻止"}</td></tr>)}</tbody></table></div>;
 }
 
 function CurrentMethods({ methods, preferredMethodId }: { methods: V5FormalMethod[]; preferredMethodId: string }) {

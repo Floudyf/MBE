@@ -54,13 +54,15 @@ type canonicalWireRecord struct {
 	DatasetID         string   `json:"dataset_id"`
 	SourceRowIndex    int      `json:"source_row_index"`
 	SourceEventID     string   `json:"source_event_id"`
+	SourceTxHash      string   `json:"source_tx_hash"`
 	TimestampMS       int64    `json:"timestamp_ms"`
-	Category          string   `json:"category"`
-	BuyerAddress      string   `json:"buyer_address"`
-	SellerAddress     string   `json:"seller_address"`
-	ContractAddress   string   `json:"contract_address"`
+	SenderID          string   `json:"sender_id"`
+	ReceiverID        string   `json:"receiver_id"`
+	OperationType     string   `json:"operation_type"`
 	RuntimeValue      int64    `json:"runtime_value"`
 	StateKeys         []string `json:"state_keys"`
+	RoutingSourceKey  string   `json:"routing_source_key"`
+	RoutingTargetKey  string   `json:"routing_target_key"`
 	MaterializedIndex int      `json:"materialized_index"`
 	LogicalEventID    string   `json:"logical_event_id"`
 }
@@ -133,26 +135,29 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 	if err := json.Unmarshal(it.scanner.Bytes(), &wire); err != nil {
 		return WorkloadRecord{}, fmt.Errorf("malformed canonical workload JSON: %w", err)
 	}
-	if wire.SchemaVersion != "mbe_workload_record_v1" || wire.DatasetID != it.plan.DatasetID || wire.BuyerAddress == "" || wire.ContractAddress == "" || len(wire.StateKeys) < 3 {
+	if wire.SchemaVersion != "mbe_workload_record_v1" || wire.DatasetID != it.plan.DatasetID || wire.SenderID == "" || wire.OperationType == "" || len(wire.StateKeys) < 1 || wire.RoutingSourceKey == "" {
 		return WorkloadRecord{}, fmt.Errorf("canonical workload schema error")
 	}
 	if it.index >= it.summary.ExpectedCount {
 		return WorkloadRecord{}, fmt.Errorf("canonical workload has excess records")
 	}
-	buyerShard := stableShard([]string{"account:buyer:" + strings.ToLower(wire.BuyerAddress)}, it.shards)
-	contractShard := stableShard([]string{"contract:" + strings.ToLower(wire.ContractAddress)}, it.shards)
-	cross := buyerShard != contractShard
+	sourceShard := stableShard([]string{strings.ToLower(wire.RoutingSourceKey)}, it.shards)
+	targetShard := sourceShard
+	if wire.RoutingTargetKey != "" {
+		targetShard = stableShard([]string{strings.ToLower(wire.RoutingTargetKey)}, it.shards)
+	}
+	cross := wire.RoutingTargetKey != "" && sourceShard != targetShard
 	target := ""
-	payload := "dcl_sale:" + wire.Category
+	payload := "dataset_event:" + wire.OperationType
 	if cross {
-		target = fmt.Sprintf("s%d", contractShard)
+		target = fmt.Sprintf("s%d", targetShard)
 		payload = "v5_cross:" + target + ":" + payload
 		it.summary.ActualCrossShardCount++
 	}
-	it.summary.ShardLoadDistribution[fmt.Sprintf("s%d", buyerShard)]++
+	it.summary.ShardLoadDistribution[fmt.Sprintf("s%d", sourceShard)]++
 	it.summary.ReadCount++
 	it.index++
-	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), BuyerAddress: strings.ToLower(wire.BuyerAddress), SellerAddress: strings.ToLower(wire.SellerAddress), Contract: strings.ToLower(wire.ContractAddress), Category: wire.Category, Payload: payload, StateKeys: wire.StateKeys, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", buyerShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
+	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), SenderID: strings.ToLower(wire.SenderID), ReceiverID: strings.ToLower(wire.ReceiverID), OperationType: wire.OperationType, RoutingSourceKey: wire.RoutingSourceKey, RoutingTargetKey: wire.RoutingTargetKey, Payload: payload, StateKeys: wire.StateKeys, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", sourceShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
 }
 
 func (it *CanonicalTraceIterator) Close() error {
@@ -195,13 +200,13 @@ func (it *CanonicalTraceIterator) Summary() WorkloadReplaySummary {
 
 func (it *CanonicalTraceIterator) SignedTransaction(record WorkloadRecord) (tx.SignedTransaction, error) {
 	domain := strings.Join([]string{it.plan.DatasetID, it.plan.SourceSHA256, fmt.Sprint(it.plan.Seed), firstNonEmpty(it.plan.IdentityMappingVersion, "mbe_dataset_identity_v1")}, "|")
-	privateSeed := domain + "|" + record.BuyerAddress
+	privateSeed := domain + "|" + record.SenderID
 	publicKey, privateKey := tx.DeterministicKeyPair(privateSeed)
 	sender := tx.AddressFromPublicKey(publicKey)
-	it.identities[record.BuyerAddress] = sender
-	nonce := it.nonces[record.BuyerAddress]
-	it.nonces[record.BuyerAddress] = nonce + 1
-	item := tx.SignedTransaction{Sender: sender, Receiver: "seller_" + record.SellerAddress, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
+	it.identities[record.SenderID] = sender
+	nonce := it.nonces[record.SenderID]
+	it.nonces[record.SenderID] = nonce + 1
+	item := tx.SignedTransaction{Sender: sender, Receiver: "receiver_" + record.ReceiverID, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
 	if err := tx.Sign(&item, privateKey); err != nil {
 		return item, err
 	}

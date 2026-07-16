@@ -93,9 +93,9 @@ def test_canonical_output_is_byte_identical_and_preserves_source_traceability(tm
     assert first_path.read_bytes() == second_path.read_bytes()
     records = _records(first_path)
     assert len(records) == 8
-    assert records[0]["state_keys"][0].startswith("account:buyer:")
+    assert records[0]["state_keys"][0].startswith("account:sender:")
     assert records[0]["source_event_id"] == "sale-0"
-    assert records[0]["runtime_value"] == 1 and isinstance(records[0]["price_raw"], str)
+    assert records[0]["runtime_value"] == 1 and isinstance(records[0]["metadata"]["price_raw"], str)
     with gzip.open(first_path, "rb") as stream:
         assert stream.read(1)
         assert stream.mtime == 0
@@ -144,7 +144,7 @@ def test_contract_zipf_preserves_categories_and_reuses_real_source_rows(tmp_path
     canonical = build_canonical(source, tmp_path / "cache", _manifest(source))
     path = tmp_path / "cache" / canonical["canonical_relative_path"]
     original = materialize(path, tmp_path / "cache", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=10_000, seed=17)
-    derived = materialize(path, tmp_path / "cache", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=10_000, seed=17, variant_mode="contract_zipf", target_alpha=1.4)
+    derived = materialize(path, tmp_path / "cache", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=10_000, seed=17, variant_mode="contract_zipf", target_alpha=1.4, skew_axis="contract")
     original_records = _records(tmp_path / "cache" / original["materialized_relative_path"])
     derived_records = _records(tmp_path / "cache" / derived["materialized_relative_path"])
     assert derived["category_counts"] == original["category_counts"]
@@ -157,12 +157,12 @@ def test_zipf_supported_alphas_preserve_real_rows_and_raise_concentration(tmp_pa
     canonical = build_canonical(source, tmp_path / "cache", _manifest(source)); path = tmp_path / "cache" / canonical["canonical_relative_path"]
     summaries = {}
     for alpha in sorted(plane.SUPPORTED_ALPHAS):
-        summaries[alpha] = materialize(path, tmp_path / "cache", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=10_000, seed=17, variant_mode="contract_zipf", target_alpha=alpha)
+        summaries[alpha] = materialize(path, tmp_path / "cache", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=10_000, seed=17, variant_mode="contract_zipf", target_alpha=alpha, skew_axis="contract")
     assert summaries[1.0]["hhi"] > summaries[0.0]["hhi"]
     assert summaries[1.4]["gini"] > summaries[0.0]["gini"]
     assert summaries[0.0]["materialized_sha256"] != materialize(path, tmp_path / "original", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=10_000, seed=17)["materialized_sha256"]
     with pytest.raises(WorkloadDataError, match="alpha"):
-        materialize(path, tmp_path / "cache", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=10_000, seed=17, variant_mode="contract_zipf", target_alpha=0.1)
+        materialize(path, tmp_path / "cache", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=10_000, seed=17, variant_mode="contract_zipf", target_alpha=0.1, skew_axis="contract")
 
 
 def test_canonical_hash_mismatch_is_not_reused(tmp_path: Path) -> None:
@@ -219,3 +219,54 @@ def test_cli_help_success_and_invalid_path_do_not_expose_source_path(tmp_path: P
     assert passed.returncode == 0 and str(tmp_path) not in passed.stdout
     failed = subprocess.run(command + ["--input", str(tmp_path / "missing.csv")], cwd=root, capture_output=True, text=True, env=environment)
     assert failed.returncode != 0
+
+
+def test_generic_canonical_csv_adapter_materializes_without_decentraland_fields(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[2]
+    manifest = plane.load_manifest("ethereum_like_sample_for_test_only")
+    canonical = build_canonical(plane.raw_source_path(manifest), tmp_path / "cache", manifest)
+    path = tmp_path / "cache" / canonical["canonical_relative_path"]
+    materialized = materialize(path, tmp_path / "cache", dataset_id=manifest["dataset_id"], source_sha256=canonical["source_sha256"], requested_tx_count=4, seed=11, variant_mode="key_zipf", skew_axis="contract", target_alpha=1.0)
+    records = _records(tmp_path / "cache" / materialized["materialized_relative_path"])
+    assert root and materialized["actual_tx_count"] == 4
+    assert all("sender_id" in row and "routing_source_key" in row for row in records)
+    assert all("buyer_address" not in row and "contract_address" not in row for row in records)
+    assert materialized["operation_counts"] == {"asset_transfer": 2, "contract_call": 1, "mint": 1}
+
+
+def test_unknown_adapter_and_missing_generic_required_fields_fail(tmp_path: Path) -> None:
+    source = tmp_path / "generic.csv"
+    source.write_text((Path(__file__).resolve().parents[2] / "data/workloads/samples/ethereum_like_sample_for_test_only.csv").read_text(encoding="utf-8"), encoding="utf-8")
+    manifest = {"dataset_id": "ethereum_like_sample_for_test_only", "adapter_id": "missing_adapter", "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest()}
+    with pytest.raises(WorkloadDataError, match="unknown dataset adapter_id"):
+        build_canonical(source, tmp_path / "cache", manifest)
+    rows = list(csv.DictReader(source.open(encoding="utf-8")))
+    rows[0]["sender_id"] = ""
+    with source.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    manifest["adapter_id"] = "canonical_csv_v1"
+    manifest["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    with pytest.raises(WorkloadDataError, match="missing sender_id"):
+        build_canonical(source, tmp_path / "cache", manifest)
+    rows[0]["sender_id"] = "sender"
+    rows[0]["state_keys"] = ""
+    with source.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    manifest["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+    with pytest.raises(WorkloadDataError, match="state_keys"):
+        build_canonical(source, tmp_path / "cache2", manifest)
+
+
+def test_key_zipf_alpha_changes_materialized_identity(tmp_path: Path) -> None:
+    manifest = plane.load_manifest("ethereum_like_sample_for_test_only")
+    canonical = build_canonical(plane.raw_source_path(manifest), tmp_path / "cache", manifest)
+    path = tmp_path / "cache" / canonical["canonical_relative_path"]
+    first = materialize(path, tmp_path / "cache", dataset_id=manifest["dataset_id"], source_sha256=canonical["source_sha256"], requested_tx_count=4, seed=11, variant_mode="key_zipf", skew_axis="contract", target_alpha=0.0)
+    second = materialize(path, tmp_path / "cache", dataset_id=manifest["dataset_id"], source_sha256=canonical["source_sha256"], requested_tx_count=4, seed=11, variant_mode="key_zipf", skew_axis="contract", target_alpha=1.4)
+    repeat = materialize(path, tmp_path / "cache", dataset_id=manifest["dataset_id"], source_sha256=canonical["source_sha256"], requested_tx_count=4, seed=11, variant_mode="key_zipf", skew_axis="contract", target_alpha=1.4)
+    assert first["materialized_id"] != second["materialized_id"]
+    assert second["materialized_sha256"] == repeat["materialized_sha256"]

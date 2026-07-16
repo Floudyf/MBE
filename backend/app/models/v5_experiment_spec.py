@@ -25,14 +25,14 @@ class V5WorkloadSourceSpec(BaseModel):
     source_type: Literal["synthetic", "dataset"] = "synthetic"
     plugin_id: Literal["deterministic_signed_synthetic", "canonical_trace_replay"] = "deterministic_signed_synthetic"
     dataset_id: str | None = None
-    variant_mode: Literal["original_window", "contract_zipf"] | None = None
+    variant_mode: Literal["original_window", "contract_zipf", "key_zipf"] | None = None
     variant_id: str | None = None
     requested_tx_count: int = Field(ge=1, le=271868)
     use_full_dataset: bool = False
     seed: int
     selection_mode: Literal["contiguous_window"] = "contiguous_window"
     replay_mode: Literal["max_throughput"] = "max_throughput"
-    skew_axis: Literal["contract"] | None = None
+    skew_axis: str | None = None
     target_alpha: float | None = None
     materialized_id: str | None = None
     source_sha256: str | None = None
@@ -53,12 +53,12 @@ class V5WorkloadSourceSpec(BaseModel):
             self.variant_mode = "original_window"
         if self.variant_mode == "original_window" and self.target_alpha is not None:
             raise ValueError("original_window workload_source does not allow target_alpha")
-        if self.variant_mode == "contract_zipf" and self.target_alpha is None:
-            raise ValueError("contract_zipf workload_source requires target_alpha")
-        if self.variant_mode == "contract_zipf" and self.target_alpha not in {0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4}:
-            raise ValueError("contract_zipf workload_source target_alpha is not supported")
-        if self.variant_mode == "contract_zipf" and self.skew_axis != "contract":
-            raise ValueError("contract_zipf workload_source requires skew_axis=contract")
+        if self.variant_mode in {"contract_zipf", "key_zipf"} and self.target_alpha is None:
+            raise ValueError("derived workload_source requires target_alpha")
+        if self.variant_mode in {"contract_zipf", "key_zipf"} and self.target_alpha not in {0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4}:
+            raise ValueError("derived workload_source target_alpha is not supported")
+        if self.variant_mode in {"contract_zipf", "key_zipf"} and not self.skew_axis:
+            raise ValueError("derived workload_source requires skew_axis")
         if self.use_full_dataset and self.requested_tx_count < 1:
             raise ValueError("full dataset workload_source requires a positive requested_tx_count mirror")
         return self

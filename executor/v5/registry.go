@@ -95,20 +95,21 @@ type WorkloadItem struct {
 	StateKeys []string
 }
 type WorkloadRecord struct {
-	Index         int
-	LogicalID     string
-	BuyerAddress  string
-	SellerAddress string
-	Contract      string
-	Category      string
-	Payload       string
-	StateKeys     []string
-	CrossShard    bool
-	SourceShard   string
-	TargetShard   string
-	SourceEventID string
-	TimestampMS   int64
-	Value         int64
+	Index            int
+	LogicalID        string
+	SenderID         string
+	ReceiverID       string
+	OperationType    string
+	RoutingSourceKey string
+	RoutingTargetKey string
+	Payload          string
+	StateKeys        []string
+	CrossShard       bool
+	SourceShard      string
+	TargetShard      string
+	SourceEventID    string
+	TimestampMS      int64
+	Value            int64
 }
 type WorkloadReplaySummary struct {
 	DatasetID                string         `json:"dataset_id,omitempty"`
