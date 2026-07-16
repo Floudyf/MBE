@@ -82,7 +82,10 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   const catalogDefault = useMemo<V5FormalMethod>(() => ({ method_id: "v5_catalog_default", display_name: "目录默认基线", plugin_overrides: {}, role: "baseline" }), []);
   const methods = useMemo(() => [catalogDefault, ...savedMethods], [catalogDefault, savedMethods]);
   const seeds = useMemo(() => parseSeeds(workload.seedText), [workload.seedText]);
-  const catalogReady = useMemo(() => defaultV5PluginSelections(catalog).length === 17, [catalog]);
+  const catalogReady = useMemo(() => {
+    const categories = new Set(catalog.map((item) => item.category));
+    return catalog.length > 0 && defaultV5PluginSelections(catalog).length === categories.size;
+  }, [catalog]);
   const selected = methods.filter((method) => selectedMethods.includes(method.method_id));
   const previewRunnable = Boolean(preview?.rows.length && preview.rows.every((row) => row.runnable && !row.blockers.length));
   const workloadRunnable = Boolean(workloadPreview && !workloadPreviewDirty && !workloadPreview.blockers.length && !workloadPreviewError);
@@ -98,7 +101,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
       const [pluginResponse, savedResponse, datasetResponse] = await Promise.all([fetchV5PluginCatalog("real_cluster"), listV3SavedConfigs("method"), fetchV5WorkloadDatasets()]);
       setCatalog(pluginResponse);
       setDatasets(datasetResponse);
-      setCatalogError(defaultV5PluginSelections(pluginResponse).length === 17 ? "" : "真实集群插件目录不完整。");
+      const categories = new Set(pluginResponse.map((item) => item.category));
+      setCatalogError(pluginResponse.length > 0 && defaultV5PluginSelections(pluginResponse).length === categories.size ? "" : "真实集群插件目录不完整。");
       const parsed = savedResponse.flatMap((item) => { const method = parseSavedV5Method(item, pluginResponse); return method ? [method] : []; });
       setSavedMethods(parsed);
       setSavedError("");

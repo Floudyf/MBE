@@ -22,6 +22,11 @@ export function parseSavedV5Method(saved: V3SavedConfig, catalog: V5PluginManife
     if (!record(item) || typeof item.category !== "string" || !item.category || typeof item.plugin_id !== "string" || !item.plugin_id || V5_METHOD_EXCLUDED_CATEGORIES.has(item.category) || overrides[item.category] || !catalog.some((plugin) => plugin.category === item.category && plugin.plugin_id === item.plugin_id)) return null;
     overrides[item.category] = item.plugin_id;
   }
+  if (!overrides.block_executor) {
+    const fallback = catalog.find((plugin) => plugin.category === "block_executor" && plugin.plugin_id === "serial_block_executor") ?? catalog.find((plugin) => plugin.category === "block_executor");
+    if (!fallback) return null;
+    overrides.block_executor = fallback.plugin_id;
+  }
   const draft = record(payload.source_composer_draft) ? payload.source_composer_draft : {};
   const role = typeof draft.role === "string" && ["main", "baseline", "ablation", "custom"].includes(draft.role) ? draft.role : saved.tags.find((tag) => ["main", "baseline", "ablation", "custom"].includes(tag)) ?? "custom";
   return { method_id: saved.config_id, display_name: saved.name, plugin_overrides: overrides, role: role as V5FormalMethod["role"] };

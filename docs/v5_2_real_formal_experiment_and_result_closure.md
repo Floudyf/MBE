@@ -260,6 +260,13 @@ formal matrix only produces a plan/matrix persistence record.
 
 V5.2 does not introduce another template store. It does not redefine V5.1 runtime semantics. It does not promote simulation results to paper evidence. It does not claim production blockchain security or performance superiority without controlled artifacts.
 
+The internal block-execution foundation work inside V5.2 adds a generic
+`block_executor` extension point and `serial_block_executor` baseline. This is
+not a new public V5 version and does not implement any external parallel
+execution paper mechanism. Formal methods may vary the block executor only after
+the selected implementation is represented in the plugin catalog, compiled plan,
+runtime snapshot, results, and artifacts.
+
 ## 13. Completion Standard
 
 V5.2 software closure is complete when formal run groups can execute on V5.1

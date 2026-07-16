@@ -5,7 +5,7 @@ export const suiteLabel = (value: string) => ({
 
 export const categoryLabel = (value: string) => ({
   transaction_admission: "交易准入", txpool: "交易池", sharding: "分片", routing: "路由", block_producer: "出块器",
-  consensus: "共识", network: "网络", execution: "执行", scheduler: "调度", state_access: "状态访问",
+  consensus: "共识", network: "网络", execution: "执行", scheduler: "调度", block_executor: "区块执行算法", state_access: "状态访问",
   state_storage: "状态存储", cross_shard: "跨片", commit: "提交", metrics: "指标", observability: "可观测性",
   workload: "负载", fault_injection: "故障注入",
 }[value] ?? value);

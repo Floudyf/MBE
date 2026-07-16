@@ -17,6 +17,11 @@ type DB struct {
 	values    map[string]string
 }
 
+type StateKV struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 type FileCheckpoint struct {
 	data    []byte
 	missing bool
@@ -57,6 +62,14 @@ func (db *DB) ApplyBatch(updates map[string]string) {
 	}
 }
 
+func (db *DB) ApplyDeterministicBatch(updates []StateKV) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	for _, item := range updates {
+		db.values[db.key(item.Key)] = item.Value
+	}
+}
+
 func (db *DB) Snapshot() map[string]string {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -78,6 +91,10 @@ func (db *DB) Restore(snapshot map[string]string) {
 
 func (db *DB) Root() string {
 	return Root(db.Snapshot())
+}
+
+func RootOfSnapshot(snapshot map[string]string) string {
+	return Root(snapshot)
 }
 
 func (db *DB) Save() error {

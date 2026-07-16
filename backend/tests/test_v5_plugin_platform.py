@@ -38,6 +38,21 @@ def test_saved_config_adapter_reuses_v3_payload() -> None:
     selections, warnings = adapt_saved_method({"payload": {"module_plugins": {"routing": "hash_routing_baseline", "execution": "serial_execution_baseline"}}})
     assert len(selections) == len(CATEGORIES)
     assert not warnings
+    block_executor = next(item for item in selections if item.category == "block_executor")
+    assert block_executor.plugin_id == "serial_block_executor"
+    assert block_executor.config["migrated_default"] is True
+
+
+def test_block_executor_manifest_and_compiled_plan(tmp_path: Path) -> None:
+    manifest = STORE.get("serial_block_executor")
+    assert manifest.category == "block_executor"
+    assert manifest.supported_backends == ["real_cluster"]
+    assert manifest.truth_boundary == "legacy_faithful_reference_baseline"
+    plan = compile_plan(_spec(), tmp_path)
+    assert "block_execution_summary.json" in plan.expected_artifacts
+    assert "execution_plan.jsonl" in plan.expected_artifacts
+    assert all(node.plugin_profile["block_executor"]["plugin_id"] == "serial_block_executor" for node in plan.node_configs)
+    assert plan.node_configs[0].plugin_profile["block_executor"]["migrated_default"] is False
 
 
 def test_compiler_rejects_non_committee_topology(tmp_path: Path) -> None:

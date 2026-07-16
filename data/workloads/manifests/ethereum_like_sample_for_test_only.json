@@ -13,7 +13,7 @@
   "default_skew_axis": "contract",
   "source_format": "csv",
   "local_raw_relative_path": "data/workloads/samples/ethereum_like_sample_for_test_only.csv",
-  "source_sha256": "aa2281b00f22db52478dfbf65fa1217afab5c4f40e38f4c329235097122b5719",
+  "source_sha256": "f47ddcc0ae41083caf7975653dfc1ddfe93e4bbca49193c6f36c2fd81b295219",
   "canonical_sha256": "",
   "row_count": 4,
   "unique_source_tx_hash_count": 3,

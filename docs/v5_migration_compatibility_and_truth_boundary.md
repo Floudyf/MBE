@@ -106,3 +106,17 @@ V3 remains the `simulation` backend and V4 realism smoke remains a historical re
 V5 method configurations continue to use `V3SavedConfig(config_kind="method")`; no `V5SavedConfig` store exists. Legacy payloads are adapted at compile time, retaining unmapped legacy choices as explicit blockers for `real_cluster` rather than mutating or deleting user templates.
 
 The V5.1 truth boundary is `v5_real_cluster_candidate`: it has independent process, port, persistence, state-root, cross-shard, and artifact evidence, but does not claim production PBFT, Byzantine security, production atomicity, cloud/multi-server deployment, or V5.2 paper-candidate closure.
+
+# V5.2 Internal Block Execution Extension
+
+The block-execution foundation is an internal V5.2 extension. It introduces a
+`block_executor` plugin category so block state execution can be selected,
+compiled, instantiated, and audited independently from the existing `execution`
+classification plugin and `scheduler` ordering plugin. The first executor,
+`serial_block_executor`, is locked to the legacy MBE realism serial execution
+engine and carries `legacy_faithful_reference_baseline`.
+
+This extension is a compatibility-preserving migration point. Historical method
+profiles that lack `block_executor` must be migrated to `serial_block_executor`
+explicitly in the compiled plan. Runtime must not guess silently and must not
+fall back to legacy execution after a selected block executor fails.

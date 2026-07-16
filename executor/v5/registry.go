@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	realblock "metaverse-chainlab/executor/realism/block"
+	"metaverse-chainlab/executor/realism/execution"
+	"metaverse-chainlab/executor/realism/state"
 	"metaverse-chainlab/executor/realism/tx"
 )
 
@@ -57,6 +60,10 @@ type SchedulerPlugin interface {
 	Plugin
 	Order([]tx.SignedTransaction) []tx.SignedTransaction
 }
+type BlockExecutorPlugin interface {
+	Plugin
+	ExecuteBlock(context.Context, BlockExecutionInput) (BlockExecutionResult, error)
+}
 type StateAccessPlugin interface {
 	Plugin
 	AccessMode() string
@@ -89,6 +96,22 @@ type ObservabilityPlugin interface {
 type WorkloadInput struct {
 	Index, Shards, Seed, TimeoutEvery int
 	CrossShard                        bool
+}
+type BlockExecutionInput struct {
+	Block             realblock.Block
+	BaseStateSnapshot map[string]string
+	NodeID            string
+	ShardID           string
+	WorkerCount       int
+}
+type BlockExecutionResult struct {
+	ExecutionResult        execution.Result `json:"execution_result"`
+	StateDelta             []state.StateKV  `json:"state_delta"`
+	PlanDigest             string           `json:"execution_plan_digest"`
+	WorkerCount            int              `json:"worker_count"`
+	BlockExecutionMS       int64            `json:"block_execution_ms"`
+	TransactionExecutionMS int64            `json:"transaction_execution_ms"`
+	DeterministicApplyMS   int64            `json:"deterministic_apply_ms"`
 }
 type WorkloadItem struct {
 	Payload   string
@@ -178,7 +201,7 @@ func (r *Registry) Create(category, id string, config map[string]any) (Plugin, e
 	return factory(config)
 }
 
-var Categories = []string{"workload", "transaction_admission", "txpool", "sharding", "routing", "block_producer", "consensus", "network", "execution", "scheduler", "state_access", "state_storage", "cross_shard", "commit", "fault_injection", "metrics", "observability"}
+var Categories = []string{"workload", "transaction_admission", "txpool", "sharding", "routing", "block_producer", "consensus", "network", "execution", "scheduler", "block_executor", "state_access", "state_storage", "cross_shard", "commit", "fault_injection", "metrics", "observability"}
 
 type basicPlugin struct {
 	category, id string
@@ -268,7 +291,10 @@ func (p metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 type builtinBlockProducer struct{ basicPlugin }
 
 func (p builtinBlockProducer) BlockSize() int {
-	if value, ok := p.config["block_size"].(float64); ok {
+	switch value := p.config["block_size"].(type) {
+	case int:
+		return value
+	case float64:
 		return int(value)
 	}
 	return 10
@@ -300,6 +326,22 @@ func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecisio
 type builtinScheduler struct{ basicPlugin }
 
 func (p builtinScheduler) Order(items []tx.SignedTransaction) []tx.SignedTransaction { return items }
+
+type serialBlockExecutor struct{ basicPlugin }
+
+func (p serialBlockExecutor) ExecuteBlock(_ context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
+	workerCount := input.WorkerCount
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	executor := execution.NewSerialExecutor()
+	result := executor.ExecuteBlock(input.Block, input.BaseStateSnapshot)
+	delta := make([]state.StateKV, 0, len(result.StateDelta))
+	for _, item := range result.StateDelta {
+		delta = append(delta, state.StateKV{Key: item.Key, Value: item.Value})
+	}
+	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: workerCount}, nil
+}
 
 type builtinStateAccess struct{ basicPlugin }
 
@@ -417,6 +459,9 @@ func BuiltinRegistry() *Registry {
 	register("scheduler", "fast_first_scheduler", func(c map[string]any) (Plugin, error) {
 		return builtinScheduler{makeBasic("scheduler", "fast_first_scheduler", c)}, nil
 	})
+	register("block_executor", "serial_block_executor", func(c map[string]any) (Plugin, error) {
+		return serialBlockExecutor{makeBasic("block_executor", "serial_block_executor", c)}, nil
+	})
 	register("state_access", "direct_state_access", func(c map[string]any) (Plugin, error) {
 		return builtinStateAccess{makeBasic("state_access", "direct_state_access", c)}, nil
 	})
@@ -460,6 +505,7 @@ type RuntimePlugins struct {
 	Network       NetworkPlugin
 	Execution     ExecutionPlugin
 	Scheduler     SchedulerPlugin
+	BlockExecutor BlockExecutorPlugin
 	StateAccess   StateAccessPlugin
 	StateStorage  StateStoragePlugin
 	CrossShard    CrossShardPlugin
@@ -514,6 +560,9 @@ func InstantiatePlugins(profile map[string]PluginConfig) (RuntimePlugins, error)
 	}
 	if p.Scheduler, ok = created["scheduler"].(SchedulerPlugin); !ok {
 		return p, fmt.Errorf("scheduler behavior missing")
+	}
+	if p.BlockExecutor, ok = created["block_executor"].(BlockExecutorPlugin); !ok {
+		return p, fmt.Errorf("block executor behavior missing")
 	}
 	if p.StateAccess, ok = created["state_access"].(StateAccessPlugin); !ok {
 		return p, fmt.Errorf("state access behavior missing")

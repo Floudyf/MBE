@@ -44,6 +44,11 @@ V5.1 uses these categories:
 - metrics
 - observability
 
+The later V5.2 internal block-execution foundation adds an additional
+`block_executor` category. It does not replace the existing `execution` category:
+`execution` remains the MetaTrack-style transaction classification plugin, while
+`block_executor` owns block state execution and receipt generation.
+
 Current 11-module compatibility mapping:
 
 | Current Composer module | V5 category mapping |

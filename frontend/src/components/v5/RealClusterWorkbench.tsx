@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { compileV5ExperimentSpec, createV3SavedConfig, fetchV5PluginCatalog, runV5RealCluster, validateV5ExperimentSpec, type V5CompatibilityResult, type V5ExperimentSpec, type V5PluginManifest, type V5PluginSelection, type V5SchemaField } from "../../api";
 
-const categoryLabels: Record<string, string> = { workload: "Workload", transaction_admission: "Admission", txpool: "TxPool", sharding: "Sharding", routing: "Routing", block_producer: "Block producer", consensus: "Consensus", network: "Network", execution: "Execution", scheduler: "Scheduler", state_access: "State access", state_storage: "State storage", cross_shard: "Cross-shard", commit: "Commit", fault_injection: "Fault injection", metrics: "Metrics", observability: "Observability" };
+const categoryLabels: Record<string, string> = { workload: "Workload", transaction_admission: "Admission", txpool: "TxPool", sharding: "Sharding", routing: "Routing", block_producer: "Block producer", consensus: "Consensus", network: "Network", execution: "Execution", scheduler: "Scheduler", block_executor: "Block Execution Engine", state_access: "State access", state_storage: "State storage", cross_shard: "Cross-shard", commit: "Commit", fault_injection: "Fault injection", metrics: "Metrics", observability: "Observability" };
 
 export default function RealClusterWorkbench() {
   const [catalog, setCatalog] = useState<V5PluginManifest[]>([]);

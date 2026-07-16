@@ -288,7 +288,14 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
         spec.workload_source.seed = spec.seed
     method = row["method"]
     overrides = method.get("plugin_overrides", {})
-    spec.plugin_selections = [V5PluginSelection(category=item.category, plugin_id=overrides.get(item.category, item.plugin_id), config=item.config) for item in spec.plugin_selections]
+    spec.plugin_selections = [
+        V5PluginSelection(
+            category=item.category,
+            plugin_id=overrides.get(item.category, item.plugin_id),
+            config=(item.config | {"migrated_default": True}) if item.category == "block_executor" and item.category not in overrides and method.get("method_id") != "v5_catalog_default" else item.config,
+        )
+        for item in spec.plugin_selections
+    ]
     spec.saved_config_id = plan.saved_config_id or spec.saved_config_id
     spec.formal_plan_config_id = formal_plan_config_id or spec.formal_plan_config_id
     spec.method_config_id = row.get("method_config_id")

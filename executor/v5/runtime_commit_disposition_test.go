@@ -8,7 +8,6 @@ import (
 
 	"metaverse-chainlab/executor/realism/account"
 	realblock "metaverse-chainlab/executor/realism/block"
-	"metaverse-chainlab/executor/realism/execution"
 	"metaverse-chainlab/executor/realism/mempool"
 	"metaverse-chainlab/executor/realism/state"
 	"metaverse-chainlab/executor/realism/storage"
@@ -86,7 +85,6 @@ func TestAppliedBlockResultIsNotOverwrittenByPendingFailure(t *testing.T) {
 		pool:            mempool.New("n0", "s0", mempool.DefaultPolicy(), account.NewNonceManager()),
 		db:              db,
 		store:           storage.NewBlockStore(storeDir, "n0", "s0"),
-		engine:          execution.NewEngine(),
 		committed:       map[string]bool{},
 		committing:      map[string]bool{},
 		pendingCommits:  map[uint64]realblock.Block{},

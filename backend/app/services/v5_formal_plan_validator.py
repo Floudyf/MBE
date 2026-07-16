@@ -89,6 +89,8 @@ def _verified_method(method: V5FormalMethod) -> V5FormalMethod:
         if manifest.category != category:
             raise FormalPlanValidationError(f"saved method plugin category mismatch: {category}/{plugin_id}")
         expected[category] = manifest.plugin_id
+    if "block_executor" not in expected:
+        expected["block_executor"] = _default_plugin("block_executor")
     if method.display_name != saved.get("name") or method.plugin_overrides != expected:
         raise FormalPlanValidationError(f"method profile payload does not match saved config: {method.method_id}")
     draft = payload.get("source_composer_draft") if isinstance(payload.get("source_composer_draft"), dict) else {}
@@ -138,6 +140,10 @@ def _effective_snapshot(plan: V5FormalExperimentPlan, method: V5FormalMethod) ->
 
 def _changed_categories(left: dict[str, str], right: dict[str, str]) -> list[str]:
     return sorted(category for category in sorted(set(left) | set(right)) if left.get(category) != right.get(category))
+
+
+def _default_plugin(category: str) -> str:
+    return next(item.plugin_id for item in STORE.list() if item.category == category and item.implementation_status == "implemented")
 
 
 _FAULT_FIELDS = {

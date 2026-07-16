@@ -12,7 +12,18 @@ from backend.app.services import v5_workload_data_plane as workload_plane
 from backend.app.services.v5_workload_data_plane import WorkloadPreviewRequest
 
 
-EXPECTED_ARTIFACTS = ["compiled_run_plan.json", "process_manifest.json", "real_cluster_summary.json", "client_submission_log.csv", "artifact_catalog.json"]
+EXPECTED_ARTIFACTS = [
+    "compiled_run_plan.json",
+    "process_manifest.json",
+    "real_cluster_summary.json",
+    "client_submission_log.csv",
+    "artifact_catalog.json",
+    "block_execution_summary.json",
+    "execution_plan.jsonl",
+    "transaction_execution_trace.csv",
+    "state_delta_log.csv",
+    "plan_digest_consistency.csv",
+]
 DATASET_ARTIFACTS = [
     "workload_manifest_snapshot.json",
     "workload_source_spec.json",
@@ -35,7 +46,12 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
     normalized = spec.model_dump()
     raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
-    profile = {selection.category: {"plugin_id": selection.plugin_id, "config": selection.config} for selection in compatibility.resolved_plugins}
+    profile = {}
+    for selection in compatibility.resolved_plugins:
+        entry = {"plugin_id": selection.plugin_id, "config": selection.config}
+        if selection.category == "block_executor":
+            entry["migrated_default"] = bool(selection.config.get("migrated_default"))
+        profile[selection.category] = entry
     nodes: list[V5CompiledNodeConfig] = []
     for index in range(spec.topology.nodes):
         shard_index = index // spec.topology.validators_per_shard
