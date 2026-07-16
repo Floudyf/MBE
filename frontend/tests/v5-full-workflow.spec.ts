@@ -40,16 +40,16 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
 
     await page.getByLabel("nodes").fill("8"); await page.getByLabel("shards").fill("2"); await page.getByLabel("validators per shard").fill("4");
     await page.getByLabel("tx_count").fill("40"); await page.getByLabel("cross_shard_ratio").fill("0.25"); await page.getByLabel("seeds").fill("47"); await page.getByLabel("repeats").fill("1");
-    await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+    await page.getByTestId("v5-formal-preview-button").click();
     await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("矩阵行数：1");
     const previewRow = page.locator(`[data-method-config-id="${configId}"]`);
     await expect(previewRow).toHaveCount(1);
     await expect(previewRow.locator("td").nth(1)).toHaveText(methodName);
-    await expect(previewRow.locator("td").nth(2)).toHaveText(configId);
-    await expect(previewRow.locator("td").nth(7)).toHaveText("real_cluster");
-    await expect(previewRow.locator("td").nth(8)).toContainText("可运行");
-    await expect(page.getByRole("button", { name: "启动真实集群实验组" })).toBeEnabled();
-    await page.getByRole("button", { name: "启动真实集群实验组" }).click();
+    await expect(previewRow.locator("td").nth(2)).toHaveText("synthetic");
+    await expect(previewRow.locator("td").nth(5)).toHaveText("40");
+    await expect(previewRow.locator("td").nth(11)).toContainText("可运行");
+    await expect(page.getByTestId("v5-start-run-group-button")).toBeEnabled();
+    await page.getByTestId("v5-start-run-group-button").click();
     await expect.poll(async () => page.getByTestId("v5-formal-group-summary").innerText(), { timeout: 180_000 }).toContain("已完成");
     const groupId = await page.locator("code").filter({ hasText: "v5grp_" }).innerText();
 

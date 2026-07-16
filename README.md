@@ -18,7 +18,30 @@ V5 has only two outward stages:
 
 V5.1 defines the implemented `real_cluster` execution backend. Each logical node runs in an independent OS process, and a failed `real_cluster` run never falls back to V4 smoke or V3 simulation. V5.2 formal software closure is implemented and verified with Gate A/B, an 8-child real RunGroup, statistics/ZIP artifacts, and a completed 16-node/4-shard/10000-transaction Child. The 12-child 10000-transaction paper matrix is compiled and persisted but intentionally not executed in this software-validation round.
 
-The primary product workflow is V5 Method Design -> saved runnable V5 Method Profile -> Formal RunGroup -> Results and artifacts. Profiles reuse `V3SavedConfig`; V3 Composer and V4 smoke remain historical compatibility and regression entries. The local `real_cluster` backend has no silent fallback. No production blockchain, production PBFT, or public dataset claim is made; Decentraland and other external datasets are not connected.
+The primary product workflow is V5 Method Design -> saved runnable V5 Method Profile -> Formal RunGroup -> Results and artifacts. Profiles reuse `V3SavedConfig`; V3 Composer and V4 smoke remain historical compatibility and regression entries. The local `real_cluster` backend has no silent fallback. The V5 workload data plane now uses a generic canonical workload contract with dataset adapters; Decentraland is the first formal real-data adapter. No production blockchain, production PBFT, Polygon EVM execution, or Decentraland contract-state replay claim is made.
+
+### Workload Data Plane Status
+
+The V5 Formal Workflow remains the product baseline. Workloads are a run-level
+condition selected through `workload_source`: the synthetic path uses
+`deterministic_signed_synthetic`, while registered datasets use
+`canonical_trace_replay` and the generic `mbe_workload_record_v1` contract.
+Decentraland Polygon marketplace sales are the first formal real-data adapter;
+already-normalized external files can enter through `canonical_csv_v1`. Dataset
+replay remains research-grade workload modelling, not instruction-level Polygon
+or Decentraland contract execution.
+
+| Capability | Status |
+| --- | --- |
+| V5 synthetic Formal RunGroup | Complete |
+| V5 real local multi-process runtime | Complete |
+| V5 result/artifact workflow | Complete |
+| Decentraland dataset provenance | Confirmed |
+| Generic canonical workload contract | Implemented |
+| Decentraland dataset adapter | Implemented |
+| Generic canonical CSV adapter | Implemented |
+| Decentraland Formal replay | Implemented and locally accepted |
+| Derived key-skew workloads | Implemented and locally accepted |
 
 Planning documents:
 
@@ -26,6 +49,7 @@ Planning documents:
 - `docs/v5_1_real_plugin_driven_multi_process_multishard_runtime.md`
 - `docs/v5_2_real_formal_experiment_and_result_closure.md`
 - `docs/v5_migration_compatibility_and_truth_boundary.md`
+- `docs/v5_workload_data_plane_design.md`
 
 V3 logical/formal runtime remains the `simulation` backend. V4 realism smoke remains historical regression evidence. V5 `real_cluster` is the implemented local runtime backend. Preview, Simulation, and unexecuted formal rows are never Paper Candidates; only completed real-cluster children can pass that gate.
 
@@ -56,7 +80,7 @@ V4.2 implementation status: the V4 runtime now executes committed blocks determi
 
 Current stage: V5.2 Real Formal Experiment and Result Closure, with V3-final preserved as the stable light-runtime baseline and V4 realism smoke preserved as historical realism validation.
 Latest runtime capability: V4.3 smoke validation provides signed transaction binding, per-node mempool, localhost TCP, PBFT-style messages, deterministic execution, durable block/state/receipt/tx-index artifacts, state-root consistency, cross-shard evidence, fault delay/drop evidence, and BlockEmulator CSV bridge evidence.
-Latest product capability: V5 Method Design saves runnable V5 Method Profiles through `V3SavedConfig`; Formal RunGroups validate and execute selected profiles, and Results exposes grouped statistics, Child finality/runtime evidence, artifacts, and the real ZIP bundle. The product flow is Design -> Run -> Results; it remains a local research runtime without production claims or an external dataset connection.
+Latest product capability: V5 Method Design saves runnable V5 Method Profiles through `V3SavedConfig`; Formal RunGroups validate and execute selected profiles, and Results exposes grouped statistics, Child finality/runtime evidence, artifacts, and the real ZIP bundle. The product flow is Design -> Run -> Results; it remains a local research runtime without production claims. Dataset workloads are local, registered, adapter-normalized research replay inputs rather than live public-chain execution.
 Current execution bridge: Preview, Simulation, and Real Cluster are distinct V5 backends; formal RunGroups execute sequentially through the persistent scheduler without fallback. Runtime truth: V3 formal runs are `v3_formal_simulation_logical_runtime`; V4 realism smoke is `v4_realism_smoke_regression`; V5 `real_cluster` is `v5_real_cluster_candidate` until the per-child Paper Candidate gate passes.
 
 V3.5, V3.6, V3.7, V3.8, V3.9, V3.10, V3.10.1, V3.11, V3.12, V3.13, and V3-final are closed. V3-final adds deterministic local fault injection, node failure/recovery/network delay/drop/target congestion/Relay fault observation artifacts, local observability summaries, component health status, final artifact catalog, reproducibility manifest/guide/manual, and paper experiment mapping. It is not multi-server deployment, not a production cluster, not production PBFT / HotStuff / Raft, not production fault tolerance, not production monitoring, not a Byzantine adversary model, not BlockEmulator backend, not Fabric/EVM live backend, and not paper-grade performance evidence.

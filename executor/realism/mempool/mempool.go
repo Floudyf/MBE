@@ -78,7 +78,7 @@ func (m *Mempool) admitAt(item tx.SignedTransaction, now time.Time, enforceNonce
 	}
 	if enforceNonce {
 		if err := m.nonces.Accept(item.Sender, item.Nonce); err != nil {
-		return rejected(item, m.nodeID, m.shardID, reasonOf(err), len(m.byID), nowMS)
+			return rejected(item, m.nodeID, m.shardID, reasonOf(err), len(m.byID), nowMS)
 		}
 	}
 	m.nextSeq++
@@ -252,6 +252,18 @@ func (m *Mempool) Snapshot() Snapshot {
 		})
 	}
 	return Snapshot{NodeID: m.nodeID, ShardID: m.shardID, Size: len(items), Capacity: m.policy.Capacity, Items: items}
+}
+
+func (m *Mempool) IDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ids := make([]string, 0, len(m.order))
+	for _, id := range m.order {
+		if _, ok := m.byID[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (m *Mempool) Stats() Stats {

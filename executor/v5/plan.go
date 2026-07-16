@@ -21,13 +21,37 @@ type NodePlan struct {
 	PluginProfile map[string]PluginConfig `json:"plugin_profile"`
 }
 type WorkloadPlan struct {
-	PluginID                 string  `json:"plugin_id"`
-	TxCount                  int     `json:"tx_count"`
-	Seed                     int     `json:"seed"`
-	CrossShardRatio          float64 `json:"cross_shard_ratio"`
-	TimeoutEvery             int     `json:"timeout_every"`
-	RequestedCrossShardRatio float64 `json:"requested_cross_shard_ratio"`
-	RequestedCrossShardCount int     `json:"requested_cross_shard_count"`
+	PluginID                 string   `json:"plugin_id"`
+	SourceType               string   `json:"source_type"`
+	DatasetID                string   `json:"dataset_id"`
+	VariantID                string   `json:"variant_id"`
+	VariantMode              string   `json:"variant_mode"`
+	MaterializedID           string   `json:"materialized_id"`
+	CanonicalRelativePath    string   `json:"canonical_relative_path"`
+	MaterializedRelativePath string   `json:"materialized_relative_path"`
+	SourceSHA256             string   `json:"source_sha256"`
+	CanonicalSHA256          string   `json:"canonical_sha256"`
+	MaterializedSHA256       string   `json:"materialized_sha256"`
+	BaseWindowSHA256         string   `json:"base_window_sha256"`
+	BaseWindowHash           string   `json:"base_window_hash"`
+	TruthLabel               string   `json:"truth_label"`
+	SelectionMode            string   `json:"selection_mode"`
+	ReplayMode               string   `json:"replay_mode"`
+	SkewAxis                 string   `json:"skew_axis"`
+	TargetAlpha              *float64 `json:"target_alpha"`
+	GeneratorVersion         string   `json:"generator_version"`
+	IdentityMappingVersion   string   `json:"identity_mapping_version"`
+	NoFallback               bool     `json:"no_fallback"`
+	TxCount                  int      `json:"tx_count"`
+	RequestedTxCount         int      `json:"requested_tx_count"`
+	ActualTxCount            int      `json:"actual_tx_count"`
+	Seed                     int      `json:"seed"`
+	CrossShardRatio          float64  `json:"cross_shard_ratio"`
+	TimeoutEvery             int      `json:"timeout_every"`
+	RequestedCrossShardRatio float64  `json:"requested_cross_shard_ratio"`
+	RequestedCrossShardCount int      `json:"requested_cross_shard_count"`
+	ExpectedCrossShardCount  int      `json:"expected_cross_shard_count"`
+	ExpectedCrossShardRatio  float64  `json:"expected_cross_shard_ratio"`
 }
 type Plan struct {
 	PlanID           string         `json:"plan_id"`

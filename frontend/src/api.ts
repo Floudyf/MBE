@@ -1283,7 +1283,24 @@ export type V5PluginMetric = { key: string; type: string; unit: string; aggregat
 export type V5PluginManifest = { plugin_id: string; category: string; version: string; display_name: string; description: string; display_name_zh?: string; description_zh?: string; implementation_status: string; supported_backends: string[]; config_schema: { type?: string; properties?: Record<string, V5SchemaField> }; default_config: Record<string, unknown>; capabilities: string[]; requirements: string[]; conflicts: string[]; metrics: V5PluginMetric[]; runtime_factory: string; runtime_adapter: string; truth_boundary: string };
 export type V5SchemaField = { type?: string; title?: string; description?: string; default?: unknown; minimum?: number; maximum?: number; enum?: string[]; readOnly?: boolean; advanced?: boolean };
 export type V5PluginSelection = { category: string; plugin_id: string; config: Record<string, unknown> };
-export type V5ExperimentSpec = { schema_version?: "v5_experiment_spec_v1"; name: string; execution_backend: "preview" | "simulation" | "real_cluster"; plugin_selections: V5PluginSelection[]; topology: { nodes: number; shards: number; validators_per_shard: number }; tx_count: number; seed: number; duration_ms: number; fault_policy?: Record<string, unknown>; requested_metrics?: string[]; saved_config_id?: string | null; formal_plan_config_id?: string | null; method_config_id?: string | null; source_composer_draft?: Record<string, unknown> };
+export type V5WorkloadSourceSpec = {
+  schema_version?: "mbe_workload_source_v1";
+  source_type: "synthetic" | "dataset";
+  plugin_id: "deterministic_signed_synthetic" | "canonical_trace_replay";
+  dataset_id?: string | null;
+  variant_mode?: "original_window" | "contract_zipf" | "key_zipf" | null;
+  variant_id?: string | null;
+  requested_tx_count: number;
+  use_full_dataset?: boolean;
+  seed: number;
+  selection_mode?: "contiguous_window";
+  replay_mode?: "max_throughput";
+  skew_axis?: string | null;
+  target_alpha?: number | null;
+  materialized_id?: string | null;
+  source_sha256?: string | null;
+};
+export type V5ExperimentSpec = { schema_version?: "v5_experiment_spec_v1"; name: string; execution_backend: "preview" | "simulation" | "real_cluster"; plugin_selections: V5PluginSelection[]; topology: { nodes: number; shards: number; validators_per_shard: number }; tx_count: number; seed: number; workload_source?: V5WorkloadSourceSpec | null; duration_ms: number; fault_policy?: Record<string, unknown>; requested_metrics?: string[]; saved_config_id?: string | null; formal_plan_config_id?: string | null; method_config_id?: string | null; source_composer_draft?: Record<string, unknown> };
 export type V5CompatibilityResult = { valid: boolean; blockers: string[]; warnings: string[]; resolved_plugins: V5PluginSelection[]; resource_estimate: Record<string, unknown> };
 export type V5CompiledRunPlan = Record<string, unknown> & { plan_id: string; plan_digest: string; node_configs: Record<string, unknown>[]; plugin_snapshot: V5PluginManifest[]; no_fallback: boolean };
 export type V5RealClusterResult = { run_id: string; status: string; summary: Record<string, unknown>; artifacts: V2Artifact[]; stdout: string; stderr: string; no_fallback: boolean };
@@ -1371,11 +1388,43 @@ export type V5FormalArtifactCatalog = { run_group_id: string; status: "ready" | 
 export type V5FormalRunGroupSummary = { run_group_id: string; status: string; plan_name: string; execution_backend: string; runtime_truth: string; created_at?: string; updated_at?: string; finished_at?: string | null; total_child_runs: number; completed_child_runs: number; failed_child_runs: number; suite_names: string[]; method_names: string[]; method_ids: string[]; aggregate?: V5FormalAggregate; source_label: "user" | "e2e" | "script"; tags: string[]; is_test: boolean };
 export type V5FormalRunGroupSummaryPage = { items: V5FormalRunGroupSummary[]; total: number; next_cursor: string | null };
 export type V5FormalAnalysis = { run_group_id: string; groups: Array<Record<string, unknown>>; charts: Array<{ suite_type: string; kind: "summary" | "bar" | "line"; rows: Array<Record<string, unknown>> }> };
+export type V5WorkloadDatasetSummary = { schema_version: string; dataset_id: string; display_name: string; description: string; source_platform: string; source_chain: string; truth_label: string; row_count: number; operation_counts?: Record<string, number>; category_counts: Record<string, number>; source_sha256: string; available: boolean; selectable: boolean; validation_status: string; blockers: string[]; warnings: string[]; supported_skew_axes?: string[]; default_skew_axis?: string | null };
+export type V5WorkloadDatasetDetail = V5WorkloadDatasetSummary & { dataset_type: string; included_categories: string[]; excluded_categories: string[]; unique_source_tx_hash_count: number; time_start_ms: number; time_end_ms: number; verification_method: string; verification_sample_count: number; verification_results: string; usage_note: string; generator_version: string; variants: Array<Record<string, unknown>>; adapter_id?: string; supported_variants?: string[] };
+export type V5WorkloadPreviewRequest = V5WorkloadSourceSpec;
+export type V5WorkloadPreview = {
+  schema_version: string;
+  source_type: "synthetic" | "dataset" | string;
+  plugin_id: string;
+  dataset_id?: string | null;
+  tx_count: number;
+  selected_time_range: { start_ms?: number | null; end_ms?: number | null };
+  operation_counts?: Record<string, number>;
+  category_counts: Record<string, number>;
+  natural_skew: Record<string, unknown>;
+  derived_skew: Record<string, unknown>;
+  expected_cross_shard: Record<string, unknown>;
+  shard_distribution: Record<string, number>;
+  materialization_cache_status: Record<string, unknown>;
+  blockers: string[];
+  warnings: string[];
+};
 
 export async function fetchV5PluginCatalog(backend?: string): Promise<V5PluginManifest[]> {
   const query = backend ? `?backend=${encodeURIComponent(backend)}` : "";
   const response = await request<{ items: V5PluginManifest[] }>(`/api/v5/plugins${query}`);
   return response.items;
+}
+
+export async function fetchV5WorkloadDatasets(): Promise<V5WorkloadDatasetSummary[]> {
+  return request<V5WorkloadDatasetSummary[]>("/api/v5/workloads/datasets");
+}
+
+export async function fetchV5WorkloadDataset(datasetId: string): Promise<V5WorkloadDatasetDetail> {
+  return request<V5WorkloadDatasetDetail>(`/api/v5/workloads/datasets/${encodeURIComponent(datasetId)}`);
+}
+
+export async function previewV5Workload(payload: V5WorkloadPreviewRequest): Promise<V5WorkloadPreview> {
+  return request<V5WorkloadPreview>("/api/v5/workloads/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
 }
 
 export async function validateV5ExperimentSpec(payload: V5ExperimentSpec): Promise<V5CompatibilityResult> {

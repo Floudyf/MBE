@@ -170,4 +170,111 @@ func TestFinalizeClearsSourceRelayAfterTargetCommit(t *testing.T) {
 	}
 }
 
+func TestExpireStaleProposalReleasesReservedTransactions(t *testing.T) {
+	runtime, block, generated := proposalRuntimeForTest(t, "proposal-timeout")
+	runtime.votes[block.BlockHash] = map[string]bool{"n0": true}
+	if runtime.pool.ReservedCount() != 1 {
+		t.Fatal("test setup did not reserve transaction")
+	}
+	runtime.expireStaleProposal(5 * time.Second)
+	if runtime.proposalInFlight || runtime.proposalInFlightHash != "" {
+		t.Fatal("stale proposal remained in flight")
+	}
+	if runtime.pool.ReservedCount() != 0 {
+		t.Fatal("stale proposal did not release reserved transaction")
+	}
+	if !runtime.pool.Has(generated[0].TxID) {
+		t.Fatal("transaction was dropped instead of being made available for reproposal")
+	}
+	if _, ok := runtime.proposals[block.BlockHash]; ok {
+		t.Fatal("stale proposal was not removed")
+	}
+}
+
+func TestExpireStaleProposalDoesNotReleaseQuorumOrCommittingProposal(t *testing.T) {
+	runtime, block, generated := proposalRuntimeForTest(t, "proposal-commit-race")
+	runtime.votes[block.BlockHash] = map[string]bool{"n0": true, "n1": true, "n2": true}
+	runtime.committing[block.BlockHash] = true
+	runtime.expireStaleProposal(5 * time.Second)
+	if !runtime.proposalInFlight || runtime.proposalInFlightHash != block.BlockHash {
+		t.Fatal("quorum/committing proposal was cleared by timeout")
+	}
+	if runtime.pool.ReservedCount() != 1 {
+		t.Fatal("timeout released a committing proposal reservation")
+	}
+	if _, ok := runtime.proposals[block.BlockHash]; !ok {
+		t.Fatal("timeout removed a committing proposal")
+	}
+	delete(runtime.committing, block.BlockHash)
+	if _, err := runtime.commitWithOrigin(context.Background(), block, CommitOriginConsensus); err != nil {
+		t.Fatalf("commit after protected timeout failed: %v", err)
+	}
+	if runtime.pool.Has(generated[0].TxID) || runtime.pool.ReservedCount() != 0 {
+		t.Fatal("committed transaction remained in mempool reservation state")
+	}
+	if runtime.blockCount != 1 || runtime.committedHeight != 1 {
+		t.Fatalf("unexpected commit count/height: count=%d height=%d", runtime.blockCount, runtime.committedHeight)
+	}
+	if _, err := runtime.commitWithOrigin(context.Background(), block, CommitOriginConsensus); err != nil {
+		t.Fatalf("idempotent duplicate commit returned error: %v", err)
+	}
+	if runtime.blockCount != 1 {
+		t.Fatal("duplicate durable commit advanced block count")
+	}
+}
+
+func proposalRuntimeForTest(t *testing.T, seed string) (*NodeRuntime, realblock.Block, []tx.SignedTransaction) {
+	t.Helper()
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "store")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := map[string]PluginConfig{}
+	for _, category := range Categories {
+		profile[category] = PluginConfig{PluginID: firstPlugin(category), Config: map[string]any{}}
+	}
+	plugins, err := InstantiatePlugins(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := mempool.New("n0", "s0", mempool.DefaultPolicy(), account.NewNonceManager())
+	generated, _, _, err := tx.Generate(tx.GenerateOptions{Count: 1, Sender: seed + "-client", Receiver: "receiver", Value: 1, StateKeys: []string{"key"}, Seed: seed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := pool.Admit(generated[0]); !result.Accepted {
+		t.Fatal(result)
+	}
+	proposer := realblock.NewProposer("n0", "s0")
+	block, err := proposer.Build(pool, 1, nowForTest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := state.NewDB(root, "s0")
+	if err := db.Save(); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &NodeRuntime{
+		node:                 NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root, Validators: []string{"n0", "n1", "n2", "n3"}},
+		pool:                 pool,
+		proposer:             proposer,
+		db:                   db,
+		store:                storage.NewBlockStore(storeDir, "n0", "s0"),
+		engine:               execution.NewEngine(),
+		proposals:            map[string]realblock.Block{block.BlockHash: block},
+		votes:                map[string]map[string]bool{block.BlockHash: {"n0": true}},
+		committed:            map[string]bool{},
+		committing:           map[string]bool{},
+		pendingCommits:       map[uint64]realblock.Block{},
+		committedHash:        "genesis",
+		pluginSnapshot:       profile,
+		plugins:              plugins,
+		proposalInFlight:     true,
+		proposalInFlightHash: block.BlockHash,
+		proposalStartedAt:    time.Now().Add(-10 * time.Second),
+	}
+	return runtime, block, generated
+}
+
 func nowForTest() (t time.Time) { return time.Unix(100, 0) }

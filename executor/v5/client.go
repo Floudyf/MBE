@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"path/filepath"
@@ -47,23 +49,34 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if shards < 2 && plan.WorkloadPlan.CrossShardRatio > 0 {
 		return fmt.Errorf("cross_shard_ratio requires at least 2 shards")
 	}
-	for index := 0; index < plan.WorkloadPlan.TxCount; index++ {
-		shardIDs := make([]string, 0, shards)
-		for shardIndex := 0; shardIndex < shards; shardIndex++ {
-			shardIDs = append(shardIDs, fmt.Sprintf("s%d", shardIndex))
+	shardIDs := make([]string, 0, shards)
+	for shardIndex := 0; shardIndex < shards; shardIndex++ {
+		shardIDs = append(shardIDs, fmt.Sprintf("s%d", shardIndex))
+	}
+	iterator, err := plugins.Workload.NewIterator(plan.WorkloadPlan, shards, outDir)
+	if err != nil {
+		return err
+	}
+	defer iterator.Close()
+	for {
+		record, err := iterator.Next(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
 		}
-		crossShard := crossShardAt(index, plan.WorkloadPlan.TxCount, plan.WorkloadPlan.CrossShardRatio, plan.WorkloadPlan.Seed)
-		workload := plugins.Workload.BuildWorkloadItem(WorkloadInput{Index: index, Shards: shards, Seed: plan.WorkloadPlan.Seed, TimeoutEvery: plan.WorkloadPlan.TimeoutEvery, CrossShard: crossShard})
-		route := plugins.Routing.Route(RoutingInput{Index: index, StateKeys: workload.StateKeys, ShardIDs: shardIDs, CrossShard: strings.HasPrefix(workload.Payload, "v5_cross")})
+		route := plugins.Routing.Route(RoutingInput{Index: record.Index, StateKeys: record.StateKeys, ShardIDs: shardIDs, CrossShard: record.CrossShard})
 		shardID := route.ShardID
+		if record.SourceShard != "" {
+			shardID = record.SourceShard
+		}
 		leader, ok := leaders[shardID]
 		if !ok {
 			return fmt.Errorf("no leader for %s", shardID)
 		}
-		// Independent deterministic senders keep admission outcome independent of
-		// cross-process gossip ordering; each signed transaction starts at nonce 0.
-		sender := fmt.Sprintf("client_%s_%d", shardID, index)
-		payload := workload.Payload
+		sender := fmt.Sprintf("client_%s_%d", shardID, record.Index)
+		payload := record.Payload
 		if payload == "v5_cross" {
 			generatedCrossShardCount++
 			targetIndex := 0
@@ -75,21 +88,33 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			}
 			payload = "v5_cross:" + shardIDs[targetIndex]
 		}
-		isCrossShard := strings.HasPrefix(payload, "v5_cross:")
 		targetShard := ""
-		if isCrossShard {
+		if strings.HasPrefix(payload, "v5_cross:") {
 			targetShard = strings.TrimPrefix(payload, "v5_cross:")
+			if colon := strings.Index(targetShard, ":"); colon >= 0 {
+				targetShard = targetShard[:colon]
+			}
 		}
-		seed := fmt.Sprintf("%d:%s", plan.WorkloadPlan.Seed, shardID)
-		stateKeys := append([]string{"shard:" + shardID + ":account"}, workload.StateKeys...)
-		generated, _, _, err := tx.Generate(tx.GenerateOptions{Count: 1, Sender: sender, Receiver: "receiver_" + shardID, StartNonce: 0, Value: 1, StateKeys: stateKeys, Seed: seed})
+		isCrossShard := targetShard != "" && targetShard != shardID
+		stateKeys := append([]string{"shard:" + shardID + ":account"}, record.StateKeys...)
+		var item tx.SignedTransaction
+		if datasetIterator, ok := iterator.(*CanonicalTraceIterator); ok {
+			record.StateKeys = stateKeys
+			item, err = datasetIterator.SignedTransaction(record)
+			sender = item.Sender
+			generatedCrossShardCount = datasetIterator.summary.ActualCrossShardCount
+		} else {
+			seed := fmt.Sprintf("%d:%s", plan.WorkloadPlan.Seed, shardID)
+			generated, _, _, genErr := tx.Generate(tx.GenerateOptions{Count: 1, Sender: sender, Receiver: "receiver_" + shardID, StartNonce: 0, Value: 1, StateKeys: stateKeys, Seed: seed})
+			err = genErr
+			if err == nil {
+				item = generated[0]
+				item.Payload = payload
+				_, privateKey := tx.DeterministicKeyPair(seed + ":" + sender)
+				err = tx.Sign(&item, privateKey)
+			}
+		}
 		if err != nil {
-			return err
-		}
-		item := generated[0]
-		item.Payload = payload
-		_, privateKey := tx.DeterministicKeyPair(seed + ":" + sender)
-		if err := tx.Sign(&item, privateKey); err != nil {
 			return err
 		}
 		envelope, err := p2p.NewEnvelope(p2p.MessageTXGossip, "mbe-client", leader.NodeID, shardID, 0, 0, 0, item)
@@ -100,11 +125,13 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		err = sendPersistent(ctx, connections, leader.ListenAddr, envelope)
 		rows = append(rows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, sender, leader.NodeID, shardID, payload, fmt.Sprint(isCrossShard), shardID, targetShard, fmt.Sprint(err == nil), fmt.Sprint(time.Since(start).Milliseconds()), errorString(err)})
 		lifecycleRows = append(lifecycleRows, lifecycleRow(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "submitted", NodeID: "mbe-client", ShardID: shardID, Success: err == nil, Error: errorString(err)}))
-		routingRows = append(routingRows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, plugins.Routing.ID(), strings.Join(item.StateKeys, "|"), shardID, fmt.Sprint(strings.HasPrefix(payload, "v5_cross:")), route.Reason})
+		routingRows = append(routingRows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, plugins.Routing.ID(), strings.Join(item.StateKeys, "|"), shardID, fmt.Sprint(isCrossShard), route.Reason})
 		if err != nil {
 			return err
 		}
 	}
+	replaySummary := iterator.Summary()
+	replaySummary.SubmittedCount = len(rows)
 	if err := metrics.WriteCSV(filepath.Join(outDir, "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, rows); err != nil {
 		return err
 	}
@@ -122,6 +149,15 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		return err
 	}
 	requestedCrossShardCount := requestedCrossShardCount(plan.WorkloadPlan.TxCount, plan.WorkloadPlan.CrossShardRatio)
+	if plan.WorkloadPlan.SourceType == "dataset" {
+		requestedCrossShardCount = replaySummary.ExpectedCrossShardCount
+	}
+	if err := SaveJSON(filepath.Join(outDir, "workload_replay_summary.json"), replaySummary); err != nil {
+		return err
+	}
+	if err := SaveJSON(filepath.Join(outDir, "workload_identity_mapping_summary.json"), map[string]any{"identity_count": replaySummary.IdentityCount, "mapping_digest": replaySummary.MappingDigest, "nonce_continuity": replaySummary.NonceContinuity, "signature_pass_count": replaySummary.SignaturePassCount, "identity_mapping_version": replaySummary.IdentityMappingVersion}); err != nil {
+		return err
+	}
 	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows))})
 }
 

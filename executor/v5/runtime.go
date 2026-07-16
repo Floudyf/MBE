@@ -83,8 +83,8 @@ type CommitResult struct {
 type CommitOrigin string
 
 const (
-	CommitOriginConsensus    CommitOrigin = "consensus"
-	CommitOriginCatchUp      CommitOrigin = "catch_up"
+	CommitOriginConsensus      CommitOrigin = "consensus"
+	CommitOriginCatchUp        CommitOrigin = "catch_up"
 	CommitOriginRecoveryReplay CommitOrigin = "recovery_replay"
 )
 
@@ -110,6 +110,8 @@ type NodeRuntime struct {
 	pendingCommits         map[uint64]realblock.Block
 	pendingCommitErrors    map[uint64]string
 	proposalInFlight       bool
+	proposalInFlightHash   string
+	proposalStartedAt      time.Time
 	lastProposalError      string
 	fatalPersistenceError  string
 	lastCatchupRequest     time.Time
@@ -164,6 +166,7 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 		case <-ticker.C:
 			r.retryPendingRelays()
 			if selected.Leader {
+				r.expireStaleProposal(5 * time.Second)
 				r.propose(ctx)
 			} else {
 				r.requestCatchup(ctx)
@@ -501,6 +504,8 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	r.lastProposalError = ""
 	r.votes[block.BlockHash] = map[string]bool{r.node.NodeID: true}
 	r.proposalInFlight = true
+	r.proposalInFlightHash = block.BlockHash
+	r.proposalStartedAt = time.Now()
 	r.mu.Unlock()
 	r.logConsensus("PBFT_PRE_PREPARE_LOCAL", r.node.NodeID, block.BlockHash, block.Height)
 	proposal := Proposal{Block: block}
@@ -555,6 +560,8 @@ func (r *NodeRuntime) finalize(ctx context.Context, block realblock.Block) error
 		r.mu.Lock()
 		if r.node.Leader {
 			r.proposalInFlight = false
+			r.proposalInFlightHash = ""
+			r.proposalStartedAt = time.Time{}
 		}
 		delete(r.proposals, block.BlockHash)
 		delete(r.votes, block.BlockHash)
@@ -713,6 +720,8 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	r.lastProgressAt = time.Now().UnixMilli()
 	if r.node.Leader {
 		r.proposalInFlight = false
+		r.proposalInFlightHash = ""
+		r.proposalStartedAt = time.Time{}
 	}
 	next := r.pendingCommits[r.committedHeight+1]
 	delete(r.pendingCommits, r.committedHeight+1)
@@ -729,6 +738,41 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		}
 	}
 	return CommitResult{Disposition: CommitApplied, Block: next}, nil
+}
+
+func (r *NodeRuntime) expireStaleProposal(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	r.mu.Lock()
+	if !r.proposalInFlight || r.proposalInFlightHash == "" || r.proposalStartedAt.IsZero() || time.Since(r.proposalStartedAt) < timeout {
+		r.mu.Unlock()
+		return
+	}
+	hash := r.proposalInFlightHash
+	if r.committed[hash] || r.committing[hash] || r.proposalQuorumReachedLocked(hash) {
+		r.mu.Unlock()
+		return
+	}
+	block := r.proposals[hash]
+	r.proposalInFlight = false
+	r.proposalInFlightHash = ""
+	r.proposalStartedAt = time.Time{}
+	delete(r.proposals, hash)
+	delete(r.votes, hash)
+	r.lastProposalError = "proposal_timeout_released"
+	if block.BlockHash != "" {
+		r.pool.ReleaseReserved(block.TxList)
+	}
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) proposalQuorumReachedLocked(hash string) bool {
+	votes := r.votes[hash]
+	if len(votes) == 0 || len(r.node.Validators) == 0 || r.plugins.Consensus == nil {
+		return false
+	}
+	return len(votes) >= r.plugins.Consensus.Quorum(len(r.node.Validators))
 }
 
 func (r *NodeRuntime) rollbackCommitFailure(blockHash string, stateBefore map[string]string, stateCheckpoint state.FileCheckpoint, checkpoint storage.ArtifactCheckpoint, cause error) error {
@@ -790,7 +834,10 @@ func (r *NodeRuntime) onCommittedTxWithOrigin(ctx context.Context, item tx.Signe
 		return
 	}
 	if r.plugins.CrossShard.IsCrossShard(item) {
-		target := strings.TrimPrefix(item.Payload, "v5_cross:")
+		target := crossTargetShard(item.Payload)
+		if target == "" || target == r.node.ShardID {
+			return
+		}
 		r.recordEvent(item.TxID, r.node.ShardID, target, "SourceLock", true, "")
 		relay := Relay{Tx: item, LogicalTxID: item.TxID, SourceShard: r.node.ShardID, TargetShard: target}
 		envelope, err := p2p.NewEnvelope(p2p.MessageXShardRelay, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, relay)
@@ -799,6 +846,15 @@ func (r *NodeRuntime) onCommittedTxWithOrigin(ctx context.Context, item tx.Signe
 		}
 	}
 }
+
+func crossTargetShard(payload string) string {
+	target := strings.TrimPrefix(payload, "v5_cross:")
+	if colon := strings.Index(target, ":"); colon >= 0 {
+		return target[:colon]
+	}
+	return target
+}
+
 func (r *NodeRuntime) leaderID(shard string) string {
 	for _, item := range r.plan.NodeConfigs {
 		if item.ShardID == shard && item.Leader {
@@ -913,7 +969,9 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	for txID := range r.relaySource {
 		pendingRelayIDs = append(pendingRelayIDs, txID)
 	}
-	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": r.committedHeight, "committed_block_hash": r.committedHash, "mempool_depth": r.pool.Len(), "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": r.proposalInFlight, "last_proposal_error": r.lastProposalError, "fatal_persistence_error": r.fatalPersistenceError, "pending_commit_count": len(r.pendingCommits), "pending_commit_heights": mapKeys(r.pendingCommits), "pending_commit_errors": r.pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": len(r.relaySource), "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": r.relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "last_progress_at": r.lastProgressAt, "ready": true, "stopping": false}
+	mempoolIDs := r.pool.IDs()
+	sort.Strings(mempoolIDs)
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": r.committedHeight, "committed_block_hash": r.committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": r.proposalInFlight, "last_proposal_error": r.lastProposalError, "fatal_persistence_error": r.fatalPersistenceError, "pending_commit_count": len(r.pendingCommits), "pending_commit_heights": mapKeys(r.pendingCommits), "pending_commit_errors": r.pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": len(r.relaySource), "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": r.relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "last_progress_at": r.lastProgressAt, "ready": true, "stopping": false}
 	r.mu.Unlock()
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
 }

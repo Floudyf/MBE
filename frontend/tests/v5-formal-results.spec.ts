@@ -13,9 +13,9 @@ test("shows persisted V5 results, runtime evidence, and real artifacts", async (
   await page.getByLabel("cross_shard_ratio").fill("0.25");
   await page.getByLabel("seeds").fill("31");
   await page.getByLabel("repeats").fill("1");
-  await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+  await page.getByTestId("v5-formal-preview-button").click();
   await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("矩阵行数：1");
-  await page.getByRole("button", { name: "启动真实集群实验组" }).click();
+  await page.getByTestId("v5-start-run-group-button").click();
   await expect.poll(async () => page.getByTestId("v5-formal-group-summary").innerText(), { timeout: 180_000 }).toContain("已完成");
   const groupId = await page.locator("code").filter({ hasText: "v5grp_" }).innerText();
   expect(groupId).toMatch(/^v5grp_[A-Za-z0-9_]+$/);

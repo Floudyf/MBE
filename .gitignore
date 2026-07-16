@@ -25,6 +25,20 @@ experiments/runs/
 *.jsonl.gz
 !tests/golden/*.jsonl.gz
 
+# V5 workload data plane definitions are tracked; local source and generated
+# workload caches remain local-only.
+!/data/
+!/data/workloads/
+!/data/workloads/manifests/
+!/data/workloads/manifests/**
+!/data/workloads/schemas/
+!/data/workloads/schemas/**
+!/data/workloads/samples/
+!/data/workloads/samples/**
+/dcl_sales_workload_chain_ready.csv
+/data_local/workloads/
+/.cache/workloads/
+
 # Local tooling
 .env
 .idea/

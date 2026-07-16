@@ -55,6 +55,20 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
     if spec.duration_ms > RESOURCE_POLICY["max_runtime_seconds"] * 1000:
         blockers.append("duration exceeds max_runtime_seconds resource policy")
     workload_config = by_category.get("workload").config if by_category.get("workload") else {}
+    source = spec.workload_source
+    if source and source.source_type == "dataset":
+        if by_category.get("workload") and by_category["workload"].plugin_id != "canonical_trace_replay":
+            blockers.append("dataset workload_source requires canonical_trace_replay workload plugin")
+        if source.variant_mode == "original_window" and source.target_alpha is not None:
+            blockers.append("original_window workload_source does not allow target_alpha")
+        if source.variant_mode in {"contract_zipf", "key_zipf"} and source.target_alpha is None:
+            blockers.append("derived workload_source requires target_alpha")
+        if source.variant_mode in {"contract_zipf", "key_zipf"} and not source.skew_axis:
+            blockers.append("derived workload_source requires skew_axis")
+        if float(workload_config.get("cross_shard_ratio", 0.0) or 0.0) != 0:
+            blockers.append("dataset workload_source does not allow cross_shard_ratio")
+        if int(workload_config.get("timeout_every", 0) or 0) != 0:
+            blockers.append("dataset workload_source does not allow timeout_every")
     ratio = float(workload_config.get("cross_shard_ratio", 0.0) or 0.0)
     if spec.execution_backend == "real_cluster" and ratio > 0 and _cross_shard_fault_unsupported(spec.fault_policy):
         blockers.append("cross-shard experiments with message loss or node restart are not supported because Relay/SourceFinalize reliable retransmission is not implemented")

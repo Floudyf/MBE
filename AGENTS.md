@@ -2,25 +2,42 @@
 
 ## Project
 
-This repository implements MBE, a metaverse blockchain experiment platform. The stable baseline is V3-final: a local modular light-runtime and experiment-console baseline with reproducible artifacts, fault-observation MVP, metaverse workload suite, formal benchmark console, and explicit truth boundaries.
+This repository implements MBE, a metaverse blockchain experiment platform. The current stable product baseline is the V5 Formal Experiment Workflow: V5 Method Design, runnable saved Method Profiles, Formal RunGroups, local independent-process `real_cluster` execution, results, artifacts, and explicit truth boundaries. V3-final and V4 realism paths remain preserved historical compatibility and regression baselines.
 
-The next active planning direction, only when explicitly requested by the user, is V4: MBE Realism Runtime. V4 aims to upgrade the lower runtime from a configuration-driven local light runtime into a real multi-node sharded-chain emulator while preserving the V3 platform as a stable fallback and baseline.
+The next active implementation direction, only when explicitly requested by the user, is the V5 Workload Data Plane. It extends the completed V5 Formal Experiment Workflow with registered datasets, deterministic materialization, real dataset replay, and derived skew workloads. V3 and V4 remain historical compatibility and regression baselines with their original truth boundaries.
 
 ## Current Baseline And Next Direction
 
 Stable baseline:
 
 ```text
-V3-final = light runtime / formal experiment console / reproducibility baseline
+V5 Formal Experiment Workflow = synthetic formal workflow / local real_cluster / results and reproducibility baseline
 ```
 
-Active V4 target after explicit user request:
+The next explicitly authorized implementation is:
 
 ```text
-V4 = MBE Realism Runtime
+V5 Workload Data Plane implementation
 ```
 
-V4 must not be developed by silently mutating V3 preview/MVP components into overclaimed features. It must add a new realism runtime path and keep truth labels clear.
+This is not V5.3, V5.2.1, or V6. It must preserve V3/V4 truth boundaries and must not silently route dataset work to the synthetic workload.
+
+The implemented workload data plane uses a generic `mbe_workload_record_v1`
+canonical contract. Decentraland is the first formal real-data adapter, and
+additional sources should be added by manifest + adapter or by providing a
+file accepted by `canonical_csv_v1`. Runtime nodes, consensus, state storage,
+cross-shard protocol, and result collection consume only the generic workload
+record and do not know the original source format.
+
+## V5 Workload Data Plane Safety
+
+- Workload is a Run condition, not a Method Design variable. Saved V5 methods continue to exclude `workload` and `fault_injection`.
+- Full CSV, canonical traces, and materialized workloads do not enter Git. Raw data is read-only; materializer output belongs in `.cache/workloads`.
+- Artifacts expose dataset IDs or relative logical paths only, never local absolute paths. API/RPC credentials never enter code, documentation, data, manifests, or artifacts.
+- Dataset open/hash/schema/count failures fail the Child. There is no fallback to `deterministic_signed_synthetic`, V4 smoke, V1 replay, or Simulation.
+- Source-specific fields belong in dataset adapters and record `metadata`, not
+  in the core Go iterator or compiler contract.
+- Implement in order: dataset validation -> canonical conversion -> materialization -> ExperimentSpec -> compiler -> Go iterator -> frontend -> E2E. Read `docs/v5_workload_data_plane_design.md` before implementation.
 
 ## Non-negotiable Workflow
 
@@ -80,9 +97,9 @@ V3-final remains the stable light-runtime and experiment-console baseline. V3 ma
 
 V3 preview/MVP artifacts must remain labeled as preview/MVP/local emulator evidence.
 
-## V4 Direction
+## V4 Historical Direction
 
-V4 is opened only when the user explicitly requests it. V4 must be implemented in large bounded stages, not as scattered preview additions. The four-round plan is:
+V4 was opened as an explicitly requested historical stage. Its four-round plan is retained for compatibility and truth-boundary review:
 
 ```text
 Round 1: docs / skill / roadmap reset only.

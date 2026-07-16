@@ -56,6 +56,7 @@ import RealClusterWorkbench from "./components/v5/RealClusterWorkbench";
 import V5FormalRunPage from "./pages/V5FormalRunPage";
 import V5ResultsPage from "./pages/V5ResultsPage";
 import V5MethodDesignPage from "./pages/V5MethodDesignPage";
+import V5WorkloadLibraryPage from "./pages/WorkloadLibraryPage";
 
 type PageId =
   | "overview"
@@ -381,7 +382,7 @@ function App() {
       {activePage === "v4realism" && <RealismModePanel />}
       {activePage === "runs" && <V5ResultsPage preferredGroupId={preferredGroupId} />}
       {activePage === "artifacts" && <RunHistoryPage runs={v2Runs} selectedRunId={selectedRunId} artifacts={selectedArtifacts} selectRun={selectRun} refreshRuns={() => refreshRuns()} />}
-      {activePage === "workloads" && <WorkloadLibraryPage />}
+      {activePage === "workloads" && <V5WorkloadLibraryPage />}
       {activePage === "boundaries" && <BoundariesPage />}
       {activePage === "developer" && <DeveloperPage traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
       {activePage === "advanced" && <AdvancedPage setActivePage={navigate} traceSources={traceSources} backends={backends} protocols={protocols} sweeps={sweeps} calibrations={calibrations} v1Stages={v1Stages} />}
@@ -568,7 +569,7 @@ function RunHistoryPage({ runs, selectedRunId, artifacts, selectRun, refreshRuns
 }
 
 function BoundariesPage() {
-  return <section className="page-grid"><InfoPanel title="真实性边界" note="V5 real_cluster 是本地研究运行时，不是生产级区块链。" /><article className="final-card wide"><h3>已实现能力</h3><ul className="boundary-list"><li>每个逻辑节点独立 OS 进程、localhost TCP、签名交易、每节点独立交易池、PBFT 风格法定人数消息、确定性执行、本地持久化状态/区块/回执/交易索引、状态根一致性证据、跨片中继与最终确认、真实运行产物，以及无静默回退。</li></ul><h3>未声明能力</h3><ul className="boundary-list"><li>production blockchain=false；production PBFT=false；完整拜占庭安全=false；多服务器部署=false。</li><li>Fabric/EVM 实时后端=false；production exactly-once=false；跨片可靠重传与中途重启闭环=false。</li><li>尚未接入真实公链数据集与 Decentraland。</li></ul></article></section>;
+  return <section className="page-grid"><InfoPanel title="真实性边界" note="V5 real_cluster 是本地研究运行时，不是生产级区块链。" /><article className="final-card wide"><h3>已实现能力</h3><ul className="boundary-list"><li>每个逻辑节点独立 OS 进程、localhost TCP、签名交易、每节点独立交易池、PBFT 风格法定人数消息、确定性执行、本地持久化状态/区块/回执/交易索引、状态根一致性证据、跨片中继与最终确认、真实运行产物，以及无静默回退。</li><li>V5 workload source 可选择模拟负载或本地注册数据集；真实数据集先通过 adapter 规范化为通用 canonical workload record，再进入 real_cluster。</li></ul><h3>未声明能力</h3><ul className="boundary-list"><li>production blockchain=false；production PBFT=false；完整拜占庭安全=false；多服务器部署=false。</li><li>Fabric/EVM 实时后端=false；production exactly-once=false；跨片可靠重传与中途重启闭环=false。</li><li>Decentraland replay 是 research-grade workload modelling，不等同于 Polygon EVM 执行、合约字节码回放或完整链状态回放。</li></ul></article></section>;
 }
 
 function DeveloperPage(props: { traceSources: V2TraceSource[]; backends: V2ChainBackend[]; protocols: V2ProtocolInfo[]; sweeps: V2SweepInfo[]; calibrations: V2CalibrationInfo[]; v1Stages: V1StageStatus[] }) {
@@ -582,7 +583,7 @@ function DeveloperPage(props: { traceSources: V2TraceSource[]; backends: V2Chain
 function WorkloadLibraryPage() {
   return <section className="page-grid">
     <InfoPanel title="负载库" note="当前正式负载为确定性签名合成负载，支持片内、跨片与超时退款工况。" />
-    <article className="final-card wide"><p>cross_shard_ratio 与 timeout_every 在运行实验中设置；交易数量与随机种子也属于运行实验。</p><p>尚未接入 Decentraland 或真实公链 Raw Trace；历史 V1/V2 轨迹回放保留在高级功能中。</p></article>
+    <article className="final-card wide"><p>cross_shard_ratio 与 timeout_every 只用于模拟负载；真实数据集负载通过 workload_source、dataset manifest 和 adapter 选择原始窗口或派生偏斜物化。</p><p>Decentraland 是首个正式 adapter；其它来源可通过新增 manifest + adapter，或提供符合 canonical_csv_v1 的通用字段文件接入。</p></article>
     <article className="final-card wide">
       <h3>负载接入边界</h3>
       <p className="muted">V5 Formal 当前仅运行确定性签名合成负载。它是合成输入，不是实际元宇宙数据或真实公链数据集；执行前请在运行实验中预览正式实验矩阵。</p>

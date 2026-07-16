@@ -8,13 +8,14 @@ test("comparison preview requires two methods and expands both methods across se
     await page.getByTestId("primary-navigation").getByRole("button", { name: "② 运行实验" }).click();
     await page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox").check();
     await selectOnlySuite(page, "comparison_experiment");
-    await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+    await page.getByLabel("tx_count").fill("20");
+    await page.getByTestId("v5-formal-preview-button").click();
     await expect(page.getByTestId("v5-formal-run-page")).toContainText("方法对比实验至少需要两个方法");
     await expect(page.locator("[data-method-config-id]")).toHaveCount(0);
     await page.getByTestId(`v5-run-method-${method.config_id}`).getByRole("checkbox").check();
     await page.getByLabel("seeds").fill("11,12");
     const preview = page.waitForResponse((response) => response.url().includes("/api/v5/formal/preview") && response.request().method() === "POST");
-    await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+    await page.getByTestId("v5-formal-preview-button").click();
     const body = await (await preview).json();
     expect(body.rows).toHaveLength(4);
     for (const id of ["v5_catalog_default", method.config_id]) {

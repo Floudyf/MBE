@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"metaverse-chainlab/executor/realism/p2p"
@@ -151,5 +152,83 @@ func TestSubmitWorkloadRejectsCrossShardRatioOnSingleShard(t *testing.T) {
 	plan := Plan{NodeConfigs: []NodePlan{{NodeID: "n0", ShardID: "s0", Leader: true, PluginProfile: profile}}, WorkloadPlan: WorkloadPlan{TxCount: 1, CrossShardRatio: 0.5}}
 	if err := SubmitWorkload(context.Background(), plan, t.TempDir()); err == nil {
 		t.Fatal("single shard cross-shard workload was not rejected")
+	}
+}
+
+func TestSubmitDatasetWorkloadUsesBuyerHomeShardAsIngress(t *testing.T) {
+	listeners := make([]net.Listener, 2)
+	for i := range listeners {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		listeners[i] = listener
+		go func(ln net.Listener) {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer conn.Close()
+					reader := bufio.NewReader(conn)
+					for {
+						if _, _, err := p2p.DecodeReader(reader); err != nil {
+							return
+						}
+					}
+				}()
+			}
+		}(listener)
+	}
+	defer func() {
+		for _, listener := range listeners {
+			_ = listener.Close()
+		}
+	}()
+	profile := map[string]PluginConfig{}
+	for _, category := range Categories {
+		profile[category] = PluginConfig{PluginID: firstPlugin(category), Config: map[string]any{}}
+	}
+	profile["workload"] = PluginConfig{PluginID: "canonical_trace_replay", Config: map[string]any{}}
+	out := t.TempDir()
+	records := []map[string]any{}
+	for index := 0; index < 32; index++ {
+		buyer := "0x" + strings.Repeat("0", 40-len(strconv.Itoa(index+1))) + strconv.Itoa(index+1)
+		contract := "0x" + strings.Repeat("0", 40-len(strconv.Itoa(index+101))) + strconv.Itoa(index+101)
+		records = append(records, canonicalRecord(index, buyer, contract))
+	}
+	relative, hash := writeCanonicalFixture(t, filepath.Join(out, ".cache", "workloads"), records)
+	plan := Plan{NodeConfigs: []NodePlan{
+		{NodeID: "n0", ShardID: "s0", Leader: true, ListenAddr: listeners[0].Addr().String(), PluginProfile: profile},
+		{NodeID: "n1", ShardID: "s1", Leader: true, ListenAddr: listeners[1].Addr().String(), PluginProfile: profile},
+	}, WorkloadPlan: canonicalPlan(relative, hash, len(records))}
+	if err := SubmitWorkload(context.Background(), plan, out); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(filepath.Join(out, "client_submission_log.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(file).ReadAll()
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != len(records)+1 {
+		t.Fatalf("unexpected submission rows: %v", rows)
+	}
+	crossRows := 0
+	for _, row := range rows[1:] {
+		if row[6] != "true" {
+			continue
+		}
+		crossRows++
+		if row[7] == "" || row[8] == "" || row[7] == row[8] {
+			t.Fatalf("dataset cross-shard submission did not use distinct source/target shards: %v", row)
+		}
+	}
+	if crossRows == 0 {
+		t.Fatal("fixture did not produce any dataset cross-shard submissions")
 	}
 }

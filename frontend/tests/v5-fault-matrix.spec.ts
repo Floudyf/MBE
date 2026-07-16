@@ -6,6 +6,7 @@ test("fault matrix only exposes runtime-supported modes and blocks cross-shard p
   await page.getByTestId("primary-navigation").getByRole("button", { name: "② 运行实验" }).click();
   await page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox").check();
   await selectOnlySuite(page, "fault_recovery_experiment");
+  await page.getByLabel("tx_count").fill("20");
   const editor = page.getByTestId("v5-point-editor-故障扫描点");
   await editor.getByRole("button", { name: "添加扫描点" }).click();
   await editor.getByRole("button", { name: "添加扫描点" }).click();
@@ -18,7 +19,7 @@ test("fault matrix only exposes runtime-supported modes and blocks cross-shard p
   await expect(editor.getByLabel("drop_rate")).toBeVisible();
   await editor.getByLabel("drop_rate").fill("0.1");
   const allowed = page.waitForResponse((response) => response.url().includes("/api/v5/formal/preview") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+  await page.getByTestId("v5-formal-preview-button").click();
   const allowedBody = await (await allowed).json();
   expect(allowedBody.rows).toHaveLength(2);
   expect(allowedBody.rows.map((row: { fault_point: { mode: string } }) => row.fault_point.mode).sort()).toEqual(["disabled", "network_drop"]);
@@ -31,10 +32,10 @@ test("fault matrix only exposes runtime-supported modes and blocks cross-shard p
   let createCount = 0;
   page.on("request", (request) => { if (request.url().includes("/api/v5/formal/run-groups") && request.method() === "POST") createCount += 1; });
   const blocked = page.waitForResponse((response) => response.url().includes("/api/v5/formal/preview") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "预览正式实验矩阵" }).click();
+  await page.getByTestId("v5-formal-preview-button").click();
   const blockedBody = await (await blocked).json();
   expect(blockedBody.rows.some((row: { runnable: boolean; blockers: string[] }) => !row.runnable && row.blockers.some((blocker) => blocker.includes("retransmission")))).toBe(true);
   await expect(page.getByTestId("v5-formal-run-page")).toContainText("可靠重传");
-  await expect(page.getByRole("button", { name: "启动真实集群实验组" })).toBeDisabled();
+  await expect(page.getByTestId("v5-start-run-group-button")).toBeDisabled();
   expect(createCount).toBe(0);
 });

@@ -188,7 +188,7 @@ func runV5(planPath, dataDir string) error {
 		commands = append(commands, cmd)
 		processes = append(processes, v5NodeProcess{NodeID: nodePlan.NodeID, ShardID: nodePlan.ShardID, PID: cmd.Process.Pid, ListenAddr: nodePlan.ListenAddr, DataDir: nodePlan.DataDir, LogPath: logPath})
 	}
-	if err := v5.SaveJSON(filepath.Join(dataDir, "process_manifest.json"), map[string]any{"one_node_one_os_process": true, "processes": processes, "expected_process_count": len(plan.NodeConfigs)}); err != nil {
+	if err := v5.SaveJSON(filepath.Join(dataDir, "process_manifest.json"), map[string]any{"one_node_one_os_process": true, "processes": redactV5Processes(processes, dataDir), "expected_process_count": len(plan.NodeConfigs)}); err != nil {
 		return err
 	}
 	if err := waitReady(plan, 10*time.Second); err != nil {
@@ -207,7 +207,13 @@ func runV5(planPath, dataDir string) error {
 		reap(commands)
 		return fmt.Errorf("real client submit: %w", err)
 	}
+	_ = copyIfExists(filepath.Join(dataDir, "client", "workload_replay_summary.json"), filepath.Join(dataDir, "workload_replay_summary.json"))
+	_ = copyIfExists(filepath.Join(dataDir, "client", "workload_identity_mapping_summary.json"), filepath.Join(dataDir, "workload_identity_mapping_summary.json"))
 	if err := drainV5(plan, dataDir); err != nil {
+		reap(commands)
+		return err
+	}
+	if err := writeRedactedV5PlanArtifacts(plan, dataDir, planPath); err != nil {
 		reap(commands)
 		return err
 	}
@@ -233,6 +239,9 @@ func runV5(planPath, dataDir string) error {
 	}
 	if value, ok := finality["cross_shard_refunded_unique_count"].(int); ok {
 		summary["cross_shard_refund_count"] = value
+	}
+	if replay := readOptionalJSON(filepath.Join(dataDir, "workload_replay_summary.json")); replay != nil {
+		summary["workload_replay_summary"] = replay
 	}
 	if err := v5.SaveJSON(filepath.Join(dataDir, "real_cluster_summary.json"), summary); err != nil {
 		return err
@@ -282,7 +291,7 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			if value := fmt.Sprint(status["fatal_persistence_error"]); value != "" && value != "<nil>" {
 				fatalPersistence = value
 			}
-			for _, key := range []string{"mempool_depth", "reserved_tx_count", "pending_commit_count", "pending_future_block_count", "pending_cross_shard_count"} {
+			for _, key := range []string{"reserved_tx_count", "pending_commit_count", "pending_future_block_count", "pending_cross_shard_count"} {
 				if number(status[key]) != 0 {
 					allEmpty = false
 				}
@@ -302,6 +311,9 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			return err
 		}
 		terminal = liveTerminal
+		if hasNonTerminalMempool(statuses, terminal) {
+			allEmpty = false
+		}
 		aligned := true
 		for _, values := range heights {
 			if len(values) != 1 {
@@ -427,6 +439,21 @@ func stringSlice(value any) []string {
 		}
 	}
 	return items
+}
+
+func hasNonTerminalMempool(statuses []map[string]any, terminal map[string]bool) bool {
+	for _, status := range statuses {
+		ids := stringSlice(status["mempool_logical_tx_ids"])
+		if len(ids) == 0 && number(status["mempool_depth"]) > 0 {
+			return true
+		}
+		for _, id := range ids {
+			if !terminal[id] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 type lifecycleRecord struct {
@@ -572,16 +599,16 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 		return nil, err
 	}
 	type aggregate struct {
-		submitted     int64
-		cross         bool
+		submitted        int64
+		cross            bool
 		durableCommitted bool
-		targetCommit  bool
-		crossFinal    bool
-		crossRefund   bool
-		failed        bool
-		terminal      int64
-		terminalStage string
-		success       bool
+		targetCommit     bool
+		crossFinal       bool
+		crossRefund      bool
+		failed           bool
+		terminal         int64
+		terminalStage    string
+		success          bool
 	}
 	byLogical := map[string]*aggregate{}
 	for logicalID, isCross := range classification {
@@ -744,6 +771,26 @@ func buildBinary(output, target string) error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
+
+func copyIfExists(source, target string) error {
+	raw, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(target, raw, 0o644)
+}
+
+func readOptionalJSON(path string) map[string]any {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out map[string]any
+	if json.Unmarshal(raw, &out) != nil {
+		return nil
+	}
+	return out
+}
 func allocateAddress() (string, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -852,7 +899,44 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	ready := len(pids) == len(plan.NodeConfigs) && len(ports) == len(plan.NodeConfigs) && consistent && allActive && pbftCount == len(plan.NodeConfigs) && clientInfo != nil
 	faultRequested := fmt.Sprint(plan.FaultPlan["mode"]) != "" && fmt.Sprint(plan.FaultPlan["mode"]) != "disabled"
 	ready = ready && (!faultRequested || faultEvidence)
-	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "fault_injection_real": faultEvidence, "fault_injection_requested": faultRequested, "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": processes, "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
+	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "fault_injection_real": faultEvidence, "fault_injection_requested": faultRequested, "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": redactV5Processes(processes, dataDir), "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
+}
+
+func redactV5Processes(processes []v5NodeProcess, dataDir string) []v5NodeProcess {
+	redacted := make([]v5NodeProcess, 0, len(processes))
+	for _, process := range processes {
+		item := process
+		item.DataDir = v5LogicalPath(dataDir, process.DataDir)
+		item.LogPath = v5LogicalPath(dataDir, process.LogPath)
+		redacted = append(redacted, item)
+	}
+	return redacted
+}
+
+func writeRedactedV5PlanArtifacts(plan v5.Plan, dataDir, planPath string) error {
+	redacted := plan
+	redacted.NodeConfigs = append([]v5.NodePlan(nil), plan.NodeConfigs...)
+	for index := range redacted.NodeConfigs {
+		redacted.NodeConfigs[index].DataDir = v5LogicalPath(dataDir, plan.NodeConfigs[index].DataDir)
+	}
+	if err := v5.SaveJSON(planPath, redacted); err != nil {
+		return err
+	}
+	for _, nodePlan := range redacted.NodeConfigs {
+		configPath := filepath.Join(dataDir, "node_config_"+nodePlan.NodeID+".json")
+		if err := v5.SaveJSON(configPath, map[string]any{"plan": redacted, "node_id": nodePlan.NodeID}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func v5LogicalPath(dataDir, target string) string {
+	rel, err := filepath.Rel(dataDir, target)
+	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return filepath.ToSlash(filepath.Base(target))
+	}
+	return filepath.ToSlash(rel)
 }
 
 func writeHeightRootMatrix(dataDir string, nodes []v5.NodePlan) error {

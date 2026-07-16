@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest, V3SavedConfigUpdateRequest
+import backend.app.services.v3_saved_config_store as saved_config_store
 from backend.app.services.v3_saved_config_store import create_saved_config, delete_saved_config, get_saved_config, list_saved_configs, update_saved_config
 
 
@@ -55,3 +57,24 @@ def test_saved_workload_and_topology_payloads(tmp_path: Path) -> None:
     assert workload["config_kind"] == "workload"
     assert topology["payload"]["topology"]["state_backend"] == "merkle_trie_mvp"
     assert len(list_saved_configs(kind="workload", root=tmp_path)) == 1
+
+
+def test_list_saved_configs_tolerates_deleted_file_after_glob(tmp_path: Path, monkeypatch: Any) -> None:
+    create_saved_config(
+        V3SavedConfigCreateRequest(
+            config_kind="method",
+            name="transient method",
+            payload={"modules": {}},
+        ),
+        root=tmp_path,
+    )
+
+    original_read = saved_config_store._read
+
+    def delete_before_read(path: Path) -> dict[str, Any]:
+        path.unlink()
+        return original_read(path)
+
+    monkeypatch.setattr(saved_config_store, "_read", delete_before_read)
+
+    assert list_saved_configs(root=tmp_path) == []

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MBE Dataset Manifest v1",
+  "type": "object",
+  "required": ["schema_version", "dataset_id", "display_name", "source_platform", "source_endpoint", "source_chain", "dataset_type", "adapter_id", "supported_variants", "source_format", "local_raw_relative_path", "source_sha256", "row_count", "unique_source_tx_hash_count", "time_start_ms", "time_end_ms", "truth_label", "collection_method", "generator_version"],
+  "properties": {
+    "schema_version": {"const": "mbe_dataset_manifest_v1"},
+    "dataset_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "adapter_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "supported_variants": {"type": "array", "items": {"enum": ["original_window", "contract_zipf", "key_zipf"]}, "minItems": 1},
+    "supported_skew_axes": {"type": "array", "items": {"type": "string"}},
+    "default_skew_axis": {"type": ["string", "null"]},
+    "local_raw_relative_path": {"type": "string", "pattern": "^[^\\\\:]+$"},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "canonical_sha256": {"type": "string"},
+    "row_count": {"type": "integer", "minimum": 1},
+    "unique_source_tx_hash_count": {"type": "integer", "minimum": 1},
+    "time_start_ms": {"type": "integer", "minimum": 0},
+    "time_end_ms": {"type": "integer", "minimum": 0}
+  }
+}

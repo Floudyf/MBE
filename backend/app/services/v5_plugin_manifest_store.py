@@ -47,7 +47,7 @@ def _manifest(category: str, plugin_id: str, display_name: str, description: str
               config: dict | None = None, schema: dict | None = None, capabilities: list[str] | None = None,
               requirements: list[str] | None = None, metrics: list[dict] | None = None,
               aliases: list[str] | None = None) -> V5PluginManifest:
-    display_name_zh, description_zh = _ZH[plugin_id]
+    display_name_zh, description_zh = _ZH.get(plugin_id, (display_name, description))
     return V5PluginManifest(
         plugin_id=plugin_id, category=category, display_name=display_name, description=description,
         display_name_zh=display_name_zh, description_zh=description_zh,
@@ -60,6 +60,7 @@ def _manifest(category: str, plugin_id: str, display_name: str, description: str
 
 _MANIFESTS = [
     _manifest("workload", "deterministic_signed_synthetic", "Deterministic Signed Synthetic", "Deterministic signed workload with intra-shard, relay, and timeout cases.", config={"cross_shard_ratio": 0.25, "timeout_every": 17}, schema=_schema({"cross_shard_ratio": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.25}, "timeout_every": {"type": "integer", "minimum": 0, "maximum": 1000, "default": 17}}), metrics=[{"key": "submitted_tx_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Transactions submitted over TCP."}]),
+    _manifest("workload", "canonical_trace_replay", "Canonical Trace Replay", "Streams deterministic materialized dataset workload records.", config={}, schema=_schema({"dataset_id": {"type": "string"}, "variant_mode": {"type": "string", "enum": ["original_window", "contract_zipf", "key_zipf"]}, "skew_axis": {"type": ["string", "null"]}, "target_alpha": {"type": ["number", "null"]}}), capabilities=["dataset_replay", "gzip_streaming", "no_fallback"], metrics=[{"key": "workload_replay_read_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Canonical workload records read by the client."}]),
     _manifest("transaction_admission", "signature_nonce_admission", "Signature and Nonce Admission", "Ed25519 signature, sender/public-key binding, and nonce admission.", capabilities=["signed_tx", "nonce_validation"]),
     _manifest("txpool", "fifo_per_node_mempool", "FIFO Per-node Mempool", "Independent FIFO mempool on every node.", config={"capacity": 10000}, schema=_schema({"capacity": {"type": "integer", "minimum": 100, "maximum": 100000, "default": 10000}})),
     _manifest("sharding", "deterministic_state_key_sharding", "Deterministic State-key Sharding", "Maps account/state keys to a configured shard.", capabilities=["multi_shard"]),
