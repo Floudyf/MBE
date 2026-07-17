@@ -182,6 +182,20 @@ not fall back to the legacy engine after a block executor failure.
 
 The UI must show implementation status, backend support, parameter ranges, dependencies, conflicts, truth boundary, and metrics. Formal Real Cluster requires all selected plugins to support `real_cluster`.
 
+## 7.3 Block-STM Reproduction Rule
+
+Block-STM work must start from `docs/reproductions/block_stm/`. The locked
+paper source is arXiv:2203.06871v3, and the locked Aptos reference source is
+`aptos-labs/aptos-core` commit `20f9379515358add43f4042693462aaedd654826`.
+
+Do not call an executor `block_stm` unless it implements the core mechanism:
+preset transaction order, transaction version `(transaction_index,
+incarnation)`, MVMemory, captured reads, registered writes, validation,
+abort/re-execution, ESTIMATE, dependency waiting, collaborative execution and
+validation tasks, deterministic ordered output, and Serial equivalence. A static
+conflict graph, StateKeys-only grouping, wave batching, or ordinary optimistic
+lock loop is not Block-STM.
+
 ## 8. Backend Rule
 
 Use layered services:
