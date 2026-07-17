@@ -182,3 +182,13 @@ still treating a true progress stall as failure.
 ## Non-Goals
 
 This stage does not implement any external paper algorithm, parallel validation, speculative execution, MVMemory, incarnation, estimates, re-execution, or consensus-bound execution plans.
+
+## Next Reproduction Dossier
+
+The follow-on Block-STM dossier is in `docs/reproductions/block_stm/`. It locks
+the paper to arXiv:2203.06871v3 and the Aptos source reference to
+`aptos-labs/aptos-core` commit
+`20f9379515358add43f4042693462aaedd654826`. That dossier is a mechanism source
+lock and mapping only; the Serial foundation remains the only implemented block
+executor until a separate `block_stm` executor passes its equivalence and
+real-cluster acceptance matrix.

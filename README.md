@@ -42,6 +42,12 @@ Batch-SI, SmallBank, Geth TxPool, OptChain, HotStuff, S-BAC, or any external
 paper mechanism. The legacy `execution` and `scheduler` plugin categories keep
 their existing classification and ordering meaning.
 
+The next local reproduction dossier, `docs/reproductions/block_stm/`, locks
+Block-STM to arXiv:2203.06871v3 and Aptos `aptos-core` commit
+`20f9379515358add43f4042693462aaedd654826`. This is a source lock and mechanism
+mapping only until a `block_stm` block executor passes Serial equivalence and
+real-cluster acceptance.
+
 | Capability | Status |
 | --- | --- |
 | V5 synthetic Formal RunGroup | Complete |
