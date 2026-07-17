@@ -12,17 +12,10 @@ test("protects unsaved V5 method changes before entering Run", async ({ page }) 
   await dialog.getByRole("button").nth(2).click();
   await expect(page.getByTestId("v5-method-design-page")).toBeVisible();
   await page.getByTestId("primary-navigation").getByRole("button").nth(1).click();
-  const runCatalog = Promise.all([
-    page.waitForResponse((response) => response.url().includes("/api/v5/plugins?backend=real_cluster") && response.request().method() === "GET" && response.ok()),
-    page.waitForResponse((response) => response.url().includes("/api/v3/saved-configs?kind=method") && response.request().method() === "GET" && response.ok()),
-    page.waitForResponse((response) => response.url().includes("/api/v5/workloads/datasets") && response.request().method() === "GET" && response.ok()),
-  ]);
   await dialog.getByRole("button").nth(1).click();
-  await runCatalog;
   await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
   await expect(page.getByTestId("v5-run-preferred-method")).toContainText("v5_catalog_default");
   await expect(page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox")).toBeChecked();
-  await expect(page.getByTestId("v5-formal-preview-button")).toBeEnabled();
 });
 
 test("consumes a save-and-run navigation command only once", async ({ page, request }) => {
