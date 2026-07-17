@@ -37,5 +37,6 @@ class V5PluginManifest(BaseModel):
     runtime_factory: str = ""
     runtime_adapter: str = ""
     truth_boundary: str = "v5_real_cluster_candidate"
+    source: dict[str, Any] = Field(default_factory=dict)
     legacy_aliases: list[str] = Field(default_factory=list)
     schema_version: str = "v5_plugin_manifest_v1"

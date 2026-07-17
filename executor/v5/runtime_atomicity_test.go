@@ -10,7 +10,6 @@ import (
 
 	"metaverse-chainlab/executor/realism/account"
 	realblock "metaverse-chainlab/executor/realism/block"
-	"metaverse-chainlab/executor/realism/execution"
 	"metaverse-chainlab/executor/realism/mempool"
 	"metaverse-chainlab/executor/realism/p2p"
 	"metaverse-chainlab/executor/realism/state"
@@ -57,7 +56,7 @@ func TestCommitRollbackFailureFreezesRuntime(t *testing.T) {
 	store := storage.NewBlockStore(storeDir, "n0", "s0")
 	store.SetFailpointForTest("after_block_append")
 	store.SetRollbackFailpointForTest(true)
-	runtime := &NodeRuntime{node: NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root}, pool: pool, proposer: proposer, db: db, store: store, engine: execution.NewEngine(), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, committedHash: "genesis", pluginSnapshot: profile, plugins: plugins}
+	runtime := &NodeRuntime{node: NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root}, pool: pool, proposer: proposer, db: db, store: store, proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, committedHash: "genesis", pluginSnapshot: profile, plugins: plugins}
 	if err := runtime.commit(context.Background(), b); err == nil {
 		t.Fatal("expected injected rollback failure")
 	}
@@ -113,7 +112,7 @@ func testCommitDurableFailure(t *testing.T, failpoint string) {
 	}
 	store := storage.NewBlockStore(storeDir, "n0", "s0")
 	store.SetFailpointForTest(failpoint)
-	runtime := &NodeRuntime{node: NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root}, pool: pool, proposer: proposer, db: db, store: store, engine: execution.NewEngine(), proposals: map[string]realblock.Block{block.BlockHash: block}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, committedHash: "genesis", pluginSnapshot: profile, plugins: plugins}
+	runtime := &NodeRuntime{node: NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root}, pool: pool, proposer: proposer, db: db, store: store, proposals: map[string]realblock.Block{block.BlockHash: block}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, committedHash: "genesis", pluginSnapshot: profile, plugins: plugins}
 	if err := runtime.commit(context.Background(), block); err == nil {
 		t.Fatal("expected durable commit failure")
 	}
@@ -223,6 +222,59 @@ func TestExpireStaleProposalDoesNotReleaseQuorumOrCommittingProposal(t *testing.
 	}
 }
 
+func TestProposalTimeoutScalesWithBlockProducerConfig(t *testing.T) {
+	runtime, _, _ := proposalRuntimeForTest(t, "proposal-timeout-budget")
+	runtime.node.PluginProfile["block_producer"] = PluginConfig{PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 100, "interval_ms": 75}}
+	plugins, err := InstantiatePlugins(runtime.node.PluginProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.plugins = plugins
+	if got := runtime.proposalTimeout(); got < 15*time.Second || got > 16*time.Second {
+		t.Fatalf("unexpected proposal timeout for 100 tx block: %s", got)
+	}
+	runtime.node.PluginProfile["block_producer"] = PluginConfig{PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 1000, "interval_ms": 1000}}
+	plugins, err = InstantiatePlugins(runtime.node.PluginProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.plugins = plugins
+	if got := runtime.proposalTimeout(); got != 60*time.Second {
+		t.Fatalf("proposal timeout hard cap changed: %s", got)
+	}
+}
+
+func TestCatchupRequestIntervalTracksProposalTimeout(t *testing.T) {
+	runtime, _, _ := proposalRuntimeForTest(t, "catchup-budget")
+	runtime.node.PluginProfile["block_producer"] = PluginConfig{PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 10, "interval_ms": 75}}
+	plugins, err := InstantiatePlugins(runtime.node.PluginProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.plugins = plugins
+	if got := runtime.catchupRequestInterval(); got != 10*time.Second {
+		t.Fatalf("small-block catch-up interval should keep the minimum guard: %s", got)
+	}
+	runtime.node.PluginProfile["block_producer"] = PluginConfig{PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 100, "interval_ms": 75}}
+	plugins, err = InstantiatePlugins(runtime.node.PluginProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.plugins = plugins
+	if got := runtime.catchupRequestInterval(); got < 15*time.Second || got > 16*time.Second {
+		t.Fatalf("catch-up interval did not track proposal timeout: %s", got)
+	}
+}
+
+func TestRuntimeStatusWriteIntervalIsThrottled(t *testing.T) {
+	if got := runtimeStatusWriteInterval(75 * time.Millisecond); got != time.Second {
+		t.Fatalf("fast block intervals should not rewrite large status files every tick: %s", got)
+	}
+	if got := runtimeStatusWriteInterval(2 * time.Second); got != 2*time.Second {
+		t.Fatalf("slow block intervals should preserve their cadence: %s", got)
+	}
+}
+
 func proposalRuntimeForTest(t *testing.T, seed string) (*NodeRuntime, realblock.Block, []tx.SignedTransaction) {
 	t.Helper()
 	root := t.TempDir()
@@ -256,12 +308,11 @@ func proposalRuntimeForTest(t *testing.T, seed string) (*NodeRuntime, realblock.
 		t.Fatal(err)
 	}
 	runtime := &NodeRuntime{
-		node:                 NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root, Validators: []string{"n0", "n1", "n2", "n3"}},
+		node:                 NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root, Validators: []string{"n0", "n1", "n2", "n3"}, PluginProfile: profile},
 		pool:                 pool,
 		proposer:             proposer,
 		db:                   db,
 		store:                storage.NewBlockStore(storeDir, "n0", "s0"),
-		engine:               execution.NewEngine(),
 		proposals:            map[string]realblock.Block{block.BlockHash: block},
 		votes:                map[string]map[string]bool{block.BlockHash: {"n0": true}},
 		committed:            map[string]bool{},

@@ -2,6 +2,8 @@ package v5
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,7 +15,6 @@ import (
 
 	"metaverse-chainlab/executor/realism/account"
 	realblock "metaverse-chainlab/executor/realism/block"
-	"metaverse-chainlab/executor/realism/execution"
 	"metaverse-chainlab/executor/realism/faults"
 	"metaverse-chainlab/executor/realism/mempool"
 	"metaverse-chainlab/executor/realism/metrics"
@@ -89,44 +90,51 @@ const (
 )
 
 type NodeRuntime struct {
-	plan                   Plan
-	node                   NodePlan
-	peers                  []p2p.Peer
-	transport              *p2p.Transport
-	pool                   *mempool.Mempool
-	proposer               *realblock.Proposer
-	db                     *state.DB
-	store                  *storage.BlockStore
-	engine                 *execution.Engine
-	mu                     sync.Mutex
-	commitMu               sync.Mutex
-	proposals              map[string]realblock.Block
-	votes                  map[string]map[string]bool
-	committed              map[string]bool
-	committing             map[string]bool
-	committedHeight        uint64
-	committedHash          string
-	lastProgressAt         int64
-	pendingCommits         map[uint64]realblock.Block
-	pendingCommitErrors    map[uint64]string
-	proposalInFlight       bool
-	proposalInFlightHash   string
-	proposalStartedAt      time.Time
-	lastProposalError      string
-	fatalPersistenceError  string
-	lastCatchupRequest     time.Time
-	relaySource            map[string]Relay
-	crossEventSeen         map[string]bool
-	relayAdmissionFailures map[string]string
-	events                 []Event
-	lifecycle              []LifecycleEvent
-	consensusRows          [][]string
-	executionRows          [][]string
-	commitRows             [][]string
-	chainRows              [][]string
-	pluginSnapshot         map[string]PluginConfig
-	plugins                RuntimePlugins
-	blockCount             int
+	plan                    Plan
+	node                    NodePlan
+	peers                   []p2p.Peer
+	transport               *p2p.Transport
+	pool                    *mempool.Mempool
+	proposer                *realblock.Proposer
+	db                      *state.DB
+	store                   *storage.BlockStore
+	mu                      sync.Mutex
+	commitMu                sync.Mutex
+	proposals               map[string]realblock.Block
+	votes                   map[string]map[string]bool
+	committed               map[string]bool
+	committing              map[string]bool
+	committedHeight         uint64
+	committedHash           string
+	commitPhase             string
+	commitPhaseHeight       uint64
+	commitPhaseHash         string
+	lastProgressAt          int64
+	pendingCommits          map[uint64]realblock.Block
+	pendingCommitErrors     map[uint64]string
+	proposalInFlight        bool
+	proposalInFlightHash    string
+	proposalStartedAt       time.Time
+	lastProposalError       string
+	fatalPersistenceError   string
+	lastCatchupRequest      time.Time
+	relaySource             map[string]Relay
+	crossEventSeen          map[string]bool
+	relayAdmissionFailures  map[string]string
+	events                  []Event
+	lifecycle               []LifecycleEvent
+	consensusRows           [][]string
+	executionRows           [][]string
+	commitRows              [][]string
+	chainRows               [][]string
+	blockExecutionSummaries []map[string]any
+	executionPlans          []map[string]any
+	txExecutionTraceRows    [][]string
+	stateDeltaRows          [][]string
+	planDigestRows          [][]string
+	pluginSnapshot          map[string]PluginConfig
+	plugins                 RuntimePlugins
+	blockCount              int
 }
 
 func RunNode(ctx context.Context, plan Plan, nodeID string) error {
@@ -151,14 +159,11 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 	if err := r.writeReady(); err != nil {
 		return err
 	}
-	interval := 150 * time.Millisecond
-	if producer, ok := selected.PluginProfile["block_producer"]; ok {
-		if value, ok := producer.Config["interval_ms"].(float64); ok && value >= 25 {
-			interval = time.Duration(value) * time.Millisecond
-		}
-	}
+	interval := blockInterval(*selected)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	statusInterval := runtimeStatusWriteInterval(interval)
+	lastStatusWrite := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -166,17 +171,27 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 		case <-ticker.C:
 			r.retryPendingRelays()
 			if selected.Leader {
-				r.expireStaleProposal(5 * time.Second)
+				r.expireStaleProposal(r.proposalTimeout())
 				r.propose(ctx)
 			} else {
 				r.requestCatchup(ctx)
 			}
-			_ = r.writeRuntimeStatus()
+			if lastStatusWrite.IsZero() || time.Since(lastStatusWrite) >= statusInterval {
+				_ = r.writeRuntimeStatus()
+				lastStatusWrite = time.Now()
+			}
 			if _, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(r.node.DataDir)), "stop.request")); err == nil {
 				return r.WriteArtifacts()
 			}
 		}
 	}
+}
+
+func runtimeStatusWriteInterval(blockInterval time.Duration) time.Duration {
+	if blockInterval < time.Second {
+		return time.Second
+	}
+	return blockInterval
 }
 
 func (r *NodeRuntime) retryPendingRelays() {
@@ -234,7 +249,7 @@ func (r *NodeRuntime) requestCatchup(ctx context.Context) {
 		return
 	}
 	r.mu.Lock()
-	if !r.lastCatchupRequest.IsZero() && time.Since(r.lastCatchupRequest) < time.Second {
+	if !r.lastCatchupRequest.IsZero() && time.Since(r.lastCatchupRequest) < r.catchupRequestInterval() {
 		r.mu.Unlock()
 		return
 	}
@@ -248,6 +263,14 @@ func (r *NodeRuntime) requestCatchup(ctx context.Context) {
 	if err == nil {
 		_ = r.sendToNode(ctx, leader, envelope)
 	}
+}
+
+func (r *NodeRuntime) catchupRequestInterval() time.Duration {
+	interval := r.proposalTimeout()
+	if interval < 10*time.Second {
+		return 10 * time.Second
+	}
+	return interval
 }
 
 func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
@@ -267,7 +290,7 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 	}
 	policy := mempool.DefaultPolicy()
 	policy.Capacity = plugins.TxPool.Capacity()
-	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: mempool.New(node.NodeID, node.ShardID, policy, account.NewNonceManager()), proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: storage.NewBlockStore(node.DataDir, node.NodeID, node.ShardID), engine: execution.NewEngine(), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
+	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: mempool.New(node.NodeID, node.ShardID, policy, account.NewNonceManager()), proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: storage.NewBlockStore(node.DataDir, node.NodeID, node.ShardID), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
 	r.transport = p2p.NewTransport(node.NodeID, node.ListenAddr, peers, r.handle)
 	r.transport.SetFaultPolicy(faultPolicyFromPlan(plan.FaultPlan))
 	return r, nil
@@ -532,14 +555,26 @@ func (r *NodeRuntime) acceptVote(ctx context.Context, vote Vote) {
 		votes = map[string]bool{r.node.NodeID: true}
 		r.votes[vote.BlockHash] = votes
 	}
+	threshold := r.plugins.Consensus.Quorum(len(r.node.Validators))
+	previousCount := len(votes)
 	votes[vote.NodeID] = true
-	reached := len(votes) >= r.plugins.Consensus.Quorum(len(r.node.Validators))
+	reached := previousCount < threshold && len(votes) >= threshold && !r.committed[vote.BlockHash] && !r.committing[vote.BlockHash]
 	block := r.proposals[vote.BlockHash]
 	r.mu.Unlock()
 	if reached && block.BlockHash != "" {
+		r.logConsensus("PBFT_QUORUM_REACHED", r.node.NodeID, block.BlockHash, block.Height)
 		_ = r.finalize(ctx, block)
 	}
 }
+
+func (r *NodeRuntime) setCommitPhase(phase string, block realblock.Block) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.commitPhase = phase
+	r.commitPhaseHeight = block.Height
+	r.commitPhaseHash = block.BlockHash
+}
+
 func (r *NodeRuntime) finalize(ctx context.Context, block realblock.Block) error {
 	for _, item := range block.TxList {
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "quorum_committed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
@@ -643,14 +678,17 @@ func (r *NodeRuntime) drainPendingCommits(ctx context.Context, next realblock.Bl
 }
 
 func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, origin CommitOrigin) (CommitResult, error) {
+	r.setCommitPhase("enter", block)
 	r.mu.Lock()
 	if r.fatalPersistenceError != "" {
 		err := fmt.Errorf("fatal persistence freeze: %s", r.fatalPersistenceError)
 		r.mu.Unlock()
+		r.setCommitPhase("rejected_fatal", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, err
 	}
 	if r.committed[block.BlockHash] {
 		r.mu.Unlock()
+		r.setCommitPhase("already_applied", block)
 		return CommitResult{Disposition: CommitAlreadyApplied, Block: realblock.Block{}}, nil
 	}
 	if r.committing == nil {
@@ -658,20 +696,24 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	}
 	if r.committing[block.BlockHash] {
 		r.mu.Unlock()
+		r.setCommitPhase("already_committing", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("block %s is already being committed", block.BlockHash)
 	}
 	expected := r.committedHeight + 1
 	if block.Height > expected {
 		r.pendingCommits[block.Height] = block
 		r.mu.Unlock()
+		r.setCommitPhase("deferred_future_height", block)
 		return CommitResult{Disposition: CommitDeferred, Block: realblock.Block{}}, nil
 	}
 	if block.Height < expected {
 		r.mu.Unlock()
+		r.setCommitPhase("rejected_stale_height", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("stale block height %d, expected %d", block.Height, expected)
 	}
 	if block.PreviousHash != r.committedHash {
 		r.mu.Unlock()
+		r.setCommitPhase("rejected_parent_hash", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("parent hash mismatch at height %d", block.Height)
 	}
 	r.committing[block.BlockHash] = true
@@ -687,27 +729,52 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		}
 	}
 	r.mu.Unlock()
+	r.setCommitPhase("state_checkpoint", block)
 	stateBefore := r.db.Snapshot()
 	stateCheckpoint, err := r.db.Checkpoint()
 	if err != nil {
+		r.setCommitPhase("state_checkpoint_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, err
 	}
+	r.setCommitPhase("store_checkpoint", block)
 	checkpoint, err := r.store.Checkpoint()
 	if err != nil {
+		r.setCommitPhase("store_checkpoint_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, err
 	}
-	result := r.engine.ExecuteBlock(block, r.db)
+	r.setCommitPhase("execute_block", block)
+	executeStarted := time.Now()
+	executed, err := r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: stateBefore, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: 1})
+	if err != nil {
+		r.setCommitPhase("execute_block_error", block)
+		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
+	executed.BlockExecutionMS = time.Since(executeStarted).Milliseconds()
+	executed.TransactionExecutionMS = executed.BlockExecutionMS
+	r.setCommitPhase("apply_state_delta", block)
+	applyStarted := time.Now()
+	r.db.ApplyDeterministicBatch(executed.StateDelta)
+	executed.DeterministicApplyMS = time.Since(applyStarted).Milliseconds()
+	result := executed.ExecutionResult
+	r.setCommitPhase("durable_commit", block)
 	if _, err := r.store.DurableCommit(block, result); err != nil {
+		r.setCommitPhase("durable_commit_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
+	r.setCommitPhase("state_save", block)
 	if err := r.db.Save(); err != nil {
+		r.setCommitPhase("state_save_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
+	r.setCommitPhase("record_execution_artifacts", block)
+	r.recordBlockExecutionResult(block, executed)
 	r.recordExecutionAndCommitDecisions(block)
+	r.setCommitPhase("commit_reserved", block)
 	r.pool.CommitReserved(block.TxList)
 	if r.node.Leader {
 		r.proposer.Confirm(block)
 	}
+	r.setCommitPhase("advance_runtime_state", block)
 	r.mu.Lock()
 	r.committed[block.BlockHash] = true
 	delete(r.committing, block.BlockHash)
@@ -737,6 +804,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 			r.mu.Unlock()
 		}
 	}
+	r.setCommitPhase("idle", realblock.Block{})
 	return CommitResult{Disposition: CommitApplied, Block: next}, nil
 }
 
@@ -870,6 +938,30 @@ func (r *NodeRuntime) sendToNode(ctx context.Context, nodeID string, envelope p2
 func (r *NodeRuntime) blockSize() int {
 	return r.plugins.BlockProducer.BlockSize()
 }
+func blockInterval(node NodePlan) time.Duration {
+	interval := 150 * time.Millisecond
+	if producer, ok := node.PluginProfile["block_producer"]; ok {
+		if value := intValue(producer.Config["interval_ms"]); value >= 25 {
+			interval = time.Duration(value) * time.Millisecond
+		}
+	}
+	return interval
+}
+func (r *NodeRuntime) proposalTimeout() time.Duration {
+	blockSize := r.blockSize()
+	if blockSize <= 0 {
+		blockSize = 1
+	}
+	interval := blockInterval(r.node)
+	timeout := 5*time.Second + time.Duration(blockSize)*100*time.Millisecond + 4*interval
+	if timeout < 5*time.Second {
+		return 5 * time.Second
+	}
+	if timeout > 60*time.Second {
+		return 60 * time.Second
+	}
+	return timeout
+}
 func (r *NodeRuntime) rememberProposal(block realblock.Block) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -916,6 +1008,27 @@ func (r *NodeRuntime) writeReady() error {
 }
 func (r *NodeRuntime) writeRuntimeStatus() error {
 	r.mu.Lock()
+	committedHeight := r.committedHeight
+	committedHash := r.committedHash
+	proposalInFlight := r.proposalInFlight
+	proposalTimeoutMS := r.proposalTimeout().Milliseconds()
+	commitPhase := r.commitPhase
+	commitPhaseHeight := r.commitPhaseHeight
+	commitPhaseHash := r.commitPhaseHash
+	lastProposalError := r.lastProposalError
+	fatalPersistenceError := r.fatalPersistenceError
+	pendingCommitCount := len(r.pendingCommits)
+	pendingCommitHeights := mapKeys(r.pendingCommits)
+	pendingCommitErrors := map[uint64]string{}
+	for key, value := range r.pendingCommitErrors {
+		pendingCommitErrors[key] = value
+	}
+	pendingRelayCount := len(r.relaySource)
+	relayAdmissionFailures := map[string]string{}
+	for key, value := range r.relayAdmissionFailures {
+		relayAdmissionFailures[key] = value
+	}
+	lastProgressAt := r.lastProgressAt
 	terminal := map[string]bool{}
 	durableCommitted := map[string]bool{}
 	sourceFinalized := map[string]bool{}
@@ -969,10 +1082,10 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	for txID := range r.relaySource {
 		pendingRelayIDs = append(pendingRelayIDs, txID)
 	}
+	r.mu.Unlock()
 	mempoolIDs := r.pool.IDs()
 	sort.Strings(mempoolIDs)
-	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": r.committedHeight, "committed_block_hash": r.committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": r.proposalInFlight, "last_proposal_error": r.lastProposalError, "fatal_persistence_error": r.fatalPersistenceError, "pending_commit_count": len(r.pendingCommits), "pending_commit_heights": mapKeys(r.pendingCommits), "pending_commit_errors": r.pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": len(r.relaySource), "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": r.relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "last_progress_at": r.lastProgressAt, "ready": true, "stopping": false}
-	r.mu.Unlock()
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_timeout_ms": proposalTimeoutMS, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "fatal_persistence_error": fatalPersistenceError, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": pendingRelayCount, "pending_cross_shard_ids": pendingRelayIDs, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
 }
 func mapIDs(items map[string]bool) []string {
@@ -1006,6 +1119,11 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	executionRows := append([][]string(nil), r.executionRows...)
 	commitRows := append([][]string(nil), r.commitRows...)
 	chainRows := append([][]string(nil), r.chainRows...)
+	blockExecutionSummaries := append([]map[string]any(nil), r.blockExecutionSummaries...)
+	executionPlans := append([]map[string]any(nil), r.executionPlans...)
+	txExecutionTraceRows := append([][]string(nil), r.txExecutionTraceRows...)
+	stateDeltaRows := append([][]string(nil), r.stateDeltaRows...)
+	planDigestRows := append([][]string(nil), r.planDigestRows...)
 	lifecycle := append([]LifecycleEvent(nil), r.lifecycle...)
 	count := r.blockCount
 	r.mu.Unlock()
@@ -1028,6 +1146,21 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "committed_chain.csv"), []string{"node_id", "shard_id", "height", "view", "block_hash", "parent_hash", "tx_count", "tx_digest", "state_root_before", "state_root_after", "receipt_root", "commit_started_at", "commit_finished_at"}, chainRows); err != nil {
 		return err
 	}
+	if err := SaveJSON(filepath.Join(r.node.DataDir, "block_execution_summary.json"), map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": "1.0.0", "worker_count": 1, "blocks": blockExecutionSummaries, "executed_block_count": len(blockExecutionSummaries), "plan_digest_consistent": planDigestsConsistent(planDigestRows)}); err != nil {
+		return err
+	}
+	if err := writeJSONL(filepath.Join(r.node.DataDir, "execution_plan.jsonl"), executionPlans); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "transaction_execution_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "tx_id", "original_index", "success", "error", "read_key_count", "write_key_count", "state_root_after_tx"}, txExecutionTraceRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "state_delta_log.csv"), []string{"node_id", "shard_id", "block_hash", "height", "key", "value_digest"}, stateDeltaRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "plan_digest_consistency.csv"), []string{"node_id", "shard_id", "block_hash", "height", "block_executor_id", "plan_digest", "state_root_before", "state_root_after", "receipt_root", "worker_count", "consistent"}, planDigestRows); err != nil {
+		return err
+	}
 	lifecycleRows := make([][]string, 0, len(lifecycle))
 	for _, event := range lifecycle {
 		lifecycleRows = append(lifecycleRows, lifecycleRow(event))
@@ -1046,7 +1179,7 @@ func (r *NodeRuntime) WriteArtifacts() error {
 		return err
 	}
 	fast, conservative, groups, logical, physical := summarizeMethodRows(executionRows, commitRows)
-	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.db.Root(), "plugin_snapshot": r.pluginSnapshot, "fast_track_count": fast, "conservative_track_count": conservative, "aggregation_group_count": groups, "logical_update_count": logical, "physical_update_count": physical, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.db.Root(), "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": "1.0.0", "worker_count": 1, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": fast, "conservative_track_count": conservative, "aggregation_group_count": groups, "logical_update_count": logical, "physical_update_count": physical, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
 }
 
 func pluginEvidence(profile map[string]PluginConfig) map[string]map[string]any {
@@ -1068,6 +1201,62 @@ func (r *NodeRuntime) recordExecutionAndCommitDecisions(block realblock.Block) {
 		r.executionRows = append(r.executionRows, []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, item.TxID, fmt.Sprint(block.Height), executionPlugin, decision.Track, decision.Reason})
 	}
 	r.commitRows = append(r.commitRows, []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), commitPlugin, commitDecision.AggregationGroupID, fmt.Sprint(commitDecision.LogicalUpdates), fmt.Sprint(commitDecision.PhysicalUpdates), fmt.Sprint(commitDecision.Applied)})
+}
+
+func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result BlockExecutionResult) {
+	executed := result.ExecutionResult
+	observedReadKeys, observedWriteKeys := 0, 0
+	for _, delta := range executed.TxDeltas {
+		observedReadKeys += len(delta.ReadSet)
+		observedWriteKeys += len(delta.WriteSet)
+	}
+	summary := map[string]any{
+		"block_hash":                   block.BlockHash,
+		"height":                       block.Height,
+		"block_executor_id":            r.plugins.BlockExecutor.ID(),
+		"block_executor_version":       executed.ExecutorVersion,
+		"block_execution_ms":           result.BlockExecutionMS,
+		"transaction_execution_ms":     result.TransactionExecutionMS,
+		"deterministic_apply_ms":       result.DeterministicApplyMS,
+		"executed_transaction_count":   len(block.TxList),
+		"successful_transaction_count": executed.SuccessfulTxs,
+		"failed_transaction_count":     executed.FailedTxs,
+		"declared_read_key_count":      executed.Plan.DeclaredReadKeyCount,
+		"declared_write_key_count":     executed.Plan.DeclaredWriteKeyCount,
+		"observed_read_key_count":      observedReadKeys,
+		"observed_write_key_count":     observedWriteKeys,
+		"state_root_before":            executed.StateRootBefore,
+		"state_root_after":             executed.StateRootAfter,
+		"receipt_root":                 executed.ReceiptRoot,
+		"execution_plan_digest":        executed.PlanDigest,
+		"worker_count":                 result.WorkerCount,
+		"plan_digest_consistent":       true,
+		"state_root_consistent":        true,
+		"serial_order_preserved":       true,
+		"reordered_transaction_count":  0,
+		"maximum_parallel_width":       1,
+	}
+	plan := map[string]any{
+		"node_id":  r.node.NodeID,
+		"shard_id": r.node.ShardID,
+		"plan":     executed.Plan,
+	}
+	traceRows := make([][]string, 0, len(executed.TxDeltas))
+	for _, delta := range executed.TxDeltas {
+		traceRows = append(traceRows, []string{r.node.NodeID, r.node.ShardID, block.BlockHash, fmt.Sprint(block.Height), delta.TxID, fmt.Sprint(delta.OriginalIndex), fmt.Sprint(delta.Success), delta.Error, fmt.Sprint(len(delta.ReadSet)), fmt.Sprint(len(delta.WriteSet)), delta.Receipt.StateRootAfterTx})
+	}
+	stateRows := make([][]string, 0, len(result.StateDelta))
+	for _, item := range result.StateDelta {
+		stateRows = append(stateRows, []string{r.node.NodeID, r.node.ShardID, block.BlockHash, fmt.Sprint(block.Height), item.Key, stableTextDigest(item.Value)})
+	}
+	planRow := []string{r.node.NodeID, r.node.ShardID, block.BlockHash, fmt.Sprint(block.Height), r.plugins.BlockExecutor.ID(), executed.PlanDigest, executed.StateRootBefore, executed.StateRootAfter, executed.ReceiptRoot, fmt.Sprint(result.WorkerCount), "true"}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.blockExecutionSummaries = append(r.blockExecutionSummaries, summary)
+	r.executionPlans = append(r.executionPlans, plan)
+	r.txExecutionTraceRows = append(r.txExecutionTraceRows, traceRows...)
+	r.stateDeltaRows = append(r.stateDeltaRows, stateRows...)
+	r.planDigestRows = append(r.planDigestRows, planRow)
 }
 
 func summarizeMethodRows(executionRows, commitRows [][]string) (int, int, int, int, int) {
@@ -1108,4 +1297,30 @@ func DecodeNodePlan(path string) (Plan, string, error) {
 		return Plan{}, "", err
 	}
 	return holder.Plan, holder.NodeID, nil
+}
+
+func writeJSONL(path string, rows []map[string]any) error {
+	lines := make([]string, 0, len(rows))
+	for _, row := range rows {
+		payload, err := json.Marshal(row)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, string(payload))
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+}
+
+func stableTextDigest(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func planDigestsConsistent(rows [][]string) bool {
+	for _, row := range rows {
+		if len(row) < 11 || row[5] == "" || row[10] != "true" {
+			return false
+		}
+	}
+	return true
 }

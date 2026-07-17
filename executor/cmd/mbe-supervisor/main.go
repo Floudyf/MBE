@@ -108,13 +108,17 @@ type v5NodeProcess struct {
 	LogPath    string `json:"log_path"`
 }
 type v5NodeSummary struct {
-	NodeID              string `json:"node_id"`
-	ShardID             string `json:"shard_id"`
-	PID                 int    `json:"pid"`
-	ListenAddr          string `json:"listen_addr"`
-	CommittedBlockCount int    `json:"committed_block_count"`
-	StateRoot           string `json:"state_root"`
-	RealPBFT            bool   `json:"real_pbft_style_messages"`
+	NodeID               string `json:"node_id"`
+	ShardID              string `json:"shard_id"`
+	PID                  int    `json:"pid"`
+	ListenAddr           string `json:"listen_addr"`
+	CommittedBlockCount  int    `json:"committed_block_count"`
+	StateRoot            string `json:"state_root"`
+	RealPBFT             bool   `json:"real_pbft_style_messages"`
+	BlockExecutorID      string `json:"block_executor_id"`
+	BlockExecutorVersion string `json:"block_executor_version"`
+	WorkerCount          int    `json:"worker_count"`
+	PlanDigestConsistent bool   `json:"plan_digest_consistent"`
 }
 
 func runV5(planPath, dataDir string) error {
@@ -151,6 +155,7 @@ func runV5(planPath, dataDir string) error {
 	if err := v5.SaveJSON(planPath, plan); err != nil {
 		return err
 	}
+	nodeRuntimePlan := runtimePlanForNodes(plan)
 	binDir := filepath.Join(dataDir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return err
@@ -167,7 +172,7 @@ func runV5(planPath, dataDir string) error {
 	commands := []*exec.Cmd{}
 	for _, nodePlan := range plan.NodeConfigs {
 		configPath := filepath.Join(dataDir, "node_config_"+nodePlan.NodeID+".json")
-		if err := v5.SaveJSON(configPath, map[string]any{"plan": plan, "node_id": nodePlan.NodeID}); err != nil {
+		if err := v5.SaveJSON(configPath, map[string]any{"plan": nodeRuntimePlan, "node_id": nodePlan.NodeID}); err != nil {
 			return err
 		}
 		if err := os.MkdirAll(nodePlan.DataDir, 0o755); err != nil {
@@ -188,7 +193,7 @@ func runV5(planPath, dataDir string) error {
 		commands = append(commands, cmd)
 		processes = append(processes, v5NodeProcess{NodeID: nodePlan.NodeID, ShardID: nodePlan.ShardID, PID: cmd.Process.Pid, ListenAddr: nodePlan.ListenAddr, DataDir: nodePlan.DataDir, LogPath: logPath})
 	}
-	if err := v5.SaveJSON(filepath.Join(dataDir, "process_manifest.json"), map[string]any{"one_node_one_os_process": true, "processes": redactV5Processes(processes, dataDir), "expected_process_count": len(plan.NodeConfigs)}); err != nil {
+	if err := v5.SaveJSON(filepath.Join(dataDir, "process_manifest.json"), map[string]any{"one_node_one_os_process": true, "processes": redactV5Processes(processes, dataDir), "expected_process_count": len(plan.NodeConfigs), "node_runtime_duration_ms": nodeRuntimePlan.DurationMS}); err != nil {
 		return err
 	}
 	if err := waitReady(plan, 10*time.Second); err != nil {
@@ -258,7 +263,8 @@ func drainV5(plan v5.Plan, dataDir string) error {
 		return err
 	}
 	phase := "DRAINING"
-	deadline := started.Add(time.Duration(plan.DurationMS) * time.Millisecond)
+	budget := drainBudget(plan)
+	deadline := started.Add(budget.HardTimeout)
 	progressPath := filepath.Join(dataDir, "drain_progress.csv")
 	_ = os.Remove(progressPath)
 	lastProgress := started
@@ -346,6 +352,11 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "failed_persistence_inconsistency", "fatal_persistence_error": fatalPersistence, "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli()})
 			return fmt.Errorf("failed_persistence_inconsistency: %s", fatalPersistence)
 		}
+		if initialized && now.Sub(lastProgress) > budget.NoProgressTimeout {
+			phase = "FAILED"
+			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "no_progress_timeout", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
+			return fmt.Errorf("drain no-progress timeout")
+		}
 		phase = "DRAINING"
 		if !aligned {
 			phase = "CATCHING_UP"
@@ -353,10 +364,10 @@ func drainV5(plan v5.Plan, dataDir string) error {
 		writeDrainProgress(progressPath, phase, submitted, len(terminal), current, lastTerminalProgress, lastMempoolProgress)
 		if len(terminal) >= submitted && allEmpty && aligned {
 			phase = "QUIESCENT"
-			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "drain_quiescent", "drain_started_at": started.UnixMilli(), "drain_finished_at": now.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli()})
+			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "drain_quiescent", "drain_started_at": started.UnixMilli(), "drain_finished_at": now.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
 			return nil
 		}
-		_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "in_progress", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "node_count": len(statuses)})
+		_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "in_progress", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "node_count": len(statuses), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
 		time.Sleep(250 * time.Millisecond)
 	}
 	classifiers := []string{}
@@ -381,6 +392,71 @@ type progressSnapshot struct {
 	Reserved         int  `json:"reserved"`
 	Pending          int  `json:"pending"`
 	ProposalInFlight bool `json:"proposal_in_flight"`
+}
+
+type drainTimeoutBudget struct {
+	HardTimeout       time.Duration
+	NoProgressTimeout time.Duration
+	EstimatedTimeout  time.Duration
+}
+
+func runtimePlanForNodes(plan v5.Plan) v5.Plan {
+	runtimePlan := plan
+	runtimeMS := int(drainBudget(plan).HardTimeout.Milliseconds())
+	if runtimeMS > runtimePlan.DurationMS {
+		runtimePlan.DurationMS = runtimeMS
+	}
+	return runtimePlan
+}
+
+func drainBudget(plan v5.Plan) drainTimeoutBudget {
+	blockSize, interval := blockProducerTiming(plan)
+	txCount := plan.WorkloadPlan.TxCount
+	if txCount <= 0 {
+		txCount = 1
+	}
+	blocks := (txCount + blockSize - 1) / blockSize
+	perBlock := 5*time.Second + time.Duration(blockSize)*100*time.Millisecond + 4*interval
+	estimated := time.Duration(blocks) * perBlock
+	if plan.WorkloadPlan.ExpectedCrossShardCount > 0 || plan.WorkloadPlan.CrossShardRatio > 0 {
+		estimated += estimated / 2
+	}
+	requested := time.Duration(plan.DurationMS) * time.Millisecond
+	hard := maxDuration(requested, estimated+30*time.Second)
+	if hard < 30*time.Second {
+		hard = 30 * time.Second
+	}
+	if hard > 45*time.Minute {
+		hard = 45 * time.Minute
+	}
+	noProgress := maxDuration(30*time.Second, 10*perBlock)
+	if noProgress > 5*time.Minute {
+		noProgress = 5 * time.Minute
+	}
+	return drainTimeoutBudget{HardTimeout: hard, NoProgressTimeout: noProgress, EstimatedTimeout: estimated}
+}
+
+func blockProducerTiming(plan v5.Plan) (int, time.Duration) {
+	blockSize := 10
+	interval := 150 * time.Millisecond
+	if len(plan.NodeConfigs) > 0 {
+		if producer, ok := plan.NodeConfigs[0].PluginProfile["block_producer"]; ok {
+			if value := number(producer.Config["block_size"]); value > 0 {
+				blockSize = value
+			}
+			if value := number(producer.Config["interval_ms"]); value >= 25 {
+				interval = time.Duration(value) * time.Millisecond
+			}
+		}
+	}
+	return blockSize, interval
+}
+
+func maxDuration(left, right time.Duration) time.Duration {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func makeProgressSnapshot(terminal int, statuses []map[string]any, heights map[string]map[string]bool) progressSnapshot {
@@ -889,9 +965,19 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	}
 	pids := map[int]bool{}
 	ports := map[string]bool{}
+	blockExecutors := map[string]bool{}
+	planDigestConsistent := true
 	for _, p := range processes {
 		pids[p.PID] = true
 		ports[p.ListenAddr] = true
+	}
+	for _, item := range summaries {
+		if item.BlockExecutorID != "" {
+			blockExecutors[item.BlockExecutorID] = true
+		}
+		if !item.PlanDigestConsistent {
+			planDigestConsistent = false
+		}
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].NodeID < summaries[j].NodeID })
 	clientLog := filepath.Join(dataDir, "client", "client_submission_log.csv")
@@ -899,7 +985,17 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	ready := len(pids) == len(plan.NodeConfigs) && len(ports) == len(plan.NodeConfigs) && consistent && allActive && pbftCount == len(plan.NodeConfigs) && clientInfo != nil
 	faultRequested := fmt.Sprint(plan.FaultPlan["mode"]) != "" && fmt.Sprint(plan.FaultPlan["mode"]) != "disabled"
 	ready = ready && (!faultRequested || faultEvidence)
-	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "fault_injection_real": faultEvidence, "fault_injection_requested": faultRequested, "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": redactV5Processes(processes, dataDir), "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
+	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "block_executor_id": singleMapKey(blockExecutors), "block_executor_consistent": len(blockExecutors) == 1, "plan_digest_consistent": planDigestConsistent, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "fault_injection_real": faultEvidence, "fault_injection_requested": faultRequested, "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": redactV5Processes(processes, dataDir), "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
+}
+
+func singleMapKey(values map[string]bool) string {
+	if len(values) != 1 {
+		return ""
+	}
+	for key := range values {
+		return key
+	}
+	return ""
 }
 
 func redactV5Processes(processes []v5NodeProcess, dataDir string) []v5NodeProcess {

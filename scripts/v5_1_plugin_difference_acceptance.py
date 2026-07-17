@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import subprocess
 import sys
 from collections import Counter
@@ -38,6 +39,8 @@ def read_csv(path: Path) -> list[dict[str, str]]:
 
 
 def run_method(name: str, overrides: dict[str, str], output: Path) -> dict:
+    if output.exists():
+        shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
     spec = V5ExperimentSpec(execution_backend="real_cluster", name=name, plugin_selections=selections(overrides), topology=V5Topology(nodes=8, shards=2, validators_per_shard=4), tx_count=100, seed=53, duration_ms=9000)
     plan = compile_plan(spec, output)

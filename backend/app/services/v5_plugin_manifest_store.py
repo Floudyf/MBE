@@ -8,7 +8,7 @@ from backend.app.models.v5_plugin import V5PluginManifest
 CATEGORIES = (
     "workload", "transaction_admission", "txpool", "sharding", "routing",
     "block_producer", "consensus", "network", "execution", "scheduler",
-    "state_access", "state_storage", "cross_shard", "commit", "fault_injection",
+    "block_executor", "state_access", "state_storage", "cross_shard", "commit", "fault_injection",
     "metrics", "observability",
 )
 
@@ -46,15 +46,16 @@ _ZH = {
 def _manifest(category: str, plugin_id: str, display_name: str, description: str, *,
               config: dict | None = None, schema: dict | None = None, capabilities: list[str] | None = None,
               requirements: list[str] | None = None, metrics: list[dict] | None = None,
-              aliases: list[str] | None = None) -> V5PluginManifest:
+              aliases: list[str] | None = None, supported_backends: list[str] | None = None,
+              truth_boundary: str = "v5_real_cluster_candidate", source: dict | None = None) -> V5PluginManifest:
     display_name_zh, description_zh = _ZH.get(plugin_id, (display_name, description))
     return V5PluginManifest(
         plugin_id=plugin_id, category=category, display_name=display_name, description=description,
         display_name_zh=display_name_zh, description_zh=description_zh,
-        supported_backends=["preview", "simulation", "real_cluster"],
+        supported_backends=supported_backends or ["preview", "simulation", "real_cluster"],
         config_schema=schema or _schema({}), default_config=config or {}, capabilities=capabilities or [],
         requirements=requirements or [], metrics=metrics or [], runtime_factory=f"builtin:{plugin_id}",
-        runtime_adapter="go_factory_registry", legacy_aliases=aliases or [],
+        runtime_adapter="go_factory_registry", truth_boundary=truth_boundary, source=source or {}, legacy_aliases=aliases or [],
     )
 
 
@@ -73,6 +74,23 @@ _MANIFESTS = [
     _manifest("execution", "dual_track_execution", "Dual-track Execution", "Deterministic execution with fast/conservative track evidence.", aliases=["dual_track"]),
     _manifest("scheduler", "fifo_serial_scheduler", "FIFO Serial Scheduler", "FIFO scheduler for admitted transactions."),
     _manifest("scheduler", "fast_first_scheduler", "Fast-first Scheduler", "Fast-first scheduler for dual-track execution.", requirements=["execution:dual_track_execution"]),
+    _manifest(
+        "block_executor", "serial_block_executor", "Serial Block Executor",
+        "Executes block transactions in original order through the generic block executor contract.",
+        config={"worker_count": 1},
+        schema=_schema({"worker_count": {"type": "integer", "minimum": 1, "maximum": 1, "default": 1, "readOnly": True}}),
+        capabilities=["serial_order", "deterministic_state_delta", "legacy_equivalence_oracle", "execution_plan_digest"],
+        metrics=[
+            {"key": "block_executor_id", "type": "string", "unit": "", "aggregation": "last", "visualization": "summary", "description": "Selected block executor plugin."},
+            {"key": "block_execution_ms", "type": "number", "unit": "ms", "aggregation": "sum", "visualization": "summary", "description": "Block execution wall-clock time."},
+            {"key": "executed_transaction_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Transactions executed by the block executor."},
+            {"key": "execution_plan_digest", "type": "string", "unit": "", "aggregation": "last", "visualization": "summary", "description": "Deterministic execution plan digest."},
+            {"key": "plan_digest_consistent", "type": "ratio", "unit": "boolean", "aggregation": "all", "visualization": "summary", "description": "Committed nodes agree on plan digest evidence."},
+        ],
+        supported_backends=["real_cluster"],
+        truth_boundary="legacy_faithful_reference_baseline",
+        source={"source_type": "internal_reference", "source_name": "MBE legacy realism serial execution engine", "source_commit": "84f28f43f2cfe93864fd4e4b68377fcfd31a5595", "reproduction_dossier": "docs/reproductions/serial/source_lock.md"},
+    ),
     _manifest("state_access", "direct_state_access", "Direct State Access", "Direct deterministic state database access."),
     _manifest("state_storage", "persistent_local_state_store", "Persistent Local State Store", "Per-node persisted state, block, receipt, and transaction index files.", capabilities=["persistent_state", "state_root"]),
     _manifest("cross_shard", "relay_certificate_protocol", "Relay Certificate Cross-shard", "SourceLock, relay certificate, target commit, source finalization, and timeout/refund evidence.", capabilities=["cross_shard", "relay_certificate"]),

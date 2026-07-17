@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
+
+	"metaverse-chainlab/executor/v5"
 )
 
 func TestProgressSnapshotChangesOnlyOnRealProgress(t *testing.T) {
@@ -31,6 +34,72 @@ func TestProgressSnapshotChangesOnlyOnRealProgress(t *testing.T) {
 	if err != nil || string(raw) == "{}" {
 		t.Fatalf("progress snapshot did not serialize: %s", raw)
 	}
+}
+
+func TestDrainBudgetScalesWithWorkloadAndBlockProducer(t *testing.T) {
+	base := drainBudgetTestPlan(1000, 100, 75)
+	larger := base
+	larger.WorkloadPlan.TxCount = 10000
+	if !(drainBudget(larger).HardTimeout > drainBudget(base).HardTimeout) {
+		t.Fatal("drain budget did not grow with tx_count")
+	}
+	smallerBlocks := drainBudgetTestPlan(1000, 10, 75)
+	smallerBlocks.NodeConfigs[0].PluginProfile["block_producer"] = blockProducerConfig(10, 75)
+	if !(drainBudget(smallerBlocks).HardTimeout > drainBudget(base).HardTimeout) {
+		t.Fatal("drain budget did not account for smaller block_size")
+	}
+	slowerInterval := drainBudgetTestPlan(1000, 100, 300)
+	slowerInterval.NodeConfigs[0].PluginProfile["block_producer"] = blockProducerConfig(100, 300)
+	if !(drainBudget(slowerInterval).HardTimeout > drainBudget(base).HardTimeout) {
+		t.Fatal("drain budget did not account for slower block interval")
+	}
+	crossShard := drainBudgetTestPlan(1000, 100, 75)
+	crossShard.WorkloadPlan.ExpectedCrossShardCount = 250
+	if !(drainBudget(crossShard).HardTimeout > drainBudget(base).HardTimeout) {
+		t.Fatal("drain budget did not account for cross-shard lifecycle work")
+	}
+	budget := drainBudget(larger)
+	if budget.NoProgressTimeout <= 0 || budget.NoProgressTimeout >= budget.HardTimeout {
+		t.Fatalf("invalid no-progress watchdog budget: %#v", budget)
+	}
+}
+
+func TestDrainBudgetKeepsAbsoluteHardCap(t *testing.T) {
+	plan := drainBudgetTestPlan(1_000_000, 1, 1000)
+	plan.DurationMS = int((2 * time.Hour).Milliseconds())
+	if got := drainBudget(plan).HardTimeout; got != 45*time.Minute {
+		t.Fatalf("hard cap changed: %s", got)
+	}
+}
+
+func TestRuntimePlanForNodesExtendsShortExperimentDuration(t *testing.T) {
+	plan := drainBudgetTestPlan(10000, 100, 75)
+	plan.DurationMS = 180000
+	runtimePlan := runtimePlanForNodes(plan)
+	if runtimePlan.DurationMS <= plan.DurationMS {
+		t.Fatalf("node runtime duration was not extended: plan=%d runtime=%d", plan.DurationMS, runtimePlan.DurationMS)
+	}
+	if runtimePlan.WorkloadPlan.TxCount != plan.WorkloadPlan.TxCount {
+		t.Fatal("node runtime plan changed workload semantics")
+	}
+}
+
+func drainBudgetTestPlan(txCount, blockSize, intervalMS int) v5.Plan {
+	return v5.Plan{
+		DurationMS: 0,
+		WorkloadPlan: v5.WorkloadPlan{
+			TxCount: txCount,
+		},
+		NodeConfigs: []v5.NodePlan{{
+			PluginProfile: map[string]v5.PluginConfig{
+				"block_producer": blockProducerConfig(blockSize, intervalMS),
+			},
+		}},
+	}
+}
+
+func blockProducerConfig(blockSize, intervalMS int) v5.PluginConfig {
+	return v5.PluginConfig{PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": blockSize, "interval_ms": intervalMS}}
 }
 
 func TestFinalityDoesNotDrainBeforeSourceFinalize(t *testing.T) {

@@ -160,6 +160,26 @@ The completed workload data plane implementation used internal sequential checkp
 
 These checkpoints are not outward V5.3/V5.2.1/V6 stages.
 
+## 7.2 Block Execution Extension Point Rule
+
+The internal stage `V5 Block Execution Foundation and Serial Equivalence Closure`
+adds a `block_executor` plugin category and the `serial_block_executor`
+reference implementation. Treat this as V5.2 internal infrastructure, not a new
+public version. The legacy `execution` category still means transaction track
+classification, and the legacy `scheduler` category still means ordering policy.
+
+`serial_block_executor` must be locked to the MBE legacy realism serial execution
+engine as `legacy_faithful_reference_baseline`. It is the oracle for future block
+execution mechanisms. Do not claim Block-STM, CG, ACG, Nezha, BSX, Batch-SI,
+SmallBank, Geth TxPool, OptChain, HotStuff, S-BAC, or any external paper
+algorithm until a reproduction dossier locks the formal source, implementation
+source, commit SHA, license, mechanism checklist, invariants, MBE adaptation
+boundary, deviations, and acceptance matrix.
+
+The block executor path must use interface + factory registry + dependency
+injection. Do not implement runtime behavior with large plugin ID branches. Do
+not fall back to the legacy engine after a block executor failure.
+
 The UI must show implementation status, backend support, parameter ranges, dependencies, conflicts, truth boundary, and metrics. Formal Real Cluster requires all selected plugins to support `real_cluster`.
 
 ## 8. Backend Rule

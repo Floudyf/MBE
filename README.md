@@ -31,6 +31,17 @@ already-normalized external files can enter through `canonical_csv_v1`. Dataset
 replay remains research-grade workload modelling, not instruction-level Polygon
 or Decentraland contract execution.
 
+### Block Execution Extension Point
+
+The active internal V5.2 extension work is `V5 Block Execution Foundation and
+Serial Equivalence Closure`. It introduces a generic `block_executor` plugin
+category and a `serial_block_executor` reference that must remain equivalent to
+the legacy MBE realism serial execution engine. This is an internal execution
+foundation only: it does not implement or claim Block-STM, CG, ACG, Nezha, BSX,
+Batch-SI, SmallBank, Geth TxPool, OptChain, HotStuff, S-BAC, or any external
+paper mechanism. The legacy `execution` and `scheduler` plugin categories keep
+their existing classification and ordering meaning.
+
 | Capability | Status |
 | --- | --- |
 | V5 synthetic Formal RunGroup | Complete |

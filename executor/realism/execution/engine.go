@@ -20,11 +20,18 @@ type Result struct {
 	ReceiptRoot     string            `json:"receipt_root"`
 	Receipts        []Receipt         `json:"receipts"`
 	StateUpdates    map[string]string `json:"state_updates"`
+	StateDelta      []StateUpdate     `json:"state_delta,omitempty"`
 	Deterministic   bool              `json:"deterministic_execution"`
 	EVMExecution    bool              `json:"evm_execution"`
 	FabricExecution bool              `json:"fabric_execution"`
 	SuccessfulTxs   int               `json:"successful_txs"`
 	FailedTxs       int               `json:"failed_txs"`
+	BlockExecutorID string            `json:"block_executor_id,omitempty"`
+	ExecutorVersion string            `json:"block_executor_version,omitempty"`
+	WorkerCount     int               `json:"worker_count,omitempty"`
+	Plan            ExecutionPlan     `json:"execution_plan,omitempty"`
+	PlanDigest      string            `json:"execution_plan_digest,omitempty"`
+	TxDeltas        []TxDelta         `json:"tx_deltas,omitempty"`
 }
 
 func NewEngine() *Engine {
