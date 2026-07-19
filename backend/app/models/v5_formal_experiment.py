@@ -13,6 +13,7 @@ class V5FormalMethod(BaseModel):
     method_id: str = Field(min_length=1, max_length=120)
     display_name: str = Field(min_length=1, max_length=160)
     plugin_overrides: dict[str, str] = Field(default_factory=dict)
+    plugin_config_overrides: dict[str, dict[str, object]] = Field(default_factory=dict)
     role: Literal["main", "baseline", "ablation", "custom"] = "custom"
 
 

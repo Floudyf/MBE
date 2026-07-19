@@ -42,6 +42,7 @@ def main() -> int:
     try:
         checked(["go", "test", "./v5"], ROOT / "executor")
         checked([sys.executable, "scripts/v5_1_plugin_difference_acceptance.py", "--output-root", str(Path(args.output_root) / "four_methods")], ROOT)
+        checked([sys.executable, "scripts/v5_execution_methods_closure_acceptance.py", "--output-root", str(Path(args.output_root) / "execution_methods_closure")], ROOT)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -49,7 +50,7 @@ def main() -> int:
     if findings:
         print("\n".join(findings), file=sys.stderr)
         return 1
-    print('{"gate":"A","closed":true,"four_method_real_cluster":true,"core_plugin_id_audit":"passed"}')
+    print('{"gate":"A","closed":true,"legacy_four_method_real_cluster":true,"execution_methods_closure_real_cluster":true,"core_plugin_id_audit":"passed"}')
     return 0
 
 

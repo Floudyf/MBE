@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"metaverse-chainlab/executor/realism/account"
 	realblock "metaverse-chainlab/executor/realism/block"
+	"metaverse-chainlab/executor/realism/execution"
 	"metaverse-chainlab/executor/realism/faults"
 	"metaverse-chainlab/executor/realism/mempool"
 	"metaverse-chainlab/executor/realism/metrics"
@@ -27,6 +29,11 @@ import (
 const finalizeMessage = "V5_XSHARD_FINALIZE"
 const catchupRequestMessage = "V5_CATCHUP_REQUEST"
 const catchupBlockMessage = "V5_CATCHUP_BLOCK"
+const stateFetchRequestMessage = "V5_STATE_FETCH_REQUEST"
+const stateFetchResponseMessage = "V5_STATE_FETCH_RESPONSE"
+const stateDeltaApplyMessage = "V5_STATE_DELTA_APPLY"
+const stateDeltaApplyAckMessage = "V5_STATE_DELTA_APPLY_ACK"
+const remoteStateDeltaApplyLagBlocks uint64 = 1
 
 type Proposal struct {
 	Block realblock.Block `json:"block"`
@@ -56,6 +63,60 @@ type CatchupRequest struct {
 type CatchupBlock struct {
 	Block      realblock.Block `json:"block"`
 	SourceNode string          `json:"source_node"`
+}
+type StateFetchRequest struct {
+	RequestID      string `json:"request_id"`
+	TxID           string `json:"tx_id"`
+	BlockHash      string `json:"block_hash"`
+	Key            string `json:"key"`
+	HomeShard      string `json:"home_shard"`
+	ExecutionShard string `json:"execution_shard"`
+	AccessKind     string `json:"access_kind"`
+}
+type StateFetchResponse struct {
+	RequestID      string `json:"request_id"`
+	TxID           string `json:"tx_id"`
+	BlockHash      string `json:"block_hash"`
+	Key            string `json:"key"`
+	QualifiedKey   string `json:"qualified_key"`
+	Value          string `json:"value"`
+	HomeShard      string `json:"home_shard"`
+	ExecutionShard string `json:"execution_shard"`
+	StateRoot      string `json:"state_root"`
+	WitnessDigest  string `json:"witness_digest"`
+	Success        bool   `json:"success"`
+	Error          string `json:"error,omitempty"`
+}
+type StateDeltaApplyRequest struct {
+	RequestID       string   `json:"request_id"`
+	TxID            string   `json:"tx_id"`
+	TxIDs           []string `json:"tx_ids,omitempty"`
+	BlockHash       string   `json:"block_hash"`
+	Key             string   `json:"key"`
+	Value           string   `json:"value"`
+	UpdateSemantics string   `json:"update_semantics,omitempty"`
+	Delta           int64    `json:"delta,omitempty"`
+	HomeShard       string   `json:"home_shard"`
+	ExecutionShard  string   `json:"execution_shard"`
+	SourceKey       string   `json:"source_key"`
+	SourceHeight    uint64   `json:"source_height"`
+}
+type StateDeltaApplyAck struct {
+	RequestID       string   `json:"request_id"`
+	TxID            string   `json:"tx_id"`
+	TxIDs           []string `json:"tx_ids,omitempty"`
+	BlockHash       string   `json:"block_hash"`
+	Key             string   `json:"key"`
+	QualifiedKey    string   `json:"qualified_key"`
+	ValueDigest     string   `json:"value_digest"`
+	UpdateSemantics string   `json:"update_semantics,omitempty"`
+	Delta           int64    `json:"delta,omitempty"`
+	HomeShard       string   `json:"home_shard"`
+	ExecutionShard  string   `json:"execution_shard"`
+	StateRoot       string   `json:"state_root"`
+	WitnessDigest   string   `json:"witness_digest"`
+	Success         bool     `json:"success"`
+	Error           string   `json:"error,omitempty"`
 }
 type Event struct {
 	Timestamp   int64  `json:"timestamp"`
@@ -125,13 +186,23 @@ type NodeRuntime struct {
 	lifecycle               []LifecycleEvent
 	consensusRows           [][]string
 	executionRows           [][]string
+	schedulerRows           [][]string
 	commitRows              [][]string
+	logicalPhysicalRows     [][]string
 	chainRows               [][]string
 	blockExecutionSummaries []map[string]any
 	executionPlans          []map[string]any
 	txExecutionTraceRows    [][]string
 	stateDeltaRows          [][]string
 	planDigestRows          [][]string
+	remoteStateRows         [][]string
+	stateFetchWaiters       map[string]chan StateFetchResponse
+	stateFetchWitnesses     map[string]StateFetchResponse
+	stateFetchSnapshots     map[string]map[string]string
+	stateApplyWaiters       map[string]chan StateDeltaApplyAck
+	pendingStateDeltas      []StateDeltaApplyRequest
+	pendingStateDeltaKeys   map[string]bool
+	appliedStateDeltaKeys   map[string]bool
 	pluginSnapshot          map[string]PluginConfig
 	plugins                 RuntimePlugins
 	blockCount              int
@@ -290,7 +361,7 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 	}
 	policy := mempool.DefaultPolicy()
 	policy.Capacity = plugins.TxPool.Capacity()
-	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: mempool.New(node.NodeID, node.ShardID, policy, account.NewNonceManager()), proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: storage.NewBlockStore(node.DataDir, node.NodeID, node.ShardID), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
+	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: mempool.New(node.NodeID, node.ShardID, policy, account.NewNonceManager()), proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: storage.NewBlockStore(node.DataDir, node.NodeID, node.ShardID), proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
 	r.transport = p2p.NewTransport(node.NodeID, node.ListenAddr, peers, r.handle)
 	r.transport.SetFaultPolicy(faultPolicyFromPlan(plan.FaultPlan))
 	return r, nil
@@ -482,6 +553,30 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 			return err
 		}
 		r.logConsensus("CATCHUP_APPLIED", item.SourceNode, item.Block.BlockHash, item.Block.Height)
+	case stateFetchRequestMessage:
+		request, err := p2p.DecodePayload[StateFetchRequest](msg)
+		if err != nil {
+			return err
+		}
+		return r.handleStateFetchRequest(ctx, msg.FromNode, request)
+	case stateFetchResponseMessage:
+		response, err := p2p.DecodePayload[StateFetchResponse](msg)
+		if err != nil {
+			return err
+		}
+		r.handleStateFetchResponse(response)
+	case stateDeltaApplyMessage:
+		request, err := p2p.DecodePayload[StateDeltaApplyRequest](msg)
+		if err != nil {
+			return err
+		}
+		return r.handleStateDeltaApply(ctx, msg.FromNode, request)
+	case stateDeltaApplyAckMessage:
+		ack, err := p2p.DecodePayload[StateDeltaApplyAck](msg)
+		if err != nil {
+			return err
+		}
+		r.handleStateDeltaApplyAck(ack)
 	}
 	return nil
 }
@@ -519,6 +614,7 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		r.mu.Unlock()
 		return
 	}
+	block = r.scheduleBlock(block)
 	r.rememberProposal(block)
 	for _, item := range block.TxList {
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "proposed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
@@ -547,6 +643,93 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	if len(r.node.Validators) == 1 {
 		_ = r.finalize(ctx, block)
 	}
+}
+
+func (r *NodeRuntime) scheduleBlock(block realblock.Block) realblock.Block {
+	schedule := r.plugins.Scheduler.Schedule(block.TxList, r.plugins.Execution)
+	ordered := schedule.Ordered
+	if len(ordered) != len(block.TxList) {
+		return block
+	}
+	r.recordScheduleEvents(block, schedule.Events)
+	block.TxList = ordered
+	block.TxIDs = make([]string, 0, len(ordered))
+	for _, item := range ordered {
+		block.TxIDs = append(block.TxIDs, item.TxID)
+	}
+	block.SystemStateDeltas = r.readyRemoteStateDeltasForConsensus(block.Height)
+	realblock.AssignHash(&block)
+	return block
+}
+
+func (r *NodeRuntime) recordScheduleEvents(block realblock.Block, events []ScheduleEvent) {
+	if len(events) == 0 {
+		return
+	}
+	schedulerPlugin := ""
+	if plugin, ok := r.pluginSnapshot["scheduler"]; ok {
+		schedulerPlugin = plugin.PluginID
+	}
+	rows := make([][]string, 0, len(events))
+	now := time.Now().UnixMilli()
+	txByID := map[string]tx.SignedTransaction{}
+	for _, item := range block.TxList {
+		txByID[item.TxID] = item
+	}
+	for index, event := range events {
+		if item, ok := txByID[event.TxID]; ok && r.executesRemoteHomeState(item) {
+			event.StolenWork = true
+			event.LocalExecution = false
+			if event.DecisionReason != "" {
+				event.DecisionReason += ";"
+			}
+			event.DecisionReason += "remote_home_work"
+		}
+		timestamp := now + int64(index)
+		rows = append(rows, []string{
+			fmt.Sprint(timestamp),
+			r.node.NodeID,
+			r.node.ShardID,
+			fmt.Sprint(block.Height),
+			schedulerPlugin,
+			event.TxID,
+			event.Track,
+			event.QueueName,
+			event.DecisionReason,
+			fmt.Sprint(event.LocalExecution),
+			fmt.Sprint(event.StolenWork),
+			fmt.Sprint(event.Blocked),
+			fmt.Sprint(event.Wakeup),
+			fmt.Sprint(event.ReadyQueueDepth),
+			fmt.Sprint(event.FastQueueDepth),
+			fmt.Sprint(event.ConservativeQueueDepth),
+			fmt.Sprint(event.DependencyWaitMS),
+			fmt.Sprint(event.SchedulerIdleMS),
+		})
+	}
+	r.mu.Lock()
+	r.schedulerRows = append(r.schedulerRows, rows...)
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) executesRemoteHomeState(item tx.SignedTransaction) bool {
+	if !r.hasBatchRoutingControlPlane() {
+		return false
+	}
+	shards := r.shardIDs()
+	if len(shards) < 2 {
+		return false
+	}
+	for _, access := range item.AccessList {
+		if access.Key == "" {
+			continue
+		}
+		homeShard := shards[stableKey([]string{access.Key})%len(shards)]
+		if homeShard != r.node.ShardID {
+			return true
+		}
+	}
+	return false
 }
 func (r *NodeRuntime) acceptVote(ctx context.Context, vote Vote) {
 	r.mu.Lock()
@@ -742,18 +925,40 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		r.setCommitPhase("store_checkpoint_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, err
 	}
+	remoteDeltas := remoteStateDeltasFromBlock(block, r.node.ShardID)
+	executionSnapshot := applyStateDeltaToSnapshot(stateBefore, remoteDeltas, r.node.ShardID)
 	r.setCommitPhase("execute_block", block)
 	executeStarted := time.Now()
-	executed, err := r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: stateBefore, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: 1})
+	executionSnapshot, err = r.prepareMetaTrackStateSnapshot(ctx, block, executionSnapshot)
+	if err != nil {
+		r.setCommitPhase("state_access_error", block)
+		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
+	executed, err := r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot)})
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, err
 	}
 	executed.BlockExecutionMS = time.Since(executeStarted).Milliseconds()
 	executed.TransactionExecutionMS = executed.BlockExecutionMS
+	r.setCommitPhase("build_commit_plan", block)
+	commitDecision := r.plugins.Commit.DecideCommit(CommitInput{ShardID: r.node.ShardID, Height: block.Height, Transactions: block.TxList, TxDeltas: executed.ExecutionResult.TxDeltas, StateDelta: executed.StateDelta})
+	physicalDelta := commitDecision.PhysicalStateDelta
+	if len(physicalDelta) == 0 {
+		physicalDelta = executed.StateDelta
+	}
+	physicalDelta = annotateStateDeltaTxIDs(physicalDelta, executed.ExecutionResult.TxDeltas, block.TxList)
+	physicalDelta, err = r.applyMetaTrackRemoteDeltas(ctx, block, physicalDelta)
+	if err != nil {
+		r.setCommitPhase("state_delta_apply_error", block)
+		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
+	if len(remoteDeltas) > 0 {
+		physicalDelta = append(append([]state.StateKV(nil), remoteDeltas...), physicalDelta...)
+	}
 	r.setCommitPhase("apply_state_delta", block)
 	applyStarted := time.Now()
-	r.db.ApplyDeterministicBatch(executed.StateDelta)
+	r.db.ApplyDeterministicBatch(physicalDelta)
 	executed.DeterministicApplyMS = time.Since(applyStarted).Milliseconds()
 	result := executed.ExecutionResult
 	r.setCommitPhase("durable_commit", block)
@@ -766,9 +971,10 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		r.setCommitPhase("state_save_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
+	r.markRemoteStateDeltasApplied(block.SystemStateDeltas)
 	r.setCommitPhase("record_execution_artifacts", block)
 	r.recordBlockExecutionResult(block, executed)
-	r.recordExecutionAndCommitDecisions(block)
+	r.recordExecutionAndCommitDecisions(block, commitDecision, physicalDelta)
 	r.setCommitPhase("commit_reserved", block)
 	r.pool.CommitReserved(block.TxList)
 	if r.node.Leader {
@@ -866,6 +1072,596 @@ func (r *NodeRuntime) rollbackCommitFailure(blockHash string, stateBefore map[st
 	}
 	return cause
 }
+
+func (r *NodeRuntime) prepareMetaTrackStateSnapshot(ctx context.Context, block realblock.Block, stateBefore map[string]string) (map[string]string, error) {
+	if !r.hasBatchRoutingControlPlane() {
+		return stateBefore, nil
+	}
+	shardIDs := r.shardIDs()
+	if len(shardIDs) < 2 {
+		return stateBefore, nil
+	}
+	next := map[string]string{}
+	for key, value := range stateBefore {
+		next[key] = value
+	}
+	seen := map[string]bool{}
+	for _, item := range block.TxList {
+		for _, access := range item.AccessList {
+			if access.Key == "" || strings.Contains(access.Key, "::") {
+				continue
+			}
+			homeShard := shardIDs[stableKey([]string{access.Key})%len(shardIDs)]
+			if homeShard == "" || homeShard == r.node.ShardID {
+				continue
+			}
+			rowKey := item.TxID + "|" + access.Key + "|" + homeShard
+			if seen[rowKey] {
+				continue
+			}
+			seen[rowKey] = true
+			response, latency, err := r.fetchRemoteState(ctx, block, item, access, homeShard)
+			if err != nil {
+				return nil, err
+			}
+			localQualifiedKey := r.node.ShardID + "::" + access.Key
+			next[localQualifiedKey] = response.Value
+			r.recordRemoteStateAccess(block, item, access, response, latency)
+		}
+	}
+	return next, nil
+}
+
+func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, homeShard string) (StateFetchResponse, time.Duration, error) {
+	targetNode := r.leaderID(homeShard)
+	if targetNode == "" {
+		return StateFetchResponse{}, 0, fmt.Errorf("metatrack remote state home leader missing for %s", homeShard)
+	}
+	requestID := stableTextDigest(strings.Join([]string{r.node.NodeID, item.TxID, block.BlockHash, access.Key, homeShard, r.node.ShardID}, "|"))
+	waiter := make(chan StateFetchResponse, 1)
+	r.mu.Lock()
+	if r.stateFetchWaiters == nil {
+		r.stateFetchWaiters = map[string]chan StateFetchResponse{}
+	}
+	r.stateFetchWaiters[requestID] = waiter
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.stateFetchWaiters, requestID)
+		r.mu.Unlock()
+	}()
+	request := StateFetchRequest{RequestID: requestID, TxID: item.TxID, BlockHash: block.BlockHash, Key: access.Key, HomeShard: homeShard, ExecutionShard: r.node.ShardID, AccessKind: string(access.Mode)}
+	envelope, err := p2p.NewEnvelope(stateFetchRequestMessage, r.node.NodeID, targetNode, r.node.ShardID, block.Height, 0, block.Height, request)
+	if err != nil {
+		return StateFetchResponse{}, 0, err
+	}
+	start := time.Now()
+	if err := r.sendToNode(ctx, targetNode, envelope); err != nil {
+		return StateFetchResponse{}, time.Since(start), err
+	}
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case response := <-waiter:
+		if !response.Success {
+			return response, time.Since(start), fmt.Errorf("metatrack remote state fetch failed: %s", response.Error)
+		}
+		return response, time.Since(start), nil
+	case <-timer.C:
+		return StateFetchResponse{}, time.Since(start), fmt.Errorf("metatrack remote state fetch timed out for %s from %s", access.Key, homeShard)
+	case <-ctx.Done():
+		return StateFetchResponse{}, time.Since(start), ctx.Err()
+	}
+}
+
+func (r *NodeRuntime) handleStateFetchRequest(ctx context.Context, requester string, request StateFetchRequest) error {
+	qualifiedKey := request.HomeShard + "::" + request.Key
+	cacheKey := stateFetchWitnessKey(request)
+	r.mu.Lock()
+	cached, ok := r.stateFetchWitnesses[cacheKey]
+	r.mu.Unlock()
+	response := cached
+	if !ok {
+		snapshot := r.stateFetchSnapshot(request)
+		value := snapshot[qualifiedKey]
+		response = StateFetchResponse{TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, Value: value, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: state.RootOfSnapshot(snapshot), Success: true}
+		r.mu.Lock()
+		if r.stateFetchWitnesses == nil {
+			r.stateFetchWitnesses = map[string]StateFetchResponse{}
+		}
+		r.stateFetchWitnesses[cacheKey] = response
+		r.mu.Unlock()
+	}
+	response.RequestID = request.RequestID
+	response.TxID = request.TxID
+	response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
+	envelope, err := p2p.NewEnvelope(stateFetchResponseMessage, r.node.NodeID, requester, r.node.ShardID, 0, 0, 0, response)
+	if err != nil {
+		return err
+	}
+	return r.sendToNode(ctx, requester, envelope)
+}
+
+func stateFetchWitnessKey(request StateFetchRequest) string {
+	return stableTextDigest(strings.Join([]string{request.BlockHash, request.HomeShard, request.ExecutionShard, request.Key, request.AccessKind}, "|"))
+}
+
+func stateFetchSnapshotKey(request StateFetchRequest) string {
+	return stableTextDigest(strings.Join([]string{request.BlockHash, request.HomeShard, request.ExecutionShard}, "|"))
+}
+
+func stateFetchWitnessDigest(response StateFetchResponse, accessKind string) string {
+	return stableTextDigest(strings.Join([]string{response.BlockHash, response.QualifiedKey, response.Value, response.StateRoot, response.HomeShard, response.ExecutionShard, accessKind}, "|"))
+}
+
+func (r *NodeRuntime) stateFetchSnapshot(request StateFetchRequest) map[string]string {
+	snapshotKey := stateFetchSnapshotKey(request)
+	r.mu.Lock()
+	snapshot := r.stateFetchSnapshots[snapshotKey]
+	r.mu.Unlock()
+	if snapshot != nil {
+		return copyStringMap(snapshot)
+	}
+	fresh := r.db.Snapshot()
+	r.mu.Lock()
+	if r.stateFetchSnapshots == nil {
+		r.stateFetchSnapshots = map[string]map[string]string{}
+	}
+	if snapshot = r.stateFetchSnapshots[snapshotKey]; snapshot == nil {
+		snapshot = copyStringMap(fresh)
+		r.stateFetchSnapshots[snapshotKey] = snapshot
+	}
+	r.mu.Unlock()
+	return copyStringMap(snapshot)
+}
+
+func copyStringMap(input map[string]string) map[string]string {
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func (r *NodeRuntime) handleStateFetchResponse(response StateFetchResponse) {
+	r.mu.Lock()
+	waiter := r.stateFetchWaiters[response.RequestID]
+	r.mu.Unlock()
+	if waiter == nil {
+		return
+	}
+	select {
+	case waiter <- response:
+	default:
+	}
+}
+
+func (r *NodeRuntime) applyMetaTrackRemoteDeltas(ctx context.Context, block realblock.Block, physicalDelta []state.StateKV) ([]state.StateKV, error) {
+	if !r.hasBatchRoutingControlPlane() {
+		return physicalDelta, nil
+	}
+	shardIDs := r.shardIDs()
+	if len(shardIDs) < 2 {
+		return physicalDelta, nil
+	}
+	local := make([]state.StateKV, 0, len(physicalDelta))
+	for _, item := range physicalDelta {
+		unqualified, ok := unqualifiedLocalKey(item.Key, r.node.ShardID)
+		if !ok {
+			local = append(local, item)
+			continue
+		}
+		homeShard := shardIDs[stableKey([]string{unqualified})%len(shardIDs)]
+		if homeShard == "" || homeShard == r.node.ShardID {
+			local = append(local, item)
+			continue
+		}
+		if !r.node.Leader {
+			continue
+		}
+		acks, latency, err := r.applyRemoteStateDelta(ctx, block, item, unqualified, homeShard)
+		if err != nil {
+			return nil, err
+		}
+		for _, ack := range acks {
+			r.recordRemoteStateApply(block, item, unqualified, ack, latency)
+		}
+	}
+	return local, nil
+}
+
+func annotateStateDeltaTxIDs(physicalDelta []state.StateKV, txDeltas []execution.TxDelta, transactions []tx.SignedTransaction) []state.StateKV {
+	txByID := map[string]tx.SignedTransaction{}
+	for _, item := range transactions {
+		if item.TxID != "" {
+			txByID[item.TxID] = item
+		}
+	}
+	deltaByID := map[string]execution.TxDelta{}
+	for _, delta := range txDeltas {
+		if delta.TxID != "" {
+			deltaByID[delta.TxID] = delta
+		}
+	}
+	out := make([]state.StateKV, 0, len(physicalDelta))
+	for _, item := range physicalDelta {
+		txIDs := append([]string(nil), item.TxIDs...)
+		seen := map[string]bool{}
+		for _, txID := range txIDs {
+			seen[txID] = true
+		}
+		for _, delta := range txDeltas {
+			if delta.TxID == "" || seen[delta.TxID] || !writeSetContainsStateKey(delta.WriteSet, item.Key) {
+				continue
+			}
+			txIDs = append(txIDs, delta.TxID)
+			seen[delta.TxID] = true
+		}
+		next := item
+		next.TxIDs = txIDs
+		if semantics, delta, ok := commutativeDeltaSemanticsFor(item.Key, txIDs, txByID, deltaByID); ok {
+			next.UpdateSemantics = semantics
+			next.Delta = delta
+		}
+		out = append(out, next)
+	}
+	return out
+}
+
+func commutativeDeltaSemanticsFor(stateKey string, txIDs []string, txByID map[string]tx.SignedTransaction, deltaByID map[string]execution.TxDelta) (string, int64, bool) {
+	if len(txIDs) == 0 {
+		return "", 0, false
+	}
+	total := int64(0)
+	matched := 0
+	for _, txID := range txIDs {
+		item, ok := txByID[txID]
+		if !ok {
+			return "", 0, false
+		}
+		delta, ok := deltaByID[txID]
+		if !ok || !delta.Success {
+			return "", 0, false
+		}
+		found := false
+		for _, access := range item.AccessList {
+			if access.Mode != tx.AccessCommutativeDelta || !stateKeysReferToSameLogicalKey(stateKey, access.Key) {
+				continue
+			}
+			total += access.Delta
+			found = true
+		}
+		if !found && item.Sender != item.Receiver && item.Value > 0 && stateKeysReferToSameLogicalKey(stateKey, "balance:"+item.Receiver) {
+			total += item.Value
+			found = true
+		}
+		if !found {
+			return "", 0, false
+		}
+		matched++
+	}
+	return "commutative_delta", total, matched > 0
+}
+
+func stateKeysReferToSameLogicalKey(stateKey, logicalKey string) bool {
+	if stateKey == logicalKey {
+		return true
+	}
+	if index := strings.Index(stateKey, "::"); index >= 0 && index+2 < len(stateKey) {
+		return stateKey[index+2:] == logicalKey
+	}
+	return false
+}
+
+func writeSetContainsStateKey(writeSet map[string]string, stateKey string) bool {
+	if _, ok := writeSet[stateKey]; ok {
+		return true
+	}
+	if index := strings.Index(stateKey, "::"); index >= 0 && index+2 < len(stateKey) {
+		_, ok := writeSet[stateKey[index+2:]]
+		return ok
+	}
+	return false
+}
+
+func (r *NodeRuntime) applyRemoteStateDelta(ctx context.Context, block realblock.Block, item state.StateKV, unqualifiedKey, homeShard string) ([]StateDeltaApplyAck, time.Duration, error) {
+	targetNodes := r.nodeIDsForShard(homeShard)
+	if len(targetNodes) == 0 {
+		return nil, 0, fmt.Errorf("metatrack remote state apply home nodes missing for %s", homeShard)
+	}
+	joinedTxIDs := strings.Join(item.TxIDs, "|")
+	start := time.Now()
+	acks := make([]StateDeltaApplyAck, 0, len(targetNodes))
+	for _, targetNode := range targetNodes {
+		requestID := stableTextDigest(strings.Join([]string{r.node.NodeID, targetNode, block.BlockHash, joinedTxIDs, item.Key, unqualifiedKey, item.Value, item.UpdateSemantics, fmt.Sprint(item.Delta), homeShard, r.node.ShardID}, "|"))
+		waiter := make(chan StateDeltaApplyAck, 1)
+		r.mu.Lock()
+		if r.stateApplyWaiters == nil {
+			r.stateApplyWaiters = map[string]chan StateDeltaApplyAck{}
+		}
+		r.stateApplyWaiters[requestID] = waiter
+		r.mu.Unlock()
+		request := StateDeltaApplyRequest{RequestID: requestID, TxID: joinedTxIDs, TxIDs: append([]string(nil), item.TxIDs...), BlockHash: block.BlockHash, Key: unqualifiedKey, Value: item.Value, UpdateSemantics: item.UpdateSemantics, Delta: item.Delta, HomeShard: homeShard, ExecutionShard: r.node.ShardID, SourceKey: item.Key, SourceHeight: block.Height}
+		envelope, err := p2p.NewEnvelope(stateDeltaApplyMessage, r.node.NodeID, targetNode, r.node.ShardID, block.Height, 0, block.Height, request)
+		if err != nil {
+			r.mu.Lock()
+			delete(r.stateApplyWaiters, requestID)
+			r.mu.Unlock()
+			return nil, time.Since(start), err
+		}
+		if err := r.sendToNode(ctx, targetNode, envelope); err != nil {
+			r.mu.Lock()
+			delete(r.stateApplyWaiters, requestID)
+			r.mu.Unlock()
+			return nil, time.Since(start), err
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case ack := <-waiter:
+			timer.Stop()
+			r.mu.Lock()
+			delete(r.stateApplyWaiters, requestID)
+			r.mu.Unlock()
+			if !ack.Success {
+				return acks, time.Since(start), fmt.Errorf("metatrack remote state apply failed on %s: %s", targetNode, ack.Error)
+			}
+			acks = append(acks, ack)
+		case <-timer.C:
+			r.mu.Lock()
+			delete(r.stateApplyWaiters, requestID)
+			r.mu.Unlock()
+			return acks, time.Since(start), fmt.Errorf("metatrack remote state apply timed out for %s to %s/%s", unqualifiedKey, homeShard, targetNode)
+		case <-ctx.Done():
+			timer.Stop()
+			r.mu.Lock()
+			delete(r.stateApplyWaiters, requestID)
+			r.mu.Unlock()
+			return acks, time.Since(start), ctx.Err()
+		}
+	}
+	return acks, time.Since(start), nil
+}
+
+func (r *NodeRuntime) handleStateDeltaApply(ctx context.Context, requester string, request StateDeltaApplyRequest) error {
+	ack := r.handleStateDeltaApplyRequest(request)
+	envelope, err := p2p.NewEnvelope(stateDeltaApplyAckMessage, r.node.NodeID, requester, r.node.ShardID, 0, 0, 0, ack)
+	if err != nil {
+		return err
+	}
+	return r.sendToNode(ctx, requester, envelope)
+}
+
+func (r *NodeRuntime) handleStateDeltaApplyRequest(request StateDeltaApplyRequest) StateDeltaApplyAck {
+	qualifiedKey := request.HomeShard + "::" + request.Key
+	ack := stateDeltaApplyAckFromRequest(request, qualifiedKey, stableTextDigest("queued:"+request.Value), r.db.Root())
+	if request.HomeShard != "" && request.HomeShard != r.node.ShardID {
+		ack.Success = false
+		ack.Error = "wrong_home_shard"
+		ack.WitnessDigest = stateDeltaApplyWitnessDigest(ack)
+		return ack
+	}
+	key := stateDeltaApplyKey(request)
+	r.mu.Lock()
+	if r.pendingStateDeltaKeys == nil {
+		r.pendingStateDeltaKeys = map[string]bool{}
+	}
+	if r.appliedStateDeltaKeys == nil {
+		r.appliedStateDeltaKeys = map[string]bool{}
+	}
+	if !r.pendingStateDeltaKeys[key] && !r.appliedStateDeltaKeys[key] {
+		r.pendingStateDeltaKeys[key] = true
+		r.pendingStateDeltas = append(r.pendingStateDeltas, request)
+	}
+	r.mu.Unlock()
+	ack.WitnessDigest = stateDeltaApplyWitnessDigest(ack)
+	return ack
+}
+
+func (r *NodeRuntime) applyQueuedStateDeltas() {
+	// Remote state deltas are intentionally applied only through the home
+	// shard's consensus-bound commit path. This helper is kept as a no-op for
+	// older call sites/tests that used to flush out-of-band state mutations.
+}
+
+func (r *NodeRuntime) flushQueuedStateDeltas() {
+	// Artifact writes must not turn remote acknowledgements into state commits.
+	// Pending deltas stay pending until a home-shard block commits them.
+}
+
+func (r *NodeRuntime) readyRemoteStateDeltasForConsensus(homeBlockHeight uint64) []realblock.SystemStateDelta {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ready := make([]StateDeltaApplyRequest, 0, len(r.pendingStateDeltas))
+	for _, request := range r.pendingStateDeltas {
+		if remoteStateDeltaReadyForHomeBlock(request, homeBlockHeight) {
+			ready = append(ready, request)
+		}
+	}
+	sort.SliceStable(ready, func(i, j int) bool {
+		return remoteDeltaConsensusOrder(ready[i]) < remoteDeltaConsensusOrder(ready[j])
+	})
+	out := make([]realblock.SystemStateDelta, 0, len(ready))
+	for _, request := range ready {
+		out = append(out, systemStateDeltaFromRequest(request))
+	}
+	return out
+}
+
+func (r *NodeRuntime) markRemoteStateDeltasApplied(applied []realblock.SystemStateDelta) {
+	if len(applied) == 0 {
+		return
+	}
+	appliedKeys := map[string]bool{}
+	for _, item := range applied {
+		if item.DeltaID != "" {
+			appliedKeys[item.DeltaID] = true
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.appliedStateDeltaKeys == nil {
+		r.appliedStateDeltaKeys = map[string]bool{}
+	}
+	for key := range appliedKeys {
+		r.appliedStateDeltaKeys[key] = true
+		delete(r.pendingStateDeltaKeys, key)
+	}
+	pending := make([]StateDeltaApplyRequest, 0, len(r.pendingStateDeltas))
+	for _, request := range r.pendingStateDeltas {
+		key := stateDeltaApplyKey(request)
+		if appliedKeys[key] {
+			continue
+		}
+		pending = append(pending, request)
+	}
+	r.pendingStateDeltas = pending
+}
+
+func systemStateDeltaFromRequest(request StateDeltaApplyRequest) realblock.SystemStateDelta {
+	return realblock.SystemStateDelta{
+		DeltaID:         stateDeltaApplyKey(request),
+		Key:             request.Key,
+		Value:           request.Value,
+		TxID:            request.TxID,
+		TxIDs:           append([]string(nil), request.TxIDs...),
+		UpdateSemantics: request.UpdateSemantics,
+		Delta:           request.Delta,
+		HomeShard:       request.HomeShard,
+		ExecutionShard:  request.ExecutionShard,
+		SourceKey:       request.SourceKey,
+		SourceHeight:    request.SourceHeight,
+		SourceBlockHash: request.BlockHash,
+	}
+}
+
+func remoteStateDeltasFromBlock(block realblock.Block, homeShard string) []state.StateKV {
+	out := make([]state.StateKV, 0, len(block.SystemStateDeltas))
+	for _, item := range block.SystemStateDeltas {
+		if item.HomeShard != "" && item.HomeShard != homeShard {
+			continue
+		}
+		out = append(out, state.StateKV{
+			Key:             item.Key,
+			Value:           item.Value,
+			TxIDs:           append([]string(nil), item.TxIDs...),
+			UpdateSemantics: item.UpdateSemantics,
+			Delta:           item.Delta,
+		})
+	}
+	return out
+}
+
+func remoteStateDeltaReadyForHomeBlock(request StateDeltaApplyRequest, homeBlockHeight uint64) bool {
+	return request.SourceHeight <= homeBlockHeight
+}
+
+func remoteDeltaConsensusOrder(request StateDeltaApplyRequest) string {
+	return strings.Join([]string{
+		fmt.Sprintf("%020d", request.SourceHeight),
+		request.BlockHash,
+		request.Key,
+		fmt.Sprintf("%02d", remoteDeltaSemanticsRank(request.UpdateSemantics)),
+		fmt.Sprintf("%020d", request.Delta),
+		request.TxID,
+		request.ExecutionShard,
+		request.SourceKey,
+	}, "|")
+}
+
+func remoteDeltaSemanticsRank(semantics string) int {
+	if semantics == "commutative_delta" {
+		return 1
+	}
+	return 0
+}
+
+func applyStateDeltaToSnapshot(snapshot map[string]string, updates []state.StateKV, namespace string) map[string]string {
+	out := make(map[string]string, len(snapshot)+len(updates))
+	for key, value := range snapshot {
+		out[key] = value
+	}
+	for _, item := range updates {
+		key := item.Key
+		if !strings.Contains(key, "::") {
+			// The caller passes home-shard snapshots, so unqualified keys belong
+			// to that home namespace.
+			key = namespace + "::" + item.Key
+		}
+		if item.UpdateSemantics == "commutative_delta" {
+			current, _ := strconv.ParseInt(out[key], 10, 64)
+			out[key] = strconv.FormatInt(current+item.Delta, 10)
+			continue
+		}
+		out[key] = item.Value
+	}
+	return out
+}
+
+func stateDeltaApplyAckFromRequest(request StateDeltaApplyRequest, qualifiedKey, valueDigest, stateRoot string) StateDeltaApplyAck {
+	return StateDeltaApplyAck{RequestID: request.RequestID, TxID: request.TxID, TxIDs: append([]string(nil), request.TxIDs...), BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, ValueDigest: valueDigest, UpdateSemantics: request.UpdateSemantics, Delta: request.Delta, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: stateRoot, Success: true}
+}
+
+func stateDeltaApplyWitnessDigest(ack StateDeltaApplyAck) string {
+	return stableTextDigest(strings.Join([]string{ack.BlockHash, ack.QualifiedKey, ack.ValueDigest, ack.StateRoot, ack.HomeShard, ack.ExecutionShard, ack.UpdateSemantics, fmt.Sprint(ack.Delta)}, "|"))
+}
+
+func stateDeltaApplyKey(request StateDeltaApplyRequest) string {
+	return stableTextDigest(strings.Join([]string{fmt.Sprint(request.SourceHeight), request.BlockHash, request.SourceKey, request.Key, request.TxID, request.UpdateSemantics, fmt.Sprint(request.Delta), request.HomeShard, request.ExecutionShard}, "|"))
+}
+
+func (r *NodeRuntime) handleStateDeltaApplyAck(ack StateDeltaApplyAck) {
+	r.mu.Lock()
+	waiter := r.stateApplyWaiters[ack.RequestID]
+	r.mu.Unlock()
+	if waiter == nil {
+		return
+	}
+	select {
+	case waiter <- ack:
+	default:
+	}
+}
+
+func (r *NodeRuntime) recordRemoteStateApply(block realblock.Block, item state.StateKV, unqualifiedKey string, ack StateDeltaApplyAck, latency time.Duration) {
+	accessKind := "write_apply"
+	if ack.UpdateSemantics != "" {
+		accessKind += ":" + ack.UpdateSemantics
+	}
+	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, ack.TxID, unqualifiedKey, ack.QualifiedKey, ack.HomeShard, ack.ExecutionShard, accessKind, fmt.Sprint(latency.Milliseconds()), ack.WitnessDigest, ack.StateRoot, fmt.Sprint(ack.Success), ack.Error}
+	r.mu.Lock()
+	r.remoteStateRows = append(r.remoteStateRows, row)
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) recordRemoteStateAccess(block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, response StateFetchResponse, latency time.Duration) {
+	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, item.TxID, access.Key, response.QualifiedKey, response.HomeShard, response.ExecutionShard, string(access.Mode), fmt.Sprint(latency.Milliseconds()), response.WitnessDigest, response.StateRoot, fmt.Sprint(response.Success), response.Error}
+	r.mu.Lock()
+	r.remoteStateRows = append(r.remoteStateRows, row)
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) shardIDs() []string {
+	seen := map[string]bool{}
+	shards := []string{}
+	for _, node := range r.plan.NodeConfigs {
+		if node.ShardID == "" || seen[node.ShardID] {
+			continue
+		}
+		seen[node.ShardID] = true
+		shards = append(shards, node.ShardID)
+	}
+	sort.Strings(shards)
+	return shards
+}
+
+func unqualifiedLocalKey(key, shardID string) (string, bool) {
+	prefix := shardID + "::"
+	if !strings.HasPrefix(key, prefix) {
+		return "", false
+	}
+	next := strings.TrimPrefix(key, prefix)
+	return next, next != ""
+}
 func (r *NodeRuntime) onCommittedTx(ctx context.Context, item tx.SignedTransaction, relay Relay) {
 	r.onCommittedTxWithOrigin(ctx, item, relay, CommitOriginConsensus)
 }
@@ -930,6 +1726,16 @@ func (r *NodeRuntime) leaderID(shard string) string {
 		}
 	}
 	return ""
+}
+
+func (r *NodeRuntime) nodeIDsForShard(shard string) []string {
+	out := []string{}
+	for _, item := range r.plan.NodeConfigs {
+		if item.ShardID == shard {
+			out = append(out, item.NodeID)
+		}
+	}
+	return out
 }
 
 func (r *NodeRuntime) sendToNode(ctx context.Context, nodeID string, envelope p2p.MessageEnvelope) error {
@@ -1104,6 +1910,7 @@ func mapKeys(items map[uint64]realblock.Block) []uint64 {
 	return out
 }
 func (r *NodeRuntime) WriteArtifacts() error {
+	r.flushQueuedStateDeltas()
 	if err := r.writeRuntimeStatus(); err != nil {
 		return err
 	}
@@ -1118,6 +1925,7 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	rows := append([][]string(nil), r.consensusRows...)
 	executionRows := append([][]string(nil), r.executionRows...)
 	commitRows := append([][]string(nil), r.commitRows...)
+	logicalPhysicalRows := append([][]string(nil), r.logicalPhysicalRows...)
 	chainRows := append([][]string(nil), r.chainRows...)
 	blockExecutionSummaries := append([]map[string]any(nil), r.blockExecutionSummaries...)
 	executionPlans := append([]map[string]any(nil), r.executionPlans...)
@@ -1143,10 +1951,16 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "commit_log.csv"), []string{"timestamp", "node_id", "shard_id", "height", "commit_plugin", "aggregation_group_id", "logical_update_count", "physical_update_count", "aggregation_applied"}, commitRows); err != nil {
 		return err
 	}
+	if r.hasBatchRoutingControlPlane() {
+		if err := r.writeMetaTrackNodeArtifacts(executionRows, commitRows, logicalPhysicalRows); err != nil {
+			return err
+		}
+	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "committed_chain.csv"), []string{"node_id", "shard_id", "height", "view", "block_hash", "parent_hash", "tx_count", "tx_digest", "state_root_before", "state_root_after", "receipt_root", "commit_started_at", "commit_finished_at"}, chainRows); err != nil {
 		return err
 	}
-	if err := SaveJSON(filepath.Join(r.node.DataDir, "block_execution_summary.json"), map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": "1.0.0", "worker_count": 1, "blocks": blockExecutionSummaries, "executed_block_count": len(blockExecutionSummaries), "plan_digest_consistent": planDigestsConsistent(planDigestRows)}); err != nil {
+	artifactWorkerCount := workerCountFromBlockSummaries(blockExecutionSummaries)
+	if err := SaveJSON(filepath.Join(r.node.DataDir, "block_execution_summary.json"), map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "blocks": blockExecutionSummaries, "executed_block_count": len(blockExecutionSummaries), "plan_digest_consistent": planDigestsConsistent(planDigestRows)}); err != nil {
 		return err
 	}
 	if err := writeJSONL(filepath.Join(r.node.DataDir, "execution_plan.jsonl"), executionPlans); err != nil {
@@ -1159,6 +1973,9 @@ func (r *NodeRuntime) WriteArtifacts() error {
 		return err
 	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "plan_digest_consistency.csv"), []string{"node_id", "shard_id", "block_hash", "height", "block_executor_id", "plan_digest", "state_root_before", "state_root_after", "receipt_root", "worker_count", "consistent"}, planDigestRows); err != nil {
+		return err
+	}
+	if err := r.writeBlockSTMArtifacts(blockExecutionSummaries); err != nil {
 		return err
 	}
 	lifecycleRows := make([][]string, 0, len(lifecycle))
@@ -1179,7 +1996,94 @@ func (r *NodeRuntime) WriteArtifacts() error {
 		return err
 	}
 	fast, conservative, groups, logical, physical := summarizeMethodRows(executionRows, commitRows)
-	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.db.Root(), "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": "1.0.0", "worker_count": 1, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": fast, "conservative_track_count": conservative, "aggregation_group_count": groups, "logical_update_count": logical, "physical_update_count": physical, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+	remoteSummary := summarizeRemoteStateRows(r.remoteStateRows)
+	schedulerSummary := summarizeSchedulerRows(r.schedulerRows)
+	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.db.Root(), "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": fast, "conservative_track_count": conservative, "aggregation_group_count": groups, "logical_update_count": logical, "physical_update_count": physical, "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+}
+
+func (r *NodeRuntime) writeMetaTrackNodeArtifacts(executionRows, commitRows, logicalPhysicalRows [][]string) error {
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "track_classification.csv"), []string{"timestamp", "node_id", "shard_id", "tx_id", "height", "execution_plugin", "track", "reason"}, executionRows); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	remoteRows := append([][]string(nil), r.remoteStateRows...)
+	schedulerRows := append([][]string(nil), r.schedulerRows...)
+	r.mu.Unlock()
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "metatrack_scheduler_trace.csv"), []string{"timestamp", "node_id", "shard_id", "height", "scheduler_plugin", "tx_id", "track", "queue_name", "decision_reason", "local_execution", "stolen_work", "blocked", "wakeup", "ready_queue_depth", "fast_queue_depth", "conservative_queue_depth", "dependency_wait_ms", "scheduler_idle_ms"}, schedulerRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "aggregation_plan.csv"), []string{"timestamp", "node_id", "shard_id", "height", "commit_plugin", "aggregation_group_id", "logical_update_count", "physical_update_count", "aggregation_applied"}, commitRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "remote_state_access.csv"), []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error"}, remoteRows); err != nil {
+		return err
+	}
+	return metrics.WriteCSV(filepath.Join(r.node.DataDir, "logical_physical_update_mapping.csv"), []string{"timestamp", "node_id", "shard_id", "height", "commit_plugin", "aggregation_group_id", "state_key", "value_digest", "logical_tx_ids", "logical_update_count", "physical_update_count", "reduced_physical_write_count", "aggregation_applied"}, logicalPhysicalRows)
+}
+
+func (r *NodeRuntime) writeBlockSTMArtifacts(blocks []map[string]any) error {
+	taskRows := [][]string{}
+	validationRows := [][]string{}
+	abortRows := [][]string{}
+	dependencyRows := [][]string{}
+	incarnationRows := [][]string{}
+	equivalenceRows := []map[string]any{}
+	serialEquivalent := true
+	total := execution.BlockSTMMetrics{IncarnationHistogram: map[int]int{}}
+	for _, blockSummary := range blocks {
+		metricsValue, ok := blockSTMMetricsFromSummary(blockSummary)
+		if !ok {
+			continue
+		}
+		blockHash := fmt.Sprint(blockSummary["block_hash"])
+		height := fmt.Sprint(blockSummary["height"])
+		total.WorkerCount = maxInt(total.WorkerCount, metricsValue.WorkerCount)
+		total.MaximumParallelWidth = maxInt(total.MaximumParallelWidth, metricsValue.MaximumParallelWidth)
+		total.ExecutionTaskCount += metricsValue.ExecutionTaskCount
+		total.ValidationTaskCount += metricsValue.ValidationTaskCount
+		total.AbortCount += metricsValue.AbortCount
+		total.ReexecutionCount += metricsValue.ReexecutionCount
+		total.EstimateCount += metricsValue.EstimateCount
+		total.DependencyWaitCount += metricsValue.DependencyWaitCount
+		total.DependencyResumeCount += metricsValue.DependencyResumeCount
+		total.SpeculativeReadCount += metricsValue.SpeculativeReadCount
+		total.ValidationFailureCount += metricsValue.ValidationFailureCount
+		total.CommittedTransactionCount += metricsValue.CommittedTransactionCount
+		total.MaximumIncarnation = maxInt(total.MaximumIncarnation, metricsValue.MaximumIncarnation)
+		for incarnation, count := range metricsValue.IncarnationHistogram {
+			total.IncarnationHistogram[incarnation] += count
+			incarnationRows = append(incarnationRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(incarnation), fmt.Sprint(count)})
+		}
+		taskRows = append(taskRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.WorkerCount), fmt.Sprint(metricsValue.ExecutionTaskCount), fmt.Sprint(metricsValue.MaximumParallelWidth), fmt.Sprint(metricsValue.SpeculativeReadCount)})
+		validationRows = append(validationRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.ValidationTaskCount), fmt.Sprint(metricsValue.ValidationFailureCount)})
+		abortRows = append(abortRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.AbortCount), fmt.Sprint(metricsValue.ReexecutionCount), fmt.Sprint(metricsValue.MaximumIncarnation)})
+		dependencyRows = append(dependencyRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.DependencyWaitCount), fmt.Sprint(metricsValue.DependencyResumeCount), fmt.Sprint(metricsValue.EstimateCount)})
+		blockEquivalent := boolFromAny(blockSummary["serial_equivalent"])
+		serialEquivalent = serialEquivalent && blockEquivalent
+		equivalenceRows = append(equivalenceRows, map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_hash": blockHash, "height": blockSummary["height"], "block_executor_id": blockSummary["block_executor_id"], "state_root_before": blockSummary["state_root_before"], "state_root_after": blockSummary["state_root_after"], "receipt_root": blockSummary["receipt_root"], "execution_plan_digest": blockSummary["execution_plan_digest"], "serial_equivalent": blockEquivalent})
+	}
+	if len(taskRows) == 0 {
+		return nil
+	}
+	if err := SaveJSON(filepath.Join(r.node.DataDir, "block_stm_summary.json"), map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_executor_id": execution.BlockSTMExecutorID, "block_stm_metrics": total, "block_count": len(taskRows), "serial_equivalent": serialEquivalent}); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "block_stm_task_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "worker_count", "execution_task_count", "maximum_parallel_width", "speculative_read_count"}, taskRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "block_stm_validation_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "validation_task_count", "validation_failure_count"}, validationRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "block_stm_abort_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "abort_count", "reexecution_count", "maximum_incarnation"}, abortRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "block_stm_dependency_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "dependency_wait_count", "dependency_resume_count", "estimate_count"}, dependencyRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "incarnation_summary.csv"), []string{"node_id", "shard_id", "block_hash", "height", "incarnation", "transaction_count"}, incarnationRows); err != nil {
+		return err
+	}
+	return SaveJSON(filepath.Join(r.node.DataDir, "serial_equivalence.json"), map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_executor_id": execution.BlockSTMExecutorID, "serial_equivalent": serialEquivalent, "blocks": equivalenceRows})
 }
 
 func pluginEvidence(profile map[string]PluginConfig) map[string]map[string]any {
@@ -1190,17 +2094,103 @@ func pluginEvidence(profile map[string]PluginConfig) map[string]map[string]any {
 	return out
 }
 
-func (r *NodeRuntime) recordExecutionAndCommitDecisions(block realblock.Block) {
+func blockSTMMetricsFromSummary(item map[string]any) (execution.BlockSTMMetrics, bool) {
+	switch value := item["block_stm_metrics"].(type) {
+	case execution.BlockSTMMetrics:
+		return value, true
+	case map[string]any:
+		return blockSTMMetricsFromMap(value), true
+	default:
+		return execution.BlockSTMMetrics{}, false
+	}
+}
+
+func blockSTMMetricsFromMap(value map[string]any) execution.BlockSTMMetrics {
+	metricsValue := execution.BlockSTMMetrics{IncarnationHistogram: map[int]int{}}
+	metricsValue.WorkerCount = intFromAny(value["worker_count"])
+	metricsValue.MaximumParallelWidth = intFromAny(value["maximum_parallel_width"])
+	metricsValue.ExecutionTaskCount = intFromAny(value["execution_task_count"])
+	metricsValue.ValidationTaskCount = intFromAny(value["validation_task_count"])
+	metricsValue.AbortCount = intFromAny(value["abort_count"])
+	metricsValue.ReexecutionCount = intFromAny(value["reexecution_count"])
+	metricsValue.EstimateCount = intFromAny(value["estimate_count"])
+	metricsValue.DependencyWaitCount = intFromAny(value["dependency_wait_count"])
+	metricsValue.DependencyResumeCount = intFromAny(value["dependency_resume_count"])
+	metricsValue.SpeculativeReadCount = intFromAny(value["speculative_read_count"])
+	metricsValue.ValidationFailureCount = intFromAny(value["validation_failure_count"])
+	metricsValue.CommittedTransactionCount = intFromAny(value["committed_transaction_count"])
+	metricsValue.MaximumIncarnation = intFromAny(value["maximum_incarnation"])
+	if histogram, ok := value["incarnation_histogram"].(map[string]any); ok {
+		for key, count := range histogram {
+			metricsValue.IncarnationHistogram[intFromAny(key)] = intFromAny(count)
+		}
+	}
+	return metricsValue
+}
+
+func intFromAny(value any) int {
+	switch item := value.(type) {
+	case int:
+		return item
+	case int64:
+		return int(item)
+	case float64:
+		return int(item)
+	case string:
+		var parsed int
+		_, _ = fmt.Sscan(item, &parsed)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func boolFromAny(value any) bool {
+	switch item := value.(type) {
+	case bool:
+		return item
+	case string:
+		return item == "true"
+	default:
+		return false
+	}
+}
+
+func blockExecutorWorkerCountFromProfile(profile map[string]PluginConfig) int {
+	plugin, ok := profile["block_executor"]
+	if !ok {
+		return 1
+	}
+	return configuredWorkerCount(plugin.Config, 1)
+}
+
+func (r *NodeRuntime) hasBatchRoutingControlPlane() bool {
+	if r == nil || r.plugins.Routing == nil {
+		return false
+	}
+	_, ok := r.plugins.Routing.(BatchRoutingPlugin)
+	return ok
+}
+
+func (r *NodeRuntime) recordExecutionAndCommitDecisions(block realblock.Block, commitDecision CommitDecision, physicalDelta []state.StateKV) {
 	executionPlugin := r.plugins.Execution.ID()
 	commitPlugin := r.plugins.Commit.ID()
-	commitDecision := r.plugins.Commit.DecideCommit(CommitInput{ShardID: r.node.ShardID, Height: block.Height, Transactions: block.TxList})
+	timestamp := fmt.Sprint(time.Now().UnixMilli())
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, item := range block.TxList {
 		decision := r.plugins.Execution.Classify(item)
-		r.executionRows = append(r.executionRows, []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, item.TxID, fmt.Sprint(block.Height), executionPlugin, decision.Track, decision.Reason})
+		r.executionRows = append(r.executionRows, []string{timestamp, r.node.NodeID, r.node.ShardID, item.TxID, fmt.Sprint(block.Height), executionPlugin, decision.Track, decision.Reason})
 	}
-	r.commitRows = append(r.commitRows, []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), commitPlugin, commitDecision.AggregationGroupID, fmt.Sprint(commitDecision.LogicalUpdates), fmt.Sprint(commitDecision.PhysicalUpdates), fmt.Sprint(commitDecision.Applied)})
+	r.commitRows = append(r.commitRows, []string{timestamp, r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), commitPlugin, commitDecision.AggregationGroupID, fmt.Sprint(commitDecision.LogicalUpdates), fmt.Sprint(commitDecision.PhysicalUpdates), fmt.Sprint(commitDecision.Applied)})
+	for _, item := range physicalDelta {
+		physicalUpdates := 1
+		reduced := len(item.TxIDs) - physicalUpdates
+		if reduced < 0 {
+			reduced = 0
+		}
+		r.logicalPhysicalRows = append(r.logicalPhysicalRows, []string{timestamp, r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), commitPlugin, commitDecision.AggregationGroupID, item.Key, stableTextDigest(item.Value), strings.Join(item.TxIDs, "|"), fmt.Sprint(len(item.TxIDs)), fmt.Sprint(physicalUpdates), fmt.Sprint(reduced), fmt.Sprint(commitDecision.Applied)})
+	}
 }
 
 func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result BlockExecutionResult) {
@@ -1232,9 +2222,17 @@ func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result B
 		"worker_count":                 result.WorkerCount,
 		"plan_digest_consistent":       true,
 		"state_root_consistent":        true,
-		"serial_order_preserved":       true,
-		"reordered_transaction_count":  0,
-		"maximum_parallel_width":       1,
+		"serial_order_preserved":       executed.BlockExecutorID == execution.SerialBlockExecutorID,
+		"reordered_transaction_count":  reorderedTransactionCount(executed),
+		"maximum_parallel_width":       maximumParallelWidth(executed, result.WorkerCount),
+	}
+	if executed.BlockSTMMetrics.WorkerCount > 0 {
+		summary["block_stm_metrics"] = executed.BlockSTMMetrics
+		summary["abort_count"] = executed.BlockSTMMetrics.AbortCount
+		summary["reexecution_count"] = executed.BlockSTMMetrics.ReexecutionCount
+		summary["dependency_wait_count"] = executed.BlockSTMMetrics.DependencyWaitCount
+		summary["validation_failure_count"] = executed.BlockSTMMetrics.ValidationFailureCount
+		summary["serial_equivalent"] = executed.SerialEquivalent
 	}
 	plan := map[string]any{
 		"node_id":  r.node.NodeID,
@@ -1257,6 +2255,54 @@ func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result B
 	r.txExecutionTraceRows = append(r.txExecutionTraceRows, traceRows...)
 	r.stateDeltaRows = append(r.stateDeltaRows, stateRows...)
 	r.planDigestRows = append(r.planDigestRows, planRow)
+}
+
+func workerCountFromBlockSummaries(items []map[string]any) int {
+	max := 1
+	for _, item := range items {
+		switch value := item["worker_count"].(type) {
+		case int:
+			if value > max {
+				max = value
+			}
+		case float64:
+			if int(value) > max {
+				max = int(value)
+			}
+		}
+	}
+	return max
+}
+
+func blockExecutorVersionFromSummaries(items []map[string]any) string {
+	for _, item := range items {
+		if value, ok := item["block_executor_version"].(string); ok && value != "" {
+			return value
+		}
+	}
+	return "1.0.0"
+}
+
+func maximumParallelWidth(result execution.Result, workerCount int) int {
+	if result.BlockSTMMetrics.MaximumParallelWidth > 0 {
+		return result.BlockSTMMetrics.MaximumParallelWidth
+	}
+	if result.BlockExecutorID == execution.SerialBlockExecutorID {
+		return 1
+	}
+	if workerCount > 0 {
+		return workerCount
+	}
+	return 1
+}
+
+func reorderedTransactionCount(result execution.Result) int {
+	for index, original := range result.Plan.OriginalTransactionIdxs {
+		if index != original {
+			return len(result.Plan.OriginalTransactionIdxs)
+		}
+	}
+	return 0
 }
 
 func summarizeMethodRows(executionRows, commitRows [][]string) (int, int, int, int, int) {
@@ -1282,6 +2328,96 @@ func summarizeMethodRows(executionRows, commitRows [][]string) (int, int, int, i
 		}
 	}
 	return fast, conservative, groups, logical, physical
+}
+
+type remoteStateSummary struct {
+	total      int
+	reads      int
+	writes     int
+	failed     int
+	avgLatency float64
+}
+
+func summarizeRemoteStateRows(rows [][]string) remoteStateSummary {
+	summary := remoteStateSummary{}
+	latencySum := 0
+	successful := 0
+	for _, row := range rows {
+		if len(row) < 16 {
+			continue
+		}
+		if row[14] != "true" {
+			summary.failed++
+			continue
+		}
+		successful++
+		summary.total++
+		if row[10] == "write_apply" {
+			summary.writes++
+		} else {
+			summary.reads++
+		}
+		latencySum += intFromAny(row[11])
+	}
+	if successful > 0 {
+		summary.avgLatency = float64(latencySum) / float64(successful)
+	}
+	return summary
+}
+
+type schedulerSummary struct {
+	total             int
+	blocked           int
+	wakeup            int
+	stolen            int
+	local             int
+	readyMax          int
+	fastMax           int
+	conservativeMax   int
+	dependencyWaitMS  int
+	idleMS            int
+	idlePositiveCount int
+}
+
+func summarizeSchedulerRows(rows [][]string) schedulerSummary {
+	summary := schedulerSummary{total: len(rows)}
+	for _, row := range rows {
+		if len(row) < 13 {
+			continue
+		}
+		if row[9] == "true" {
+			summary.local++
+		}
+		if row[10] == "true" {
+			summary.stolen++
+		}
+		if row[11] == "true" {
+			summary.blocked++
+		}
+		if row[12] == "true" {
+			summary.wakeup++
+		}
+		if len(row) >= 18 {
+			summary.readyMax = maxInt(summary.readyMax, intFromAny(row[13]))
+			summary.fastMax = maxInt(summary.fastMax, intFromAny(row[14]))
+			summary.conservativeMax = maxInt(summary.conservativeMax, intFromAny(row[15]))
+			waitMS := intFromAny(row[16])
+			idleMS := intFromAny(row[17])
+			summary.dependencyWaitMS += waitMS
+			summary.idleMS += idleMS
+			if idleMS > 0 {
+				summary.idlePositiveCount++
+			}
+		}
+	}
+	return summary
+}
+
+func (summary schedulerSummary) idleRatio() float64 {
+	if summary.total == 0 {
+		return 0
+	}
+	return float64(summary.idlePositiveCount) / float64(summary.total)
 }
 
 func DecodeNodePlan(path string) (Plan, string, error) {

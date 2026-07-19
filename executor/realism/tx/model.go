@@ -17,31 +17,49 @@ const (
 
 // SignedTransaction is the V4.0 transaction format admitted by real node mempools.
 type SignedTransaction struct {
-	TxID          string   `json:"tx_id"`
-	Sender        string   `json:"sender"`
-	Receiver      string   `json:"receiver"`
-	Nonce         uint64   `json:"nonce"`
-	Value         int64    `json:"value"`
-	StateKeys     []string `json:"state_keys"`
-	Payload       string   `json:"payload"`
-	Timestamp     int64    `json:"timestamp"`
-	Signature     string   `json:"signature"`
-	PublicKey     string   `json:"public_key"`
-	SourceKind    string   `json:"source_kind,omitempty"`
-	TraceSourceID string   `json:"trace_source_id,omitempty"`
+	TxID          string       `json:"tx_id"`
+	Sender        string       `json:"sender"`
+	Receiver      string       `json:"receiver"`
+	Nonce         uint64       `json:"nonce"`
+	Value         int64        `json:"value"`
+	StateKeys     []string     `json:"state_keys"`
+	AccessList    []AccessItem `json:"access_list,omitempty"`
+	Payload       string       `json:"payload"`
+	Timestamp     int64        `json:"timestamp"`
+	Signature     string       `json:"signature"`
+	PublicKey     string       `json:"public_key"`
+	SourceKind    string       `json:"source_kind,omitempty"`
+	TraceSourceID string       `json:"trace_source_id,omitempty"`
+}
+
+type AccessMode string
+
+const (
+	AccessRead             AccessMode = "read"
+	AccessWrite            AccessMode = "write"
+	AccessReadWrite        AccessMode = "read_write"
+	AccessCommutativeDelta AccessMode = "commutative_delta"
+)
+
+type AccessItem struct {
+	Key             string     `json:"key"`
+	Mode            AccessMode `json:"mode"`
+	UpdateSemantics string     `json:"update_semantics"`
+	Delta           int64      `json:"delta,omitempty"`
 }
 
 type coreFields struct {
-	Sender        string   `json:"sender"`
-	Receiver      string   `json:"receiver"`
-	Nonce         uint64   `json:"nonce"`
-	Value         int64    `json:"value"`
-	StateKeys     []string `json:"state_keys"`
-	Payload       string   `json:"payload"`
-	Timestamp     int64    `json:"timestamp"`
-	PublicKey     string   `json:"public_key"`
-	SourceKind    string   `json:"source_kind,omitempty"`
-	TraceSourceID string   `json:"trace_source_id,omitempty"`
+	Sender        string       `json:"sender"`
+	Receiver      string       `json:"receiver"`
+	Nonce         uint64       `json:"nonce"`
+	Value         int64        `json:"value"`
+	StateKeys     []string     `json:"state_keys"`
+	AccessList    []AccessItem `json:"access_list,omitempty"`
+	Payload       string       `json:"payload"`
+	Timestamp     int64        `json:"timestamp"`
+	PublicKey     string       `json:"public_key"`
+	SourceKind    string       `json:"source_kind,omitempty"`
+	TraceSourceID string       `json:"trace_source_id,omitempty"`
 }
 
 func (t SignedTransaction) core() coreFields {
@@ -51,6 +69,7 @@ func (t SignedTransaction) core() coreFields {
 		Nonce:         t.Nonce,
 		Value:         t.Value,
 		StateKeys:     append([]string(nil), t.StateKeys...),
+		AccessList:    append([]AccessItem(nil), t.AccessList...),
 		Payload:       t.Payload,
 		Timestamp:     t.Timestamp,
 		PublicKey:     t.PublicKey,
@@ -74,6 +93,16 @@ func (t SignedTransaction) ValidateBasic() error {
 	}
 	for _, key := range t.StateKeys {
 		if strings.TrimSpace(key) == "" {
+			return errors.New(ErrMalformedTx)
+		}
+	}
+	for _, item := range t.AccessList {
+		if strings.TrimSpace(item.Key) == "" {
+			return errors.New(ErrMalformedTx)
+		}
+		switch item.Mode {
+		case AccessRead, AccessWrite, AccessReadWrite, AccessCommutativeDelta:
+		default:
 			return errors.New(ErrMalformedTx)
 		}
 	}

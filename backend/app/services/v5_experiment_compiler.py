@@ -33,6 +33,29 @@ DATASET_ARTIFACTS = [
     "workload_identity_mapping_summary.json",
     "workload_replay_summary.json",
 ]
+METATRACK_ARTIFACTS = [
+    "metatrack_batch_plan.jsonl",
+    "access_matrix_summary.csv",
+    "state_frequency.csv",
+    "coaccess_matrix_edges.csv",
+    "placement_plan.csv",
+    "transaction_placement.csv",
+    "dependency_graph.csv",
+    "track_classification.csv",
+    "metatrack_scheduler_trace.csv",
+    "remote_state_access.csv",
+    "aggregation_plan.csv",
+    "logical_physical_update_mapping.csv",
+]
+BLOCK_STM_ARTIFACTS = [
+    "block_stm_summary.json",
+    "block_stm_task_trace.csv",
+    "block_stm_validation_trace.csv",
+    "block_stm_abort_trace.csv",
+    "block_stm_dependency_trace.csv",
+    "incarnation_summary.csv",
+    "serial_equivalence.json",
+]
 
 
 def requested_cross_shard_count(tx_count: int, ratio: float) -> int:
@@ -61,6 +84,10 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
     snapshot = [STORE.get(item.plugin_id).model_dump() | {"selected_config": item.config} for item in compatibility.resolved_plugins]
     workload = _compile_workload_plan(spec, profile, run_dir)
     expected_artifacts = EXPECTED_ARTIFACTS + (DATASET_ARTIFACTS if workload.get("source_type") == "dataset" else [])
+    if profile.get("routing", {}).get("plugin_id") == "metatrack_coaccess_routing":
+        expected_artifacts += METATRACK_ARTIFACTS
+    if profile.get("block_executor", {}).get("plugin_id") == "block_stm_block_executor":
+        expected_artifacts += BLOCK_STM_ARTIFACTS
     return V5CompiledRunPlan(
         plan_id=f"v5plan_{digest[:16]}", plan_digest=digest,
         execution_backend=spec.execution_backend, duration_ms=spec.duration_ms,

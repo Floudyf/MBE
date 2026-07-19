@@ -14,6 +14,61 @@ CATALOG_DEFAULT_METHOD_ID = "v5_catalog_default"
 METHOD_EXCLUDED_CATEGORIES = {"workload", "fault_injection"}
 MAX_CHILD_RUNS = 100
 
+BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+    "hash_serial": V5FormalMethod(
+        method_id="hash_serial",
+        display_name="Hash + Serial",
+        role="baseline",
+        plugin_overrides={
+            "routing": "hash_routing_baseline",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "serial_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 1}},
+    ),
+    "hash_block_stm": V5FormalMethod(
+        method_id="hash_block_stm",
+        display_name="Hash + Block-STM",
+        role="baseline",
+        plugin_overrides={
+            "routing": "hash_routing_baseline",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "block_stm_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 4}},
+    ),
+    "metatrack_serial": V5FormalMethod(
+        method_id="metatrack_serial",
+        display_name="MetaTrack + Serial",
+        role="main",
+        plugin_overrides={
+            "routing": "metatrack_coaccess_routing",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "serial_block_executor",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 1}},
+    ),
+    "metatrack_block_stm": V5FormalMethod(
+        method_id="metatrack_block_stm",
+        display_name="MetaTrack + Block-STM",
+        role="main",
+        plugin_overrides={
+            "routing": "metatrack_coaccess_routing",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "block_stm_block_executor",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 4}},
+    ),
+}
+
 
 class FormalPlanValidationError(ValueError):
     pass
@@ -64,6 +119,11 @@ def _verified_method(method: V5FormalMethod) -> V5FormalMethod:
         if method.plugin_overrides:
             raise FormalPlanValidationError("v5_catalog_default must not contain plugin overrides")
         return V5FormalMethod(method_id=CATALOG_DEFAULT_METHOD_ID, display_name="V5 Catalog Default", plugin_overrides={}, role="baseline")
+    if method.method_id in BUILTIN_METHODS:
+        expected = BUILTIN_METHODS[method.method_id]
+        if method.display_name != expected.display_name or method.plugin_overrides != expected.plugin_overrides or method.plugin_config_overrides != expected.plugin_config_overrides:
+            raise FormalPlanValidationError(f"builtin method payload does not match registry: {method.method_id}")
+        return expected
     try:
         saved = get_saved_config(method.method_id)
     except SavedConfigNotFound as exc:
@@ -91,11 +151,12 @@ def _verified_method(method: V5FormalMethod) -> V5FormalMethod:
         expected[category] = manifest.plugin_id
     if "block_executor" not in expected:
         expected["block_executor"] = _default_plugin("block_executor")
-    if method.display_name != saved.get("name") or method.plugin_overrides != expected:
+    expected_config_overrides = payload.get("plugin_config_overrides") if isinstance(payload.get("plugin_config_overrides"), dict) else {}
+    if method.display_name != saved.get("name") or method.plugin_overrides != expected or method.plugin_config_overrides != expected_config_overrides:
         raise FormalPlanValidationError(f"method profile payload does not match saved config: {method.method_id}")
     draft = payload.get("source_composer_draft") if isinstance(payload.get("source_composer_draft"), dict) else {}
     role = draft.get("role") if draft.get("role") in {"main", "baseline", "ablation", "custom"} else next((tag for tag in saved.get("tags", []) if tag in {"main", "baseline", "ablation", "custom"}), "custom")
-    return V5FormalMethod(method_id=method.method_id, display_name=saved["name"], plugin_overrides=expected, role=role)
+    return V5FormalMethod(method_id=method.method_id, display_name=saved["name"], plugin_overrides=expected, plugin_config_overrides=expected_config_overrides, role=role)
 
 
 def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:

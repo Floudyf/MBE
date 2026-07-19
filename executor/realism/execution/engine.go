@@ -13,25 +13,27 @@ type Engine struct {
 }
 
 type Result struct {
-	BlockHash       string            `json:"block_hash"`
-	Height          uint64            `json:"height"`
-	StateRootBefore string            `json:"state_root_before"`
-	StateRootAfter  string            `json:"state_root_after"`
-	ReceiptRoot     string            `json:"receipt_root"`
-	Receipts        []Receipt         `json:"receipts"`
-	StateUpdates    map[string]string `json:"state_updates"`
-	StateDelta      []StateUpdate     `json:"state_delta,omitempty"`
-	Deterministic   bool              `json:"deterministic_execution"`
-	EVMExecution    bool              `json:"evm_execution"`
-	FabricExecution bool              `json:"fabric_execution"`
-	SuccessfulTxs   int               `json:"successful_txs"`
-	FailedTxs       int               `json:"failed_txs"`
-	BlockExecutorID string            `json:"block_executor_id,omitempty"`
-	ExecutorVersion string            `json:"block_executor_version,omitempty"`
-	WorkerCount     int               `json:"worker_count,omitempty"`
-	Plan            ExecutionPlan     `json:"execution_plan,omitempty"`
-	PlanDigest      string            `json:"execution_plan_digest,omitempty"`
-	TxDeltas        []TxDelta         `json:"tx_deltas,omitempty"`
+	BlockHash        string            `json:"block_hash"`
+	Height           uint64            `json:"height"`
+	StateRootBefore  string            `json:"state_root_before"`
+	StateRootAfter   string            `json:"state_root_after"`
+	ReceiptRoot      string            `json:"receipt_root"`
+	Receipts         []Receipt         `json:"receipts"`
+	StateUpdates     map[string]string `json:"state_updates"`
+	StateDelta       []StateUpdate     `json:"state_delta,omitempty"`
+	Deterministic    bool              `json:"deterministic_execution"`
+	EVMExecution     bool              `json:"evm_execution"`
+	FabricExecution  bool              `json:"fabric_execution"`
+	SuccessfulTxs    int               `json:"successful_txs"`
+	FailedTxs        int               `json:"failed_txs"`
+	BlockExecutorID  string            `json:"block_executor_id,omitempty"`
+	ExecutorVersion  string            `json:"block_executor_version,omitempty"`
+	WorkerCount      int               `json:"worker_count,omitempty"`
+	Plan             ExecutionPlan     `json:"execution_plan,omitempty"`
+	PlanDigest       string            `json:"execution_plan_digest,omitempty"`
+	TxDeltas         []TxDelta         `json:"tx_deltas,omitempty"`
+	BlockSTMMetrics  BlockSTMMetrics   `json:"block_stm_metrics,omitempty"`
+	SerialEquivalent bool              `json:"serial_equivalent,omitempty"`
 }
 
 func NewEngine() *Engine {
@@ -59,9 +61,21 @@ func (e *Engine) ExecuteBlock(b block.Block, db *state.DB) Result {
 }
 
 func (e *Engine) executeTx(b block.Block, db *state.DB, item tx.SignedTransaction) Receipt {
+	receipt := Receipt{TxID: item.TxID, BlockHash: b.BlockHash, Height: b.Height, Success: false, ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...)}
+	if isPureCommutativeDelta(item.AccessList) {
+		applyCommutativeDeltasToDB(db, item.AccessList)
+		receipt.Success = true
+		receipt.StateRootAfterTx = db.Root()
+		return receipt
+	}
+	if isCrossShardTargetCommit(item, b.ShardID) {
+		db.Set("relay_commit:"+item.TxID, "1")
+		receipt.Success = true
+		receipt.StateRootAfterTx = db.Root()
+		return receipt
+	}
 	ensureAccount(db, item.Sender, e.DefaultInitialBalance)
 	ensureAccount(db, item.Receiver, 0)
-	receipt := Receipt{TxID: item.TxID, BlockHash: b.BlockHash, Height: b.Height, Success: false, ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...)}
 	expectedNonce := db.Nonce(item.Sender)
 	if item.Nonce != expectedNonce {
 		receipt.Error = fmt.Sprintf("nonce_mismatch_expected_%d_got_%d", expectedNonce, item.Nonce)
@@ -94,4 +108,20 @@ func ensureAccount(db *state.DB, account string, balance int64) {
 	if db.Get("nonce:"+account) == "" {
 		db.SetNonce(account, 0)
 	}
+}
+
+func applyCommutativeDeltasToDB(db *state.DB, accesses []tx.AccessItem) {
+	for _, access := range accesses {
+		if access.Mode != tx.AccessCommutativeDelta || access.Key == "" {
+			continue
+		}
+		current, _ := parseStateInt(db.Get(access.Key))
+		db.Set(access.Key, fmt.Sprintf("%d", current+access.Delta))
+	}
+}
+
+func parseStateInt(value string) (int64, error) {
+	var parsed int64
+	_, err := fmt.Sscanf(value, "%d", &parsed)
+	return parsed, err
 }

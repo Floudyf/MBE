@@ -69,6 +69,13 @@ V5.1 builds a unified `ExperimentSpec` driven runtime with:
 
 V5.1 implementation status: complete as a local research runtime after the required 8-node, 16-node, four-method difference, backend/Go/frontend, and E2E gates pass. V5.2 software closure is also implemented and verified through Gate A/B, an 8-child real RunGroup, and one completed 16-node/4-shard/10000-transaction Child. This does not claim production security, production PBFT, or completion of the long-running 12-child paper matrix.
 
+Current internal execution-method closure status: the V5 platform branch may
+include the implemented `block_executor` category, `serial_block_executor`,
+`block_stm_block_executor`, and the four runnable method configurations Hash +
+Serial, Hash + Block-STM, MetaTrack + Serial, and MetaTrack + Block-STM. Treat
+this as a V5.2 internal method-execution closure, not as V5.3/V6 and not as an
+Aptos production runtime claim.
+
 ## 5. V5.2 Goal
 
 V5.2 uses V5.1 to execute full formal experiment matrices and close:
@@ -114,6 +121,7 @@ All modules use one extension model. Categories:
 - network
 - execution
 - scheduler
+- block_executor
 - state_access
 - state_storage
 - cross_shard
@@ -181,6 +189,38 @@ injection. Do not implement runtime behavior with large plugin ID branches. Do
 not fall back to the legacy engine after a block executor failure.
 
 The UI must show implementation status, backend support, parameter ranges, dependencies, conflicts, truth boundary, and metrics. Formal Real Cluster requires all selected plugins to support `real_cluster`.
+
+## 7.3 Block-STM Reproduction Rule
+
+Block-STM work must start from `docs/reproductions/block_stm/`. The locked
+paper source is arXiv:2203.06871v3, and the locked Aptos reference source is
+`aptos-labs/aptos-core` commit `20f9379515358add43f4042693462aaedd654826`.
+
+Do not call an executor `block_stm` unless it implements the core mechanism:
+preset transaction order, transaction version `(transaction_index,
+incarnation)`, MVMemory, captured reads, registered writes, validation,
+abort/re-execution, ESTIMATE, dependency waiting, collaborative execution and
+validation tasks, deterministic ordered output, and Serial equivalence. A static
+conflict graph, StateKeys-only grouping, wave batching, or ordinary optimistic
+lock loop is not Block-STM.
+
+When `block_stm_block_executor` is present, it must remain under the
+`block_executor` category and must be compared through the four-method matrix:
+
+- Hash + Serial
+- Hash + Block-STM
+- MetaTrack + Serial
+- MetaTrack + Block-STM
+
+Synthetic crafted workload acceptance must prove routing, track, aggregation,
+and Block-STM/Serial-equivalence evidence. Dataset acceptance must prove the
+same four methods run the registered canonical workload with truth labels,
+no-fallback replay summaries, terminal finality, MetaTrack remote-state access,
+and Block-STM serial-equivalence artifacts; it must not fabricate synthetic
+fast-track or aggregation behavior for a real dataset window. Local
+`go test -race` remains required when a CGO C compiler is installed; if Windows
+lacks `gcc`, report that as an environment limitation instead of claiming the
+race gate passed.
 
 ## 8. Backend Rule
 

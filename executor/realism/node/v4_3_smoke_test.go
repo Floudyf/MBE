@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -91,6 +92,72 @@ func TestBlockEmulatorImportedTxsRunV43Smoke(t *testing.T) {
 	}
 }
 
+func TestV43RootArtifactSourcePrefersCompleteN0(t *testing.T) {
+	outDir := t.TempDir()
+	writeV43NodeArtifacts(t, outDir, "n0", "n0")
+	writeV43NodeArtifacts(t, outDir, "n1", "n1")
+
+	source, err := selectV43RootArtifactSource(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "n0" {
+		t.Fatalf("expected n0 source, got %s", source)
+	}
+	if err := writeV43RootArtifacts(outDir); err != nil {
+		t.Fatal(err)
+	}
+	assertV43RootArtifactsFrom(t, outDir, "n0")
+}
+
+func TestV43RootArtifactSourceFallsBackToFirstCompleteNode(t *testing.T) {
+	outDir := t.TempDir()
+	writeV43NodeArtifactsExcept(t, outDir, "n0", "n0", "receipts.jsonl")
+	writeV43NodeArtifacts(t, outDir, "n1", "n1")
+	writeV43NodeArtifacts(t, outDir, "n2", "n2")
+
+	source, err := selectV43RootArtifactSource(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "n1" {
+		t.Fatalf("expected n1 source, got %s", source)
+	}
+	if err := writeV43RootArtifacts(outDir); err != nil {
+		t.Fatal(err)
+	}
+	assertV43RootArtifactsFrom(t, outDir, "n1")
+}
+
+func TestV43RootArtifactsAreNotMixedAcrossNodes(t *testing.T) {
+	outDir := t.TempDir()
+	writeV43NodeArtifactsExcept(t, outDir, "n0", "n0", "receipts.jsonl")
+	writeV43NodeArtifacts(t, outDir, "n1", "n1")
+	writeV43NodeArtifactsExcept(t, outDir, "n2", "n2", "network_log.csv")
+
+	if err := writeV43RootArtifacts(outDir); err != nil {
+		t.Fatal(err)
+	}
+	assertV43RootArtifactsFrom(t, outDir, "n1")
+}
+
+func TestV43RootArtifactSourceFailsWithMissingFileDetails(t *testing.T) {
+	outDir := t.TempDir()
+	writeV43NodeArtifactsExcept(t, outDir, "n0", "n0", "receipts.jsonl")
+	writeV43NodeArtifactsExcept(t, outDir, "n1", "n1", "tx_index.jsonl")
+
+	_, err := selectV43RootArtifactSource(outDir)
+	if err == nil {
+		t.Fatal("expected incomplete source failure")
+	}
+	message := err.Error()
+	for _, want := range []string{"candidates=[n0 n1]", "receipts.jsonl", "tx_index.jsonl"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected error to contain %q, got %q", want, message)
+		}
+	}
+}
+
 func v43SmokeFixture(t *testing.T) (string, FinalSummaryV43, []string) {
 	t.Helper()
 	v43Fixture.once.Do(func() {
@@ -104,4 +171,38 @@ func v43SmokeFixture(t *testing.T) (string, FinalSummaryV43, []string) {
 		t.Fatal(v43Fixture.err)
 	}
 	return v43Fixture.outDir, v43Fixture.summary, v43Fixture.artifacts
+}
+
+func writeV43NodeArtifacts(t *testing.T, outDir, nodeID, marker string) {
+	t.Helper()
+	writeV43NodeArtifactsExcept(t, outDir, nodeID, marker, "")
+}
+
+func writeV43NodeArtifactsExcept(t *testing.T, outDir, nodeID, marker, except string) {
+	t.Helper()
+	nodeDir := filepath.Join(outDir, nodeID)
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range v43RootArtifactFiles {
+		if name == except {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(nodeDir, name), []byte(marker+":"+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func assertV43RootArtifactsFrom(t *testing.T, outDir, marker string) {
+	t.Helper()
+	for _, name := range v43RootArtifactFiles {
+		raw, err := os.ReadFile(filepath.Join(outDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(string(raw), marker+":") {
+			t.Fatalf("root artifact %s was not copied from %s: %q", name, marker, string(raw))
+		}
+	}
 }

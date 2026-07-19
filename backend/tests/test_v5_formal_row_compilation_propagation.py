@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -8,6 +11,7 @@ from backend.app.models.v5_experiment_spec import V5ExperimentSpec, V5PluginSele
 from backend.app.models.v5_formal_experiment import V5FormalExperimentPlan, V5FormalMethod
 from backend.app.services.v5_experiment_compiler import compile_plan
 from backend.app.services.v5_compatibility_engine import validate as validate_compatibility
+from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS, validate_request
 from backend.app.services.v5_formal_scheduler import _spec_for, expand
 from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
 
@@ -125,6 +129,146 @@ def test_compiled_plan_keeps_formal_and_method_profile_ids(tmp_path: Path) -> No
     second = compile_plan(_spec_for(plan, rows[1], formal_plan_config_id="v3cfg_formal_plan"), tmp_path / "second")
     assert first.formal_plan_config_id == second.formal_plan_config_id == "v3cfg_formal_plan"
     assert first.method_config_id != second.method_config_id
+
+
+def test_method_config_overrides_propagate_to_child_spec() -> None:
+    plan = method_plan(suites=["comparison_experiment"])
+    plan.methods = [
+        V5FormalMethod(
+            method_id="hash_block_stm",
+            display_name="Hash + Block-STM",
+            plugin_overrides={
+                "routing": "hash_routing_baseline",
+                "execution": "serial_execution_baseline",
+                "scheduler": "fifo_serial_scheduler",
+                "block_executor": "block_stm_block_executor",
+                "commit": "normal_commit",
+            },
+            plugin_config_overrides={"block_executor": {"worker_count": 4}},
+            role="baseline",
+        )
+    ]
+    rows = expand(plan, "real_cluster")
+    spec = _spec_for(plan, rows[0])
+    block_executor = next(item for item in spec.plugin_selections if item.category == "block_executor")
+    assert block_executor.plugin_id == "block_stm_block_executor"
+    assert block_executor.config["worker_count"] == 4
+
+
+def test_method_plugin_override_resets_to_target_plugin_default_config() -> None:
+    plan = method_plan(suites=["comparison_experiment"])
+    for selection in plan.base_spec.plugin_selections:
+        if selection.category == "block_executor":
+            selection.plugin_id = "block_stm_block_executor"
+            selection.config = {"worker_count": 4}
+    plan.methods = [
+        V5FormalMethod(
+            method_id="hash_serial",
+            display_name="Hash + Serial",
+            plugin_overrides={"block_executor": "serial_block_executor"},
+            role="baseline",
+        )
+    ]
+
+    rows = expand(plan, "real_cluster")
+    spec = _spec_for(plan, rows[0])
+    block_executor = next(item for item in spec.plugin_selections if item.category == "block_executor")
+
+    assert block_executor.plugin_id == "serial_block_executor"
+    assert block_executor.config["worker_count"] == 1
+    assert validate_compatibility(spec).valid is True
+
+
+def test_builtin_four_method_comparison_preserves_fairness_conditions(tmp_path: Path) -> None:
+    plan = method_plan(suites=["comparison_experiment"])
+    plan.methods = list(BUILTIN_METHODS.values())
+    checked = validate_request(type("Request", (), {"execution_backend": "real_cluster", "plan": plan})())
+    rows = checked.rows
+
+    assert [row["method_config_id"] for row in rows] == [
+        "hash_serial",
+        "hash_block_stm",
+        "metatrack_serial",
+        "metatrack_block_stm",
+    ]
+    assert len({row["comparison_group_id"] for row in rows}) == 1
+    assert len({row["fairness_key"] for row in rows}) == 1
+    assert len({row["workload_snapshot_digest"] for row in rows}) == 1
+    assert len({row["topology_snapshot_digest"] for row in rows}) == 1
+    assert len({row["fault_snapshot_digest"] for row in rows}) == 1
+    assert len({row["seed"] for row in rows}) == 1
+    assert len({row["estimated_transactions"] for row in rows}) == 1
+    assert len({row["method_snapshot_digest"] for row in rows}) == 4
+
+    compiled_by_method = {
+        row["method_config_id"]: compiled(plan, row, tmp_path / row["method_config_id"])
+        for row in rows
+    }
+    common_workload = {item.workload_plan["tx_count"] for item in compiled_by_method.values()}
+    common_topology = {json.dumps(item.experiment_spec["topology"], sort_keys=True) for item in compiled_by_method.values()}
+    assert common_workload == {100}
+    assert len(common_topology) == 1
+
+    def plugin(plan_item, category: str) -> dict:
+        return plan_item.node_configs[0].plugin_profile[category]
+
+    assert plugin(compiled_by_method["hash_serial"], "routing")["plugin_id"] == "hash_routing_baseline"
+    assert plugin(compiled_by_method["hash_serial"], "block_executor")["plugin_id"] == "serial_block_executor"
+    assert plugin(compiled_by_method["hash_serial"], "block_executor")["config"]["worker_count"] == 1
+    assert plugin(compiled_by_method["hash_block_stm"], "routing")["plugin_id"] == "hash_routing_baseline"
+    assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["plugin_id"] == "block_stm_block_executor"
+    assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["config"]["worker_count"] == 4
+    assert plugin(compiled_by_method["metatrack_serial"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
+    assert plugin(compiled_by_method["metatrack_serial"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
+    assert plugin(compiled_by_method["metatrack_serial"], "block_executor")["plugin_id"] == "serial_block_executor"
+    assert plugin(compiled_by_method["metatrack_block_stm"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
+    assert plugin(compiled_by_method["metatrack_block_stm"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
+    assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["plugin_id"] == "block_stm_block_executor"
+    assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["worker_count"] == 4
+
+
+def test_formal_scheduler_start_records_in_process_worker_thread(monkeypatch) -> None:
+    import backend.app.services.v5_formal_scheduler as scheduler
+
+    group_id = "v5grp_threaded_start"
+    record = {"run_group_id": group_id, "status": "queued"}
+    entered_worker = threading.Event()
+    release_worker = threading.Event()
+
+    def fake_read_group(value: str) -> dict:
+        assert value == group_id
+        return dict(record)
+
+    def fake_write_group(group: dict) -> None:
+        record.clear()
+        record.update(group)
+
+    def fake_worker(value: str) -> None:
+        assert value == group_id
+        entered_worker.set()
+        release_worker.wait(timeout=2)
+        group = fake_read_group(value)
+        group["status"] = "completed"
+        fake_write_group(group)
+
+    monkeypatch.setattr(scheduler, "read_group", fake_read_group)
+    monkeypatch.setattr(scheduler, "write_group", fake_write_group)
+    monkeypatch.setattr(scheduler, "_worker", fake_worker)
+
+    scheduler.start(group_id)
+
+    assert entered_worker.wait(timeout=1)
+    assert record["worker_pid"] == os.getpid()
+    assert record["worker_thread"] == f"v5-formal-worker-{group_id}"
+    assert record["status"] == "starting"
+    release_worker.set()
+    for _ in range(50):
+        if record.get("status") == "completed":
+            break
+        threading.Event().wait(0.01)
+    assert record["status"] == "completed"
+    assert record["worker_pid"] == os.getpid()
+    assert record["worker_thread"] == f"v5-formal-worker-{group_id}"
 
 
 def test_unknown_workload_point_is_blocked_and_not_silently_compiled() -> None:

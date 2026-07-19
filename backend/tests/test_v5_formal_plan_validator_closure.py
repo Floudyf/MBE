@@ -2,7 +2,7 @@ import pytest
 
 from backend.app.models.v5_experiment_spec import V5ExperimentSpec, V5PluginSelection, V5Topology
 from backend.app.models.v5_formal_experiment import V5FormalExperimentPlan, V5FormalMethod, V5FormalRunRequest
-from backend.app.services.v5_formal_plan_validator import FormalPlanValidationError, _effective_snapshot, validate_request
+from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS, FormalPlanValidationError, _effective_snapshot, validate_request
 from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
 
 
@@ -21,6 +21,27 @@ def test_catalog_default_is_canonical_baseline_and_alias_snapshot_is_canonical()
     alias = V5FormalMethod(method_id="x", display_name="x", plugin_overrides={"routing": "hash"})
     canonical = V5FormalMethod(method_id="x", display_name="x", plugin_overrides={"routing": "hash_routing_baseline"})
     assert _effective_snapshot(plan, alias) == _effective_snapshot(plan, canonical)
+
+
+def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
+    plan = _plan()
+    plan.methods = list(BUILTIN_METHODS.values())
+    plan.suites = ["comparison_experiment"]
+    checked = validate_request(V5FormalRunRequest(execution_backend="real_cluster", plan=plan))
+    assert [method.method_id for method in checked.plan.methods] == [
+        "hash_serial",
+        "hash_block_stm",
+        "metatrack_serial",
+        "metatrack_block_stm",
+    ]
+    assert checked.plan.methods[1].plugin_overrides["block_executor"] == "block_stm_block_executor"
+    assert checked.plan.methods[1].plugin_config_overrides["block_executor"]["worker_count"] == 4
+
+    forged = BUILTIN_METHODS["hash_block_stm"].model_copy(deep=True)
+    forged.plugin_config_overrides["block_executor"]["worker_count"] = 1
+    plan.methods = [forged]
+    with pytest.raises(FormalPlanValidationError, match="builtin method payload does not match registry"):
+        validate_request(V5FormalRunRequest(execution_backend="real_cluster", plan=plan))
 
 
 @pytest.mark.parametrize("point", [{"mode": "delay_only"}, {"mode": "delay_only", "delay_ms": True}, {"mode": "network_drop"}, {"mode": "network_drop", "drop_rate": 0}, {"mode": "network_drop", "drop_every": 3}, {"mode": "kill_node"}, {"mode": "restart_node"}])
