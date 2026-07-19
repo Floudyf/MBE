@@ -1305,7 +1305,7 @@ export type V5CompatibilityResult = { valid: boolean; blockers: string[]; warnin
 export type V5CompiledRunPlan = Record<string, unknown> & { plan_id: string; plan_digest: string; node_configs: Record<string, unknown>[]; plugin_snapshot: V5PluginManifest[]; no_fallback: boolean };
 export type V5RealClusterResult = { run_id: string; status: string; summary: Record<string, unknown>; artifacts: V2Artifact[]; stdout: string; stderr: string; no_fallback: boolean };
 export type V5FormalSuite = "main_experiment" | "comparison_experiment" | "ablation_experiment" | "workload_sensitivity" | "topology_scaling" | "fault_recovery_experiment";
-export type V5FormalMethod = { method_id: string; display_name: string; plugin_overrides: Record<string, string>; role?: "main" | "baseline" | "ablation" | "custom" };
+export type V5FormalMethod = { method_id: string; display_name: string; plugin_overrides: Record<string, string>; plugin_config_overrides?: Record<string, Record<string, unknown>>; role?: "main" | "baseline" | "ablation" | "custom" };
 export type V5FormalExperimentPlan = {
   name: string;
   saved_config_id?: string;

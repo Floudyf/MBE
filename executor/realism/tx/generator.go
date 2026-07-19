@@ -12,6 +12,7 @@ type GenerateOptions struct {
 	StartNonce  uint64
 	Value       int64
 	StateKeys   []string
+	AccessList  []AccessItem
 	Seed        string
 	SourceKind  string
 	StartTimeMS int64
@@ -42,12 +43,17 @@ func Generate(opts GenerateOptions) ([]SignedTransaction, string, string, error)
 		if len(stateKeys) == 0 {
 			stateKeys = DefaultStateKeys(sender, receiver)
 		}
+		accessList := append([]AccessItem(nil), opts.AccessList...)
+		if len(accessList) == 0 {
+			accessList = DefaultTransferAccessList(sender, receiver)
+		}
 		item := SignedTransaction{
 			Sender:     sender,
 			Receiver:   receiver,
 			Nonce:      nonce,
 			Value:      opts.Value,
 			StateKeys:  stateKeys,
+			AccessList: accessList,
 			Payload:    fmt.Sprintf("mbe-client:%s:%s:%d", sender, receiver, nonce),
 			Timestamp:  opts.StartTimeMS + int64(i),
 			SourceKind: opts.SourceKind,
@@ -62,6 +68,17 @@ func Generate(opts GenerateOptions) ([]SignedTransaction, string, string, error)
 
 func DefaultStateKeys(sender, receiver string) []string {
 	return []string{"acct:" + strings.TrimSpace(sender), "acct:" + strings.TrimSpace(receiver)}
+}
+
+func DefaultTransferAccessList(sender, receiver string) []AccessItem {
+	sender = strings.TrimSpace(sender)
+	receiver = strings.TrimSpace(receiver)
+	return []AccessItem{
+		{Key: "balance:" + sender, Mode: AccessReadWrite, UpdateSemantics: "set"},
+		{Key: "nonce:" + sender, Mode: AccessReadWrite, UpdateSemantics: "set"},
+		{Key: "balance:" + receiver, Mode: AccessReadWrite, UpdateSemantics: "set"},
+		{Key: "nonce:" + receiver, Mode: AccessRead, UpdateSemantics: "validate"},
+	}
 }
 
 func encodeKey(raw []byte) string {

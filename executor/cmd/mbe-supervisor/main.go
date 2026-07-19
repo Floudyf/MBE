@@ -108,17 +108,33 @@ type v5NodeProcess struct {
 	LogPath    string `json:"log_path"`
 }
 type v5NodeSummary struct {
-	NodeID               string `json:"node_id"`
-	ShardID              string `json:"shard_id"`
-	PID                  int    `json:"pid"`
-	ListenAddr           string `json:"listen_addr"`
-	CommittedBlockCount  int    `json:"committed_block_count"`
-	StateRoot            string `json:"state_root"`
-	RealPBFT             bool   `json:"real_pbft_style_messages"`
-	BlockExecutorID      string `json:"block_executor_id"`
-	BlockExecutorVersion string `json:"block_executor_version"`
-	WorkerCount          int    `json:"worker_count"`
-	PlanDigestConsistent bool   `json:"plan_digest_consistent"`
+	NodeID                        string  `json:"node_id"`
+	ShardID                       string  `json:"shard_id"`
+	PID                           int     `json:"pid"`
+	ListenAddr                    string  `json:"listen_addr"`
+	CommittedBlockCount           int     `json:"committed_block_count"`
+	StateRoot                     string  `json:"state_root"`
+	RealPBFT                      bool    `json:"real_pbft_style_messages"`
+	BlockExecutorID               string  `json:"block_executor_id"`
+	BlockExecutorVersion          string  `json:"block_executor_version"`
+	WorkerCount                   int     `json:"worker_count"`
+	PlanDigestConsistent          bool    `json:"plan_digest_consistent"`
+	SchedulerEventCount           int     `json:"scheduler_event_count"`
+	SchedulerBlockedCount         int     `json:"scheduler_blocked_count"`
+	SchedulerWakeupCount          int     `json:"scheduler_wakeup_count"`
+	SchedulerStolenWorkCount      int     `json:"scheduler_stolen_work_count"`
+	SchedulerLocalExecutionCount  int     `json:"scheduler_local_execution_count"`
+	SchedulerReadyQueueMaxDepth   int     `json:"scheduler_ready_queue_max_depth"`
+	SchedulerFastQueueMaxDepth    int     `json:"scheduler_fast_queue_max_depth"`
+	SchedulerConsQueueMaxDepth    int     `json:"scheduler_conservative_queue_max_depth"`
+	SchedulerDependencyWaitMS     int     `json:"scheduler_dependency_wait_ms"`
+	SchedulerIdleMS               int     `json:"scheduler_idle_ms"`
+	SchedulerIdleRatio            float64 `json:"scheduler_idle_ratio"`
+	RemoteStateAccessCount        int     `json:"remote_state_access_count"`
+	RemoteStateReadCount          int     `json:"remote_state_read_count"`
+	RemoteStateWriteApplyCount    int     `json:"remote_state_write_apply_count"`
+	RemoteStateAccessFailedCount  int     `json:"remote_state_access_failed_count"`
+	RemoteStateAccessAvgLatencyMS float64 `json:"remote_state_access_avg_latency_ms"`
 }
 
 func runV5(planPath, dataDir string) error {
@@ -927,6 +943,22 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	crossSuccess := 0
 	crossRefund := 0
 	faultEvidence := false
+	remoteStateAccessCount := 0
+	remoteStateReadCount := 0
+	remoteStateWriteApplyCount := 0
+	remoteStateFailedCount := 0
+	remoteStateLatencyWeightedSum := 0.0
+	schedulerEventCount := 0
+	schedulerBlockedCount := 0
+	schedulerWakeupCount := 0
+	schedulerStolenWorkCount := 0
+	schedulerLocalExecutionCount := 0
+	schedulerReadyQueueMaxDepth := 0
+	schedulerFastQueueMaxDepth := 0
+	schedulerConsQueueMaxDepth := 0
+	schedulerDependencyWaitMS := 0
+	schedulerIdleMS := 0
+	schedulerIdleRatioWeightedSum := 0.0
 	for _, node := range plan.NodeConfigs {
 		raw, err := os.ReadFile(filepath.Join(node.DataDir, "node_summary.json"))
 		if err != nil {
@@ -947,6 +979,28 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		if item.RealPBFT {
 			pbftCount++
 		}
+		remoteStateAccessCount += item.RemoteStateAccessCount
+		remoteStateReadCount += item.RemoteStateReadCount
+		remoteStateWriteApplyCount += item.RemoteStateWriteApplyCount
+		remoteStateFailedCount += item.RemoteStateAccessFailedCount
+		remoteStateLatencyWeightedSum += item.RemoteStateAccessAvgLatencyMS * float64(item.RemoteStateAccessCount)
+		schedulerEventCount += item.SchedulerEventCount
+		schedulerBlockedCount += item.SchedulerBlockedCount
+		schedulerWakeupCount += item.SchedulerWakeupCount
+		schedulerStolenWorkCount += item.SchedulerStolenWorkCount
+		schedulerLocalExecutionCount += item.SchedulerLocalExecutionCount
+		if item.SchedulerReadyQueueMaxDepth > schedulerReadyQueueMaxDepth {
+			schedulerReadyQueueMaxDepth = item.SchedulerReadyQueueMaxDepth
+		}
+		if item.SchedulerFastQueueMaxDepth > schedulerFastQueueMaxDepth {
+			schedulerFastQueueMaxDepth = item.SchedulerFastQueueMaxDepth
+		}
+		if item.SchedulerConsQueueMaxDepth > schedulerConsQueueMaxDepth {
+			schedulerConsQueueMaxDepth = item.SchedulerConsQueueMaxDepth
+		}
+		schedulerDependencyWaitMS += item.SchedulerDependencyWaitMS
+		schedulerIdleMS += item.SchedulerIdleMS
+		schedulerIdleRatioWeightedSum += item.SchedulerIdleRatio * float64(item.SchedulerEventCount)
 		network, _ := os.ReadFile(filepath.Join(node.DataDir, "network_log.csv"))
 		faultEvidence = faultEvidence || strings.Contains(string(network), "fault_")
 	}
@@ -985,7 +1039,15 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	ready := len(pids) == len(plan.NodeConfigs) && len(ports) == len(plan.NodeConfigs) && consistent && allActive && pbftCount == len(plan.NodeConfigs) && clientInfo != nil
 	faultRequested := fmt.Sprint(plan.FaultPlan["mode"]) != "" && fmt.Sprint(plan.FaultPlan["mode"]) != "disabled"
 	ready = ready && (!faultRequested || faultEvidence)
-	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "block_executor_id": singleMapKey(blockExecutors), "block_executor_consistent": len(blockExecutors) == 1, "plan_digest_consistent": planDigestConsistent, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "fault_injection_real": faultEvidence, "fault_injection_requested": faultRequested, "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": redactV5Processes(processes, dataDir), "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
+	remoteStateAvgLatency := 0.0
+	if remoteStateAccessCount > 0 {
+		remoteStateAvgLatency = remoteStateLatencyWeightedSum / float64(remoteStateAccessCount)
+	}
+	schedulerIdleRatio := 0.0
+	if schedulerEventCount > 0 {
+		schedulerIdleRatio = schedulerIdleRatioWeightedSum / float64(schedulerEventCount)
+	}
+	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "block_executor_id": singleMapKey(blockExecutors), "block_executor_consistent": len(blockExecutors) == 1, "plan_digest_consistent": planDigestConsistent, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "scheduler_event_count": schedulerEventCount, "scheduler_blocked_count": schedulerBlockedCount, "scheduler_wakeup_count": schedulerWakeupCount, "scheduler_stolen_work_count": schedulerStolenWorkCount, "scheduler_local_execution_count": schedulerLocalExecutionCount, "scheduler_ready_queue_max_depth": schedulerReadyQueueMaxDepth, "scheduler_fast_queue_max_depth": schedulerFastQueueMaxDepth, "scheduler_conservative_queue_max_depth": schedulerConsQueueMaxDepth, "scheduler_dependency_wait_ms": schedulerDependencyWaitMS, "scheduler_idle_ms": schedulerIdleMS, "scheduler_idle_ratio": schedulerIdleRatio, "remote_state_access_count": remoteStateAccessCount, "remote_state_read_count": remoteStateReadCount, "remote_state_write_apply_count": remoteStateWriteApplyCount, "remote_state_access_failed_count": remoteStateFailedCount, "remote_state_access_avg_latency_ms": remoteStateAvgLatency, "fault_injection_real": faultEvidence, "fault_injection_requested": faultRequested, "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": redactV5Processes(processes, dataDir), "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
 }
 
 func singleMapKey(values map[string]bool) string {

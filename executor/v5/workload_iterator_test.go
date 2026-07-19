@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 
+	"metaverse-chainlab/executor/realism/account"
+	"metaverse-chainlab/executor/realism/mempool"
 	"metaverse-chainlab/executor/realism/tx"
 )
 
@@ -56,9 +58,10 @@ func canonicalRecord(index int, sender, targetKey string) map[string]any {
 
 func crossShardPair(shards int) (string, string) {
 	sender := "user:sender:1"
+	plan := canonicalPlan("unused", "unused", 1)
 	for index := 2; index < 100; index++ {
 		targetKey := "contract:" + strings.Repeat("0", 4-len(fmt.Sprint(index))) + fmt.Sprint(index)
-		if stableShard([]string{"account:sender:" + sender}, shards) != stableShard([]string{targetKey}, shards) {
+		if canonicalRuntimeSourceShard(plan, sender, shards) != stableShard([]string{targetKey}, shards) {
 			return sender, targetKey
 		}
 	}
@@ -82,9 +85,18 @@ func TestCanonicalTraceIteratorSignsStableIdentityAndContinuousNonce(t *testing.
 	if first.SourceShard == "" || first.TargetShard == "" || first.SourceShard == first.TargetShard {
 		t.Fatalf("dataset cross-shard record did not expose distinct source/target shards: %#v", first)
 	}
+	assertAccessItem(t, first.AccessList, "account:sender:"+sender, tx.AccessReadWrite, "routing_source_state")
+	assertAccessItem(t, first.AccessList, targetKey, tx.AccessReadWrite, "routing_target_state")
 	firstTx, err := iter.SignedTransaction(first)
 	if err != nil || tx.Verify(firstTx) != nil {
 		t.Fatalf("first signature failed: %v", err)
+	}
+	assertAccessItem(t, firstTx.AccessList, targetKey, tx.AccessReadWrite, "routing_target_state")
+	planningAccess := canonicalRuntimeAccessList(iter.plan, first)
+	assertAccessItem(t, planningAccess, "balance:"+firstTx.Sender, tx.AccessReadWrite, "set")
+	assertAccessItem(t, planningAccess, "nonce:"+firstTx.Sender, tx.AccessReadWrite, "set")
+	if fmt.Sprint(planningAccess) != fmt.Sprint(firstTx.AccessList) {
+		t.Fatalf("dataset routing planner must see the same runtime access list as signed execution: %#v != %#v", planningAccess, firstTx.AccessList)
 	}
 	second, err := iter.Next(context.Background())
 	if err != nil {
@@ -97,6 +109,10 @@ func TestCanonicalTraceIteratorSignsStableIdentityAndContinuousNonce(t *testing.
 	if firstTx.Sender != secondTx.Sender || firstTx.Nonce != 0 || secondTx.Nonce != 1 {
 		t.Fatalf("identity/nonce continuity failed: %#v %#v", firstTx, secondTx)
 	}
+	expectedSourceShard := fmt.Sprintf("s%d", canonicalRuntimeSourceShard(iter.plan, sender, 2))
+	if first.SourceShard != expectedSourceShard || second.SourceShard != expectedSourceShard {
+		t.Fatalf("same runtime sender must use one nonce source shard: %s %s want %s", first.SourceShard, second.SourceShard, expectedSourceShard)
+	}
 	if _, err := iter.Next(context.Background()); err != io.EOF {
 		t.Fatalf("expected EOF, got %v", err)
 	}
@@ -107,6 +123,109 @@ func TestCanonicalTraceIteratorSignsStableIdentityAndContinuousNonce(t *testing.
 	if summary.ActualCrossShardCount != 2 || summary.ExpectedCrossShardCount != summary.ActualCrossShardCount || summary.ExpectedCrossShardRatio != summary.ActualCrossShardRatio {
 		t.Fatalf("dataset expected cross-shard summary did not match modeled actuals: %#v", summary)
 	}
+}
+
+func TestCanonicalTraceIteratorKeepsRuntimeSenderOnOneSourceShardAcrossTargets(t *testing.T) {
+	dataDir := t.TempDir()
+	root := filepath.Join(dataDir, ".cache", "workloads")
+	sender := "user:sender:shared"
+	records := []map[string]any{
+		canonicalRecord(0, sender, "contract:0001"),
+		canonicalRecord(1, sender, "contract:0002"),
+		canonicalRecord(2, sender, "contract:0003"),
+	}
+	relative, hash := writeCanonicalFixture(t, root, records)
+	iter, err := NewCanonicalTraceIterator(canonicalPlan(relative, hash, len(records)), 4, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iter.Close()
+	expected := fmt.Sprintf("s%d", canonicalRuntimeSourceShard(iter.plan, sender, 4))
+	for index := range records {
+		record, err := iter.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.SourceShard != expected {
+			t.Fatalf("record %d source shard drifted with target key: got %s want %s", index, record.SourceShard, expected)
+		}
+		item, err := iter.SignedTransaction(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item.Nonce != uint64(index) {
+			t.Fatalf("record %d nonce = %d, want %d", index, item.Nonce, index)
+		}
+	}
+}
+
+func TestCanonicalTraceIteratorDatasetSenderNonceStreamAdmitsOnOneSourceShard(t *testing.T) {
+	dataDir := t.TempDir()
+	root := filepath.Join(dataDir, ".cache", "workloads")
+	sender := "user:sender:shared"
+	records := []map[string]any{
+		canonicalRecord(0, sender, "contract:0001"),
+		canonicalRecord(1, sender, "contract:0002"),
+		canonicalRecord(2, sender, "contract:0003"),
+	}
+	relative, hash := writeCanonicalFixture(t, root, records)
+	iter, err := NewCanonicalTraceIterator(canonicalPlan(relative, hash, len(records)), 4, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iter.Close()
+	pools := map[string]*mempool.Mempool{}
+	sourceShards := map[string]bool{}
+	for index := range records {
+		record, err := iter.Next(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		item, err := iter.SignedTransaction(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item.Nonce != uint64(index) {
+			t.Fatalf("record %d nonce = %d, want %d", index, item.Nonce, index)
+		}
+		sourceShards[record.SourceShard] = true
+		pool := pools[record.SourceShard]
+		if pool == nil {
+			pool = mempool.New("node-"+record.SourceShard, record.SourceShard, mempool.DefaultPolicy(), account.NewNonceManager())
+			pools[record.SourceShard] = pool
+		}
+		if result := pool.Admit(item); !result.Accepted {
+			t.Fatalf("dataset sender nonce stream should admit on %s at nonce %d: %s", record.SourceShard, item.Nonce, result.RejectReason)
+		}
+	}
+	if len(sourceShards) != 1 {
+		t.Fatalf("single runtime sender nonce stream split across source shards: %#v", sourceShards)
+	}
+}
+
+func TestWorkloadIngressShardPreservesCrossShardSourceProtocol(t *testing.T) {
+	record := WorkloadRecord{CrossShard: true, SourceShard: "s1", TargetShard: "s0", Payload: "v5_cross:s0:dataset_event:wearable"}
+	route := RoutingDecision{ShardID: "s0", Reason: "metatrack_batch_affinity"}
+	if got := workloadIngressShard(record, route); got != "s1" {
+		t.Fatalf("cross-shard source transaction must enter source shard before relay, got %s", got)
+	}
+	local := WorkloadRecord{SourceShard: "s1", Payload: "dataset_event:wearable"}
+	if got := workloadIngressShard(local, route); got != "s0" {
+		t.Fatalf("non-cross-shard transaction should use routing decision, got %s", got)
+	}
+}
+
+func assertAccessItem(t *testing.T, items []tx.AccessItem, key string, mode tx.AccessMode, semantics string) {
+	t.Helper()
+	for _, item := range items {
+		if item.Key == key {
+			if item.Mode != mode || item.UpdateSemantics != semantics {
+				t.Fatalf("unexpected access item for %s: %#v", key, item)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing access item for %s in %#v", key, items)
 }
 
 func TestCanonicalTraceIteratorRejectsHashMismatchAndEarlyEOF(t *testing.T) {

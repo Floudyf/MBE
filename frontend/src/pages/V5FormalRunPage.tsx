@@ -25,7 +25,7 @@ import {
 import WorkloadPreviewPanel from "../components/v5/WorkloadPreviewPanel";
 import WorkloadSourceEditor, { type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
 import { backendLabel, blockerLabel, faultModeLabel, roleLabel, statusLabel, suiteLabel } from "../v5Labels";
-import { applyV5MethodSelections, defaultV5PluginSelections, parseSavedV5Method } from "../v5MethodProfile";
+import { V5_BUILTIN_METHODS, applyV5MethodSelections, defaultV5PluginSelections, parseSavedV5Method } from "../v5MethodProfile";
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
 const suites: V5FormalSuite[] = ["main_experiment", "comparison_experiment", "ablation_experiment", "workload_sensitivity", "topology_scaling", "fault_recovery_experiment"];
@@ -80,7 +80,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   const preferredConsumed = useRef(false);
 
   const catalogDefault = useMemo<V5FormalMethod>(() => ({ method_id: "v5_catalog_default", display_name: "目录默认基线", plugin_overrides: {}, role: "baseline" }), []);
-  const methods = useMemo(() => [catalogDefault, ...savedMethods], [catalogDefault, savedMethods]);
+  const methods = useMemo(() => [catalogDefault, ...V5_BUILTIN_METHODS, ...savedMethods], [catalogDefault, savedMethods]);
   const seeds = useMemo(() => parseSeeds(workload.seedText), [workload.seedText]);
   const catalogReady = useMemo(() => {
     const categories = new Set(catalog.map((item) => item.category));
@@ -106,7 +106,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
       const parsed = savedResponse.flatMap((item) => { const method = parseSavedV5Method(item, pluginResponse); return method ? [method] : []; });
       setSavedMethods(parsed);
       setSavedError("");
-      const available = ["v5_catalog_default", ...parsed.map((item) => item.method_id)];
+        const available = ["v5_catalog_default", ...V5_BUILTIN_METHODS.map((item) => item.method_id), ...parsed.map((item) => item.method_id)];
       if (preferredMethodId && available.includes(preferredMethodId)) { setSelectedMethods([preferredMethodId]); preferredConsumed.current = true; }
       else { setSelectedMethods(["v5_catalog_default"]); if (preferredMethodId && !preferredConsumed.current) { preferredConsumed.current = true; onPreferredMethodUnavailable?.(preferredMethodId); } }
     } catch (caught) {
@@ -156,7 +156,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
 
   function methodSpec(method: V5FormalMethod, source: V5WorkloadSourceSpec): V5ExperimentSpec {
     const base: V5ExperimentSpec = { name: "v5_formal_real_cluster", execution_backend: "real_cluster", plugin_selections: defaultV5PluginSelections(catalog), topology, tx_count: source.requested_tx_count, seed: source.seed, workload_source: source, duration_ms: 6000, fault_policy: { mode: "disabled" }, requested_metrics: [] };
-    const spec = applyV5MethodSelections(base, method);
+    const spec = applyV5MethodSelections(base, method, catalog);
     return { ...spec, plugin_selections: patchWorkloadSelections(spec.plugin_selections, source) };
   }
 
@@ -241,12 +241,17 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
     setBusy(true);
     try {
       const group = await createV5FormalRunGroup(previewRequest);
-      const detail = await fetchV5FormalRunGroup(group.run_group_id);
-      setGroupDetail(detail);
-      setGroupId(detail.group.run_group_id);
-      window.localStorage.setItem(recentGroupKey, detail.group.run_group_id);
-      setMessage(`RunGroup 已启动：${detail.group.run_group_id}`);
-      schedulePolling(detail.group.run_group_id);
+      setGroupId(group.run_group_id);
+      window.localStorage.setItem(recentGroupKey, group.run_group_id);
+      setMessage(`RunGroup 已启动：${group.run_group_id}`);
+      schedulePolling(group.run_group_id);
+      try {
+        const detail = await fetchV5FormalRunGroup(group.run_group_id);
+        setGroupDetail(detail);
+      } catch {
+        setGroupDetail(null);
+      }
+      schedulePolling(group.run_group_id);
       setError("");
     } catch (caught) { setError(errorMessage(caught)); } finally { setBusy(false); }
   }

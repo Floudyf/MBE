@@ -2,6 +2,12 @@ import type { V3SavedConfig, V5ExperimentSpec, V5FormalMethod, V5PluginManifest,
 
 export const V5_METHOD_PROFILE_SCHEMA_VERSION = "v5_plugin_profile_v1";
 export const V5_METHOD_EXCLUDED_CATEGORIES = new Set(["workload", "fault_injection"]);
+export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
+  { method_id: "hash_serial", display_name: "Hash + Serial", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
+  { method_id: "hash_block_stm", display_name: "Hash + Block-STM", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
+  { method_id: "metatrack_serial", display_name: "MetaTrack + Serial", role: "main", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "serial_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
+  { method_id: "metatrack_block_stm", display_name: "MetaTrack + Block-STM", role: "main", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "block_stm_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
+];
 
 export function defaultV5PluginSelections(catalog: V5PluginManifest[]): V5PluginSelection[] {
   return Array.from(new Set(catalog.map((item) => item.category))).map((category) => {
@@ -29,7 +35,8 @@ export function parseSavedV5Method(saved: V3SavedConfig, catalog: V5PluginManife
   }
   const draft = record(payload.source_composer_draft) ? payload.source_composer_draft : {};
   const role = typeof draft.role === "string" && ["main", "baseline", "ablation", "custom"].includes(draft.role) ? draft.role : saved.tags.find((tag) => ["main", "baseline", "ablation", "custom"].includes(tag)) ?? "custom";
-  return { method_id: saved.config_id, display_name: saved.name, plugin_overrides: overrides, role: role as V5FormalMethod["role"] };
+  const configOverrides = record(payload.plugin_config_overrides) ? payload.plugin_config_overrides as Record<string, Record<string, unknown>> : {};
+  return { method_id: saved.config_id, display_name: saved.name, plugin_overrides: overrides, plugin_config_overrides: configOverrides, role: role as V5FormalMethod["role"] };
 }
 
 export function buildV5MethodValidationSpec(catalog: V5PluginManifest[], methodSelections: V5PluginSelection[]): V5ExperimentSpec {
@@ -51,8 +58,17 @@ export function buildV5MethodValidationSpec(catalog: V5PluginManifest[], methodS
   return { name: "v5_method_profile_validation", execution_backend: "real_cluster", plugin_selections: all, topology: { nodes: 4, shards: 1, validators_per_shard: 4 }, tx_count: 20, seed: 11, duration_ms: 6000, fault_policy: { mode: "disabled" }, requested_metrics: [] };
 }
 
-export function applyV5MethodSelections(base: V5ExperimentSpec, method: V5FormalMethod): V5ExperimentSpec {
-  return { ...base, topology: { ...base.topology }, fault_policy: { ...(base.fault_policy ?? {}) }, plugin_selections: base.plugin_selections.map((item) => ({ ...item, plugin_id: method.plugin_overrides[item.category] ?? item.plugin_id, config: { ...item.config } })) };
+export function applyV5MethodSelections(base: V5ExperimentSpec, method: V5FormalMethod, catalog: V5PluginManifest[] = []): V5ExperimentSpec {
+  return {
+    ...base,
+    topology: { ...base.topology },
+    fault_policy: { ...(base.fault_policy ?? {}) },
+    plugin_selections: base.plugin_selections.map((item) => {
+      const pluginId = method.plugin_overrides[item.category] ?? item.plugin_id;
+      const plugin = catalog.find((candidate) => candidate.category === item.category && candidate.plugin_id === pluginId);
+      return { ...item, plugin_id: pluginId, config: { ...(pluginId !== item.plugin_id && plugin ? plugin.default_config : item.config), ...(method.plugin_config_overrides?.[item.category] ?? {}) } };
+    }),
+  };
 }
 
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }

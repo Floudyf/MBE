@@ -28,6 +28,13 @@ The current V5 `execution` plugin category is not a block execution engine. It o
 
 Plugin decision logs are currently emitted after state execution and durable commit. They are observational evidence for existing plugin categories, not the execution path used to mutate state.
 
+Current internal MetaTrack closure work extends the scheduler evidence without
+changing the block-executor boundary: the scheduler now returns both the ordered
+transaction list and a runtime schedule trace. `metatrack_scheduler_trace.csv`
+is produced from proposal-time enqueue, wait, wakeup, and dispatch events rather
+than being reconstructed from post-commit execution classification rows. This
+is still the V5 scheduler category, not the Block-STM internal worker scheduler.
+
 ## State DB Capability Audit
 
 The current state DB already provides:

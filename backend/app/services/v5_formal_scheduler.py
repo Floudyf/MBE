@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import multiprocessing
 import hashlib
 import json
+import os
+import threading
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -63,8 +64,9 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
                   for variant in variants:
                     item = method if isinstance(method, dict) else method.model_dump()
                     snapshot = {selection.category: STORE.get(item.get("plugin_overrides", {}).get(selection.category, selection.plugin_id)).plugin_id for selection in plan.base_spec.plugin_selections}
+                    method_config_snapshot = dict(item.get("plugin_config_overrides", {}))
                     workload_identity = {**base_workload_identity, "point": variant["workload_point"]}
-                    full_snapshot = {"plugins": snapshot, "workload": variant["workload_point"], "workload_identity": workload_identity, "topology": variant["topology_point"], "fault": variant["fault_point"]}
+                    fairness_snapshot = {"workload": variant["workload_point"], "workload_identity": workload_identity, "topology": variant["topology_point"], "fault": variant["fault_point"]}
                     source_type = plan.base_spec.workload_source.source_type if plan.base_spec.workload_source else "synthetic"
                     blockers = _workload_blockers(variant["workload_point"], variant["topology_point"], source_type)
                     base_workload = next((selection.config for selection in plan.base_spec.plugin_selections if selection.category == "workload"), {})
@@ -75,12 +77,13 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
                         "suite_type": suite, "method": item, "method_config_id": item["method_id"], "method_role": item.get("role", "custom"),
                         "changed_plugin_categories": _changed_categories(plan, item),
                         "method_snapshot_digest": hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(),
+                        "method_config_snapshot_digest": hashlib.sha256(json.dumps(method_config_snapshot, sort_keys=True, default=str).encode()).hexdigest(),
                         "workload_snapshot_digest": hashlib.sha256(json.dumps(variant["workload_point"], sort_keys=True).encode()).hexdigest(),
                         "topology_snapshot_digest": hashlib.sha256(json.dumps(variant["topology_point"], sort_keys=True).encode()).hexdigest(),
                         "fault_snapshot_digest": hashlib.sha256(json.dumps(variant["fault_point"], sort_keys=True, default=str).encode()).hexdigest(),
                         "workload_point": variant["workload_point"], "topology_point": variant["topology_point"], "fault_point": variant["fault_point"],
                         "seed": seed, "repeat_index": repeat, "scan_variable": variant["scan_variable"], "scan_value": variant["scan_value"],
-                        "fairness_key": hashlib.sha256(json.dumps({"suite": suite, "seed": seed, "repeat": repeat, "snapshot": full_snapshot}, sort_keys=True, default=str).encode()).hexdigest(),
+                        "fairness_key": hashlib.sha256(json.dumps({"suite": suite, "seed": seed, "repeat": repeat, "snapshot": fairness_snapshot}, sort_keys=True, default=str).encode()).hexdigest(),
                         "comparison_group_id": f"{suite}:{seed}:{repeat}:{variant['group']}:{variant['scan_value']}", "execution_backend": backend,
                         "estimated_processes": variant["topology_point"].get("nodes", plan.base_spec.topology.nodes) if backend == "real_cluster" else 0,
                         "estimated_transactions": variant["workload_point"].get("tx_count", plan.base_spec.tx_count), "runnable": backend != "simulation" and not blockers, "blockers": blockers + (["V3 simulation adapter pending"] if backend == "simulation" else []), "warnings": [],
@@ -148,11 +151,12 @@ def start(group_id: str) -> None:
     group = read_group(group_id)
     group["status"] = "starting"
     write_group(group)
-    process = multiprocessing.Process(target=_worker, args=(group_id,), daemon=False)
-    process.start()
+    worker = threading.Thread(target=_worker, args=(group_id,), name=f"v5-formal-worker-{group_id}", daemon=True)
+    worker.start()
     group = read_group(group_id)
     if group.get("status") not in {"completed", "completed_with_failures", "failed", "cancelled"}:
-        group["worker_pid"] = process.pid
+        group["worker_pid"] = os.getpid()
+        group["worker_thread"] = worker.name
         write_group(group)
 
 
@@ -288,14 +292,19 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
         spec.workload_source.seed = spec.seed
     method = row["method"]
     overrides = method.get("plugin_overrides", {})
-    spec.plugin_selections = [
-        V5PluginSelection(
-            category=item.category,
-            plugin_id=overrides.get(item.category, item.plugin_id),
-            config=(item.config | {"migrated_default": True}) if item.category == "block_executor" and item.category not in overrides and method.get("method_id") != "v5_catalog_default" else item.config,
-        )
-        for item in spec.plugin_selections
-    ]
+    config_overrides = method.get("plugin_config_overrides", {})
+    next_selections: list[V5PluginSelection] = []
+    for item in spec.plugin_selections:
+        plugin_id = overrides.get(item.category, item.plugin_id)
+        if plugin_id != item.plugin_id:
+            config = dict(STORE.get(plugin_id).default_config)
+        else:
+            config = dict(item.config)
+        if item.category == "block_executor" and item.category not in overrides and method.get("method_id") != "v5_catalog_default":
+            config["migrated_default"] = True
+        config |= dict(config_overrides.get(item.category, {}))
+        next_selections.append(V5PluginSelection(category=item.category, plugin_id=plugin_id, config=config))
+    spec.plugin_selections = next_selections
     spec.saved_config_id = plan.saved_config_id or spec.saved_config_id
     spec.formal_plan_config_id = formal_plan_config_id or spec.formal_plan_config_id
     spec.method_config_id = row.get("method_config_id")

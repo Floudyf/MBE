@@ -18,8 +18,11 @@ type DB struct {
 }
 
 type StateKV struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+	Key             string   `json:"key"`
+	Value           string   `json:"value"`
+	TxIDs           []string `json:"tx_ids,omitempty"`
+	UpdateSemantics string   `json:"update_semantics,omitempty"`
+	Delta           int64    `json:"delta,omitempty"`
 }
 
 type FileCheckpoint struct {
@@ -66,7 +69,13 @@ func (db *DB) ApplyDeterministicBatch(updates []StateKV) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	for _, item := range updates {
-		db.values[db.key(item.Key)] = item.Value
+		key := db.key(item.Key)
+		if item.UpdateSemantics == "commutative_delta" {
+			current, _ := strconv.ParseInt(db.values[key], 10, 64)
+			db.values[key] = strconv.FormatInt(current+item.Delta, 10)
+			continue
+		}
+		db.values[key] = item.Value
 	}
 }
 

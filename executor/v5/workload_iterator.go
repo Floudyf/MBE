@@ -43,7 +43,7 @@ func (it *SyntheticIterator) Next(context.Context) (WorkloadRecord, error) {
 	cross := crossShardAt(index, it.plan.TxCount, it.plan.CrossShardRatio, it.plan.Seed)
 	item := it.plugin.BuildWorkloadItem(WorkloadInput{Index: index, Shards: it.shards, Seed: it.plan.Seed, TimeoutEvery: it.plan.TimeoutEvery, CrossShard: cross})
 	it.summary.ReadCount++
-	return WorkloadRecord{Index: index, LogicalID: fmt.Sprintf("synthetic-%d", index), Payload: item.Payload, StateKeys: item.StateKeys, CrossShard: cross, Value: 1}, nil
+	return WorkloadRecord{Index: index, LogicalID: fmt.Sprintf("synthetic-%d", index), Payload: item.Payload, StateKeys: item.StateKeys, AccessList: item.AccessList, CrossShard: cross, Value: 1}, nil
 }
 
 func (it *SyntheticIterator) Close() error                   { return nil }
@@ -141,7 +141,8 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 	if it.index >= it.summary.ExpectedCount {
 		return WorkloadRecord{}, fmt.Errorf("canonical workload has excess records")
 	}
-	sourceShard := stableShard([]string{strings.ToLower(wire.RoutingSourceKey)}, it.shards)
+	senderID := strings.ToLower(wire.SenderID)
+	sourceShard := canonicalRuntimeSourceShard(it.plan, senderID, it.shards)
 	targetShard := sourceShard
 	if wire.RoutingTargetKey != "" {
 		targetShard = stableShard([]string{strings.ToLower(wire.RoutingTargetKey)}, it.shards)
@@ -154,10 +155,11 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 		payload = "v5_cross:" + target + ":" + payload
 		it.summary.ActualCrossShardCount++
 	}
+	accessList := canonicalAccessList(wire)
 	it.summary.ShardLoadDistribution[fmt.Sprintf("s%d", sourceShard)]++
 	it.summary.ReadCount++
 	it.index++
-	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), SenderID: strings.ToLower(wire.SenderID), ReceiverID: strings.ToLower(wire.ReceiverID), OperationType: wire.OperationType, RoutingSourceKey: wire.RoutingSourceKey, RoutingTargetKey: wire.RoutingTargetKey, Payload: payload, StateKeys: wire.StateKeys, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", sourceShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
+	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), SenderID: senderID, ReceiverID: strings.ToLower(wire.ReceiverID), OperationType: wire.OperationType, RoutingSourceKey: wire.RoutingSourceKey, RoutingTargetKey: wire.RoutingTargetKey, Payload: payload, StateKeys: wire.StateKeys, AccessList: accessList, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", sourceShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
 }
 
 func (it *CanonicalTraceIterator) Close() error {
@@ -199,14 +201,15 @@ func (it *CanonicalTraceIterator) Summary() WorkloadReplaySummary {
 }
 
 func (it *CanonicalTraceIterator) SignedTransaction(record WorkloadRecord) (tx.SignedTransaction, error) {
-	domain := strings.Join([]string{it.plan.DatasetID, it.plan.SourceSHA256, fmt.Sprint(it.plan.Seed), firstNonEmpty(it.plan.IdentityMappingVersion, "mbe_dataset_identity_v1")}, "|")
-	privateSeed := domain + "|" + record.SenderID
+	privateSeed := canonicalPrivateSeed(it.plan, record.SenderID)
 	publicKey, privateKey := tx.DeterministicKeyPair(privateSeed)
 	sender := tx.AddressFromPublicKey(publicKey)
 	it.identities[record.SenderID] = sender
 	nonce := it.nonces[record.SenderID]
 	it.nonces[record.SenderID] = nonce + 1
-	item := tx.SignedTransaction{Sender: sender, Receiver: "receiver_" + record.ReceiverID, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
+	receiver := "receiver_" + record.ReceiverID
+	accessList := canonicalRuntimeAccessList(it.plan, record)
+	item := tx.SignedTransaction{Sender: sender, Receiver: receiver, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, AccessList: accessList, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
 	if err := tx.Sign(&item, privateKey); err != nil {
 		return item, err
 	}
@@ -215,6 +218,87 @@ func (it *CanonicalTraceIterator) SignedTransaction(record WorkloadRecord) (tx.S
 	}
 	it.summary.SignaturePassCount++
 	return item, nil
+}
+
+func canonicalIdentityDomain(plan WorkloadPlan) string {
+	return strings.Join([]string{plan.DatasetID, plan.SourceSHA256, fmt.Sprint(plan.Seed), firstNonEmpty(plan.IdentityMappingVersion, "mbe_dataset_identity_v1")}, "|")
+}
+
+func canonicalPrivateSeed(plan WorkloadPlan, senderID string) string {
+	return canonicalIdentityDomain(plan) + "|" + senderID
+}
+
+func canonicalRuntimeSenderAddress(plan WorkloadPlan, senderID string) string {
+	publicKey, _ := tx.DeterministicKeyPair(canonicalPrivateSeed(plan, senderID))
+	return tx.AddressFromPublicKey(publicKey)
+}
+
+func canonicalRuntimeSourceShard(plan WorkloadPlan, senderID string, shards int) int {
+	if shards <= 0 {
+		return 0
+	}
+	return stableShard([]string{"nonce:" + canonicalRuntimeSenderAddress(plan, senderID)}, shards)
+}
+
+func canonicalRuntimeAccessList(plan WorkloadPlan, record WorkloadRecord) []tx.AccessItem {
+	sender := canonicalRuntimeSenderAddress(plan, record.SenderID)
+	receiver := "receiver_" + record.ReceiverID
+	accessList := append([]tx.AccessItem{}, tx.DefaultTransferAccessList(sender, receiver)...)
+	return append(accessList, record.AccessList...)
+}
+
+func canonicalAccessList(wire canonicalWireRecord) []tx.AccessItem {
+	type accessSpec struct {
+		mode      tx.AccessMode
+		semantics string
+	}
+	byKey := map[string]accessSpec{}
+	add := func(key string, mode tx.AccessMode, semantics string) {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return
+		}
+		current, ok := byKey[key]
+		if !ok || accessModeRank(mode) > accessModeRank(current.mode) {
+			byKey[key] = accessSpec{mode: mode, semantics: semantics}
+			return
+		}
+		if current.semantics == "dataset_state_key" && semantics != "" {
+			current.semantics = semantics
+			byKey[key] = current
+		}
+	}
+	for _, key := range wire.StateKeys {
+		add(key, tx.AccessReadWrite, "dataset_state_key")
+	}
+	add(wire.RoutingSourceKey, tx.AccessReadWrite, "routing_source_state")
+	add(wire.RoutingTargetKey, tx.AccessReadWrite, "routing_target_state")
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]tx.AccessItem, 0, len(keys))
+	for _, key := range keys {
+		spec := byKey[key]
+		out = append(out, tx.AccessItem{Key: key, Mode: spec.mode, UpdateSemantics: spec.semantics})
+	}
+	return out
+}
+
+func accessModeRank(mode tx.AccessMode) int {
+	switch mode {
+	case tx.AccessRead:
+		return 1
+	case tx.AccessWrite:
+		return 2
+	case tx.AccessReadWrite:
+		return 3
+	case tx.AccessCommutativeDelta:
+		return 4
+	default:
+		return 0
+	}
 }
 
 func workloadPath(dataDir, relative string) (string, error) {

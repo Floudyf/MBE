@@ -2,7 +2,11 @@ package v5
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	realblock "metaverse-chainlab/executor/realism/block"
@@ -40,6 +44,10 @@ type RoutingPlugin interface {
 	Plugin
 	Route(RoutingInput) RoutingDecision
 }
+type BatchRoutingPlugin interface {
+	RoutingPlugin
+	PlanBatch(BatchRoutingInput) BatchRoutingPlan
+}
 type BlockProducerPlugin interface {
 	Plugin
 	BlockSize() int
@@ -58,7 +66,8 @@ type ExecutionPlugin interface {
 }
 type SchedulerPlugin interface {
 	Plugin
-	Order([]tx.SignedTransaction) []tx.SignedTransaction
+	Order([]tx.SignedTransaction, ExecutionPlugin) []tx.SignedTransaction
+	Schedule([]tx.SignedTransaction, ExecutionPlugin) ScheduleResult
 }
 type BlockExecutorPlugin interface {
 	Plugin
@@ -114,8 +123,9 @@ type BlockExecutionResult struct {
 	DeterministicApplyMS   int64            `json:"deterministic_apply_ms"`
 }
 type WorkloadItem struct {
-	Payload   string
-	StateKeys []string
+	Payload    string
+	StateKeys  []string
+	AccessList []tx.AccessItem
 }
 type WorkloadRecord struct {
 	Index            int
@@ -127,6 +137,7 @@ type WorkloadRecord struct {
 	RoutingTargetKey string
 	Payload          string
 	StateKeys        []string
+	AccessList       []tx.AccessItem
 	CrossShard       bool
 	SourceShard      string
 	TargetShard      string
@@ -166,19 +177,95 @@ type WorkloadIterator interface {
 type RoutingInput struct {
 	Index               int
 	StateKeys, ShardIDs []string
+	AccessList          []tx.AccessItem
+	SourceShard         string
 	CrossShard          bool
 }
 type RoutingDecision struct{ ShardID, Reason string }
+type BatchRoutingInput struct {
+	BatchIndex int
+	Records    []WorkloadRecord
+	ShardIDs   []string
+}
+type BatchRoutingPlan struct {
+	BatchIndex            int
+	PlanDigest            string
+	AccessMatrix          []AccessMatrixRow
+	StateFrequency        []StateFrequencyRow
+	CoaccessEdges         []CoaccessEdge
+	StatePlacements       []StatePlacement
+	TransactionPlacements []TransactionPlacement
+	ShardLoadBefore       map[string]int
+	ShardLoadAfter        map[string]int
+	RemoteAccessEstimate  int
+	RoutingOverhead       int
+}
+type AccessMatrixRow struct {
+	LogicalID string
+	TxIndex   int
+	Key       string
+	Mode      tx.AccessMode
+}
+type StateFrequencyRow struct {
+	Key        string
+	Frequency  int
+	WriteCount int
+	ReadCount  int
+}
+type CoaccessEdge struct {
+	LeftKey  string
+	RightKey string
+	Weight   int
+}
+type StatePlacement struct {
+	Key            string
+	HomeShard      string
+	ExecutionShard string
+	Frequency      int
+	Reason         string
+}
+type TransactionPlacement struct {
+	LogicalID         string
+	TxIndex           int
+	HomeShard         string
+	ExecutionShard    string
+	TargetShard       string
+	CoaccessGroup     string
+	Reason            string
+	RemoteAccessCount int
+}
 type ExecutionDecision struct{ Track, Reason string }
+type ScheduleResult struct {
+	Ordered []tx.SignedTransaction
+	Events  []ScheduleEvent
+}
+type ScheduleEvent struct {
+	TxID                   string
+	Track                  string
+	QueueName              string
+	DecisionReason         string
+	LocalExecution         bool
+	StolenWork             bool
+	Blocked                bool
+	Wakeup                 bool
+	ReadyQueueDepth        int
+	FastQueueDepth         int
+	ConservativeQueueDepth int
+	DependencyWaitMS       int64
+	SchedulerIdleMS        int64
+}
 type CommitInput struct {
 	ShardID      string
 	Height       uint64
 	Transactions []tx.SignedTransaction
+	TxDeltas     []execution.TxDelta
+	StateDelta   []state.StateKV
 }
 type CommitDecision struct {
 	AggregationGroupID              string
 	LogicalUpdates, PhysicalUpdates int
 	Applied                         bool
+	PhysicalStateDelta              []state.StateKV
 }
 
 type Factory func(map[string]any) (Plugin, error)
@@ -217,11 +304,14 @@ type builtinWorkload struct{ basicPlugin }
 func (p builtinWorkload) BuildWorkloadItem(input WorkloadInput) WorkloadItem {
 	payload := "v5_safe"
 	keys := []string{"shard:account", fmt.Sprintf("asset:%d", input.Index)}
+	accessList := []tx.AccessItem{{Key: fmt.Sprintf("asset:%d", input.Index), Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}
 	switch input.Index % 8 {
 	case 2, 3:
 		payload, keys = "v5_commutative", []string{"shard:account", "coaccess:hot-update"}
+		accessList = []tx.AccessItem{{Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}
 	case 4:
 		payload, keys = "v5_conflict", []string{"shard:account", "coaccess:conflict"}
+		accessList = []tx.AccessItem{{Key: "coaccess:conflict", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}
 	}
 	if input.CrossShard && input.Shards > 1 {
 		payload = "v5_cross"
@@ -229,7 +319,7 @@ func (p builtinWorkload) BuildWorkloadItem(input WorkloadInput) WorkloadItem {
 	if !input.CrossShard && input.TimeoutEvery > 0 && (input.Index+1)%input.TimeoutEvery == 0 {
 		payload = "v5_timeout"
 	}
-	return WorkloadItem{Payload: payload, StateKeys: keys}
+	return WorkloadItem{Payload: payload, StateKeys: keys, AccessList: accessList}
 }
 
 func (p builtinWorkload) NewIterator(plan WorkloadPlan, shards int, dataDir string) (WorkloadIterator, error) {
@@ -271,6 +361,9 @@ func (p builtinSharding) ShardFor(keys, shards []string) string {
 type hashRouting struct{ basicPlugin }
 
 func (p hashRouting) Route(input RoutingInput) RoutingDecision {
+	if input.SourceShard != "" {
+		return RoutingDecision{ShardID: input.SourceShard, Reason: "source_shard_home"}
+	}
 	return RoutingDecision{ShardID: builtinSharding{}.ShardFor(input.StateKeys, input.ShardIDs), Reason: "state_key_hash"}
 }
 
@@ -280,12 +373,212 @@ func (p metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 	if len(input.ShardIDs) == 0 {
 		return RoutingDecision{}
 	}
-	for _, key := range input.StateKeys {
-		if strings.Contains(key, "coaccess:") {
-			return RoutingDecision{ShardID: input.ShardIDs[(input.Index*3+1)%len(input.ShardIDs)], Reason: "coaccess_affinity"}
+	record := WorkloadRecord{Index: input.Index, LogicalID: fmt.Sprintf("tx-%d", input.Index), StateKeys: input.StateKeys, AccessList: input.AccessList, SourceShard: input.SourceShard, CrossShard: input.CrossShard}
+	plan := p.PlanBatch(BatchRoutingInput{BatchIndex: input.Index, Records: []WorkloadRecord{record}, ShardIDs: input.ShardIDs})
+	if len(plan.TransactionPlacements) > 0 {
+		placement := plan.TransactionPlacements[0]
+		return RoutingDecision{ShardID: placement.ExecutionShard, Reason: placement.Reason}
+	}
+	return RoutingDecision{ShardID: input.ShardIDs[stableKey(input.StateKeys)%len(input.ShardIDs)], Reason: "metatrack_access_affinity"}
+}
+
+func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
+	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
+	if len(input.ShardIDs) == 0 {
+		return plan
+	}
+	for _, shard := range input.ShardIDs {
+		plan.ShardLoadBefore[shard] = 0
+		plan.ShardLoadAfter[shard] = 0
+	}
+	frequency := map[string]*StateFrequencyRow{}
+	coaccess := map[string]int{}
+	for _, record := range input.Records {
+		accessItems := normalizedAccessItems(record)
+		keys := make([]string, 0, len(accessItems))
+		seen := map[string]bool{}
+		for _, access := range accessItems {
+			if access.Key == "" {
+				continue
+			}
+			plan.AccessMatrix = append(plan.AccessMatrix, AccessMatrixRow{LogicalID: firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)), TxIndex: record.Index, Key: access.Key, Mode: access.Mode})
+			row := frequency[access.Key]
+			if row == nil {
+				row = &StateFrequencyRow{Key: access.Key}
+				frequency[access.Key] = row
+			}
+			row.Frequency++
+			if isWriteMode(access.Mode) {
+				row.WriteCount++
+			} else {
+				row.ReadCount++
+			}
+			if !seen[access.Key] {
+				keys = append(keys, access.Key)
+				seen[access.Key] = true
+			}
+		}
+		sort.Strings(keys)
+		for left := 0; left < len(keys); left++ {
+			for right := left + 1; right < len(keys); right++ {
+				coaccess[keyPair(keys[left], keys[right])]++
+			}
 		}
 	}
-	return RoutingDecision{ShardID: input.ShardIDs[(input.Index*3+1)%len(input.ShardIDs)], Reason: "metatrack_affinity"}
+	for _, row := range frequency {
+		plan.StateFrequency = append(plan.StateFrequency, *row)
+	}
+	sort.Slice(plan.StateFrequency, func(i, j int) bool { return plan.StateFrequency[i].Key < plan.StateFrequency[j].Key })
+	for pair, weight := range coaccess {
+		left, right, _ := strings.Cut(pair, "\x00")
+		plan.CoaccessEdges = append(plan.CoaccessEdges, CoaccessEdge{LeftKey: left, RightKey: right, Weight: weight})
+	}
+	sort.Slice(plan.CoaccessEdges, func(i, j int) bool {
+		if plan.CoaccessEdges[i].LeftKey != plan.CoaccessEdges[j].LeftKey {
+			return plan.CoaccessEdges[i].LeftKey < plan.CoaccessEdges[j].LeftKey
+		}
+		return plan.CoaccessEdges[i].RightKey < plan.CoaccessEdges[j].RightKey
+	})
+
+	placementByKey := map[string]StatePlacement{}
+	for _, row := range plan.StateFrequency {
+		home := input.ShardIDs[stableKey([]string{row.Key})%len(input.ShardIDs)]
+		executionShard := home
+		reason := "home_shard_locality"
+		if isOrderedNonceWrite(row) {
+			reason = "ordered_nonce_home_shard"
+		} else if row.Frequency > 1 {
+			executionShard = leastLoadedShard(input.ShardIDs, plan.ShardLoadAfter, row.Key)
+			reason = "coaccess_frequency_load_balance"
+		}
+		plan.ShardLoadAfter[executionShard] += row.Frequency
+		placement := StatePlacement{Key: row.Key, HomeShard: home, ExecutionShard: executionShard, Frequency: row.Frequency, Reason: reason}
+		placementByKey[row.Key] = placement
+		plan.StatePlacements = append(plan.StatePlacements, placement)
+	}
+	sort.Slice(plan.StatePlacements, func(i, j int) bool { return plan.StatePlacements[i].Key < plan.StatePlacements[j].Key })
+
+	transactionLoad := map[string]int{}
+	for _, record := range input.Records {
+		accessItems := normalizedAccessItems(record)
+		homeShard := firstNonEmpty(record.SourceShard, input.ShardIDs[stableKey(record.StateKeys)%len(input.ShardIDs)])
+		targetShard := record.TargetShard
+		if targetShard == "" && record.CrossShard && len(input.ShardIDs) > 1 {
+			targetShard = input.ShardIDs[(stableKey(record.StateKeys)+1)%len(input.ShardIDs)]
+		}
+		executionShard, group, remote := transactionExecutionShard(input.ShardIDs, placementByKey, accessItems, homeShard, transactionLoad)
+		transactionLoad[executionShard]++
+		if remote > 0 {
+			plan.RemoteAccessEstimate += remote
+		}
+		reason := "metatrack_batch_affinity"
+		if remote == 0 {
+			reason = "metatrack_local_affinity"
+		}
+		if strings.Contains(group, "coaccess:") {
+			reason = "coaccess_affinity:" + group
+		}
+		plan.TransactionPlacements = append(plan.TransactionPlacements, TransactionPlacement{LogicalID: firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)), TxIndex: record.Index, HomeShard: homeShard, ExecutionShard: executionShard, TargetShard: targetShard, CoaccessGroup: group, Reason: reason, RemoteAccessCount: remote})
+	}
+	sort.Slice(plan.TransactionPlacements, func(i, j int) bool {
+		return plan.TransactionPlacements[i].TxIndex < plan.TransactionPlacements[j].TxIndex
+	})
+	plan.RoutingOverhead = plan.RemoteAccessEstimate + len(plan.CoaccessEdges)
+	plan.PlanDigest = routingPlanDigest(plan)
+	return plan
+}
+
+func normalizedAccessItems(record WorkloadRecord) []tx.AccessItem {
+	if len(record.AccessList) > 0 {
+		items := append([]tx.AccessItem(nil), record.AccessList...)
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].Key != items[j].Key {
+				return items[i].Key < items[j].Key
+			}
+			return items[i].Mode < items[j].Mode
+		})
+		return items
+	}
+	items := make([]tx.AccessItem, 0, len(record.StateKeys))
+	for _, key := range record.StateKeys {
+		items = append(items, tx.AccessItem{Key: key, Mode: tx.AccessReadWrite, UpdateSemantics: "legacy_state_key"})
+	}
+	return items
+}
+
+func transactionExecutionShard(shardIDs []string, placementByKey map[string]StatePlacement, accesses []tx.AccessItem, homeShard string, currentLoad map[string]int) (string, string, int) {
+	if len(shardIDs) == 0 {
+		return "", "", 0
+	}
+	score := map[string]int{}
+	groupKeys := []string{}
+	remote := 0
+	orderedShard := ""
+	for _, access := range accesses {
+		placement, ok := placementByKey[access.Key]
+		if !ok {
+			continue
+		}
+		score[placement.ExecutionShard] += placement.Frequency
+		groupKeys = append(groupKeys, access.Key)
+		if placement.HomeShard != placement.ExecutionShard {
+			remote++
+		}
+		if isOrderedNonceAccess(access) {
+			orderedShard = firstNonEmpty(orderedShard, placement.ExecutionShard)
+		}
+	}
+	sort.Strings(groupKeys)
+	if orderedShard != "" {
+		return orderedShard, strings.Join(groupKeys, "+"), remote
+	}
+	best := firstNonEmpty(homeShard, shardIDs[0])
+	bestScore := -1
+	for _, shard := range shardIDs {
+		candidateScore := score[shard]
+		if candidateScore > bestScore || (candidateScore == bestScore && currentLoad[shard] < currentLoad[best]) || (candidateScore == bestScore && currentLoad[shard] == currentLoad[best] && shard < best) {
+			best = shard
+			bestScore = candidateScore
+		}
+	}
+	return best, strings.Join(groupKeys, "+"), remote
+}
+
+func isOrderedNonceWrite(row StateFrequencyRow) bool {
+	return strings.HasPrefix(row.Key, "nonce:") && row.WriteCount > 0
+}
+
+func isOrderedNonceAccess(access tx.AccessItem) bool {
+	return strings.HasPrefix(access.Key, "nonce:") && isWriteMode(access.Mode)
+}
+
+func isWriteMode(mode tx.AccessMode) bool {
+	return mode == tx.AccessWrite || mode == tx.AccessReadWrite || mode == tx.AccessCommutativeDelta
+}
+
+func keyPair(left, right string) string {
+	if right < left {
+		left, right = right, left
+	}
+	return left + "\x00" + right
+}
+
+func leastLoadedShard(shards []string, load map[string]int, tieBreaker string) string {
+	best := shards[stableKey([]string{tieBreaker})%len(shards)]
+	for _, shard := range shards {
+		if load[shard] < load[best] || (load[shard] == load[best] && shard < best) {
+			best = shard
+		}
+	}
+	return best
+}
+
+func routingPlanDigest(plan BatchRoutingPlan) string {
+	copyPlan := plan
+	copyPlan.PlanDigest = ""
+	payload, _ := json.Marshal(copyPlan)
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
 }
 
 type builtinBlockProducer struct{ basicPlugin }
@@ -317,20 +610,175 @@ func (p serialExecution) Classify(tx.SignedTransaction) ExecutionDecision {
 type dualTrackExecution struct{ basicPlugin }
 
 func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecision {
-	if strings.Contains(item.Payload, "v5_safe") || strings.Contains(item.Payload, "v5_commutative") {
-		return ExecutionDecision{Track: "fast", Reason: "access_list_safe"}
+	if len(item.AccessList) == 0 {
+		return ExecutionDecision{Track: "conservative", Reason: "missing_structured_access_list"}
 	}
-	return ExecutionDecision{Track: "conservative", Reason: "conflict_or_cross_shard"}
+	if hasRemoteExecutionBoundary(item) {
+		return ExecutionDecision{Track: "conservative", Reason: "remote_or_cross_shard_boundary"}
+	}
+	commutative := false
+	for _, access := range item.AccessList {
+		switch access.Mode {
+		case tx.AccessRead:
+			continue
+		case tx.AccessCommutativeDelta:
+			commutative = true
+		default:
+			return ExecutionDecision{Track: "conservative", Reason: "non_commutative_write:" + access.Key}
+		}
+	}
+	if commutative {
+		return ExecutionDecision{Track: "fast", Reason: "commutative_delta_access"}
+	}
+	return ExecutionDecision{Track: "fast", Reason: "read_only_access"}
+}
+
+func hasRemoteExecutionBoundary(item tx.SignedTransaction) bool {
+	if strings.HasPrefix(item.Payload, "v5_cross:") {
+		return true
+	}
+	switch item.SourceKind {
+	case "cross_shard_relay", "relay_certificate":
+		return true
+	default:
+		return false
+	}
 }
 
 type builtinScheduler struct{ basicPlugin }
 
-func (p builtinScheduler) Order(items []tx.SignedTransaction) []tx.SignedTransaction { return items }
+func (p builtinScheduler) Order(items []tx.SignedTransaction, execution ExecutionPlugin) []tx.SignedTransaction {
+	return p.Schedule(items, execution).Ordered
+}
+
+func (p builtinScheduler) Schedule(items []tx.SignedTransaction, execution ExecutionPlugin) ScheduleResult {
+	ordered := append([]tx.SignedTransaction(nil), items...)
+	result := ScheduleResult{Ordered: ordered}
+	fastDepth, conservativeDepth := 0, 0
+	for _, item := range ordered {
+		decision := classifyForSchedule(item, execution)
+		if decision.Track == "fast" {
+			fastDepth++
+		} else if decision.Track == "conservative" {
+			conservativeDepth++
+		}
+		result.Events = append(result.Events, ScheduleEvent{TxID: item.TxID, Track: decision.Track, QueueName: queueNameForTrack(decision.Track), DecisionReason: "enqueue:" + decision.Reason, LocalExecution: true, ReadyQueueDepth: fastDepth + conservativeDepth, FastQueueDepth: fastDepth, ConservativeQueueDepth: conservativeDepth})
+	}
+	if p.ID() != "fast_first_scheduler" || execution == nil {
+		for _, item := range ordered {
+			decision := classifyForSchedule(item, execution)
+			if decision.Track == "fast" && fastDepth > 0 {
+				fastDepth--
+			} else if decision.Track == "conservative" && conservativeDepth > 0 {
+				conservativeDepth--
+			}
+			result.Events = append(result.Events, ScheduleEvent{TxID: item.TxID, Track: decision.Track, QueueName: queueNameForTrack(decision.Track), DecisionReason: "dispatch_fifo", LocalExecution: true, ReadyQueueDepth: fastDepth + conservativeDepth, FastQueueDepth: fastDepth, ConservativeQueueDepth: conservativeDepth})
+		}
+		return result
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		left := execution.Classify(ordered[i])
+		right := execution.Classify(ordered[j])
+		if left.Track == right.Track {
+			return false
+		}
+		return left.Track == "fast"
+	})
+	result.Ordered = ordered
+	dispatched := map[string][]tx.AccessItem{}
+	fastDepth, conservativeDepth = queueDepthsFor(ordered, execution)
+	blockedDepth := 0
+	for _, item := range ordered {
+		decision := classifyForSchedule(item, execution)
+		deps := scheduleDependencies(item, dispatched)
+		if len(deps) > 0 {
+			blockedDepth++
+			result.Events = append(result.Events, ScheduleEvent{TxID: item.TxID, Track: decision.Track, QueueName: "blocked_waiting", DecisionReason: "wait_for_dependencies:" + strings.Join(deps, "|"), LocalExecution: true, Blocked: true, ReadyQueueDepth: fastDepth + conservativeDepth, FastQueueDepth: fastDepth, ConservativeQueueDepth: conservativeDepth, DependencyWaitMS: int64(len(deps))})
+			blockedDepth--
+			result.Events = append(result.Events, ScheduleEvent{TxID: item.TxID, Track: decision.Track, QueueName: queueNameForTrack(decision.Track), DecisionReason: "dependencies_satisfied:" + strings.Join(deps, "|"), LocalExecution: true, Wakeup: true, ReadyQueueDepth: fastDepth + conservativeDepth + blockedDepth, FastQueueDepth: fastDepth, ConservativeQueueDepth: conservativeDepth, DependencyWaitMS: int64(len(deps))})
+		}
+		if decision.Track == "fast" && fastDepth > 0 {
+			fastDepth--
+		} else if decision.Track == "conservative" && conservativeDepth > 0 {
+			conservativeDepth--
+		}
+		idleMS := int64(0)
+		if fastDepth == 0 && conservativeDepth == 0 && blockedDepth == 0 {
+			idleMS = 1
+		}
+		result.Events = append(result.Events, ScheduleEvent{TxID: item.TxID, Track: decision.Track, QueueName: queueNameForTrack(decision.Track), DecisionReason: "dispatch_fast_first", LocalExecution: true, ReadyQueueDepth: fastDepth + conservativeDepth, FastQueueDepth: fastDepth, ConservativeQueueDepth: conservativeDepth, SchedulerIdleMS: idleMS})
+		dispatched[item.TxID] = item.AccessList
+	}
+	return result
+}
+
+func classifyForSchedule(item tx.SignedTransaction, execution ExecutionPlugin) ExecutionDecision {
+	if execution == nil {
+		return ExecutionDecision{Track: "serial", Reason: "no_execution_classifier"}
+	}
+	decision := execution.Classify(item)
+	if decision.Track == "" {
+		decision.Track = "conservative"
+	}
+	return decision
+}
+
+func queueNameForTrack(track string) string {
+	if track == "fast" {
+		return "fast_queue"
+	}
+	if track == "conservative" {
+		return "conservative_queue"
+	}
+	return track + "_queue"
+}
+
+func queueDepthsFor(items []tx.SignedTransaction, execution ExecutionPlugin) (int, int) {
+	fast, conservative := 0, 0
+	for _, item := range items {
+		decision := classifyForSchedule(item, execution)
+		if decision.Track == "fast" {
+			fast++
+		} else if decision.Track == "conservative" {
+			conservative++
+		}
+	}
+	return fast, conservative
+}
+
+func scheduleDependencies(item tx.SignedTransaction, dispatched map[string][]tx.AccessItem) []string {
+	if len(item.AccessList) == 0 {
+		return nil
+	}
+	deps := []string{}
+	for seenTx, previousAccesses := range dispatched {
+		for _, current := range item.AccessList {
+			if current.Key == "" {
+				continue
+			}
+			for _, previous := range previousAccesses {
+				if accessItemsConflict(current, previous) {
+					deps = append(deps, current.Key+"@"+seenTx)
+					break
+				}
+			}
+		}
+	}
+	sort.Strings(deps)
+	return deps
+}
+
+func accessItemsConflict(left, right tx.AccessItem) bool {
+	if left.Key == "" || right.Key == "" || left.Key != right.Key {
+		return false
+	}
+	return isWriteMode(left.Mode) || isWriteMode(right.Mode)
+}
 
 type serialBlockExecutor struct{ basicPlugin }
 
 func (p serialBlockExecutor) ExecuteBlock(_ context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
-	workerCount := input.WorkerCount
+	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
 	if workerCount < 1 {
 		workerCount = 1
 	}
@@ -341,6 +789,40 @@ func (p serialBlockExecutor) ExecuteBlock(_ context.Context, input BlockExecutio
 		delta = append(delta, state.StateKV{Key: item.Key, Value: item.Value})
 	}
 	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: workerCount}, nil
+}
+
+type blockSTMBlockExecutor struct{ basicPlugin }
+
+func (p blockSTMBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
+	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
+	executor := execution.NewBlockSTMExecutor(workerCount)
+	result, err := executor.ExecuteBlock(ctx, input.Block, input.BaseStateSnapshot)
+	if err != nil {
+		return BlockExecutionResult{}, err
+	}
+	result.BlockSTMMetrics = executor.Metrics
+	delta := make([]state.StateKV, 0, len(result.StateDelta))
+	for _, item := range result.StateDelta {
+		delta = append(delta, state.StateKV{Key: item.Key, Value: item.Value})
+	}
+	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: result.WorkerCount}, nil
+}
+
+func configuredWorkerCount(config map[string]any, fallback int) int {
+	switch value := config["worker_count"].(type) {
+	case int:
+		if value > 0 {
+			return value
+		}
+	case float64:
+		if value > 0 {
+			return int(value)
+		}
+	}
+	if fallback > 0 {
+		return fallback
+	}
+	return 1
 }
 
 type builtinStateAccess struct{ basicPlugin }
@@ -360,27 +842,69 @@ func (p builtinCrossShard) IsCrossShard(item tx.SignedTransaction) bool {
 type normalCommit struct{ basicPlugin }
 
 func (p normalCommit) DecideCommit(input CommitInput) CommitDecision {
-	return CommitDecision{LogicalUpdates: len(input.Transactions), PhysicalUpdates: len(input.Transactions)}
+	return CommitDecision{LogicalUpdates: len(input.Transactions), PhysicalUpdates: physicalStateWriteCount(input), PhysicalStateDelta: append([]state.StateKV(nil), input.StateDelta...)}
 }
 
 type aggregationCommit struct{ basicPlugin }
 
 func (p aggregationCommit) DecideCommit(input CommitInput) CommitDecision {
-	d := CommitDecision{LogicalUpdates: len(input.Transactions), PhysicalUpdates: len(input.Transactions)}
-	commutative := 0
-	keys := map[string]bool{}
+	d := CommitDecision{LogicalUpdates: len(input.Transactions), PhysicalUpdates: physicalStateWriteCount(input), PhysicalStateDelta: append([]state.StateKV(nil), input.StateDelta...)}
+	commutativeGroups := map[string]bool{}
+	physical := 0
 	for _, item := range input.Transactions {
-		keys[strings.Join(item.StateKeys, "|")] = true
-		if strings.Contains(item.Payload, "v5_commutative") {
-			commutative++
+		commutativeOnly := false
+		nonCommutativeWrite := false
+		for _, access := range item.AccessList {
+			if access.Mode == tx.AccessCommutativeDelta {
+				commutativeOnly = true
+			} else if access.Mode == tx.AccessWrite || access.Mode == tx.AccessReadWrite {
+				nonCommutativeWrite = true
+			}
 		}
+		if commutativeOnly && !nonCommutativeWrite {
+			for _, access := range item.AccessList {
+				if access.Mode == tx.AccessCommutativeDelta {
+					commutativeGroups[access.Key] = true
+				}
+			}
+			continue
+		}
+		physical++
 	}
-	if commutative >= 2 {
-		d.PhysicalUpdates = len(keys)
+	physical += len(commutativeGroups)
+	if physical > 0 && physical < d.LogicalUpdates {
+		d.PhysicalUpdates = maxInt(1, physical)
 		d.Applied = true
 		d.AggregationGroupID = fmt.Sprintf("%s:%d", input.ShardID, input.Height)
 	}
 	return d
+}
+
+func physicalStateWriteCount(input CommitInput) int {
+	if len(input.StateDelta) > 0 {
+		return len(input.StateDelta)
+	}
+	return len(input.Transactions)
+}
+
+func metatrackAffinityKeys(accessList []tx.AccessItem, fallback []string) []string {
+	keys := make([]string, 0, len(accessList))
+	for _, access := range accessList {
+		if access.Mode == tx.AccessWrite || access.Mode == tx.AccessReadWrite || access.Mode == tx.AccessCommutativeDelta {
+			keys = append(keys, access.Key)
+		}
+	}
+	if len(keys) == 0 {
+		keys = append(keys, fallback...)
+	}
+	return keys
+}
+
+func maxInt(left, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 type builtinFault struct{ basicPlugin }
@@ -461,6 +985,9 @@ func BuiltinRegistry() *Registry {
 	})
 	register("block_executor", "serial_block_executor", func(c map[string]any) (Plugin, error) {
 		return serialBlockExecutor{makeBasic("block_executor", "serial_block_executor", c)}, nil
+	})
+	register("block_executor", "block_stm_block_executor", func(c map[string]any) (Plugin, error) {
+		return blockSTMBlockExecutor{makeBasic("block_executor", "block_stm_block_executor", c)}, nil
 	})
 	register("state_access", "direct_state_access", func(c map[string]any) (Plugin, error) {
 		return builtinStateAccess{makeBasic("state_access", "direct_state_access", c)}, nil

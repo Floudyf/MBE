@@ -4,7 +4,7 @@
 
 This repository implements MBE, a metaverse blockchain experiment platform. The current stable product baseline is the V5 Formal Experiment Workflow: V5 Method Design, runnable saved Method Profiles, Formal RunGroups, local independent-process `real_cluster` execution, results, artifacts, and explicit truth boundaries. V3-final and V4 realism paths remain preserved historical compatibility and regression baselines.
 
-The next active implementation direction, only when explicitly requested by the user, is the V5 Workload Data Plane. It extends the completed V5 Formal Experiment Workflow with registered datasets, deterministic materialization, real dataset replay, and derived skew workloads. V3 and V4 remain historical compatibility and regression baselines with their original truth boundaries.
+The V5 Workload Data Plane is implemented on the current V5 line. The next active implementation direction, only when explicitly requested by the user, is V5 execution-method closure work: generic block execution, Serial equivalence, Block-STM reproduction, MetaTrack mechanism closure, and fair four-method comparisons. V3 and V4 remain historical compatibility and regression baselines with their original truth boundaries.
 
 ## Current Baseline And Next Direction
 
@@ -14,13 +14,13 @@ Stable baseline:
 V5 Formal Experiment Workflow = synthetic formal workflow / local real_cluster / results and reproducibility baseline
 ```
 
-The next explicitly authorized implementation is:
+The latest explicitly authorized implementation direction is:
 
 ```text
-V5 Workload Data Plane implementation
+V5 Execution Methods Closure
 ```
 
-This is not V5.3, V5.2.1, or V6. It must preserve V3/V4 truth boundaries and must not silently route dataset work to the synthetic workload.
+This is not V5.3, V5.2.1, or V6. It must preserve V3/V4 truth boundaries, must not silently route dataset work to the synthetic workload, and must not claim Aptos/Move production execution when implementing the MBE Block-STM mechanism over MBE transfer semantics.
 
 The implemented workload data plane uses a generic `mbe_workload_record_v1`
 canonical contract. Decentraland is the first formal real-data adapter, and
@@ -38,6 +38,15 @@ record and do not know the original source format.
 - Source-specific fields belong in dataset adapters and record `metadata`, not
   in the core Go iterator or compiler contract.
 - Implement in order: dataset validation -> canonical conversion -> materialization -> ExperimentSpec -> compiler -> Go iterator -> frontend -> E2E. Read `docs/v5_workload_data_plane_design.md` before implementation.
+
+## V5 Execution Methods Closure Safety
+
+- The four built-in method comparisons are Hash + Serial, Hash + Block-STM, MetaTrack + Serial, and MetaTrack + Block-STM.
+- `execution` remains transaction track classification; `scheduler` remains the outer scheduling policy; `block_executor` owns block state execution.
+- `block_stm_block_executor` must implement MVMemory, incarnation, speculative execution, captured reads, validation, abort/re-execution, ESTIMATE/dependency handling, deterministic ordered output, and Serial equivalence.
+- MetaTrack must produce real batch access matrices, co-access/frequency/placement evidence, remote-state access evidence, dependency/track scheduling evidence, and physical hot-update aggregation evidence. Do not substitute payload labels, transaction indexes, or plugin IDs for mechanism behavior.
+- Dataset four-method acceptance verifies real canonical workload replay and truth labels. It must not fabricate synthetic fast-track or aggregation behavior for real dataset windows.
+- Local `go test -race` requires a CGO C compiler. If unavailable on Windows, report the environment limitation explicitly rather than claiming the race gate passed.
 
 ## Non-negotiable Workflow
 

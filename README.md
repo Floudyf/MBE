@@ -31,22 +31,45 @@ already-normalized external files can enter through `canonical_csv_v1`. Dataset
 replay remains research-grade workload modelling, not instruction-level Polygon
 or Decentraland contract execution.
 
-### Block Execution Extension Point
+### Block Execution and Method Closure
 
-The active internal V5.2 extension work is `V5 Block Execution Foundation and
-Serial Equivalence Closure`. It introduces a generic `block_executor` plugin
-category and a `serial_block_executor` reference that must remain equivalent to
-the legacy MBE realism serial execution engine. This is an internal execution
-foundation only: it does not implement or claim Block-STM, CG, ACG, Nezha, BSX,
-Batch-SI, SmallBank, Geth TxPool, OptChain, HotStuff, S-BAC, or any external
-paper mechanism. The legacy `execution` and `scheduler` plugin categories keep
-their existing classification and ordering meaning.
+The internal V5.2 block execution extension point is implemented. It adds the
+generic `block_executor` plugin category, keeps the legacy `execution` category
+as MetaTrack-style transaction track classification, and keeps the legacy
+`scheduler` category as the outer transaction ordering/scheduling policy.
 
-The next local reproduction dossier, `docs/reproductions/block_stm/`, locks
-Block-STM to arXiv:2203.06871v3 and Aptos `aptos-core` commit
-`20f9379515358add43f4042693462aaedd654826`. This is a source lock and mechanism
-mapping only until a `block_stm` block executor passes Serial equivalence and
-real-cluster acceptance.
+The implemented block executors are:
+
+- `serial_block_executor`: the legacy-faithful reference baseline.
+- `block_stm_block_executor`: a Block-STM mechanism reimplementation over MBE
+  transfer semantics with MVMemory, transaction index/incarnation, speculative
+  execution, captured reads, versioned writes, validation, abort/re-execution,
+  ESTIMATE/dependency handling, deterministic ordered output, and Serial
+  equivalence checks.
+
+The implemented method closure exposes and validates four runnable method
+configurations:
+
+- Hash + Serial
+- Hash + Block-STM
+- MetaTrack + Serial
+- MetaTrack + Block-STM
+
+MetaTrack is implemented as an outer control plane: it builds batch access
+matrices, state-frequency and co-access evidence, deterministic placement plans,
+remote-state access evidence, dependency/track scheduling evidence, and
+commutative hot-update aggregation evidence. Dataset runs do not manufacture
+synthetic fast-track or aggregation behavior; they verify real registered
+workload replay, no fallback, finality, MetaTrack remote-state evidence, and
+Block-STM serial equivalence.
+
+The Block-STM reproduction dossier in `docs/reproductions/block_stm/` locks the
+paper to arXiv:2203.06871v3 and Aptos `aptos-core` commit
+`20f9379515358add43f4042693462aaedd654826`. MBE does not claim Move VM, Aptos
+storage layout, resource groups, delayed fields, or Aptos production
+optimizations. Local race testing requires a CGO C compiler; on Windows without
+`gcc`, `go test -race` is an environment-limited check rather than a passed
+gate.
 
 | Capability | Status |
 | --- | --- |
@@ -59,6 +82,9 @@ real-cluster acceptance.
 | Generic canonical CSV adapter | Implemented |
 | Decentraland Formal replay | Implemented and locally accepted |
 | Derived key-skew workloads | Implemented and locally accepted |
+| Serial block executor | Implemented and locally accepted |
+| Block-STM block executor | Implemented and locally accepted, race check requires local CGO toolchain |
+| Four-method execution comparison | Implemented and locally accepted |
 
 Planning documents:
 

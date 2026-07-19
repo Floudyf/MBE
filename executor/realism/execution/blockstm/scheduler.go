@@ -35,12 +35,62 @@ type Scheduler struct {
 
 func NewScheduler(txCount int) *Scheduler {
 	s := &Scheduler{statuses: map[TxnIndex]TransactionStatus{}, incarnation: map[TxnIndex]Incarnation{}}
-	for index := 0; index < txCount; index++ {
-		txn := TxnIndex(index)
+	for _, txn := range defaultTxnOrder(txCount) {
 		s.statuses[txn] = StatusPending
 		s.queue = append(s.queue, SchedulerTask{Kind: TaskExecute, Version: Version{Txn: txn}})
 	}
 	return s
+}
+
+func NewSchedulerWithOrder(txCount int, order []TxnIndex) *Scheduler {
+	s := &Scheduler{statuses: map[TxnIndex]TransactionStatus{}, incarnation: map[TxnIndex]Incarnation{}}
+	seen := map[TxnIndex]bool{}
+	for _, txn := range order {
+		if int(txn) >= txCount || seen[txn] {
+			continue
+		}
+		seen[txn] = true
+		s.statuses[txn] = StatusPending
+		s.queue = append(s.queue, SchedulerTask{Kind: TaskExecute, Version: Version{Txn: txn}})
+	}
+	for _, txn := range defaultTxnOrder(txCount) {
+		if seen[txn] {
+			continue
+		}
+		s.statuses[txn] = StatusPending
+		s.queue = append(s.queue, SchedulerTask{Kind: TaskExecute, Version: Version{Txn: txn}})
+	}
+	return s
+}
+
+func NewValidationSchedulerWithOrder(txCount int, order []TxnIndex) *Scheduler {
+	s := &Scheduler{statuses: map[TxnIndex]TransactionStatus{}, incarnation: map[TxnIndex]Incarnation{}}
+	seen := map[TxnIndex]bool{}
+	for _, txn := range order {
+		if int(txn) >= txCount || seen[txn] {
+			continue
+		}
+		seen[txn] = true
+		s.statuses[txn] = StatusValidating
+		s.queue = append(s.queue, SchedulerTask{Kind: TaskValidate, Version: Version{Txn: txn}})
+	}
+	for _, txn := range defaultTxnOrder(txCount) {
+		if seen[txn] {
+			continue
+		}
+		s.statuses[txn] = StatusValidating
+		s.queue = append(s.queue, SchedulerTask{Kind: TaskValidate, Version: Version{Txn: txn}})
+	}
+	return s
+}
+
+func defaultTxnOrder(txCount int) []TxnIndex {
+	order := make([]TxnIndex, 0, txCount)
+	for index := 0; index < txCount; index++ {
+		txn := TxnIndex(index)
+		order = append(order, txn)
+	}
+	return order
 }
 
 func (s *Scheduler) Next() (SchedulerTask, bool) {

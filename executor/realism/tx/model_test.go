@@ -59,6 +59,33 @@ func TestSignatureReject(t *testing.T) {
 	}
 }
 
+func TestAccessListCoveredByTxIDAndSignature(t *testing.T) {
+	_, privateKey := DeterministicKeyPair("seed:access")
+	item := SignedTransaction{
+		Receiver:   "bob",
+		Nonce:      0,
+		Value:      1,
+		StateKeys:  []string{"acct:alice", "acct:bob"},
+		AccessList: []AccessItem{{Key: "balance:alice", Mode: AccessReadWrite, UpdateSemantics: "set"}},
+		Payload:    "hello",
+		Timestamp:  1,
+		SourceKind: "test",
+	}
+	if err := Sign(&item, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	item.AccessList[0].Key = "balance:mallory"
+	if err := Verify(item); err == nil || err.Error() != ErrInvalidTxID {
+		t.Fatalf("expected invalid tx id after access-list tamper, got %v", err)
+	}
+	if err := AssignID(&item); err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(item); err == nil || err.Error() != ErrInvalidSignature {
+		t.Fatalf("expected invalid signature after access-list tx id reassignment, got %v", err)
+	}
+}
+
 func TestAddressFromPublicKeyDeterministic(t *testing.T) {
 	publicKey, _ := DeterministicKeyPair("seed:address")
 	first := AddressFromPublicKey(publicKey)

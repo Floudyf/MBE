@@ -5,7 +5,16 @@ import json
 from pathlib import Path
 
 
-_FIXED = ("seed", "repeat_index", "execution_backend", "estimated_transactions")
+_FIXED = (
+    "seed",
+    "repeat_index",
+    "execution_backend",
+    "estimated_transactions",
+    "workload_snapshot_digest",
+    "topology_snapshot_digest",
+    "fault_snapshot_digest",
+    "fairness_key",
+)
 
 
 def validate(rows: list[dict]) -> tuple[list[dict], dict]:
@@ -32,7 +41,25 @@ def validate(rows: list[dict]) -> tuple[list[dict], dict]:
 def write_artifacts(root: Path, rows: list[dict], result: dict) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "fairness_validation.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    fields = ["child_run_id", "suite_type", "method_config_id", "fairness_key", "comparison_group_id", "seed", "repeat_index", "execution_backend", "estimated_transactions", "runnable", "status", "blockers"]
+    fields = [
+        "child_run_id",
+        "suite_type",
+        "method_config_id",
+        "fairness_key",
+        "comparison_group_id",
+        "seed",
+        "repeat_index",
+        "execution_backend",
+        "estimated_transactions",
+        "workload_snapshot_digest",
+        "topology_snapshot_digest",
+        "fault_snapshot_digest",
+        "method_snapshot_digest",
+        "method_config_snapshot_digest",
+        "runnable",
+        "status",
+        "blockers",
+    ]
     with (root / "fairness_matrix.csv").open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields); writer.writeheader()
         for row in rows: writer.writerow({key: json.dumps(row.get(key)) if isinstance(row.get(key), (list, dict)) else row.get(key, "") for key in fields})

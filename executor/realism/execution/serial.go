@@ -24,6 +24,7 @@ type AccessSet struct {
 
 type ReadObservation struct {
 	Key         string `json:"key"`
+	Value       string `json:"value,omitempty"`
 	ValueDigest string `json:"value_digest"`
 	Source      string `json:"source"`
 }
@@ -96,9 +97,21 @@ func (e *SerialExecutor) ExecuteBlock(b block.Block, base map[string]string) Res
 }
 
 func (e *SerialExecutor) executeTx(b block.Block, overlay *txOverlay, item tx.SignedTransaction) Receipt {
+	receipt := Receipt{TxID: item.TxID, BlockHash: b.BlockHash, Height: b.Height, Success: false, ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...)}
+	if isPureCommutativeDelta(item.AccessList) {
+		overlay.applyCommutativeDeltas(item.AccessList)
+		receipt.Success = true
+		receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
+		return receipt
+	}
+	if isCrossShardTargetCommit(item, b.ShardID) {
+		overlay.set("relay_commit:"+item.TxID, "1")
+		receipt.Success = true
+		receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
+		return receipt
+	}
 	overlay.ensureAccount(item.Sender, e.DefaultInitialBalance)
 	overlay.ensureAccount(item.Receiver, 0)
-	receipt := Receipt{TxID: item.TxID, BlockHash: b.BlockHash, Height: b.Height, Success: false, ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...)}
 	expectedNonce := overlay.nonce(item.Sender)
 	if item.Nonce != expectedNonce {
 		receipt.Error = fmt.Sprintf("nonce_mismatch_expected_%d_got_%d", expectedNonce, item.Nonce)
@@ -119,6 +132,7 @@ func (e *SerialExecutor) executeTx(b block.Block, overlay *txOverlay, item tx.Si
 	overlay.setBalance(item.Sender, senderBalance-item.Value)
 	overlay.setBalance(item.Receiver, overlay.balance(item.Receiver)+item.Value)
 	overlay.setNonce(item.Sender, item.Nonce+1)
+	overlay.applyCommutativeDeltas(item.AccessList)
 	receipt.Success = true
 	receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
 	return receipt
@@ -144,7 +158,7 @@ func (o *txOverlay) key(key string) string {
 
 func (o *txOverlay) get(key string) string {
 	value := o.values[o.key(key)]
-	o.reads = append(o.reads, ReadObservation{Key: key, ValueDigest: digestValue(value), Source: "state_snapshot_overlay"})
+	o.reads = append(o.reads, ReadObservation{Key: key, Value: value, ValueDigest: digestValue(value), Source: "state_snapshot_overlay"})
 	return value
 }
 
@@ -192,6 +206,47 @@ func (o *txOverlay) setNonce(account string, nonce uint64) {
 	o.set("nonce:"+account, strconv.FormatUint(nonce, 10))
 }
 
+func (o *txOverlay) applyCommutativeDeltas(accesses []tx.AccessItem) {
+	for _, access := range accesses {
+		if access.Mode != tx.AccessCommutativeDelta || access.Key == "" {
+			continue
+		}
+		current, _ := strconv.ParseInt(o.get(access.Key), 10, 64)
+		o.set(access.Key, strconv.FormatInt(current+access.Delta, 10))
+	}
+}
+
+func isPureCommutativeDelta(accesses []tx.AccessItem) bool {
+	if len(accesses) == 0 {
+		return false
+	}
+	for _, access := range accesses {
+		if access.Mode == tx.AccessRead {
+			continue
+		}
+		if access.Mode != tx.AccessCommutativeDelta {
+			return false
+		}
+	}
+	return true
+}
+
+func isCrossShardTargetCommit(item tx.SignedTransaction, shardID string) bool {
+	target := crossShardTargetFromPayload(item.Payload)
+	return target != "" && target == shardID
+}
+
+func crossShardTargetFromPayload(payload string) string {
+	if !strings.HasPrefix(payload, "v5_cross:") {
+		return ""
+	}
+	target := strings.TrimPrefix(payload, "v5_cross:")
+	if colon := strings.Index(target, ":"); colon >= 0 {
+		target = target[:colon]
+	}
+	return strings.TrimSpace(target)
+}
+
 func copySnapshot(input map[string]string) map[string]string {
 	out := make(map[string]string, len(input))
 	for key, value := range input {
@@ -219,6 +274,23 @@ func declaredAccessSet(txs []tx.SignedTransaction) AccessSet {
 	readKeys := map[string]bool{}
 	writeKeys := map[string]bool{}
 	for _, item := range txs {
+		if len(item.AccessList) > 0 {
+			for _, access := range item.AccessList {
+				switch access.Mode {
+				case tx.AccessRead:
+					readKeys[access.Key] = true
+				case tx.AccessWrite:
+					writeKeys[access.Key] = true
+				case tx.AccessReadWrite:
+					readKeys[access.Key] = true
+					writeKeys[access.Key] = true
+				case tx.AccessCommutativeDelta:
+					readKeys[access.Key] = true
+					writeKeys[access.Key] = true
+				}
+			}
+			continue
+		}
 		for _, key := range item.StateKeys {
 			readKeys[key] = true
 			writeKeys[key] = true
