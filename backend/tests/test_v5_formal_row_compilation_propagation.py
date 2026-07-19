@@ -262,6 +262,13 @@ def test_formal_scheduler_start_records_in_process_worker_thread(monkeypatch) ->
     assert record["worker_thread"] == f"v5-formal-worker-{group_id}"
     assert record["status"] == "starting"
     release_worker.set()
+    for _ in range(50):
+        if record.get("status") == "completed":
+            break
+        threading.Event().wait(0.01)
+    assert record["status"] == "completed"
+    assert record["worker_pid"] == os.getpid()
+    assert record["worker_thread"] == f"v5-formal-worker-{group_id}"
 
 
 def test_unknown_workload_point_is_blocked_and_not_silently_compiled() -> None:

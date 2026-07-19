@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 
@@ -94,18 +95,13 @@ func RunV43FinalSmoke(ctx context.Context, opts SmokeOptionsV43) (FinalSummaryV4
 }
 
 func writeV43RootArtifacts(outDir string) error {
-	copies := map[string]string{
-		filepath.Join("n0", "network_log.csv"):      "network_log.csv",
-		filepath.Join("n0", "pbft_message_log.csv"): "pbft_message_log.csv",
-		filepath.Join("n0", "block_commit_log.csv"): "block_commit_log.csv",
-		filepath.Join("n0", "receipts.jsonl"):       "receipts.jsonl",
-		filepath.Join("n0", "tx_index.jsonl"):       "tx_index.jsonl",
+	source, err := selectV43RootArtifactSource(outDir)
+	if err != nil {
+		return err
 	}
-	for srcRel, dstRel := range copies {
+	for _, name := range v43RootArtifactFiles {
+		srcRel := filepath.Join(source, name)
 		src := filepath.Join(outDir, srcRel)
-		if _, err := os.Stat(src); err != nil {
-			return fmt.Errorf("v4.3 root artifact source %s: %w", srcRel, err)
-		}
 		data, err := os.ReadFile(src)
 		if err != nil {
 			return fmt.Errorf("read v4.3 root artifact %s: %w", srcRel, err)
@@ -113,11 +109,65 @@ func writeV43RootArtifacts(outDir string) error {
 		if len(data) == 0 {
 			return fmt.Errorf("v4.3 root artifact source %s is empty", srcRel)
 		}
-		if err := os.WriteFile(filepath.Join(outDir, dstRel), data, 0o644); err != nil {
-			return fmt.Errorf("write v4.3 root artifact %s: %w", dstRel, err)
+		if err := os.WriteFile(filepath.Join(outDir, name), data, 0o644); err != nil {
+			return fmt.Errorf("write v4.3 root artifact %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+var v43RootArtifactFiles = []string{
+	"network_log.csv",
+	"pbft_message_log.csv",
+	"block_commit_log.csv",
+	"receipts.jsonl",
+	"tx_index.jsonl",
+}
+
+func selectV43RootArtifactSource(outDir string) (string, error) {
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		return "", fmt.Errorf("read v4.3 artifact candidates: %w", err)
+	}
+	candidates := []string{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if len(name) < 2 || name[0] != 'n' {
+			continue
+		}
+		if _, err := strconv.Atoi(name[1:]); err != nil {
+			continue
+		}
+		candidates = append(candidates, name)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left, _ := strconv.Atoi(candidates[i][1:])
+		right, _ := strconv.Atoi(candidates[j][1:])
+		return left < right
+	})
+	missingByCandidate := map[string][]string{}
+	for _, candidate := range candidates {
+		missing := missingV43RootArtifacts(filepath.Join(outDir, candidate))
+		if len(missing) == 0 {
+			return candidate, nil
+		}
+		missingByCandidate[candidate] = missing
+	}
+	return "", fmt.Errorf("no complete v4.3 root artifact source found; candidates=%v missing=%v required=%v", candidates, missingByCandidate, v43RootArtifactFiles)
+}
+
+func missingV43RootArtifacts(nodeDir string) []string {
+	missing := []string{}
+	for _, name := range v43RootArtifactFiles {
+		info, err := os.Stat(filepath.Join(nodeDir, name))
+		if err != nil || info.Size() == 0 {
+			missing = append(missing, name)
+		}
+	}
+	return missing
 }
 
 type v43XShardEvidence struct {

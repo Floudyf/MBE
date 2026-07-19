@@ -149,15 +149,13 @@ def _changed_categories(plan: V5FormalExperimentPlan, method: dict) -> list[str]
 
 def start(group_id: str) -> None:
     group = read_group(group_id)
+    worker_name = f"v5-formal-worker-{group_id}"
     group["status"] = "starting"
+    group["worker_pid"] = os.getpid()
+    group["worker_thread"] = worker_name
     write_group(group)
-    worker = threading.Thread(target=_worker, args=(group_id,), name=f"v5-formal-worker-{group_id}", daemon=True)
+    worker = threading.Thread(target=_worker, args=(group_id,), name=worker_name, daemon=True)
     worker.start()
-    group = read_group(group_id)
-    if group.get("status") not in {"completed", "completed_with_failures", "failed", "cancelled"}:
-        group["worker_pid"] = os.getpid()
-        group["worker_thread"] = worker.name
-        write_group(group)
 
 
 def _worker(group_id: str) -> None:
