@@ -95,10 +95,10 @@ def test_metric_extractor_reads_block_stm_and_metatrack_artifact_evidence(tmp_pa
         encoding="utf-8",
     )
     (tmp_path / "finality_summary.json").write_text(
-        '{"logical_transaction_count":5,"finalized_unique_logical_tx_count":5,"throughput_tps":10.5}',
+        '{"logical_transaction_count":5,"finalized_unique_logical_tx_count":5,"throughput_tps":10.5,"logical_window_start_ms":1,"logical_window_end_ms":401,"logical_finality_duration_ms":400,"logical_finality_tps":12.5,"drain_started_at_ms":401,"drain_finished_at_ms":477,"drain_duration_ms":76,"system_delta_drain_block_count":1,"completion_window_start_ms":1,"completion_window_end_ms":477,"completion_duration_ms":476,"end_to_end_tps":10.5,"tail_completion_overhead_ms":76}',
         encoding="utf-8",
     )
-    for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "metatrack_batch_plan.jsonl", "dependency_graph.csv", "track_classification.csv", "aggregation_plan.csv", "logical_physical_update_mapping.csv"]:
+    for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "drain_status.json", "throughput_windows.csv", "metatrack_batch_plan.jsonl", "dependency_graph.csv", "track_classification.csv", "aggregation_plan.csv", "logical_physical_update_mapping.csv"]:
         (tmp_path / name).write_text("", encoding="utf-8")
     (tmp_path / "metatrack_scheduler_trace.csv").write_text(
         "timestamp,node_id,shard_id,height,scheduler_plugin,tx_id,track,queue_name,decision_reason,local_execution,stolen_work,blocked,wakeup,ready_queue_depth,fast_queue_depth,conservative_queue_depth,dependency_wait_ms,scheduler_idle_ms\n"
@@ -153,10 +153,10 @@ def test_metric_extractor_does_not_treat_planning_remote_state_csv_as_runtime_me
         encoding="utf-8",
     )
     (tmp_path / "finality_summary.json").write_text(
-        '{"logical_transaction_count":1,"finalized_unique_logical_tx_count":1}',
+        '{"logical_transaction_count":1,"finalized_unique_logical_tx_count":1,"throughput_tps":10,"logical_window_start_ms":1,"logical_window_end_ms":101,"logical_finality_duration_ms":100,"logical_finality_tps":10,"drain_started_at_ms":101,"drain_finished_at_ms":101,"drain_duration_ms":0,"system_delta_drain_block_count":0,"completion_window_start_ms":1,"completion_window_end_ms":101,"completion_duration_ms":100,"end_to_end_tps":10,"tail_completion_overhead_ms":0}',
         encoding="utf-8",
     )
-    for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv"]:
+    for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "drain_status.json", "throughput_windows.csv"]:
         (tmp_path / name).write_text("", encoding="utf-8")
     (tmp_path / "remote_state_access.csv").write_text(
         "batch_index,logical_id,tx_index,state_key,home_shard,execution_shard,access_kind,witness_digest\n"

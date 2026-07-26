@@ -10,6 +10,12 @@ type SystemStateDelta struct {
 	TxIDs           []string `json:"tx_ids,omitempty"`
 	UpdateSemantics string   `json:"update_semantics,omitempty"`
 	Delta           int64    `json:"delta,omitempty"`
+	BaseValue       string   `json:"base_value,omitempty"`
+	BaseValueDigest string   `json:"base_value_digest,omitempty"`
+	ApplyOrigin     string   `json:"apply_origin,omitempty"`
+	DeltaKind       string   `json:"delta_kind,omitempty"`
+	HasInitialValue bool     `json:"has_initial_value,omitempty"`
+	InitialValue    int64    `json:"initial_value"`
 	HomeShard       string   `json:"home_shard"`
 	ExecutionShard  string   `json:"execution_shard"`
 	SourceKey       string   `json:"source_key"`

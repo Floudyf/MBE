@@ -19,7 +19,7 @@ from typing import Any, Literal, Iterator
 
 from pydantic import BaseModel, Field
 
-from backend.app.core.paths import ROOT
+from backend.app.core.paths import ROOT, WORKLOAD_CACHE_ROOT
 from backend.app.services.workload_adapters.base import SourceValidationSummary
 from backend.app.services.workload_adapters.registry import get_adapter
 
@@ -28,7 +28,6 @@ SUPPORTED_ALPHAS = frozenset({0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4})
 GENERATOR_VERSION = "v5_workload_data_plane_v2_generic_record"
 SELECTOR_VERSION = "contiguous_window_v1"
 MAX_JSONL_RECORD_BYTES = 1024 * 1024
-WORKLOAD_CACHE_ROOT = ROOT / ".cache" / "workloads"
 MANIFEST_ROOT = ROOT / "data" / "workloads" / "manifests"
 
 

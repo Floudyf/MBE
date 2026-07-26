@@ -1,4 +1,12 @@
-export const WORKLOAD_TX_OPTIONS = [10_000, 50_000, 100_000, 250_000] as const;
+export const WORKLOAD_TX_OPTIONS = [
+  100,
+  1_000,
+  10_000,
+  50_000,
+  100_000,
+  250_000,
+] as const;
+
 export const WORKLOAD_ALPHA_OPTIONS = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4] as const;
 
 export function formatHash(value: unknown): string {

@@ -67,8 +67,26 @@ func TestDrainBudgetScalesWithWorkloadAndBlockProducer(t *testing.T) {
 func TestDrainBudgetKeepsAbsoluteHardCap(t *testing.T) {
 	plan := drainBudgetTestPlan(1_000_000, 1, 1000)
 	plan.DurationMS = int((2 * time.Hour).Milliseconds())
-	if got := drainBudget(plan).HardTimeout; got != 45*time.Minute {
+	if got := drainBudget(plan).HardTimeout; got != 90*time.Minute {
 		t.Fatalf("hard cap changed: %s", got)
+	}
+}
+
+func TestShutdownBudgetScalesForLargeArtifactFlush(t *testing.T) {
+	plan := drainBudgetTestPlan(10_000, 100, 75)
+	for len(plan.NodeConfigs) < 8 {
+		plan.NodeConfigs = append(plan.NodeConfigs, plan.NodeConfigs[0])
+	}
+	got := shutdownBudget(plan)
+	if got <= 30*time.Second {
+		t.Fatalf("shutdown budget did not grow for 10K run: %s", got)
+	}
+	if got > 10*time.Minute {
+		t.Fatalf("shutdown budget exceeded hard cap: %s", got)
+	}
+	tiny := drainBudgetTestPlan(1, 100, 75)
+	if got := shutdownBudget(tiny); got < 30*time.Second {
+		t.Fatalf("tiny shutdown budget fell below minimum: %s", got)
 	}
 }
 
@@ -100,6 +118,34 @@ func drainBudgetTestPlan(txCount, blockSize, intervalMS int) v5.Plan {
 
 func blockProducerConfig(blockSize, intervalMS int) v5.PluginConfig {
 	return v5.PluginConfig{PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": blockSize, "interval_ms": intervalMS}}
+}
+
+func writeDrainStatus(t *testing.T, root string, finishedAt int64) {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{"completion_reason": "drain_quiescent", "drain_finished_at": finishedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "drain_status.json"), append(raw, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeRows(path string, header []string, rows [][]string) {
+	file, err := os.Create(path)
+	if err != nil {
+		panic(err)
+	}
+	writer := csv.NewWriter(file)
+	_ = writer.Write(header)
+	_ = writer.WriteAll(rows)
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		panic(err)
+	}
+	if err := file.Close(); err != nil {
+		panic(err)
+	}
 }
 
 func TestFinalityDoesNotDrainBeforeSourceFinalize(t *testing.T) {
@@ -144,6 +190,7 @@ func TestFinalityDoesNotDrainBeforeSourceFinalize(t *testing.T) {
 	header := []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success"}
 	writeRows(filepath.Join(root, "client", "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, submissionRows)
 	writeRows(filepath.Join(root, "client", "client_lifecycle.csv"), header, lifecycleRows)
+	writeDrainStatus(t, root, 6000)
 
 	assertSummary := func(wantTerminal, wantIncomplete int) {
 		summary, err := deriveFinalityArtifacts(root, nil)
@@ -265,6 +312,16 @@ func TestHasNonTerminalMempoolIgnoresTerminalResidue(t *testing.T) {
 	}
 }
 
+func TestProgressSnapshotCountsPendingSystemDeltas(t *testing.T) {
+	statuses := []map[string]any{
+		{"committed_height": float64(1), "mempool_depth": float64(0), "reserved_tx_count": float64(0), "pending_commit_count": float64(0), "pending_future_block_count": float64(0), "pending_cross_shard_count": float64(0), "pending_state_delta_count": float64(1), "pending_state_delta_key_count": float64(1), "ready_state_delta_count": float64(1), "proposal_in_flight": false},
+	}
+	snapshot := makeProgressSnapshot(1, statuses, map[string]map[string]bool{"s0": map[string]bool{"1": true}})
+	if snapshot.Pending != 3 {
+		t.Fatalf("pending system deltas should block drain, pending=%d", snapshot.Pending)
+	}
+}
+
 func TestFinalityCountsDurableCommitIndependentlyOfTerminalStageOrder(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "client"), 0o755); err != nil {
@@ -292,11 +349,95 @@ func TestFinalityCountsDurableCommitIndependentlyOfTerminalStageOrder(t *testing
 		{"200", id, id, "refund", "n0", "s0", "", "", "2", "true"},
 		{"200", id, id, "durable_committed", "n0", "s0", "", "", "2", "true"},
 	})
+	writeDrainStatus(t, root, 200)
 	summary, err := deriveFinalityArtifacts(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if summary["intra_shard_committed_unique_count"] != 1 || summary["intra_shard_terminal_unique_count"] != 1 || summary["terminal_unique_tx_count"] != 1 {
 		t.Fatalf("same-timestamp stages caused metric drift: %#v", summary)
+	}
+}
+
+func TestFinalityTimingUsesDrainInclusiveThroughput(t *testing.T) {
+	timing := computeFinalityTiming(60, 1000, 5000, 7000, 2)
+	if timing.LogicalFinalityDurationMS != 4000 || timing.LogicalFinalityTPS != 15 {
+		t.Fatalf("bad logical timing: %#v", timing)
+	}
+	if timing.CompletionDurationMS != 6000 || timing.EndToEndTPS != 10 {
+		t.Fatalf("bad completion timing: %#v", timing)
+	}
+	if timing.DrainDurationMS != 2000 || timing.TailCompletionOverheadMS != 2000 {
+		t.Fatalf("bad drain timing: %#v", timing)
+	}
+}
+
+func TestFinalityTimingNoDrainWorkKeepsLegacyAndCompletionTPSAligned(t *testing.T) {
+	timing := computeFinalityTiming(60, 1000, 5000, 5000, 0)
+	if timing.DrainDurationMS != 0 || timing.TailCompletionOverheadMS != 0 {
+		t.Fatalf("no-drain timing should not add tail overhead: %#v", timing)
+	}
+	if timing.LogicalFinalityTPS != timing.EndToEndTPS {
+		t.Fatalf("logical and completion TPS should match without drain: %#v", timing)
+	}
+}
+
+func TestFinalityTimingKeepsTransactionLatencyIndependentFromDrain(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRows(filepath.Join(root, "client", "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, [][]string{
+		{"1000", "tx-1", "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""},
+		{"2000", "tx-2", "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""},
+	})
+	header := []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success"}
+	writeRows(filepath.Join(root, "client", "client_lifecycle.csv"), header, [][]string{
+		{"1000", "tx-1", "tx-1", "submitted", "n0", "s0", "", "", "1", "true"},
+		{"2000", "tx-2", "tx-2", "submitted", "n0", "s0", "", "", "1", "true"},
+		{"3000", "tx-1", "tx-1", "durable_committed", "n0", "s0", "", "", "2", "true"},
+		{"4000", "tx-2", "tx-2", "durable_committed", "n0", "s0", "", "", "2", "true"},
+	})
+	writeDrainStatus(t, root, 7000)
+	summary, err := deriveFinalityArtifacts(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary["p50_finality_ms"] != int64(2000) || summary["p95_finality_ms"] != int64(2000) || summary["p99_finality_ms"] != int64(2000) {
+		t.Fatalf("transaction latency was extended by drain: %#v", summary)
+	}
+	if summary["completion_duration_ms"] != int64(6000) || summary["drain_duration_ms"] != int64(3000) {
+		t.Fatalf("completion timing did not include drain: %#v", summary)
+	}
+}
+
+func TestFinalityWindowCSVSeparatesLogicalAndCompletionRows(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeRows(filepath.Join(root, "client", "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, [][]string{{"1000", "tx-1", "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""}})
+	writeRows(filepath.Join(root, "client", "client_lifecycle.csv"), []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success"}, [][]string{
+		{"1000", "tx-1", "tx-1", "submitted", "n0", "s0", "", "", "1", "true"},
+		{"5000", "tx-1", "tx-1", "durable_committed", "n0", "s0", "", "", "2", "true"},
+	})
+	writeDrainStatus(t, root, 7000)
+	if _, err := deriveFinalityArtifacts(root, nil); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(filepath.Join(root, "throughput_windows.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(file).ReadAll()
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[1][0] != "logical_finality" || rows[2][0] != "end_to_end_completion" {
+		t.Fatalf("throughput_windows.csv did not expose separate timing windows: %#v", rows)
+	}
+	if rows[1][3] != "1" || rows[2][3] != "1" {
+		t.Fatalf("drain block changed logical TPS numerator: %#v", rows)
 	}
 }

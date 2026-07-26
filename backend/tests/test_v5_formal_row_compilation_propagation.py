@@ -218,13 +218,17 @@ def test_builtin_four_method_comparison_preserves_fairness_conditions(tmp_path: 
     assert plugin(compiled_by_method["hash_block_stm"], "routing")["plugin_id"] == "hash_routing_baseline"
     assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["plugin_id"] == "block_stm_block_executor"
     assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["config"]["worker_count"] == 4
+    assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["config"]["execution_mode"] == "performance"
+    assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["config"]["oracle_mode"] == "off"
     assert plugin(compiled_by_method["metatrack_serial"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
     assert plugin(compiled_by_method["metatrack_serial"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
-    assert plugin(compiled_by_method["metatrack_serial"], "block_executor")["plugin_id"] == "serial_block_executor"
+    assert plugin(compiled_by_method["metatrack_serial"], "block_executor")["plugin_id"] == "metatrack_block_executor"
     assert plugin(compiled_by_method["metatrack_block_stm"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
     assert plugin(compiled_by_method["metatrack_block_stm"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
     assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["plugin_id"] == "block_stm_block_executor"
     assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["worker_count"] == 4
+    assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["execution_mode"] == "performance"
+    assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["oracle_mode"] == "off"
 
 
 def test_formal_scheduler_start_records_in_process_worker_thread(monkeypatch) -> None:

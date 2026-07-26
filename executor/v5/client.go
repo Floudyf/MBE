@@ -62,7 +62,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	for shardIndex := 0; shardIndex < shards; shardIndex++ {
 		shardIDs = append(shardIDs, fmt.Sprintf("s%d", shardIndex))
 	}
-	iterator, err := plugins.Workload.NewIterator(plan.WorkloadPlan, shards, outDir)
+	iterator, err := plugins.Workload.NewIterator(plan.WorkloadPlan, shards, outDir, plugins.Sharding)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					routingRecords = append(routingRecords, next)
 				}
 			}
-			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs})
+			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding})
 			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
 			for _, placement := range routePlan.TransactionPlacements {
 				decisions[placement.TxIndex] = RoutingDecision{ShardID: placement.ExecutionShard, Reason: placement.Reason}
@@ -163,7 +163,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		for _, record := range records {
 			route := decisions[record.Index]
 			if route.ShardID == "" {
-				route = plugins.Routing.Route(RoutingInput{Index: record.Index, StateKeys: record.StateKeys, AccessList: record.AccessList, SourceShard: record.SourceShard, ShardIDs: shardIDs, CrossShard: record.CrossShard})
+				route = plugins.Routing.Route(RoutingInput{Index: record.Index, StateKeys: record.StateKeys, AccessList: record.AccessList, SourceShard: record.SourceShard, ShardIDs: shardIDs, CrossShard: record.CrossShard, Sharding: plugins.Sharding})
 			}
 			if err := submitRecord(record, route); err != nil {
 				return err
@@ -309,15 +309,18 @@ func requestedCrossShardCount(total int, ratio float64) int {
 
 func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any, accessRows, frequencyRows, coaccessRows, placementRows, transactionRows, dependencyRows, remoteStateRows *[][]string) {
 	*planRows = append(*planRows, map[string]any{
-		"batch_index":            plan.BatchIndex,
-		"plan_digest":            plan.PlanDigest,
-		"transaction_count":      len(plan.TransactionPlacements),
-		"state_key_count":        len(plan.StateFrequency),
-		"coaccess_edge_count":    len(plan.CoaccessEdges),
-		"remote_access_estimate": plan.RemoteAccessEstimate,
-		"routing_overhead":       plan.RoutingOverhead,
-		"shard_load_before":      plan.ShardLoadBefore,
-		"shard_load_after":       plan.ShardLoadAfter,
+		"batch_index":                   plan.BatchIndex,
+		"plan_digest":                   plan.PlanDigest,
+		"sharding_plugin_id":            plan.ShardingPluginID,
+		"transaction_count":             len(plan.TransactionPlacements),
+		"state_key_count":               len(plan.StateFrequency),
+		"coaccess_edge_count":           len(plan.CoaccessEdges),
+		"remote_access_estimate":        plan.RemoteAccessEstimate,
+		"predicted_remote_access_count": plan.RemoteAccessEstimate,
+		"placement_fallback_count":      plan.PlacementFallbackCount,
+		"routing_overhead":              plan.RoutingOverhead,
+		"shard_load_before":             plan.ShardLoadBefore,
+		"shard_load_after":              plan.ShardLoadAfter,
 	})
 	for _, row := range plan.AccessMatrix {
 		*accessRows = append(*accessRows, []string{fmt.Sprint(plan.BatchIndex), row.LogicalID, fmt.Sprint(row.TxIndex), row.Key, string(row.Mode)})

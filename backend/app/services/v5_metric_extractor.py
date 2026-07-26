@@ -4,6 +4,22 @@ import csv
 import json
 from pathlib import Path
 
+FINALITY_REQUIRED_FIELDS = [
+    "logical_window_start_ms",
+    "logical_window_end_ms",
+    "logical_finality_duration_ms",
+    "logical_finality_tps",
+    "drain_started_at_ms",
+    "drain_finished_at_ms",
+    "drain_duration_ms",
+    "system_delta_drain_block_count",
+    "completion_window_start_ms",
+    "completion_window_end_ms",
+    "completion_duration_ms",
+    "end_to_end_tps",
+    "tail_completion_overhead_ms",
+]
+
 
 def extract(run_dir: Path) -> dict:
     summary_path = run_dir / "real_cluster_summary.json"
@@ -11,9 +27,12 @@ def extract(run_dir: Path) -> dict:
     if not summary_path.is_file() or not finality_path.is_file():
         return {"missing": [name for name, path in {"real_cluster_summary.json": summary_path, "finality_summary.json": finality_path}.items() if not path.is_file()]}
     cluster = json.loads(summary_path.read_text(encoding="utf-8")); finality = json.loads(finality_path.read_text(encoding="utf-8"))
-    required = ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "finality_summary.json", "real_cluster_summary.json"]
+    required = ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "finality_summary.json", "real_cluster_summary.json", "drain_status.json", "throughput_windows.csv"]
     missing = [name for name in required if not (run_dir / name).is_file()]
-    metrics = {"finalized_tx_count": finality.get("finalized_unique_logical_tx_count"), "throughput_tps": finality.get("throughput_tps"), "p50_latency_ms": finality.get("p50_finality_ms"), "p95_latency_ms": finality.get("p95_finality_ms"), "p99_latency_ms": finality.get("p99_finality_ms"), "block_executor_id": cluster.get("block_executor_id"), "block_executor_consistent": cluster.get("block_executor_consistent"), "plan_digest_consistent": cluster.get("plan_digest_consistent"), "state_root_consistent": cluster.get("state_root_consistent"), "orphan_process_count": cluster.get("orphan_process_count"), "no_fallback": cluster.get("no_fallback"), "lifecycle_complete": finality.get("logical_transaction_count") == finality.get("finalized_unique_logical_tx_count"), "fast_track_count": cluster.get("fast_track_count"), "conservative_track_count": cluster.get("conservative_track_count"), "aggregation_group_count": cluster.get("aggregation_group_count"), "logical_update_count": cluster.get("logical_update_count"), "physical_update_count": cluster.get("physical_update_count"), "scheduler_event_count": cluster.get("scheduler_event_count"), "scheduler_blocked_count": cluster.get("scheduler_blocked_count"), "scheduler_wakeup_count": cluster.get("scheduler_wakeup_count"), "scheduler_stolen_work_count": cluster.get("scheduler_stolen_work_count"), "scheduler_local_execution_count": cluster.get("scheduler_local_execution_count"), "scheduler_ready_queue_max_depth": cluster.get("scheduler_ready_queue_max_depth"), "scheduler_fast_queue_max_depth": cluster.get("scheduler_fast_queue_max_depth"), "scheduler_conservative_queue_max_depth": cluster.get("scheduler_conservative_queue_max_depth"), "scheduler_dependency_wait_ms": cluster.get("scheduler_dependency_wait_ms"), "scheduler_idle_ms": cluster.get("scheduler_idle_ms"), "scheduler_idle_ratio": cluster.get("scheduler_idle_ratio"), "remote_state_access_count": cluster.get("remote_state_access_count"), "remote_state_read_count": cluster.get("remote_state_read_count"), "remote_state_write_apply_count": cluster.get("remote_state_write_apply_count"), "remote_state_access_failed_count": cluster.get("remote_state_access_failed_count"), "remote_state_access_avg_latency_ms": cluster.get("remote_state_access_avg_latency_ms"), "source_artifacts": list(required), "missing": missing}
+    missing.extend(f"finality_summary.json:{field}" for field in FINALITY_REQUIRED_FIELDS if field not in finality)
+    if finality.get("throughput_tps") != finality.get("end_to_end_tps"):
+        missing.append("finality_summary.json:throughput_tps_must_equal_end_to_end_tps")
+    metrics = {"finalized_tx_count": finality.get("finalized_unique_logical_tx_count"), "throughput_tps": finality.get("throughput_tps"), "logical_finality_tps": finality.get("logical_finality_tps"), "end_to_end_tps": finality.get("end_to_end_tps"), "logical_window_start_ms": finality.get("logical_window_start_ms"), "logical_window_end_ms": finality.get("logical_window_end_ms"), "logical_finality_duration_ms": finality.get("logical_finality_duration_ms"), "drain_started_at_ms": finality.get("drain_started_at_ms"), "drain_finished_at_ms": finality.get("drain_finished_at_ms"), "drain_duration_ms": finality.get("drain_duration_ms"), "system_delta_drain_block_count": finality.get("system_delta_drain_block_count"), "completion_window_start_ms": finality.get("completion_window_start_ms"), "completion_window_end_ms": finality.get("completion_window_end_ms"), "completion_duration_ms": finality.get("completion_duration_ms"), "tail_completion_overhead_ms": finality.get("tail_completion_overhead_ms"), "p50_latency_ms": finality.get("p50_finality_ms"), "p95_latency_ms": finality.get("p95_finality_ms"), "p99_latency_ms": finality.get("p99_finality_ms"), "block_executor_id": cluster.get("block_executor_id"), "block_executor_consistent": cluster.get("block_executor_consistent"), "plan_digest_consistent": cluster.get("plan_digest_consistent"), "state_root_consistent": cluster.get("state_root_consistent"), "orphan_process_count": cluster.get("orphan_process_count"), "no_fallback": cluster.get("no_fallback"), "lifecycle_complete": finality.get("logical_transaction_count") == finality.get("finalized_unique_logical_tx_count"), "fast_track_count": cluster.get("fast_track_count"), "conservative_track_count": cluster.get("conservative_track_count"), "aggregation_group_count": cluster.get("aggregation_group_count"), "logical_update_count": cluster.get("logical_update_count"), "physical_update_count": cluster.get("physical_update_count"), "scheduler_event_count": cluster.get("scheduler_event_count"), "scheduler_blocked_count": cluster.get("scheduler_blocked_count"), "scheduler_wakeup_count": cluster.get("scheduler_wakeup_count"), "scheduler_stolen_work_count": cluster.get("scheduler_stolen_work_count"), "scheduler_local_execution_count": cluster.get("scheduler_local_execution_count"), "scheduler_ready_queue_max_depth": cluster.get("scheduler_ready_queue_max_depth"), "scheduler_fast_queue_max_depth": cluster.get("scheduler_fast_queue_max_depth"), "scheduler_conservative_queue_max_depth": cluster.get("scheduler_conservative_queue_max_depth"), "scheduler_dependency_wait_ms": cluster.get("scheduler_dependency_wait_ms"), "scheduler_idle_ms": cluster.get("scheduler_idle_ms"), "scheduler_idle_ratio": cluster.get("scheduler_idle_ratio"), "remote_state_access_count": cluster.get("remote_state_access_count"), "remote_state_read_count": cluster.get("remote_state_read_count"), "remote_state_write_apply_count": cluster.get("remote_state_write_apply_count"), "remote_state_access_failed_count": cluster.get("remote_state_access_failed_count"), "remote_state_access_avg_latency_ms": cluster.get("remote_state_access_avg_latency_ms"), "source_artifacts": list(required), "missing": missing}
     block_stm_summary = _read_json(run_dir / "block_stm_summary.json")
     block_stm_metrics = block_stm_summary.get("block_stm_metrics") if isinstance(block_stm_summary.get("block_stm_metrics"), dict) else {}
     if block_stm_metrics:

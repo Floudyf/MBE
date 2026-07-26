@@ -205,22 +205,52 @@ conflict graph, StateKeys-only grouping, wave batching, or ordinary optimistic
 lock loop is not Block-STM.
 
 When `block_stm_block_executor` is present, it must remain under the
-`block_executor` category and must be compared through the four-method matrix:
+`block_executor` category and must be compared as two independent primary
+method mechanisms plus a compatibility combination:
 
-- Hash + Serial
-- Hash + Block-STM
-- MetaTrack + Serial
-- MetaTrack + Block-STM
+- Baseline: Hash + Serial
+- MetaTrack: MetaTrack routing/dual-track/fast-first with `metatrack_block_executor`
+- Block-STM: Hash routing with Block-STM block executor
+- Combined compatibility: MetaTrack control plane with Block-STM backend
 
 Synthetic crafted workload acceptance must prove routing, track, aggregation,
 and Block-STM/Serial-equivalence evidence. Dataset acceptance must prove the
-same four methods run the registered canonical workload with truth labels,
-no-fallback replay summaries, terminal finality, MetaTrack remote-state access,
-and Block-STM serial-equivalence artifacts; it must not fabricate synthetic
-fast-track or aggregation behavior for a real dataset window. Local
+same registered canonical workload runs under these configurations with truth
+labels, no-fallback replay summaries, terminal finality, MetaTrack remote-state
+access, and Block-STM serial-equivalence artifacts; it must not fabricate
+synthetic fast-track or aggregation behavior for a real dataset window. Local
 `go test -race` remains required when a CGO C compiler is installed; if Windows
 lacks `gcc`, report that as an environment limitation instead of claiming the
 race gate passed.
+
+## 7.4 V5 Core Hardening Rule
+
+The internal `V5 Core Hardening` direction is a V5.2 hardening round, not V5.3,
+V5.2.1, or V6. It may repair persistence write amplification, runtime-root
+selection, MetaTrack mechanism closure, Block-STM correctness/performance
+boundaries, plugin wiring, method-template wording, metrics, observability, and
+acceptance reporting for the existing V5 real-cluster runtime.
+
+It must not add new workloads, alter real workload transaction semantics, add
+CG/ACG/BSX/Batch-SI or other algorithms, claim production PBFT or production
+Block-STM/Aptos execution, or describe `MetaTrack + Block-STM` as a third main
+method. The fixed dataset acceptance path for this hardening direction is
+`dcl_sales_polygon_271868` through `canonical_trace_replay` with the
+`contract_zipf` variant. MetaTrack reports must separate planned dependency
+rows from actual completion-driven `TxBlocked`/`TxWoken` events and must not
+claim performance improvement without evidence. MetaTrack worker metrics must
+separate queue/frontier width from atomically measured in-flight business
+executions and must report scheduler events, worker attempts, validator
+execution completions, and final logical completions as separate units.
+Block-STM remains a
+`staged_block_stm_prototype` truth boundary unless a later authorized round
+closes the full continuously interleaved OCC worker loop.
+
+Persistence hardening must be implemented before large 10K runs. The runtime
+must avoid per-block full state snapshot rewrites in the normal V5 commit path,
+must batch receipt and tx-index JSONL appends by block, and must record
+durability mode, fsync cadence, WAL/snapshot counts, and persistence timing
+separately from algorithm execution timing.
 
 ## 8. Backend Rule
 

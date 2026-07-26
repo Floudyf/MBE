@@ -1,6 +1,8 @@
 package block
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,5 +52,28 @@ func TestProposerBuildsFromMempoolAndRejectsEmpty(t *testing.T) {
 	}
 	if len(b.TxIDs) != 2 || b.BlockHash == "" || b.StateCommit {
 		t.Fatalf("unexpected block: %+v", b)
+	}
+}
+
+func TestSystemStateDeltaJSONIncludesZeroInitialValue(t *testing.T) {
+	data, err := json.Marshal(SystemStateDelta{
+		DeltaID:         "delta-zero-init",
+		Key:             "nonce:alice",
+		Value:           "1",
+		UpdateSemantics: "commutative_delta",
+		Delta:           1,
+		HasInitialValue: true,
+		InitialValue:    0,
+		HomeShard:       "s0",
+		ExecutionShard:  "s1",
+		SourceKey:       "s1::nonce:alice",
+		SourceHeight:    1,
+		SourceBlockHash: "source-block",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"initial_value":0`) {
+		t.Fatalf("system delta json should make zero initial value explicit: %s", data)
 	}
 }

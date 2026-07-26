@@ -70,6 +70,7 @@ type canonicalWireRecord struct {
 type CanonicalTraceIterator struct {
 	plan       WorkloadPlan
 	shards     int
+	sharding   ShardingPlugin
 	file       *os.File
 	gzip       *gzip.Reader
 	scanner    *bufio.Scanner
@@ -82,6 +83,10 @@ type CanonicalTraceIterator struct {
 }
 
 func NewCanonicalTraceIterator(plan WorkloadPlan, shards int, dataDir string) (*CanonicalTraceIterator, error) {
+	return NewCanonicalTraceIteratorWithSharding(plan, shards, dataDir, nil)
+}
+
+func NewCanonicalTraceIteratorWithSharding(plan WorkloadPlan, shards int, dataDir string, sharding ShardingPlugin) (*CanonicalTraceIterator, error) {
 	if plan.PluginID != "canonical_trace_replay" || plan.SourceType != "dataset" {
 		return nil, fmt.Errorf("canonical trace iterator requires dataset canonical_trace_replay plan")
 	}
@@ -115,7 +120,7 @@ func NewCanonicalTraceIterator(plan WorkloadPlan, shards int, dataDir string) (*
 		expected = plan.TxCount
 	}
 	return &CanonicalTraceIterator{
-		plan: plan, shards: shards, file: file, gzip: gz, scanner: scanner,
+		plan: plan, shards: shards, sharding: sharding, file: file, gzip: gz, scanner: scanner,
 		identities: map[string]string{}, nonces: map[string]uint64{}, hash: hash,
 		summary: WorkloadReplaySummary{DatasetID: plan.DatasetID, VariantID: plan.VariantID, TruthLabel: plan.TruthLabel, SourceSHA256: plan.SourceSHA256, MaterializedSHA256: plan.MaterializedSHA256, ExpectedCount: expected, ExpectedCrossShardCount: plan.ExpectedCrossShardCount, ExpectedCrossShardRatio: plan.ExpectedCrossShardRatio, ReplayMode: plan.ReplayMode, NoFallback: true, NonceContinuity: true, ShardLoadDistribution: map[string]int{}, IdentityMappingVersion: firstNonEmpty(plan.IdentityMappingVersion, "mbe_dataset_identity_v1")},
 	}, nil
@@ -142,10 +147,10 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 		return WorkloadRecord{}, fmt.Errorf("canonical workload has excess records")
 	}
 	senderID := strings.ToLower(wire.SenderID)
-	sourceShard := canonicalRuntimeSourceShard(it.plan, senderID, it.shards)
+	sourceShard := canonicalRuntimeSourceShardWithSharding(it.plan, senderID, it.shards, it.sharding)
 	targetShard := sourceShard
 	if wire.RoutingTargetKey != "" {
-		targetShard = stableShard([]string{strings.ToLower(wire.RoutingTargetKey)}, it.shards)
+		targetShard = shardIndexFor(it.sharding, []string{strings.ToLower(wire.RoutingTargetKey)}, it.shards)
 	}
 	cross := wire.RoutingTargetKey != "" && sourceShard != targetShard
 	target := ""
@@ -234,10 +239,14 @@ func canonicalRuntimeSenderAddress(plan WorkloadPlan, senderID string) string {
 }
 
 func canonicalRuntimeSourceShard(plan WorkloadPlan, senderID string, shards int) int {
+	return canonicalRuntimeSourceShardWithSharding(plan, senderID, shards, nil)
+}
+
+func canonicalRuntimeSourceShardWithSharding(plan WorkloadPlan, senderID string, shards int, sharding ShardingPlugin) int {
 	if shards <= 0 {
 		return 0
 	}
-	return stableShard([]string{"nonce:" + canonicalRuntimeSenderAddress(plan, senderID)}, shards)
+	return shardIndexFor(sharding, []string{"nonce:" + canonicalRuntimeSenderAddress(plan, senderID)}, shards)
 }
 
 func canonicalRuntimeAccessList(plan WorkloadPlan, record WorkloadRecord) []tx.AccessItem {
@@ -306,12 +315,16 @@ func workloadPath(dataDir, relative string) (string, error) {
 		return "", fmt.Errorf("unsafe materialized workload path")
 	}
 	cwd, _ := os.Getwd()
-	candidates := []string{
+	candidates := []string{}
+	if envRoot := strings.TrimSpace(os.Getenv("MBE_WORKLOAD_CACHE_ROOT")); envRoot != "" {
+		candidates = append(candidates, envRoot)
+	}
+	candidates = append(candidates,
 		filepath.Join(dataDir, ".cache", "workloads"),
 		filepath.Join(dataDir, "..", "..", "workloads"),
 		filepath.Join(cwd, ".cache", "workloads"),
 		filepath.Join(cwd, "..", ".cache", "workloads"),
-	}
+	)
 	for _, root := range candidates {
 		root = filepath.Clean(root)
 		path := filepath.Clean(filepath.Join(root, relative))
@@ -343,6 +356,25 @@ func stableShard(keys []string, shards int) int {
 		return 0
 	}
 	return stableKey(keys) % shards
+}
+
+func shardIndexFor(sharding ShardingPlugin, keys []string, shards int) int {
+	if shards <= 0 {
+		return 0
+	}
+	if sharding != nil {
+		shardIDs := make([]string, 0, shards)
+		for index := 0; index < shards; index++ {
+			shardIDs = append(shardIDs, fmt.Sprintf("s%d", index))
+		}
+		selected := sharding.ShardFor(keys, shardIDs)
+		for index, shard := range shardIDs {
+			if shard == selected {
+				return index
+			}
+		}
+	}
+	return stableShard(keys, shards)
 }
 
 func mappingDigest(items map[string]string) string {

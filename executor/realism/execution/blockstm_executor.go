@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,21 +32,30 @@ type BlockSTMMetrics struct {
 	ValidationFailureCount    int         `json:"validation_failure_count"`
 	CommittedTransactionCount int         `json:"committed_transaction_count"`
 	MaximumIncarnation        int         `json:"maximum_incarnation"`
+	SerialOracleMS            int64       `json:"serial_oracle_ms"`
+	MaterializationMS         int64       `json:"materialization_ms"`
+	IncarnationLimitHitCount  int         `json:"incarnation_limit_hit_count"`
+	SerialFallbackCount       int         `json:"serial_fallback_count"`
+	BusinessExecutionCount    int         `json:"business_execution_invocation_count"`
 	IncarnationHistogram      map[int]int `json:"incarnation_histogram"`
 }
 
 type BlockSTMExecutor struct {
-	DefaultInitialBalance int64
-	WorkerCount           int
-	Metrics               BlockSTMMetrics
-	serialSemantics       *SerialExecutor
+	DefaultInitialBalance  int64
+	WorkerCount            int
+	ExecutionMode          string
+	OracleMode             string
+	MaximumIncarnations    int
+	IncarnationLimitAction string
+	Metrics                BlockSTMMetrics
+	serialSemantics        *SerialExecutor
 }
 
 func NewBlockSTMExecutor(workerCount int) *BlockSTMExecutor {
 	if workerCount < 1 {
 		workerCount = 1
 	}
-	return &BlockSTMExecutor{DefaultInitialBalance: 1_000_000, WorkerCount: workerCount, serialSemantics: NewSerialExecutor()}
+	return &BlockSTMExecutor{DefaultInitialBalance: 1_000_000, WorkerCount: workerCount, ExecutionMode: "correctness", OracleMode: "full", MaximumIncarnations: 16, IncarnationLimitAction: "fail", serialSemantics: NewSerialExecutor()}
 }
 
 func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
@@ -60,11 +70,13 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 	memory := blockstm.NewMVMemory()
 	logicalBase := logicalSnapshot(b.ShardID, base)
 	captured := make([]blockstm.CapturedReads, len(b.TxList))
+	readSets := make([][]ReadObservation, len(b.TxList))
 	writeSets := make([]map[string]string, len(b.TxList))
+	receipts := make([]Receipt, len(b.TxList))
 	incarnations := make([]int, len(b.TxList))
 	metrics := BlockSTMMetrics{WorkerCount: workerCount, IncarnationHistogram: map[int]int{}}
 
-	if err := e.executeSpeculative(ctx, b, base, logicalBase, memory, captured, writeSets, &metrics); err != nil {
+	if err := e.executeSpeculative(ctx, b, base, logicalBase, memory, captured, readSets, writeSets, receipts, &metrics); err != nil {
 		return Result{}, err
 	}
 	validationResults, err := e.validateSpeculative(ctx, b, logicalBase, memory, captured, &metrics)
@@ -75,6 +87,7 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 	scheduler := blockstm.NewScheduler(len(b.TxList))
 	dependencies := blockstm.NewDependencyRegistry()
 	serialWorking := copySnapshot(base)
+	materializeStarted := time.Now()
 	result := Result{BlockHash: b.BlockHash, Height: b.Height, StateRootBefore: state.RootOfSnapshot(copySnapshot(base)), Deterministic: true, EVMExecution: false, FabricExecution: false, StateUpdates: map[string]string{}, BlockExecutorID: BlockSTMExecutorID, ExecutorVersion: BlockSTMExecutorVersion, WorkerCount: workerCount}
 	for index, item := range b.TxList {
 		if err := ctx.Err(); err != nil {
@@ -82,6 +95,29 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 		}
 		txnIndex := blockstm.TxnIndex(index)
 		version := blockstm.Version{Txn: txnIndex, Incarnation: blockstm.Incarnation(incarnations[index])}
+		if !readSetMatchesSnapshot(b.ShardID, serialWorking, readSets[index]) {
+			metrics.ValidationFailureCount++
+			metrics.AbortCount++
+			version.Incarnation++
+			incarnations[index] = int(version.Incarnation)
+			if e.MaximumIncarnations > 0 && incarnations[index] >= e.MaximumIncarnations {
+				metrics.IncarnationLimitHitCount++
+				if e.IncarnationLimitAction == "serial_fallback" {
+					metrics.SerialFallbackCount++
+					return e.serialFallbackResult(b, base, workerCount, metrics), nil
+				} else {
+					return Result{}, fmt.Errorf("block-stm maximum incarnations exceeded for tx %s", item.TxID)
+				}
+			}
+			overlay := newTxOverlay(b.ShardID, serialWorking)
+			receipt := e.executeTx(b, overlay, item)
+			metrics.BusinessExecutionCount++
+			captured[index] = capturedFromOverlay(overlay)
+			readSets[index] = append([]ReadObservation(nil), overlay.reads...)
+			writeSets[index] = overlay.logicalWrites()
+			receipts[index] = receipt
+			metrics.ReexecutionCount++
+		}
 		if result := validationResults[index]; !result.Valid {
 			metrics.ValidationFailureCount++
 			metrics.ReexecutionCount++
@@ -97,10 +133,21 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 			version = scheduler.Abort(version)
 			metrics.AbortCount = scheduler.AbortCount()
 			incarnations[index] = int(version.Incarnation)
+			if e.MaximumIncarnations > 0 && incarnations[index] >= e.MaximumIncarnations {
+				metrics.IncarnationLimitHitCount++
+				if e.IncarnationLimitAction == "serial_fallback" {
+					metrics.SerialFallbackCount++
+					return e.serialFallbackResult(b, base, workerCount, metrics), nil
+				}
+				return Result{}, fmt.Errorf("block-stm maximum incarnations exceeded for tx %s", item.TxID)
+			}
 			overlay := newTxOverlay(b.ShardID, serialWorking)
-			_ = e.executeTx(b, overlay, item)
+			receipt := e.executeTx(b, overlay, item)
+			metrics.BusinessExecutionCount++
 			captured[index] = capturedFromOverlay(overlay)
+			readSets[index] = append([]ReadObservation(nil), overlay.reads...)
 			writeSets[index] = overlay.logicalWrites()
+			receipts[index] = receipt
 			for key, value := range writeSets[index] {
 				memory.Write(key, version, value)
 			}
@@ -111,10 +158,15 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 				}
 			}
 		}
-		overlay := newTxOverlay(b.ShardID, serialWorking)
-		receipt := e.executeTx(b, overlay, item)
-		serialWorking = overlay.snapshot()
-		delta := TxDelta{TxID: item.TxID, OriginalIndex: index, ReadSet: overlay.reads, WriteSet: overlay.logicalWrites(), Receipt: receipt, Success: receipt.Success, Error: receipt.Error}
+		for key, value := range writeSets[index] {
+			serialWorking[qualifyKey(b.ShardID, key)] = value
+		}
+		receipt := receipts[index]
+		if receipt.TxID == "" {
+			return Result{}, fmt.Errorf("block-stm missing materialized receipt for tx %s", item.TxID)
+		}
+		receipt.StateRootAfterTx = state.RootOfSnapshot(serialWorking)
+		delta := TxDelta{TxID: item.TxID, OriginalIndex: index, ReadSet: readSets[index], WriteSet: writeSets[index], Receipt: receipt, Success: receipt.Success, Error: receipt.Error}
 		result.TxDeltas = append(result.TxDeltas, delta)
 		result.Receipts = append(result.Receipts, receipt)
 		if receipt.Success {
@@ -135,10 +187,15 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 		result.StateUpdates[key] = value
 	}
 	result.StateDelta = stateDelta(base, serialWorking)
+	metrics.MaterializationMS = time.Since(materializeStarted).Milliseconds()
 
-	serialOracle := NewSerialExecutor().ExecuteBlock(b, base)
-	if !sameExecutionOutput(serialOracle, result) {
-		return Result{}, fmt.Errorf("block-stm ordered materialization diverged from serial oracle")
+	if e.shouldRunSerialOracle() {
+		oracleStarted := time.Now()
+		serialOracle := NewSerialExecutor().ExecuteBlock(b, base)
+		metrics.SerialOracleMS = time.Since(oracleStarted).Milliseconds()
+		if !sameExecutionOutput(serialOracle, result) {
+			return Result{}, fmt.Errorf("block-stm ordered materialization diverged from serial oracle")
+		}
 	}
 	declared := declaredAccessSet(b.TxList)
 	plan := buildBlockSTMPlan(b, declared, workerCount)
@@ -152,6 +209,40 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 	}
 	result.SerialEquivalent = true
 	return result, nil
+}
+
+func (e *BlockSTMExecutor) serialFallbackResult(b block.Block, base map[string]string, workerCount int, metrics BlockSTMMetrics) Result {
+	serial := NewSerialExecutor().ExecuteBlock(b, base)
+	serial.BlockExecutorID = BlockSTMExecutorID
+	serial.ExecutorVersion = BlockSTMExecutorVersion
+	serial.WorkerCount = workerCount
+	serial.SerialEquivalent = true
+	plan := buildBlockSTMPlan(b, declaredAccessSet(b.TxList), workerCount)
+	serial.Plan = plan
+	serial.PlanDigest = plan.PlanDigest
+	metrics.CommittedTransactionCount = len(serial.TxDeltas)
+	metrics.MaterializationMS = 0
+	if metrics.IncarnationHistogram == nil {
+		metrics.IncarnationHistogram = map[int]int{}
+	}
+	for range serial.TxDeltas {
+		metrics.IncarnationHistogram[0]++
+	}
+	serial.BlockSTMMetrics = metrics
+	e.Metrics = metrics
+	return serial
+}
+
+func (e *BlockSTMExecutor) shouldRunSerialOracle() bool {
+	mode := e.ExecutionMode
+	if mode == "" {
+		mode = "correctness"
+	}
+	oracle := e.OracleMode
+	if oracle == "" {
+		oracle = "full"
+	}
+	return mode == "correctness" && oracle == "full"
 }
 
 func sameExecutionOutput(left, right Result) bool {
@@ -177,13 +268,29 @@ func sameExecutionOutput(left, right Result) bool {
 	return true
 }
 
+func qualifyKey(shardID, key string) string {
+	if key == "" || strings.Contains(key, "::") {
+		return key
+	}
+	return shardID + "::" + key
+}
+
+func readSetMatchesSnapshot(shardID string, snapshot map[string]string, reads []ReadObservation) bool {
+	for _, read := range reads {
+		if snapshot[qualifyKey(shardID, read.Key)] != read.Value {
+			return false
+		}
+	}
+	return true
+}
+
 func (e *BlockSTMExecutor) executeTx(b block.Block, overlay *txOverlay, item tx.SignedTransaction) Receipt {
 	semantics := NewSerialExecutor()
 	semantics.DefaultInitialBalance = e.DefaultInitialBalance
 	return semantics.executeTx(b, overlay, item)
 }
 
-func (e *BlockSTMExecutor) executeSpeculative(ctx context.Context, b block.Block, base, logicalBase map[string]string, memory *blockstm.MVMemory, captured []blockstm.CapturedReads, writeSets []map[string]string, metrics *BlockSTMMetrics) error {
+func (e *BlockSTMExecutor) executeSpeculative(ctx context.Context, b block.Block, base, logicalBase map[string]string, memory *blockstm.MVMemory, captured []blockstm.CapturedReads, readSets [][]ReadObservation, writeSets []map[string]string, receipts []Receipt, metrics *BlockSTMMetrics) error {
 	if len(b.TxList) == 0 {
 		return nil
 	}
@@ -230,15 +337,17 @@ func (e *BlockSTMExecutor) executeSpeculative(ctx context.Context, b block.Block
 				version := blockstm.Version{Txn: blockstm.TxnIndex(index), Incarnation: 0}
 				txnIndex := blockstm.TxnIndex(index)
 				overlay := newTxOverlay(b.ShardID, speculativeSnapshot(memory, base, logicalBase, b.ShardID, txnIndex))
-				_ = e.executeTx(b, overlay, b.TxList[index])
+				receipt := e.executeTx(b, overlay, b.TxList[index])
+				atomic.AddInt64(&executed, 1)
 				localCaptured := capturedFromOverlayWithMemory(overlay, memory, logicalBase, txnIndex)
 				localWrites := overlay.logicalWrites()
 				for key, value := range localWrites {
 					memory.Write(key, version, value)
 				}
 				captured[index] = localCaptured
+				readSets[index] = append([]ReadObservation(nil), overlay.reads...)
 				writeSets[index] = localWrites
-				atomic.AddInt64(&executed, 1)
+				receipts[index] = receipt
 				atomic.AddInt64(&readCount, int64(len(localCaptured.Reads)))
 				atomic.AddInt64(&active, -1)
 			}
@@ -269,6 +378,7 @@ func (e *BlockSTMExecutor) executeSpeculative(ctx context.Context, b block.Block
 	default:
 	}
 	metrics.ExecutionTaskCount += int(executed)
+	metrics.BusinessExecutionCount += int(executed)
 	metrics.SpeculativeReadCount += int(readCount)
 	if max := int(atomic.LoadInt64(&maxActive)); max > metrics.MaximumParallelWidth {
 		metrics.MaximumParallelWidth = max

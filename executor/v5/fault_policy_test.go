@@ -3,7 +3,7 @@ package v5
 import "testing"
 
 func TestFaultPolicyFromPlanPreservesRuntimePolicy(t *testing.T) {
-	policy := faultPolicyFromPlan(map[string]any{
+	policy := builtinFault{makeBasic("fault_injection", "network_delay_drop", nil)}.Policy(map[string]any{
 		"mode":               "network_delay_drop",
 		"delay_ms":           7,
 		"drop_rate":          0.25,

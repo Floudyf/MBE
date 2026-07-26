@@ -17,7 +17,7 @@ MAX_CHILD_RUNS = 100
 BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     "hash_serial": V5FormalMethod(
         method_id="hash_serial",
-        display_name="Hash + Serial",
+        display_name="Baseline",
         role="baseline",
         plugin_overrides={
             "routing": "hash_routing_baseline",
@@ -30,8 +30,8 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
     "hash_block_stm": V5FormalMethod(
         method_id="hash_block_stm",
-        display_name="Hash + Block-STM",
-        role="baseline",
+        display_name="Block-STM",
+        role="main",
         plugin_overrides={
             "routing": "hash_routing_baseline",
             "execution": "serial_execution_baseline",
@@ -39,25 +39,25 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "block_stm_block_executor",
             "commit": "normal_commit",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 4}},
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 16, "incarnation_limit_action": "fail"}},
     ),
     "metatrack_serial": V5FormalMethod(
         method_id="metatrack_serial",
-        display_name="MetaTrack + Serial",
+        display_name="MetaTrack",
         role="main",
         plugin_overrides={
             "routing": "metatrack_coaccess_routing",
             "execution": "dual_track_execution",
             "scheduler": "fast_first_scheduler",
-            "block_executor": "serial_block_executor",
+            "block_executor": "metatrack_block_executor",
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={"block_executor": {"worker_count": 1}},
     ),
     "metatrack_block_stm": V5FormalMethod(
         method_id="metatrack_block_stm",
-        display_name="MetaTrack + Block-STM",
-        role="main",
+        display_name="MetaTrack with Block-STM backend",
+        role="compatibility",
         plugin_overrides={
             "routing": "metatrack_coaccess_routing",
             "execution": "dual_track_execution",
@@ -65,7 +65,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "block_stm_block_executor",
             "commit": "commutative_hot_update_aggregation",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 4}},
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 16, "incarnation_limit_action": "fail"}},
     ),
 }
 
@@ -155,7 +155,8 @@ def _verified_method(method: V5FormalMethod) -> V5FormalMethod:
     if method.display_name != saved.get("name") or method.plugin_overrides != expected or method.plugin_config_overrides != expected_config_overrides:
         raise FormalPlanValidationError(f"method profile payload does not match saved config: {method.method_id}")
     draft = payload.get("source_composer_draft") if isinstance(payload.get("source_composer_draft"), dict) else {}
-    role = draft.get("role") if draft.get("role") in {"main", "baseline", "ablation", "custom"} else next((tag for tag in saved.get("tags", []) if tag in {"main", "baseline", "ablation", "custom"}), "custom")
+    roles = {"main", "baseline", "ablation", "compatibility", "custom"}
+    role = draft.get("role") if draft.get("role") in roles else next((tag for tag in saved.get("tags", []) if tag in roles), "custom")
     return V5FormalMethod(method_id=method.method_id, display_name=saved["name"], plugin_overrides=expected, plugin_config_overrides=expected_config_overrides, role=role)
 
 

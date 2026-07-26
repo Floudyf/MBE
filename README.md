@@ -41,25 +41,43 @@ as MetaTrack-style transaction track classification, and keeps the legacy
 The implemented block executors are:
 
 - `serial_block_executor`: the legacy-faithful reference baseline.
-- `block_stm_block_executor`: a Block-STM mechanism reimplementation over MBE
+- `block_stm_block_executor`: a staged Block-STM prototype over MBE
   transfer semantics with MVMemory, transaction index/incarnation, speculative
   execution, captured reads, versioned writes, validation, abort/re-execution,
   ESTIMATE/dependency handling, deterministic ordered output, and Serial
   equivalence checks.
 
-The implemented method closure exposes and validates four runnable method
-configurations:
+The implemented method closure exposes three primary runnable method
+configurations plus one compatibility/combined configuration:
 
-- Hash + Serial
-- Hash + Block-STM
-- MetaTrack + Serial
-- MetaTrack + Block-STM
+- Baseline: Hash + Serial
+- MetaTrack: MetaTrack routing/dual-track/fast-first with `metatrack_block_executor`
+- Block-STM: Hash routing with Block-STM block executor
+- Combined compatibility: MetaTrack control plane with Block-STM backend
 
-MetaTrack is implemented as an outer control plane: it builds batch access
+V5 Core Hardening is in progress on the current working tree. The implemented
+portion reduces persistence write amplification by batching per-block receipts
+and tx-index appends, replacing per-block full state snapshot rewrites with a
+state-delta WAL plus periodic snapshots, adding runtime-root environment
+overrides, routing home-shard ownership through the selected `ShardingPlugin`,
+adding MetaTrack batch-level dependency-risk classification, planned versus
+actual scheduler event separation, completion-driven ready/blocked queues,
+cost-aware placement with fallback evidence, commutative-delta materialization
+metrics with same-unit reduction accounting, and separating Block-STM
+correctness/performance oracle timing with validated-write materialization. The remaining
+hardening items are tracked in `docs/v5_core_hardening_stage_plan.md`,
+`docs/v5_persistence_wal_snapshot_runtime_root.md`, and
+`docs/v5_metatrack_blockstm_hardening_boundaries.md`.
+
+MetaTrack is implemented as an outer control plane plus a dedicated
+`metatrack_block_executor`: it builds batch access
 matrices, state-frequency and co-access evidence, deterministic placement plans,
 remote-state access evidence, dependency/track scheduling evidence, and
-commutative hot-update aggregation evidence. Dataset runs do not manufacture
-synthetic fast-track or aggregation behavior; they verify real registered
+commutative hot-update aggregation evidence. Its worker metrics distinguish
+queue/frontier width from atomically measured in-flight business executions and
+split scheduler events, worker attempts, validator execution completions, and
+unique final logical completions. Dataset runs do not manufacture
+synthetic fast-track, aggregation behavior, or performance improvement claims; they verify real registered
 workload replay, no fallback, finality, MetaTrack remote-state evidence, and
 Block-STM serial equivalence.
 

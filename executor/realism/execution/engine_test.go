@@ -70,10 +70,14 @@ func TestSerialBlockExecutorDuplicateBlockMatchesLegacy(t *testing.T) {
 	serial := NewSerialExecutor()
 	_ = legacy.ExecuteBlock(b, legacyDB)
 	first := serial.ExecuteBlock(b, serialDB.Snapshot())
-	serialDB.ApplyDeterministicBatch(toStateKV(first.StateDelta))
+	if err := serialDB.ApplyDeterministicBatch(toStateKV(first.StateDelta)); err != nil {
+		t.Fatal(err)
+	}
 	legacySecond := legacy.ExecuteBlock(b, legacyDB)
 	serialSecond := serial.ExecuteBlock(b, serialDB.Snapshot())
-	serialDB.ApplyDeterministicBatch(toStateKV(serialSecond.StateDelta))
+	if err := serialDB.ApplyDeterministicBatch(toStateKV(serialSecond.StateDelta)); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(legacySecond.Receipts, serialSecond.Receipts) || !reflect.DeepEqual(legacyDB.Snapshot(), serialDB.Snapshot()) {
 		t.Fatalf("duplicate execution diverged legacy=%+v serial=%+v", legacySecond, serialSecond)
 	}
@@ -199,6 +203,86 @@ func TestBlockSTMExecutorHonorsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestBlockSTMPerformanceModeSkipsFullSerialOracle(t *testing.T) {
+	items := append(
+		mustGenerateForExecutionTest(t, "perf-a", 1, "alice", "bob", 5, "v5_safe"),
+		mustGenerateForExecutionTest(t, "perf-b", 1, "carol", "dave", 7, "v5_safe")...,
+	)
+	b := blockForExecutionTest(items)
+	base := map[string]string{}
+	correct := NewBlockSTMExecutor(4)
+	correct.ExecutionMode = "correctness"
+	correct.OracleMode = "full"
+	expected, err := correct.ExecuteBlock(testContext(t), b, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perf := NewBlockSTMExecutor(4)
+	perf.ExecutionMode = "performance"
+	perf.OracleMode = "off"
+	actual, err := perf.ExecuteBlock(testContext(t), b, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual.BlockSTMMetrics.SerialOracleMS != 0 {
+		t.Fatalf("performance mode must not run full serial oracle: %+v", actual.BlockSTMMetrics)
+	}
+	expectedBusinessCalls := actual.BlockSTMMetrics.ExecutionTaskCount + actual.BlockSTMMetrics.ReexecutionCount
+	if actual.BlockSTMMetrics.BusinessExecutionCount != expectedBusinessCalls {
+		t.Fatalf("performance mode must not add hidden materialization business execution: got %d want %d metrics=%+v", actual.BlockSTMMetrics.BusinessExecutionCount, expectedBusinessCalls, actual.BlockSTMMetrics)
+	}
+	if !sameExecutionOutput(expected, actual) {
+		t.Fatalf("performance output diverged from correctness output")
+	}
+}
+
+func TestBlockSTMIncarnationLimitFailDoesNotReturnPartialResults(t *testing.T) {
+	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-limit-fail", 4, "alice", "bob", 1, "v5_safe"))
+	executor := NewBlockSTMExecutor(4)
+	executor.MaximumIncarnations = 0
+	executor.IncarnationLimitAction = "fail"
+	result, err := executor.ExecuteBlock(testContext(t), b, map[string]string{})
+	if err != nil {
+		t.Fatalf("maximum_incarnations=0 disables the limit and should not fail: %v", err)
+	}
+	if len(result.Receipts) != len(b.TxList) || len(result.TxDeltas) != len(b.TxList) {
+		t.Fatalf("all transactions must have results when limit is disabled: receipts=%d deltas=%d", len(result.Receipts), len(result.TxDeltas))
+	}
+
+	limited := NewBlockSTMExecutor(4)
+	limited.MaximumIncarnations = 1
+	limited.IncarnationLimitAction = "fail"
+	if _, err := limited.ExecuteBlock(testContext(t), b, map[string]string{}); err == nil {
+		t.Fatal("expected incarnation limit failure")
+	}
+}
+
+func TestBlockSTMIncarnationLimitSerialFallbackReturnsCompleteEquivalentBlock(t *testing.T) {
+	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-limit-fallback", 4, "alice", "bob", 1, "v5_safe"))
+	serial := NewSerialExecutor().ExecuteBlock(b, map[string]string{})
+	executor := NewBlockSTMExecutor(4)
+	executor.MaximumIncarnations = 1
+	executor.IncarnationLimitAction = "serial_fallback"
+	result, err := executor.ExecuteBlock(testContext(t), b, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BlockSTMMetrics.SerialFallbackCount == 0 || result.BlockSTMMetrics.IncarnationLimitHitCount == 0 {
+		t.Fatalf("fallback metrics missing: %+v", result.BlockSTMMetrics)
+	}
+	if len(result.Receipts) != len(b.TxList) || len(result.TxDeltas) != len(b.TxList) {
+		t.Fatalf("fallback must return complete results: receipts=%d deltas=%d", len(result.Receipts), len(result.TxDeltas))
+	}
+	if result.StateRootAfter != serial.StateRootAfter || result.ReceiptRoot != serial.ReceiptRoot {
+		t.Fatalf("fallback diverged from serial: state %s/%s receipt %s/%s", result.StateRootAfter, serial.StateRootAfter, result.ReceiptRoot, serial.ReceiptRoot)
+	}
+	for index := range b.TxList {
+		if result.Receipts[index].TxID == "" || result.TxDeltas[index].TxID == "" {
+			t.Fatalf("transaction %d lacks final result: receipts=%+v deltas=%+v", index, result.Receipts, result.TxDeltas)
+		}
+	}
+}
+
 func TestCommutativeDeltaAccessProducesRealStateUpdateAndBlockSTMEquivalence(t *testing.T) {
 	sender := "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	receiver := "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -255,7 +339,9 @@ func assertSerialEquivalent(t *testing.T, b block.Block) {
 	serialDB := state.NewDB(t.TempDir(), "s0")
 	legacyResult := NewEngine().ExecuteBlock(b, legacyDB)
 	serialResult := NewSerialExecutor().ExecuteBlock(b, serialDB.Snapshot())
-	serialDB.ApplyDeterministicBatch(toStateKV(serialResult.StateDelta))
+	if err := serialDB.ApplyDeterministicBatch(toStateKV(serialResult.StateDelta)); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(legacyResult.Receipts, serialResult.Receipts) {
 		t.Fatalf("receipts diverged\nlegacy=%+v\nserial=%+v", legacyResult.Receipts, serialResult.Receipts)
 	}

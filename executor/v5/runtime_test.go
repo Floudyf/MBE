@@ -169,14 +169,291 @@ func TestMetaTrackRemoteStateFetchFreezesWholeBlockSnapshot(t *testing.T) {
 	}
 }
 
+func TestMetaTrackRemoteWritebackPreservesDefaultAccountBalance(t *testing.T) {
+	item := tx.SignedTransaction{TxID: "tx-new-account-remote", Sender: "alice", Receiver: "bob", Nonce: 0, Value: 1, StateKeys: tx.DefaultStateKeys("alice", "bob"), AccessList: tx.DefaultTransferAccessList("alice", "bob")}
+	block := realblock.Block{BlockHash: "remote-new-account-block", Height: 1, ShardID: "s1", TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}}
+	result := execution.NewSerialExecutor().ExecuteBlock(block, map[string]string{})
+	if len(result.Receipts) != 1 || !result.Receipts[0].Success {
+		t.Fatalf("expected standard transfer to succeed from default account state: %#v", result.Receipts)
+	}
+	annotated := annotateStateDeltaTxIDs(stateKVsFromExecutionDelta(result.StateDelta), result.TxDeltas, block.TxList)
+	remote := remoteWritebackItemsForTest(block, annotated, result.TxDeltas)
+	remoteByKey := map[string]state.StateKV{}
+	for _, item := range remote {
+		remoteByKey[item.Key] = item
+	}
+	if item := remoteByKey["balance:alice"]; item.ApplyOrigin != "metatrack_remote_state" || item.DeltaKind != "account_balance_delta" || !item.HasInitialValue || item.InitialValue != 1_000_000 {
+		t.Fatalf("sender balance remote delta missing explicit account init metadata: %#v", item)
+	}
+	if item := remoteByKey["nonce:alice"]; item.ApplyOrigin != "metatrack_remote_state" || item.DeltaKind != "account_nonce_delta" || !item.HasInitialValue || item.InitialValue != 0 {
+		t.Fatalf("sender nonce remote delta missing explicit nonce init metadata: %#v", item)
+	}
+	if item := remoteByKey["balance:bob"]; item.ApplyOrigin != "metatrack_remote_state" || item.DeltaKind != "account_balance_delta" || !item.HasInitialValue || item.InitialValue != 0 {
+		t.Fatalf("receiver balance remote delta should declare zero initial account value: %#v", item)
+	}
+
+	applied, err := applyStateDeltaToSnapshot(map[string]string{}, remote, "s0", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := applied["s0::balance:alice"]; got != "999999" {
+		t.Fatalf("missing sender balance must use default initial balance before debit, got %q", got)
+	}
+	if got := applied["s0::nonce:alice"]; got != "1" {
+		t.Fatalf("missing sender nonce must advance from zero, got %q", got)
+	}
+	if got := applied["s0::balance:bob"]; got != "1" {
+		t.Fatalf("missing receiver balance must advance from zero, got %q", got)
+	}
+	if sum := mustParseStateInt(t, applied["s0::balance:alice"]) + mustParseStateInt(t, applied["s0::balance:bob"]); sum != 1_000_000 {
+		t.Fatalf("remote default-account transfer did not conserve balance, sum=%d snapshot=%#v", sum, applied)
+	}
+	ordinary, err := applyStateDeltaToSnapshot(map[string]string{}, []state.StateKV{{Key: "balance:charlie", UpdateSemantics: "commutative_delta", Delta: -1}}, "s0", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ordinary["s0::balance:charlie"]; got != "-1" {
+		t.Fatalf("unmarked balance-like delta should not receive account default, got %q", got)
+	}
+	contract, err := applyStateDeltaToSnapshot(map[string]string{}, []state.StateKV{{Key: "contract:balance:shadow", UpdateSemantics: "commutative_delta", Delta: -1}}, "s0", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := contract["s0::contract:balance:shadow"]; got != "-1" {
+		t.Fatalf("ordinary non-account key should not receive account default, got %q", got)
+	}
+}
+
+func TestMetaTrackRemoteAccountDeltaInitialValueIgnoresObservedCurrentValue(t *testing.T) {
+	transaction := tx.SignedTransaction{TxID: "tx-observed-current", Sender: "alice", Receiver: "bob", Nonce: 0, Value: 1}
+	txDeltas := []execution.TxDelta{{
+		TxID:          transaction.TxID,
+		OriginalIndex: 0,
+		Success:       true,
+		ReadSet: []execution.ReadObservation{
+			{Key: "s1::balance:alice", Value: "999999", ValueDigest: stateValueDigest("999999"), Source: "snapshot"},
+			{Key: "s1::nonce:alice", Value: "7", ValueDigest: stateValueDigest("7"), Source: "snapshot"},
+			{Key: "s1::balance:bob", Value: "42", ValueDigest: stateValueDigest("42"), Source: "snapshot"},
+		},
+	}}
+	transactions := []tx.SignedTransaction{transaction}
+	cases := []struct {
+		name         string
+		item         state.StateKV
+		key          string
+		initialValue int64
+	}{
+		{name: "sender balance debit", key: "balance:alice", item: state.StateKV{Key: "s1::balance:alice", Value: "999998", TxIDs: []string{transaction.TxID}, UpdateSemantics: "commutative_delta", Delta: -1}, initialValue: 1_000_000},
+		{name: "receiver balance credit", key: "balance:bob", item: state.StateKV{Key: "s1::balance:bob", Value: "43", TxIDs: []string{transaction.TxID}, UpdateSemantics: "commutative_delta", Delta: 1}, initialValue: 0},
+		{name: "sender nonce increment", key: "nonce:alice", item: state.StateKV{Key: "s1::nonce:alice", Value: "8", TxIDs: []string{transaction.TxID}, UpdateSemantics: "commutative_delta", Delta: 1}, initialValue: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := metaTrackRemoteWritebackItem(tc.item, tc.key, transactions, txDeltas)
+			if got.ApplyOrigin != "metatrack_remote_state" || !got.HasInitialValue || got.InitialValue != tc.initialValue {
+				t.Fatalf("remote account delta InitialValue used observed current value: %#v", got)
+			}
+		})
+	}
+}
+
+func TestMetaTrackRemoteWritebackDoesNotLoseTwoDebitsFromSameOldBalance(t *testing.T) {
+	first := tx.SignedTransaction{TxID: "tx-remote-debit-1", Sender: "alice", Receiver: "bob", Nonce: 0, Value: 1, StateKeys: tx.DefaultStateKeys("alice", "bob"), AccessList: tx.DefaultTransferAccessList("alice", "bob")}
+	second := tx.SignedTransaction{TxID: "tx-remote-debit-2", Sender: "alice", Receiver: "bob", Nonce: 1, Value: 1, StateKeys: tx.DefaultStateKeys("alice", "bob"), AccessList: tx.DefaultTransferAccessList("alice", "bob")}
+	blockA := realblock.Block{BlockHash: "remote-old-balance-a", Height: 1, ShardID: "s1", TxIDs: []string{first.TxID}, TxList: []tx.SignedTransaction{first}}
+	blockB := realblock.Block{BlockHash: "remote-old-balance-b", Height: 2, ShardID: "s1", TxIDs: []string{second.TxID}, TxList: []tx.SignedTransaction{second}}
+	resultA := execution.NewSerialExecutor().ExecuteBlock(blockA, map[string]string{"s1::balance:alice": "100", "s1::nonce:alice": "0"})
+	resultB := execution.NewSerialExecutor().ExecuteBlock(blockB, map[string]string{"s1::balance:alice": "100", "s1::nonce:alice": "1"})
+	if !resultA.Receipts[0].Success || !resultB.Receipts[0].Success {
+		t.Fatalf("expected both remote transfers to succeed, receipts=%#v %#v", resultA.Receipts, resultB.Receipts)
+	}
+	remote := append(
+		remoteWritebackItemsForTest(blockA, annotateStateDeltaTxIDs(stateKVsFromExecutionDelta(resultA.StateDelta), resultA.TxDeltas, blockA.TxList), resultA.TxDeltas),
+		remoteWritebackItemsForTest(blockB, annotateStateDeltaTxIDs(stateKVsFromExecutionDelta(resultB.StateDelta), resultB.TxDeltas, blockB.TxList), resultB.TxDeltas)...,
+	)
+
+	applied, err := applyStateDeltaToSnapshot(map[string]string{"s0::balance:alice": "100", "s0::nonce:alice": "0"}, remote, "s0", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := applied["s0::balance:alice"]; got != "98" {
+		t.Fatalf("two stale absolute debit writebacks must not collapse to one debit, got sender balance %q snapshot=%#v", got, applied)
+	}
+	if got := applied["s0::nonce:alice"]; got != "2" {
+		t.Fatalf("two stale nonce writebacks must not collapse to one increment, got nonce %q snapshot=%#v", got, applied)
+	}
+	if got := applied["s0::balance:bob"]; got != "2" {
+		t.Fatalf("receiver remote deltas should aggregate, got %q snapshot=%#v", got, applied)
+	}
+	if sum := mustParseStateInt(t, applied["s0::balance:alice"]) + mustParseStateInt(t, applied["s0::balance:bob"]); sum != 100 {
+		t.Fatalf("remote writeback lost balance conservation, sum=%d snapshot=%#v", sum, applied)
+	}
+}
+
+func TestMetaTrackRemoteStateDeltaIdempotentPendingAndReadySet(t *testing.T) {
+	profile := testMetaTrackProfile()
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	home, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := StateDeltaApplyRequest{RequestID: "apply-idempotent-a", TxID: "tx-idempotent", TxIDs: []string{"tx-idempotent"}, BlockHash: "remote-idempotent-block", Key: "balance:alice", Value: "99", UpdateSemantics: "commutative_delta", Delta: -1, HomeShard: "s0", ExecutionShard: "s1", SourceKey: "s1::balance:alice", SourceHeight: 1}
+	duplicate := request
+	duplicate.RequestID = "apply-idempotent-b"
+
+	if ack := home.handleStateDeltaApplyRequest(request); !ack.Success {
+		t.Fatalf("first remote delta should be accepted: %#v", ack)
+	}
+	if ack := home.handleStateDeltaApplyRequest(duplicate); !ack.Success {
+		t.Fatalf("duplicate remote delta should be idempotently acknowledged: %#v", ack)
+	}
+	if len(home.pendingStateDeltas) != 1 {
+		t.Fatalf("duplicate remote delta entered pending queue more than once: %#v", home.pendingStateDeltas)
+	}
+	ready := home.readyRemoteStateDeltasForConsensus(1)
+	if len(ready) != 1 {
+		t.Fatalf("duplicate remote delta entered consensus-ready set more than once: %#v", ready)
+	}
+	if ready[0].DeltaID != stateDeltaApplyKey(request) {
+		t.Fatalf("ready delta id changed across duplicate delivery: %#v", ready[0])
+	}
+	home.markRemoteStateDeltasApplied(ready)
+	if len(home.pendingStateDeltas) != 0 {
+		t.Fatalf("applied remote delta was not removed from pending queue: %#v", home.pendingStateDeltas)
+	}
+	if ack := home.handleStateDeltaApplyRequest(duplicate); !ack.Success {
+		t.Fatalf("already-applied duplicate should stay idempotent: %#v", ack)
+	}
+	if len(home.pendingStateDeltas) != 0 {
+		t.Fatalf("already-applied duplicate re-entered pending queue: %#v", home.pendingStateDeltas)
+	}
+}
+
+func TestMetaTrackRemoteWritebackMatchesSerialAndBlockSTMBackends(t *testing.T) {
+	item := tx.SignedTransaction{TxID: "tx-backend-equivalent", Sender: "alice", Receiver: "bob", Nonce: 0, Value: 1, StateKeys: tx.DefaultStateKeys("alice", "bob"), AccessList: tx.DefaultTransferAccessList("alice", "bob")}
+	block := realblock.Block{BlockHash: "remote-backend-equivalent-block", Height: 1, ShardID: "s1", TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}}
+	base := map[string]string{"s1::balance:alice": "100", "s1::nonce:alice": "0"}
+	serialResult := execution.NewSerialExecutor().ExecuteBlock(block, base)
+	stmResult, err := execution.NewBlockSTMExecutor(2).ExecuteBlock(context.Background(), block, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(serialResult.Receipts) != len(stmResult.Receipts) || len(serialResult.TxDeltas) != len(stmResult.TxDeltas) {
+		t.Fatalf("backend outputs should have matching receipt and tx delta counts: serial=%#v stm=%#v", serialResult, stmResult)
+	}
+	serialRemote := remoteWritebackItemsForTest(block, annotateStateDeltaTxIDs(stateKVsFromExecutionDelta(serialResult.StateDelta), serialResult.TxDeltas, block.TxList), serialResult.TxDeltas)
+	stmRemote := remoteWritebackItemsForTest(block, annotateStateDeltaTxIDs(stateKVsFromExecutionDelta(stmResult.StateDelta), stmResult.TxDeltas, block.TxList), stmResult.TxDeltas)
+	if fmt.Sprint(serialRemote) != fmt.Sprint(stmRemote) {
+		t.Fatalf("MetaTrack remote writeback should be backend-equivalent:\nserial=%#v\nstm=%#v", serialRemote, stmRemote)
+	}
+	serialApplied, err := applyStateDeltaToSnapshot(map[string]string{"s0::balance:alice": "100", "s0::nonce:alice": "0"}, serialRemote, "s0", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmApplied, err := applyStateDeltaToSnapshot(map[string]string{"s0::balance:alice": "100", "s0::nonce:alice": "0"}, stmRemote, "s0", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.RootOfSnapshot(serialApplied) != state.RootOfSnapshot(stmApplied) {
+		t.Fatalf("MetaTrack backends produced different remote logical state roots: serial=%#v stm=%#v", serialApplied, stmApplied)
+	}
+	if got := serialApplied["s0::balance:alice"]; got != "99" {
+		t.Fatalf("sender balance mismatch after backend-equivalent remote writeback: %q", got)
+	}
+}
+
+func TestMetaTrackRemoteNonCommutativeSetUsesBaseDigestCAS(t *testing.T) {
+	updates := []state.StateKV{
+		{Key: "object:parcel-1", Value: "new-owner", BaseValue: "old-owner", BaseValueDigest: stateValueDigest("old-owner")},
+		{Key: "object:parcel-1", Value: "stale-owner", BaseValue: "old-owner", BaseValueDigest: stateValueDigest("old-owner")},
+	}
+	applied, err := applyStateDeltaToSnapshot(map[string]string{"s0::object:parcel-1": "old-owner"}, updates[:1], "s0", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = applyStateDeltaToSnapshot(applied, updates[1:], "s0", 1)
+	if err == nil {
+		t.Fatal("stale non-commutative set should return CAS mismatch instead of silently skipping")
+	}
+	if got := applied["s0::object:parcel-1"]; got != "new-owner" {
+		t.Fatalf("stale non-commutative set overwrote newer value, got %q snapshot=%#v", got, applied)
+	}
+
+	db := state.NewDB(t.TempDir(), "s0")
+	db.Set("object:parcel-1", "old-owner")
+	if err := db.ApplyDeterministicBatch(updates[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ApplyDeterministicBatch(updates[1:]); err == nil {
+		t.Fatal("DB batch apply should return CAS mismatch for stale set")
+	}
+	if got := db.Get("object:parcel-1"); got != "new-owner" {
+		t.Fatalf("DB batch apply allowed stale non-commutative set overwrite, got %q", got)
+	}
+}
+
+func TestSystemDeltaDrainBlockCommitsPendingMarkerThroughConsensusPath(t *testing.T) {
+	profile := testMetaTrackProfile()
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	home, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := StateDeltaApplyRequest{RequestID: "drain-marker", TxID: "tx-relay", TxIDs: []string{"tx-relay"}, BlockHash: "target-block", Key: "relay_commit:tx-relay", Value: "1", HomeShard: "s0", ExecutionShard: "s1", SourceKey: "s1::relay_commit:tx-relay", SourceHeight: 1}
+	if ack := home.handleStateDeltaApplyRequest(request); !ack.Success {
+		t.Fatalf("system delta request rejected: %#v", ack)
+	}
+	ready := home.readyRemoteStateDeltasForConsensus(1)
+	if len(ready) != 1 {
+		t.Fatalf("expected one ready system delta, got %#v", ready)
+	}
+	block := home.buildSystemDeltaDrainBlock(nowForTest(), ready)
+	if len(block.TxList) != 0 || len(block.SystemStateDeltas) != 1 {
+		t.Fatalf("drain block should contain only system deltas: %#v", block)
+	}
+	if _, err := home.commitOnce(context.Background(), block, CommitOriginConsensus); err != nil {
+		t.Fatal(err)
+	}
+	if got := home.db.Get("relay_commit:tx-relay"); got != "1" {
+		t.Fatalf("drain block did not commit marker: %q", got)
+	}
+	if len(home.pendingStateDeltas) != 0 || len(home.pendingStateDeltaKeys) != 0 {
+		t.Fatalf("drain block did not clear pending deltas: pending=%#v keys=%#v", home.pendingStateDeltas, home.pendingStateDeltaKeys)
+	}
+	if len(home.lifecycle) != 0 {
+		t.Fatalf("system-only drain block should not create logical tx lifecycle rows: %#v", home.lifecycle)
+	}
+	if len(home.blockExecutionSummaries) == 0 || intFromAny(home.blockExecutionSummaries[len(home.blockExecutionSummaries)-1]["system_delta_drain_block_count"]) != 1 {
+		t.Fatalf("drain block summary missing audit count: %#v", home.blockExecutionSummaries)
+	}
+}
+
+func TestSystemDeltaDrainDoesNotProduceWhenNoPendingDelta(t *testing.T) {
+	profile := testMetaTrackProfile()
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	home, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := home.readyRemoteStateDeltasForConsensus(1)
+	if len(ready) != 0 {
+		t.Fatalf("unexpected ready deltas: %#v", ready)
+	}
+	input := BlockProductionInput{Pool: home.pool, Proposer: home.proposer, Limit: home.blockSize(), Now: nowForTest(), SystemDeltaReady: len(ready) > 0}
+	if home.plugins.BlockProducer.ShouldProduce(input) {
+		t.Fatal("empty mempool with no system delta should not produce a drain block")
+	}
+}
+
 func TestRuntimeScheduleBlockUsesSchedulerPluginAndRehashesProposal(t *testing.T) {
 	profile := testMetaTrackProfile()
+	profile["block_executor"] = PluginConfig{PluginID: "metatrack_block_executor", Config: map[string]any{"worker_count": 2}}
 	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
 	runtime, err := newNodeRuntime(plan, plan.NodeConfigs[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	conservative := tx.SignedTransaction{TxID: "conservative", AccessList: []tx.AccessItem{{Key: "state:rw", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
+	conservative := tx.SignedTransaction{TxID: "conservative"}
 	fast := tx.SignedTransaction{TxID: "fast", AccessList: []tx.AccessItem{{Key: "state:delta", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
 	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{conservative.TxID, fast.TxID}, TxList: []tx.SignedTransaction{conservative, fast}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
 	realblock.AssignHash(&block)
@@ -184,27 +461,24 @@ func TestRuntimeScheduleBlockUsesSchedulerPluginAndRehashesProposal(t *testing.T
 
 	scheduled := runtime.scheduleBlock(block)
 
-	if scheduled.TxIDs[0] != "fast" || scheduled.TxIDs[1] != "conservative" {
-		t.Fatalf("runtime proposal was not scheduler ordered: %#v", scheduled.TxIDs)
+	if scheduled.TxIDs[0] != "conservative" || scheduled.TxIDs[1] != "fast" {
+		t.Fatalf("metatrack proposal should preserve consensus order and defer execution ordering to block executor: %#v", scheduled.TxIDs)
 	}
-	if scheduled.BlockHash == originalHash {
-		t.Fatal("scheduled proposal hash did not change after order change")
-	}
-	if scheduled.TxRoot == block.TxRoot {
-		t.Fatal("scheduled proposal tx root did not change after order change")
+	if scheduled.BlockHash != originalHash {
+		t.Fatal("planned dependency proposal changed block hash without changing transaction semantics")
 	}
 	if len(runtime.schedulerRows) == 0 {
 		t.Fatal("runtime did not record scheduler trace rows")
 	}
-	if !schedulerRowsSaw(runtime.schedulerRows, "fast", "fast_queue", false, false) {
-		t.Fatalf("runtime scheduler trace missing fast queue dispatch evidence: %#v", runtime.schedulerRows)
+	if !schedulerRowsSaw(runtime.schedulerRows, "fast", "planned_ready", false, false) {
+		t.Fatalf("runtime scheduler trace missing planned fast-ready evidence: %#v", runtime.schedulerRows)
 	}
 	if !schedulerRowsCarryQueueDepths(runtime.schedulerRows) {
 		t.Fatalf("runtime scheduler trace missing queue depth columns: %#v", runtime.schedulerRows)
 	}
 }
 
-func TestRuntimeScheduleTraceMarksRemoteHomeWorkAsStolen(t *testing.T) {
+func TestRuntimeScheduleTraceSeparatesRemoteHomeAccessFromStolenWork(t *testing.T) {
 	profile := testMetaTrackProfile()
 	root := t.TempDir()
 	plan := Plan{
@@ -226,8 +500,11 @@ func TestRuntimeScheduleTraceMarksRemoteHomeWorkAsStolen(t *testing.T) {
 
 	runtime.scheduleBlock(block)
 
-	if !schedulerRowsSawStolen(runtime.schedulerRows, "remote-home") {
-		t.Fatalf("runtime scheduler trace should mark remote-home execution as stolen work: %#v", runtime.schedulerRows)
+	if schedulerRowsSawStolen(runtime.schedulerRows, "remote-home") {
+		t.Fatalf("remote-home execution must not be reported as stolen work: %#v", runtime.schedulerRows)
+	}
+	if !schedulerRowsSawReason(runtime.schedulerRows, "remote-home", "remote_home_access") {
+		t.Fatalf("runtime scheduler trace should record remote-home access separately: %#v", runtime.schedulerRows)
 	}
 }
 
@@ -833,6 +1110,29 @@ func transportSaw(entries []p2p.NetworkLogEntry, direction, messageType string) 
 	return false
 }
 
+func remoteWritebackItemsForTest(block realblock.Block, annotated []state.StateKV, txDeltas []execution.TxDelta) []state.StateKV {
+	out := make([]state.StateKV, 0, len(annotated))
+	for _, item := range annotated {
+		unqualified, ok := unqualifiedLocalKey(item.Key, block.ShardID)
+		if !ok {
+			continue
+		}
+		next := metaTrackRemoteWritebackItem(item, unqualified, block.TxList, txDeltas)
+		next.Key = unqualified
+		out = append(out, next)
+	}
+	return out
+}
+
+func mustParseStateInt(t *testing.T, value string) int64 {
+	t.Helper()
+	var out int64
+	if _, err := fmt.Sscanf(value, "%d", &out); err != nil {
+		t.Fatalf("invalid integer state value %q: %v", value, err)
+	}
+	return out
+}
+
 func schedulerRowsSaw(rows [][]string, txID, queue string, blocked, wakeup bool) bool {
 	for _, row := range rows {
 		if len(row) < 13 {
@@ -851,6 +1151,18 @@ func schedulerRowsSawStolen(rows [][]string, txID string) bool {
 			continue
 		}
 		if row[5] == txID && row[9] == "false" && row[10] == "true" {
+			return true
+		}
+	}
+	return false
+}
+
+func schedulerRowsSawReason(rows [][]string, txID, reason string) bool {
+	for _, row := range rows {
+		if len(row) < 9 {
+			continue
+		}
+		if row[5] == txID && strings.Contains(row[8], reason) {
 			return true
 		}
 	}

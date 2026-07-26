@@ -203,6 +203,44 @@ func TestCanonicalTraceIteratorDatasetSenderNonceStreamAdmitsOnOneSourceShard(t 
 	}
 }
 
+func TestCanonicalTraceIteratorUsesInjectedShardingForRuntimeOwnership(t *testing.T) {
+	dataDir := t.TempDir()
+	root := filepath.Join(dataDir, ".cache", "workloads")
+	sender := "user:sender:sharding"
+	targetKey := "contract:custom-shard"
+	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalRecord(0, sender, targetKey)})
+	iter, err := NewCanonicalTraceIteratorWithSharding(canonicalPlan(relative, hash, 1), 3, dataDir, lastShardSharding{id: "test_last_shard"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iter.Close()
+	record, err := iter.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.SourceShard != "s2" || record.TargetShard != "" || record.CrossShard {
+		t.Fatalf("canonical replay did not use injected sharding ownership: %#v", record)
+	}
+}
+
+func TestCanonicalTraceIteratorUsesWorkloadCacheRootEnv(t *testing.T) {
+	cacheRoot := t.TempDir()
+	relative, hash := writeCanonicalFixture(t, cacheRoot, []map[string]any{canonicalRecord(0, "user:sender:env", "contract:env")})
+	t.Setenv("MBE_WORKLOAD_CACHE_ROOT", cacheRoot)
+	iter, err := NewCanonicalTraceIterator(canonicalPlan(relative, hash, 1), 2, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iter.Close()
+	record, err := iter.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.SourceEventID != "sale" {
+		t.Fatalf("unexpected env-root workload record: %#v", record)
+	}
+}
+
 func TestWorkloadIngressShardPreservesCrossShardSourceProtocol(t *testing.T) {
 	record := WorkloadRecord{CrossShard: true, SourceShard: "s1", TargetShard: "s0", Payload: "v5_cross:s0:dataset_event:wearable"}
 	route := RoutingDecision{ShardID: "s0", Reason: "metatrack_batch_affinity"}
