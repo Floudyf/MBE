@@ -808,16 +808,11 @@ func (r *NodeRuntime) scheduleBlock(block realblock.Block) realblock.Block {
 }
 
 func (r *NodeRuntime) shouldAttachMetaTrackExecutionPlan() bool {
-	if r.plugins.Routing != nil && r.plugins.Routing.ID() == "metatrack_coaccess_routing" {
-		return true
+	if r.plugins.Routing == nil {
+		return false
 	}
-	if r.plugins.Execution != nil && r.plugins.Execution.ID() == "metatrack_stateless" {
-		return true
-	}
-	if r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == metaTrackBlockExecutorID {
-		return true
-	}
-	return false
+	_, ok := r.plugins.Routing.(BatchRoutingPlugin)
+	return ok
 }
 
 func (r *NodeRuntime) attachMetaTrackExecutionPlan(block *realblock.Block) error {
