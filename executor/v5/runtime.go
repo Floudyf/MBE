@@ -202,6 +202,7 @@ type NodeRuntime struct {
 	blockExecutionSummaries []map[string]any
 	executionPlans          []map[string]any
 	txExecutionTraceRows    [][]string
+	observedStateAccessRows [][]string
 	businessExecutionRows   [][]string
 	stateDeltaRows          [][]string
 	planDigestRows          [][]string
@@ -505,6 +506,13 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		if err != nil {
 			return err
 		}
+		if err := r.verifyExecutionPlanEnvelope(proposal.Block); err != nil {
+			r.logConsensus(msg.MessageType, msg.FromNode, proposal.Block.BlockHash, proposal.Block.Height)
+			r.mu.Lock()
+			r.lastProposalError = err.Error()
+			r.mu.Unlock()
+			return err
+		}
 		r.rememberProposal(proposal.Block)
 		r.logConsensus(msg.MessageType, msg.FromNode, proposal.Block.BlockHash, proposal.Block.Height)
 		vote := Vote{BlockHash: proposal.Block.BlockHash, Height: proposal.Block.Height, NodeID: r.node.NodeID}
@@ -772,7 +780,12 @@ func (r *NodeRuntime) buildSystemDeltaDrainBlock(now time.Time, ready []realbloc
 }
 
 func (r *NodeRuntime) scheduleBlock(block realblock.Block) realblock.Block {
-	if r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == metaTrackBlockExecutorID {
+	if r.shouldAttachMetaTrackExecutionPlan() {
+		if err := r.attachMetaTrackExecutionPlan(&block); err != nil {
+			r.mu.Lock()
+			r.lastProposalError = err.Error()
+			r.mu.Unlock()
+		}
 		r.recordPlannedDependencyPlan(block)
 		block.SystemStateDeltas = r.readyRemoteStateDeltasForConsensus(block.Height)
 		realblock.AssignHash(&block)
@@ -792,6 +805,148 @@ func (r *NodeRuntime) scheduleBlock(block realblock.Block) realblock.Block {
 	block.SystemStateDeltas = r.readyRemoteStateDeltasForConsensus(block.Height)
 	realblock.AssignHash(&block)
 	return block
+}
+
+func (r *NodeRuntime) shouldAttachMetaTrackExecutionPlan() bool {
+	if r.plugins.Routing != nil && r.plugins.Routing.ID() == "metatrack_coaccess_routing" {
+		return true
+	}
+	if r.plugins.Execution != nil && r.plugins.Execution.ID() == "metatrack_stateless" {
+		return true
+	}
+	if r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == metaTrackBlockExecutorID {
+		return true
+	}
+	return false
+}
+
+func (r *NodeRuntime) attachMetaTrackExecutionPlan(block *realblock.Block) error {
+	if block == nil {
+		return nil
+	}
+	if _, ok := r.plugins.Routing.(BatchRoutingPlugin); !ok {
+		return nil
+	}
+	payload, err := r.metaTrackExecutionPlanPayload(*block)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	payloadDigest := stableTextDigest(string(raw))
+	block.ExecutionPlan = &realblock.ExecutionPlanEnvelope{AlgorithmID: "metatrack_batch_execution_plan_v1", PayloadDigest: payloadDigest, PlanDigest: payloadDigest, Payload: append([]byte(nil), raw...)}
+	return nil
+}
+
+func (r *NodeRuntime) verifyExecutionPlanEnvelope(block realblock.Block) error {
+	if block.ExecutionPlan != nil {
+		if block.ExecutionPlan.AlgorithmID == "" || block.ExecutionPlan.PayloadDigest == "" || len(block.ExecutionPlan.Payload) == 0 {
+			return fmt.Errorf("invalid execution plan envelope")
+		}
+		if digest := stableTextDigest(string(block.ExecutionPlan.Payload)); digest != block.ExecutionPlan.PayloadDigest {
+			return fmt.Errorf("execution plan payload digest mismatch")
+		}
+		if block.ExecutionPlan.AlgorithmID == "metatrack_batch_execution_plan_v1" {
+			if err := r.verifyMetaTrackExecutionPlanPayload(block); err != nil {
+				return err
+			}
+		}
+	}
+	expected := realblock.Hash(block)
+	if block.BlockHash != expected {
+		return fmt.Errorf("block hash mismatch after execution plan verification")
+	}
+	return nil
+}
+
+func (r *NodeRuntime) verifyMetaTrackExecutionPlanPayload(block realblock.Block) error {
+	expected, err := r.metaTrackExecutionPlanPayload(block)
+	if err != nil {
+		return err
+	}
+	expectedRaw, err := json.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	if stableTextDigest(string(expectedRaw)) != block.ExecutionPlan.PayloadDigest {
+		return fmt.Errorf("metatrack execution plan semantic recompute mismatch")
+	}
+	var received map[string]any
+	if err := json.Unmarshal(block.ExecutionPlan.Payload, &received); err != nil {
+		return fmt.Errorf("metatrack execution plan payload decode: %w", err)
+	}
+	expectedDigest := fmt.Sprint(expected["routing_plan_digest"])
+	if expectedDigest == "" {
+		return fmt.Errorf("metatrack execution plan missing expected routing digest")
+	}
+	if fmt.Sprint(received["routing_plan_digest"]) != expectedDigest {
+		return fmt.Errorf("metatrack execution plan routing digest mismatch")
+	}
+	return nil
+}
+
+func (r *NodeRuntime) metaTrackExecutionPlanPayload(block realblock.Block) (map[string]any, error) {
+	planner, ok := r.plugins.Routing.(BatchRoutingPlugin)
+	if !ok {
+		return nil, fmt.Errorf("metatrack execution plan requires batch routing plugin")
+	}
+	shards := r.shardIDs()
+	records := make([]WorkloadRecord, 0, len(block.TxList))
+	orderedIDs := make([]string, 0, len(block.TxList))
+	accessDigests := make([]string, 0, len(block.TxList))
+	for index, item := range block.TxList {
+		txID := txIdentifier(item)
+		orderedIDs = append(orderedIDs, txID)
+		accessDigest := item.AccessListDigest
+		if accessDigest == "" && len(item.AccessList) > 0 {
+			accessDigest = CanonicalAccessListDigest(item.AccessList)
+		}
+		accessDigests = append(accessDigests, accessDigest)
+		records = append(records, WorkloadRecord{Index: index, LogicalID: txID, StateKeys: append([]string(nil), item.StateKeys...), AccessList: append([]tx.AccessItem(nil), item.AccessList...), AccessListDigest: accessDigest, SourceShard: block.ShardID})
+	}
+	routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: int(block.Height), Records: records, ShardIDs: shards, Sharding: r.plugins.Sharding})
+	routePlan = bindMetaTrackPlanToExecutionShard(routePlan, block.ShardID)
+	return map[string]any{
+		"algorithm_id":            "metatrack_batch_execution_plan_v1",
+		"ordered_transaction_ids": orderedIDs,
+		"access_list_digests":     accessDigests,
+		"routing_plan_digest":     routePlan.PlanDigest,
+		"placement_policy":        routePlan.PlacementPolicy,
+		"transaction_policy":      routePlan.TransactionPolicy,
+		"placement_budget":        routePlan.PlacementBudget,
+		"placement_min_budget":    routePlan.PlacementMinBudget,
+		"placement_mu":            routePlan.PlacementMu,
+		"access_matrix":           routePlan.AccessMatrix,
+		"state_frequency":         routePlan.StateFrequency,
+		"coaccess_edges":          routePlan.CoaccessEdges,
+		"state_placements":        routePlan.StatePlacements,
+		"transaction_placements":  routePlan.TransactionPlacements,
+		"remote_access_estimate":  routePlan.RemoteAccessEstimate,
+	}, nil
+}
+
+func bindMetaTrackPlanToExecutionShard(plan BatchRoutingPlan, executionShard string) BatchRoutingPlan {
+	if executionShard == "" {
+		return plan
+	}
+	for index := range plan.TransactionPlacements {
+		placement := &plan.TransactionPlacements[index]
+		if placement.ExecutionShard == executionShard {
+			continue
+		}
+		if placement.RemoteAccessCount <= 0 {
+			placement.RemoteAccessCount = 1
+		}
+		placement.ExecutionShard = executionShard
+		if placement.Reason == "" {
+			placement.Reason = "metatrack_consensus_bound_execution_shard"
+		} else if !strings.Contains(placement.Reason, "consensus_bound_execution_shard") {
+			placement.Reason += ";consensus_bound_execution_shard"
+		}
+	}
+	return plan
 }
 
 func (r *NodeRuntime) recordPlannedDependencyPlan(block realblock.Block) {
@@ -1102,14 +1257,20 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		r.setCommitPhase("remote_state_cas_rejected", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
-	r.setCommitPhase("execute_block", block)
-	executeStarted := time.Now()
-	r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionStarted", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"tx_count": len(block.TxList)}})
+	r.setCommitPhase("remote_state_prefetch", block)
 	executionSnapshot, err = r.prepareMetaTrackStateSnapshot(ctx, block, executionSnapshot)
 	if err != nil {
 		r.setCommitPhase("state_access_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, err
 	}
+	r.setCommitPhase("validate_execution_plan", block)
+	if err := r.validateMetaTrackPlanDrivesExecution(block); err != nil {
+		r.setCommitPhase("execution_plan_shard_mismatch", block)
+		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
+	r.setCommitPhase("execute_block", block)
+	executeStarted := time.Now()
+	r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionStarted", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"tx_count": len(block.TxList)}})
 	executed, err := r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler})
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
@@ -1384,7 +1545,7 @@ func (r *NodeRuntime) prepareMetaTrackStateSnapshot(ctx context.Context, block r
 			if homeShard == "" || homeShard == r.node.ShardID {
 				continue
 			}
-			rowKey := item.TxID + "|" + access.Key + "|" + homeShard
+			rowKey := strings.Join([]string{block.BlockHash, r.node.ShardID, homeShard, access.Key}, "|")
 			if seen[rowKey] {
 				continue
 			}
@@ -1399,6 +1560,33 @@ func (r *NodeRuntime) prepareMetaTrackStateSnapshot(ctx context.Context, block r
 		}
 	}
 	return next, nil
+}
+
+func (r *NodeRuntime) validateMetaTrackPlanDrivesExecution(block realblock.Block) error {
+	if block.ExecutionPlan == nil || block.ExecutionPlan.AlgorithmID != "metatrack_batch_execution_plan_v1" {
+		return nil
+	}
+	var payload struct {
+		TransactionPlacements []TransactionPlacement `json:"transaction_placements"`
+	}
+	if err := json.Unmarshal(block.ExecutionPlan.Payload, &payload); err != nil {
+		return fmt.Errorf("metatrack execution plan payload decode: %w", err)
+	}
+	placementByTx := map[string]TransactionPlacement{}
+	for _, placement := range payload.TransactionPlacements {
+		placementByTx[placement.LogicalID] = placement
+	}
+	for _, item := range block.TxList {
+		txID := txIdentifier(item)
+		placement, ok := placementByTx[txID]
+		if !ok {
+			return fmt.Errorf("metatrack execution plan missing transaction placement for %s", txID)
+		}
+		if placement.ExecutionShard != r.node.ShardID {
+			return fmt.Errorf("metatrack plan drives execution mismatch for %s: plan_execution_shard=%s runtime_shard=%s", txID, placement.ExecutionShard, r.node.ShardID)
+		}
+	}
+	return nil
 }
 
 func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, homeShard string) (StateFetchResponse, time.Duration, error) {
@@ -2501,6 +2689,7 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	blockExecutionSummaries := append([]map[string]any(nil), r.blockExecutionSummaries...)
 	executionPlans := append([]map[string]any(nil), r.executionPlans...)
 	txExecutionTraceRows := append([][]string(nil), r.txExecutionTraceRows...)
+	observedStateAccessRows := append([][]string(nil), r.observedStateAccessRows...)
 	businessExecutionRows := append([][]string(nil), r.businessExecutionRows...)
 	stateDeltaRows := append([][]string(nil), r.stateDeltaRows...)
 	planDigestRows := append([][]string(nil), r.planDigestRows...)
@@ -2544,6 +2733,9 @@ func (r *NodeRuntime) WriteArtifacts() error {
 		return err
 	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "transaction_execution_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "tx_id", "original_index", "success", "error", "read_key_count", "write_key_count", "state_root_after_tx"}, txExecutionTraceRows); err != nil {
+		return err
+	}
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "observed_state_access.csv"), []string{"node_id", "shard_id", "block_hash", "height", "tx_id", "original_index", "access_type", "state_key", "value_digest", "source"}, observedStateAccessRows); err != nil {
 		return err
 	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "business_execute_invocation_count_by_node.csv"), []string{"node_id", "shard_id", "block_height", "block_hash", "tx_id", "track", "attempt", "reason", "success", "final_completion"}, businessExecutionRows); err != nil {
@@ -2634,11 +2826,17 @@ func (r *NodeRuntime) writeBlockSTMArtifacts(blocks []map[string]any) error {
 		total.AbortCount += metricsValue.AbortCount
 		total.ReexecutionCount += metricsValue.ReexecutionCount
 		total.EstimateCount += metricsValue.EstimateCount
+		total.EstimateMarkCount += metricsValue.EstimateMarkCount
+		total.EstimateReadCount += metricsValue.EstimateReadCount
 		total.DependencyWaitCount += metricsValue.DependencyWaitCount
 		total.DependencyResumeCount += metricsValue.DependencyResumeCount
+		total.ValidatedSpeculativeResultCount += metricsValue.ValidatedSpeculativeResultCount
 		total.SpeculativeReadCount += metricsValue.SpeculativeReadCount
 		total.ValidationFailureCount += metricsValue.ValidationFailureCount
 		total.CommittedTransactionCount += metricsValue.CommittedTransactionCount
+		total.MaximumConcurrentExecutions = maxInt(total.MaximumConcurrentExecutions, metricsValue.MaximumConcurrentExecutions)
+		total.SchedulerQueuePeak = maxInt(total.SchedulerQueuePeak, metricsValue.SchedulerQueuePeak)
+		total.StaleTaskCount += metricsValue.StaleTaskCount
 		total.SerialOracleMS += metricsValue.SerialOracleMS
 		total.MaterializationMS += metricsValue.MaterializationMS
 		total.IncarnationLimitHitCount += metricsValue.IncarnationLimitHitCount
@@ -2709,12 +2907,18 @@ func blockSTMMetricsFromMap(value map[string]any) execution.BlockSTMMetrics {
 	metricsValue.AbortCount = intFromAny(value["abort_count"])
 	metricsValue.ReexecutionCount = intFromAny(value["reexecution_count"])
 	metricsValue.EstimateCount = intFromAny(value["estimate_count"])
+	metricsValue.EstimateMarkCount = intFromAny(value["estimate_mark_count"])
+	metricsValue.EstimateReadCount = intFromAny(value["estimate_read_count"])
 	metricsValue.DependencyWaitCount = intFromAny(value["dependency_wait_count"])
 	metricsValue.DependencyResumeCount = intFromAny(value["dependency_resume_count"])
+	metricsValue.ValidatedSpeculativeResultCount = intFromAny(value["validated_speculative_result_count"])
 	metricsValue.SpeculativeReadCount = intFromAny(value["speculative_read_count"])
 	metricsValue.ValidationFailureCount = intFromAny(value["validation_failure_count"])
 	metricsValue.CommittedTransactionCount = intFromAny(value["committed_transaction_count"])
 	metricsValue.MaximumIncarnation = intFromAny(value["maximum_incarnation"])
+	metricsValue.MaximumConcurrentExecutions = intFromAny(value["maximum_concurrent_executions"])
+	metricsValue.SchedulerQueuePeak = intFromAny(value["scheduler_queue_peak"])
+	metricsValue.StaleTaskCount = intFromAny(value["stale_task_count"])
 	metricsValue.SerialOracleMS = int64(intFromAny(value["serial_oracle_ms"]))
 	metricsValue.MaterializationMS = int64(intFromAny(value["materialization_ms"]))
 	metricsValue.IncarnationLimitHitCount = intFromAny(value["incarnation_limit_hit_count"])
@@ -2848,8 +3052,20 @@ func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result B
 		"plan":     executed.Plan,
 	}
 	traceRows := make([][]string, 0, len(executed.TxDeltas))
+	observedRows := [][]string{}
 	for _, delta := range executed.TxDeltas {
 		traceRows = append(traceRows, []string{r.node.NodeID, r.node.ShardID, block.BlockHash, fmt.Sprint(block.Height), delta.TxID, fmt.Sprint(delta.OriginalIndex), fmt.Sprint(delta.Success), delta.Error, fmt.Sprint(len(delta.ReadSet)), fmt.Sprint(len(delta.WriteSet)), delta.Receipt.StateRootAfterTx})
+		for _, read := range delta.ReadSet {
+			observedRows = append(observedRows, []string{r.node.NodeID, r.node.ShardID, block.BlockHash, fmt.Sprint(block.Height), delta.TxID, fmt.Sprint(delta.OriginalIndex), "read", read.Key, read.ValueDigest, read.Source})
+		}
+		writeKeys := make([]string, 0, len(delta.WriteSet))
+		for key := range delta.WriteSet {
+			writeKeys = append(writeKeys, key)
+		}
+		sort.Strings(writeKeys)
+		for _, key := range writeKeys {
+			observedRows = append(observedRows, []string{r.node.NodeID, r.node.ShardID, block.BlockHash, fmt.Sprint(block.Height), delta.TxID, fmt.Sprint(delta.OriginalIndex), "write", key, stableTextDigest(delta.WriteSet[key]), "write_set"})
+		}
 	}
 	businessRows := make([][]string, 0, len(result.BusinessAttempts))
 	for _, attempt := range result.BusinessAttempts {
@@ -2865,6 +3081,7 @@ func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result B
 	r.blockExecutionSummaries = append(r.blockExecutionSummaries, summary)
 	r.executionPlans = append(r.executionPlans, plan)
 	r.txExecutionTraceRows = append(r.txExecutionTraceRows, traceRows...)
+	r.observedStateAccessRows = append(r.observedStateAccessRows, observedRows...)
 	r.businessExecutionRows = append(r.businessExecutionRows, businessRows...)
 	r.stateDeltaRows = append(r.stateDeltaRows, stateRows...)
 	r.planDigestRows = append(r.planDigestRows, planRow)

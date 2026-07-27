@@ -1,6 +1,10 @@
 package block
 
-import "metaverse-chainlab/executor/realism/tx"
+import (
+	"encoding/json"
+
+	"metaverse-chainlab/executor/realism/tx"
+)
 
 type SystemStateDelta struct {
 	DeltaID         string   `json:"delta_id"`
@@ -40,4 +44,12 @@ type Block struct {
 	StateCommit        bool                   `json:"state_commit"`
 	CrossShardProtocol bool                   `json:"cross_shard_protocol"`
 	SystemStateDeltas  []SystemStateDelta     `json:"system_state_deltas,omitempty"`
+	ExecutionPlan      *ExecutionPlanEnvelope `json:"execution_plan,omitempty"`
+}
+
+type ExecutionPlanEnvelope struct {
+	AlgorithmID   string          `json:"algorithm_id"`
+	PayloadDigest string          `json:"payload_digest"`
+	PlanDigest    string          `json:"plan_digest"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
 }

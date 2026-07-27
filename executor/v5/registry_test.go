@@ -3,6 +3,7 @@ package v5
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -527,8 +528,40 @@ func TestMetaTrackBlockExecutorWorkerCountFourDoesNotExceedConfiguredWorkers(t *
 	assertMetaTrackSerialEquivalent(t, result.ExecutionResult, independentTransferTxs(4))
 }
 
+func TestMetaTrackBlockExecutorUsesShardLocalWorkStealing(t *testing.T) {
+	txs := independentTransferTxs(4)
+	result := runMetaTrackExecutorTestBlock(t, 2, txs, map[string]any{"business_execution_delay_ms": 20})
+	if got := intMetric(t, result.ActualMetrics, "steal_attempt_count"); got == 0 {
+		t.Fatalf("expected real steal attempts, metrics=%#v", result.ActualMetrics)
+	}
+	if got := intMetric(t, result.ActualMetrics, "steal_success_count"); got == 0 {
+		t.Fatalf("expected real steal success, metrics=%#v", result.ActualMetrics)
+	}
+	if got := intMetric(t, result.ActualMetrics, "stolen_task_count"); got == 0 {
+		t.Fatalf("expected stolen task evidence, metrics=%#v", result.ActualMetrics)
+	}
+	counts, ok := result.ActualMetrics["worker_execution_count"].([]int)
+	if !ok || len(counts) != 2 {
+		t.Fatalf("missing worker execution counts: %#v", result.ActualMetrics["worker_execution_count"])
+	}
+	if counts[1] == 0 {
+		t.Fatalf("idle worker should execute stolen work, counts=%#v", counts)
+	}
+	sawStolenEvent := false
+	for _, event := range result.ScheduleEvents {
+		if event.StolenWork {
+			sawStolenEvent = true
+			break
+		}
+	}
+	if !sawStolenEvent {
+		t.Fatalf("missing stolen work schedule event: %#v", result.ScheduleEvents)
+	}
+	assertMetaTrackSerialEquivalent(t, result.ExecutionResult, txs)
+}
+
 func TestMetaTrackBlockExecutorReleasesDependentTransactionAfterCompletion(t *testing.T) {
-	first := tx.SignedTransaction{TxID: "alice-0", Sender: "alice", Receiver: "bob", Nonce: 0, Value: 10, StateKeys: []string{"balance:alice", "balance:bob", "nonce:alice"}, AccessList: []tx.AccessItem{{Key: "balance:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "balance:bob", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
+	first := tx.SignedTransaction{TxID: "alice-0", Sender: "alice", Receiver: "bob", Nonce: 0, Value: 10, StateKeys: []string{"balance:alice", "balance:bob", "nonce:alice", "nonce:bob"}, AccessList: []tx.AccessItem{{Key: "balance:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "balance:bob", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:bob", Mode: tx.AccessRead, UpdateSemantics: "seller_nonce_state"}}}
 	second := first
 	second.TxID = "alice-1"
 	second.Nonce = 1
@@ -540,6 +573,41 @@ func TestMetaTrackBlockExecutorReleasesDependentTransactionAfterCompletion(t *te
 		t.Fatalf("dependency chain should serialize business execution, got inflight %d", got)
 	}
 	assertMetaTrackSerialEquivalent(t, result.ExecutionResult, []tx.SignedTransaction{first, second})
+}
+
+func TestMetaTrackBlockExecutorFallsBackFastAccessViolationToConservative(t *testing.T) {
+	item := tx.SignedTransaction{
+		TxID:       "declared-read-only-transfer",
+		Sender:     "alice",
+		Receiver:   "bob",
+		Nonce:      0,
+		Value:      1,
+		StateKeys:  []string{"asset:declared"},
+		AccessList: []tx.AccessItem{{Key: "asset:declared", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}},
+	}
+	result := runMetaTrackExecutorTestBlock(t, 1, []tx.SignedTransaction{item}, nil)
+	if got := intMetric(t, result.ActualMetrics, "fast_fallback_count"); got != 1 {
+		t.Fatalf("expected one fast fallback, metrics=%#v", result.ActualMetrics)
+	}
+	if got := intMetric(t, result.ActualMetrics, "discarded_tentative_result_count"); got != 1 {
+		t.Fatalf("expected discarded tentative result, metrics=%#v", result.ActualMetrics)
+	}
+	if len(result.BusinessAttempts) != 2 || result.BusinessAttempts[0].FinalCompletion || !result.BusinessAttempts[1].FinalCompletion {
+		t.Fatalf("fallback should have one discarded attempt and one final completion: %#v", result.BusinessAttempts)
+	}
+	sawFallbackEvent := false
+	for _, event := range result.ScheduleEvents {
+		if strings.HasPrefix(event.DecisionReason, "fast_fallback:") && event.Track == "conservative" {
+			sawFallbackEvent = true
+			break
+		}
+	}
+	if !sawFallbackEvent {
+		t.Fatalf("missing fast fallback schedule event: %#v", result.ScheduleEvents)
+	}
+	if result.ExecutionResult.SuccessfulTxs != 1 || len(result.ExecutionResult.TxDeltas) != 1 {
+		t.Fatalf("fallback transaction should still finalize once: %+v", result.ExecutionResult)
+	}
 }
 
 func runMetaTrackExecutorTestBlock(t *testing.T, workerCount int, txs []tx.SignedTransaction, config map[string]any) BlockExecutionResult {
@@ -557,13 +625,21 @@ func runMetaTrackExecutorTestBlock(t *testing.T, workerCount int, txs []tx.Signe
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.BusinessAttempts) != len(txs) {
-		t.Fatalf("expected one business attempt per tx, got %d for %d", len(result.BusinessAttempts), len(txs))
+	expectedAttempts := len(txs) + intMetric(t, result.ActualMetrics, "conservative_reexecution_count")
+	if len(result.BusinessAttempts) != expectedAttempts {
+		t.Fatalf("unexpected business attempt count: got %d want %d for %d txs", len(result.BusinessAttempts), expectedAttempts, len(txs))
 	}
+	finalAttempts := 0
 	for _, attempt := range result.BusinessAttempts {
-		if attempt.Attempt != 1 || !attempt.FinalCompletion {
+		if attempt.FinalCompletion {
+			finalAttempts++
+		}
+		if attempt.Attempt < 1 {
 			t.Fatalf("unexpected retry/final attempt evidence: %#v", attempt)
 		}
+	}
+	if finalAttempts != len(txs) {
+		t.Fatalf("expected exactly one final attempt per tx, got %d for %d txs: %#v", finalAttempts, len(txs), result.BusinessAttempts)
 	}
 	return result
 }
@@ -573,7 +649,7 @@ func independentTransferTxs(count int) []tx.SignedTransaction {
 	for index := 0; index < count; index++ {
 		sender := fmt.Sprintf("sender-%d", index)
 		receiver := fmt.Sprintf("receiver-%d", index)
-		items = append(items, tx.SignedTransaction{TxID: fmt.Sprintf("tx-%d", index), Sender: sender, Receiver: receiver, Nonce: 0, Value: 10, StateKeys: []string{"balance:" + sender, "balance:" + receiver, "nonce:" + sender}, AccessList: []tx.AccessItem{{Key: "balance:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "balance:" + receiver, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}})
+		items = append(items, tx.SignedTransaction{TxID: fmt.Sprintf("tx-%d", index), Sender: sender, Receiver: receiver, Nonce: 0, Value: 10, StateKeys: []string{"balance:" + sender, "balance:" + receiver, "nonce:" + sender, "nonce:" + receiver}, AccessList: []tx.AccessItem{{Key: "balance:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "balance:" + receiver, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:" + receiver, Mode: tx.AccessRead, UpdateSemantics: "seller_nonce_state"}}})
 	}
 	return items
 }
@@ -673,16 +749,17 @@ func TestAggregationCommitUsesPrePersistenceStateDelta(t *testing.T) {
 		{TxID: "tx-2", AccessList: []tx.AccessItem{{Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
 		{TxID: "tx-3", AccessList: []tx.AccessItem{{Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
 	}
-	decision := aggregate.DecideCommit(CommitInput{ShardID: "s0", Height: 7, Transactions: transactions, StateDelta: []state.StateKV{{Key: "s0::coaccess:hot-update", Value: "3"}}})
-	if decision.Applied || decision.LogicalUpdates != 3 || decision.PhysicalUpdates != 1 || len(decision.PhysicalStateDelta) != 1 {
+	originalDelta := []state.StateKV{{Key: "s0::coaccess:hot-update", Value: "3"}}
+	decision := aggregate.DecideCommit(CommitInput{ShardID: "s0", Height: 7, Transactions: transactions, StateDelta: originalDelta})
+	if !decision.Applied || decision.LogicalUpdates != 3 || decision.PhysicalUpdates != 1 || len(decision.PhysicalStateDelta) != 1 {
 		t.Fatalf("unexpected aggregation decision: %#v", decision)
 	}
-	if decision.PreAggregationPhysicalOps != 1 || decision.PostAggregationPhysicalOps != 1 || decision.AggregatedKeyCount != 1 || decision.AggregatedLogicalDeltaCount != 3 {
+	if decision.PreAggregationPhysicalOps != 3 || decision.PostAggregationPhysicalOps != 1 || decision.AggregatedKeyCount != 1 || decision.AggregatedLogicalDeltaCount != 3 {
 		t.Fatalf("unexpected same-unit aggregation counters: %#v", decision)
 	}
 	physical := decision.PhysicalStateDelta[0]
-	if physical.UpdateSemantics != "commutative_delta" || physical.Delta != 3 || strings.Join(physical.TxIDs, "|") != "tx-1|tx-2|tx-3" {
-		t.Fatalf("aggregation did not produce a witnessed physical delta: %#v", physical)
+	if physical.Key != originalDelta[0].Key || physical.Value != originalDelta[0].Value || physical.UpdateSemantics != "commutative_delta" || physical.Delta != 3 || !reflect.DeepEqual(physical.TxIDs, []string{"tx-1", "tx-2", "tx-3"}) {
+		t.Fatalf("aggregation physical delta must carry a single committed update with contributing tx ids: %#v", physical)
 	}
 	serialDB := state.NewDB(t.TempDir(), "s0")
 	serialDB.Set("coaccess:hot-update", "0")
@@ -696,6 +773,25 @@ func TestAggregationCommitUsesPrePersistenceStateDelta(t *testing.T) {
 	}
 	if serialDB.Root() != aggregatedDB.Root() {
 		t.Fatalf("aggregated physical delta changed state root: %s != %s", serialDB.Root(), aggregatedDB.Root())
+	}
+}
+
+func TestAggregationCommitAggregatesMarketSaleCounter(t *testing.T) {
+	aggregate := aggregationCommit{}
+	transactions := []tx.SignedTransaction{
+		{TxID: "tx-1", AccessList: []tx.AccessItem{{Key: "market:0xabc", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "market_sale_counter", Delta: 1}}},
+		{TxID: "tx-2", AccessList: []tx.AccessItem{{Key: "market:0xabc", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "market_sale_counter", Delta: 1}}},
+	}
+	decision := aggregate.DecideCommit(CommitInput{ShardID: "s0", Height: 8, Transactions: transactions, StateDelta: []state.StateKV{
+		{Key: "s0::market:0xabc", Value: "1"},
+		{Key: "s0::market:0xabc", Value: "2"},
+	}})
+	if !decision.Applied || decision.PhysicalUpdates != 1 || decision.AggregatedKeyCount != 1 || decision.AggregatedLogicalDeltaCount != 2 {
+		t.Fatalf("market sale counter should aggregate into one physical update: %#v", decision)
+	}
+	physical := decision.PhysicalStateDelta[0]
+	if physical.UpdateSemantics != "commutative_delta" || physical.Delta != 2 || !reflect.DeepEqual(physical.TxIDs, []string{"tx-1", "tx-2"}) {
+		t.Fatalf("unexpected aggregated market delta: %#v", physical)
 	}
 }
 
@@ -748,6 +844,9 @@ func TestMetaTrackBatchPlanBuildsAccessMatricesAndStablePlacements(t *testing.T)
 	if first.PlanDigest == "" || first.PlanDigest != second.PlanDigest {
 		t.Fatalf("metatrack batch plan digest must be stable: %q %q", first.PlanDigest, second.PlanDigest)
 	}
+	if first.PlacementPolicy != "frequency_coaccess_v1" || first.TransactionPolicy != "majority_coverage_v1" || first.PlacementBudget < 1 || first.PlacementMu != "1.0" {
+		t.Fatalf("metatrack formal policy/budget evidence missing: %#v", first)
+	}
 	if len(first.AccessMatrix) != 5 {
 		t.Fatalf("unexpected access matrix size: %d", len(first.AccessMatrix))
 	}
@@ -759,9 +858,9 @@ func TestMetaTrackBatchPlanBuildsAccessMatricesAndStablePlacements(t *testing.T)
 		t.Fatalf("unexpected hot placement: %#v", hotPlacement)
 	}
 	if len(first.PlacementScores) == 0 {
-		t.Fatal("cost-aware placement must record candidate score evidence")
+		t.Fatal("frequency-coaccess placement must record candidate score evidence")
 	}
-	if !hasCandidateScoreComponents(first.PlacementScores, "coaccess:hot-update") {
+	if !hasCandidateScoreComponents(first.PlacementScores, "balance:a") {
 		t.Fatalf("placement scores must expose real candidate components: %#v", first.PlacementScores)
 	}
 	if first.TransactionPlacements[0].ExecutionShard == "" || first.TransactionPlacements[0].CoaccessGroup == "" {
@@ -771,7 +870,7 @@ func TestMetaTrackBatchPlanBuildsAccessMatricesAndStablePlacements(t *testing.T)
 
 func hasCandidateScoreComponents(scores []PlacementScore, key string) bool {
 	for _, score := range scores {
-		if score.Key == key && (score.CoaccessLocalityGain != 0 || score.PredictedRemoteReadCost != 0 || score.PredictedRemoteWritebackCost != 0 || score.MovementOrWritebackPenalty != 0) {
+		if score.Key == key && (score.CoaccessLocalityGain != 0 || score.ShardStateLoadPenalty != 0) {
 			return true
 		}
 	}
@@ -786,7 +885,7 @@ func TestMetaTrackPlacementFallsBackWhenPredictedBenefitIsNotPositive(t *testing
 	}
 	plan := routing.PlanBatch(BatchRoutingInput{BatchIndex: 12, Records: records, ShardIDs: shards})
 	placement := findStatePlacement(t, plan, "asset:cold")
-	if placement.ExecutionShard != placement.HomeShard || placement.Reason != "placement_fallback_hash_home" || plan.PlacementFallbackCount != 1 {
+	if placement.ExecutionShard != placement.HomeShard || placement.Reason != "frequency_coaccess_home_no_affinity" || plan.PlacementFallbackCount != 1 {
 		t.Fatalf("cold state should fall back to home placement: %#v fallback=%d", placement, plan.PlacementFallbackCount)
 	}
 	if len(plan.PlacementScores) != len(shards) {
@@ -809,7 +908,7 @@ func TestMetaTrackPlacementScoresCandidateSpecificCoaccessGain(t *testing.T) {
 	for _, score := range scores {
 		gains[score.CandidateShard] = score.CoaccessLocalityGain
 	}
-	if gains["s0"] != 0 || gains["s1"] != 8 || gains["s2"] != 20 {
+	if gains["s0"] != 0 || gains["s1"] != 2 || gains["s2"] != 5 {
 		t.Fatalf("candidate coaccess gains must use only neighbors placed on that candidate: %#v", gains)
 	}
 }
@@ -825,7 +924,7 @@ func TestMetaTrackBatchPlanPinsOrderedNonceWritesToHomeShard(t *testing.T) {
 	}
 	plan := routing.PlanBatch(BatchRoutingInput{BatchIndex: 11, Records: records, ShardIDs: shards})
 	placement := findStatePlacement(t, plan, nonceKey)
-	if placement.HomeShard != home || placement.ExecutionShard != home || placement.Reason != "ordered_nonce_home_shard" {
+	if placement.HomeShard != home || placement.ExecutionShard != home || placement.Reason != "nonce_home_constraint" {
 		t.Fatalf("ordered nonce writes must stay on their stable home shard, got %#v want %s", placement, home)
 	}
 	for _, txPlacement := range plan.TransactionPlacements {

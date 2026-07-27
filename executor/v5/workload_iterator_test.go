@@ -52,20 +52,32 @@ func canonicalPlan(relative, hash string, count int) WorkloadPlan {
 }
 
 func canonicalRecord(index int, sender, targetKey string) map[string]any {
-	receiver := "user:receiver:ff"
-	return map[string]any{"schema_version": "mbe_workload_record_v1", "dataset_id": "generic_fixture_dataset", "source_row_index": index, "source_event_id": "sale", "timestamp_ms": int64(1700000000000 + index), "sender_id": sender, "receiver_id": receiver, "operation_type": "asset_sale", "runtime_value": 1, "state_keys": []string{"account:sender:" + sender, "account:receiver:" + receiver, targetKey}, "routing_source_key": "account:sender:" + sender, "routing_target_key": targetKey, "skew_keys": map[string]any{"contract": targetKey}, "provenance": map[string]any{"adapter_id": "test_generic"}, "metadata": map[string]any{}, "materialized_index": index, "logical_event_id": "logical"}
+	receiver := "0x00000000000000000000000000000000000000ff"
+	category := "wearable"
+	return map[string]any{"schema_version": "mbe_workload_record_v2", "dataset_id": "generic_fixture_dataset", "source_row_index": index, "source_event_id": "sale", "timestamp_ms": int64(1700000000000 + index), "sender_id": sender, "receiver_id": receiver, "operation_type": "asset_sale", "category": category, "contract": strings.TrimPrefix(targetKey, "market:"), "runtime_value": 1, "access_list_schema": "dcl_sale_access_template_v1", "access_list_source": "semantics_derived", "access_template": dclSaleAccessTemplate(), "state_keys": []string{targetKey, "category:" + category}, "routing_source_key": "sender_identity:" + sender, "routing_target_key": targetKey, "skew_keys": map[string]any{"contract": targetKey}, "provenance": map[string]any{"adapter_id": "test_generic"}, "metadata": map[string]any{}, "materialized_index": index, "logical_event_id": "logical"}
+}
+
+func dclSaleAccessTemplate() []map[string]any {
+	return []map[string]any{
+		{"role": "sender_balance", "mode": "read_write", "semantics": "buyer_balance"},
+		{"role": "sender_nonce", "mode": "read_write", "semantics": "buyer_nonce"},
+		{"role": "receiver_balance", "mode": "read_write", "semantics": "seller_balance"},
+		{"role": "receiver_nonce", "mode": "read", "semantics": "seller_nonce_state"},
+		{"role": "market_contract", "mode": "commutative_delta", "semantics": "market_sale_counter", "delta": 1},
+		{"role": "category_metadata", "mode": "read", "semantics": "category_metadata"},
+	}
 }
 
 func crossShardPair(shards int) (string, string) {
 	sender := "user:sender:1"
 	plan := canonicalPlan("unused", "unused", 1)
 	for index := 2; index < 100; index++ {
-		targetKey := "contract:" + strings.Repeat("0", 4-len(fmt.Sprint(index))) + fmt.Sprint(index)
+		targetKey := "market:0x" + strings.Repeat("0", 40-len(fmt.Sprint(index))) + fmt.Sprint(index)
 		if canonicalRuntimeSourceShard(plan, sender, shards) != stableShard([]string{targetKey}, shards) {
 			return sender, targetKey
 		}
 	}
-	return sender, "contract:2"
+	return sender, "market:0x0000000000000000000000000000000000000002"
 }
 
 func TestCanonicalTraceIteratorSignsStableIdentityAndContinuousNonce(t *testing.T) {
@@ -85,16 +97,25 @@ func TestCanonicalTraceIteratorSignsStableIdentityAndContinuousNonce(t *testing.
 	if first.SourceShard == "" || first.TargetShard == "" || first.SourceShard == first.TargetShard {
 		t.Fatalf("dataset cross-shard record did not expose distinct source/target shards: %#v", first)
 	}
-	assertAccessItem(t, first.AccessList, "account:sender:"+sender, tx.AccessReadWrite, "routing_source_state")
-	assertAccessItem(t, first.AccessList, targetKey, tx.AccessReadWrite, "routing_target_state")
+	runtimeSender := canonicalRuntimeSenderAddress(iter.plan, sender)
+	assertAccessItem(t, first.AccessList, "balance:"+runtimeSender, tx.AccessReadWrite, "buyer_balance")
+	assertAccessItem(t, first.AccessList, "nonce:"+runtimeSender, tx.AccessReadWrite, "buyer_nonce")
+	assertAccessItem(t, first.AccessList, "balance:receiver_0x00000000000000000000000000000000000000ff", tx.AccessReadWrite, "seller_balance")
+	assertAccessItem(t, first.AccessList, "nonce:receiver_0x00000000000000000000000000000000000000ff", tx.AccessRead, "seller_nonce_state")
+	assertAccessItem(t, first.AccessList, targetKey, tx.AccessCommutativeDelta, "market_sale_counter")
+	assertAccessItem(t, first.AccessList, "category:wearable", tx.AccessRead, "category_metadata")
+	assertNoLegacyAccessAliases(t, first.AccessList)
 	firstTx, err := iter.SignedTransaction(first)
 	if err != nil || tx.Verify(firstTx) != nil {
 		t.Fatalf("first signature failed: %v", err)
 	}
-	assertAccessItem(t, firstTx.AccessList, targetKey, tx.AccessReadWrite, "routing_target_state")
+	assertAccessItem(t, firstTx.AccessList, targetKey, tx.AccessCommutativeDelta, "market_sale_counter")
+	if firstTx.AccessListDigest == "" || firstTx.AccessListDigest != first.AccessListDigest {
+		t.Fatalf("signed transaction lost access digest: tx=%#v record=%#v", firstTx, first)
+	}
 	planningAccess := canonicalRuntimeAccessList(iter.plan, first)
-	assertAccessItem(t, planningAccess, "balance:"+firstTx.Sender, tx.AccessReadWrite, "set")
-	assertAccessItem(t, planningAccess, "nonce:"+firstTx.Sender, tx.AccessReadWrite, "set")
+	assertAccessItem(t, planningAccess, "balance:"+firstTx.Sender, tx.AccessReadWrite, "buyer_balance")
+	assertAccessItem(t, planningAccess, "nonce:"+firstTx.Sender, tx.AccessReadWrite, "buyer_nonce")
 	if fmt.Sprint(planningAccess) != fmt.Sprint(firstTx.AccessList) {
 		t.Fatalf("dataset routing planner must see the same runtime access list as signed execution: %#v != %#v", planningAccess, firstTx.AccessList)
 	}
@@ -130,9 +151,9 @@ func TestCanonicalTraceIteratorKeepsRuntimeSenderOnOneSourceShardAcrossTargets(t
 	root := filepath.Join(dataDir, ".cache", "workloads")
 	sender := "user:sender:shared"
 	records := []map[string]any{
-		canonicalRecord(0, sender, "contract:0001"),
-		canonicalRecord(1, sender, "contract:0002"),
-		canonicalRecord(2, sender, "contract:0003"),
+		canonicalRecord(0, sender, "market:0x0000000000000000000000000000000000000001"),
+		canonicalRecord(1, sender, "market:0x0000000000000000000000000000000000000002"),
+		canonicalRecord(2, sender, "market:0x0000000000000000000000000000000000000003"),
 	}
 	relative, hash := writeCanonicalFixture(t, root, records)
 	iter, err := NewCanonicalTraceIterator(canonicalPlan(relative, hash, len(records)), 4, dataDir)
@@ -164,9 +185,9 @@ func TestCanonicalTraceIteratorDatasetSenderNonceStreamAdmitsOnOneSourceShard(t 
 	root := filepath.Join(dataDir, ".cache", "workloads")
 	sender := "user:sender:shared"
 	records := []map[string]any{
-		canonicalRecord(0, sender, "contract:0001"),
-		canonicalRecord(1, sender, "contract:0002"),
-		canonicalRecord(2, sender, "contract:0003"),
+		canonicalRecord(0, sender, "market:0x0000000000000000000000000000000000000001"),
+		canonicalRecord(1, sender, "market:0x0000000000000000000000000000000000000002"),
+		canonicalRecord(2, sender, "market:0x0000000000000000000000000000000000000003"),
 	}
 	relative, hash := writeCanonicalFixture(t, root, records)
 	iter, err := NewCanonicalTraceIterator(canonicalPlan(relative, hash, len(records)), 4, dataDir)
@@ -207,7 +228,7 @@ func TestCanonicalTraceIteratorUsesInjectedShardingForRuntimeOwnership(t *testin
 	dataDir := t.TempDir()
 	root := filepath.Join(dataDir, ".cache", "workloads")
 	sender := "user:sender:sharding"
-	targetKey := "contract:custom-shard"
+	targetKey := "market:0x0000000000000000000000000000000000000123"
 	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalRecord(0, sender, targetKey)})
 	iter, err := NewCanonicalTraceIteratorWithSharding(canonicalPlan(relative, hash, 1), 3, dataDir, lastShardSharding{id: "test_last_shard"})
 	if err != nil {
@@ -225,7 +246,7 @@ func TestCanonicalTraceIteratorUsesInjectedShardingForRuntimeOwnership(t *testin
 
 func TestCanonicalTraceIteratorUsesWorkloadCacheRootEnv(t *testing.T) {
 	cacheRoot := t.TempDir()
-	relative, hash := writeCanonicalFixture(t, cacheRoot, []map[string]any{canonicalRecord(0, "user:sender:env", "contract:env")})
+	relative, hash := writeCanonicalFixture(t, cacheRoot, []map[string]any{canonicalRecord(0, "user:sender:env", "market:0x0000000000000000000000000000000000000abc")})
 	t.Setenv("MBE_WORKLOAD_CACHE_ROOT", cacheRoot)
 	iter, err := NewCanonicalTraceIterator(canonicalPlan(relative, hash, 1), 2, t.TempDir())
 	if err != nil {
@@ -266,10 +287,19 @@ func assertAccessItem(t *testing.T, items []tx.AccessItem, key string, mode tx.A
 	t.Fatalf("missing access item for %s in %#v", key, items)
 }
 
+func assertNoLegacyAccessAliases(t *testing.T, items []tx.AccessItem) {
+	t.Helper()
+	for _, item := range items {
+		if strings.HasPrefix(item.Key, "account:sender:") || strings.HasPrefix(item.Key, "account:receiver:") || strings.HasPrefix(item.Key, "contract:") {
+			t.Fatalf("legacy access alias leaked into resolved access list: %#v", items)
+		}
+	}
+}
+
 func TestCanonicalTraceIteratorRejectsHashMismatchAndEarlyEOF(t *testing.T) {
 	dataDir := t.TempDir()
 	root := filepath.Join(dataDir, ".cache", "workloads")
-	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalRecord(0, "user:sender:1", "contract:2")})
+	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalRecord(0, "user:sender:1", "market:0x0000000000000000000000000000000000000002")})
 	if _, err := NewCanonicalTraceIterator(canonicalPlan(relative, "bad"+hash, 1), 2, dataDir); err == nil {
 		t.Fatal("hash mismatch was not rejected")
 	}

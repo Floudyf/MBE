@@ -3,7 +3,9 @@ package execution
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"testing"
+	"time"
 
 	"metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/execution/blockstm"
@@ -156,11 +158,93 @@ func TestBlockSTMExecutorRecordsAbortAndReexecutionOnHotNonceSequence(t *testing
 	if got.BlockSTMMetrics.AbortCount != executor.Metrics.AbortCount || got.BlockSTMMetrics.ReexecutionCount != executor.Metrics.ReexecutionCount {
 		t.Fatalf("block-stm result did not carry kernel metrics: result=%+v executor=%+v", got.BlockSTMMetrics, executor.Metrics)
 	}
-	if executor.Metrics.ValidationTaskCount != len(b.TxList) || executor.Metrics.ExecutionTaskCount != len(b.TxList) {
+	if executor.Metrics.ValidationTaskCount < len(b.TxList) || executor.Metrics.ExecutionTaskCount < len(b.TxList) {
 		t.Fatalf("expected execution and validation tasks for every transaction, got %+v", executor.Metrics)
+	}
+	if executor.Metrics.ValidatedSpeculativeResultCount != len(b.TxList) || executor.Metrics.MaximumIncarnation < 1 {
+		t.Fatalf("expected validated final incarnations for every transaction, got %+v", executor.Metrics)
 	}
 	if executor.Metrics.MaximumParallelWidth < 1 || executor.Metrics.MaximumParallelWidth > executor.Metrics.WorkerCount {
 		t.Fatalf("unexpected maximum parallel width: %+v", executor.Metrics)
+	}
+}
+
+func TestBlockSTMExecutorReexecutesDenseNonceConflict(t *testing.T) {
+	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-hot-nonce-second-incarnation", 8, "alice", "bob", 1, "v5_safe"))
+	executor := NewBlockSTMExecutor(8)
+	got, err := executor.ExecuteBlock(testContext(t), b, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial := NewSerialExecutor().ExecuteBlock(b, map[string]string{})
+	if got.StateRootAfter != serial.StateRootAfter || got.ReceiptRoot != serial.ReceiptRoot {
+		t.Fatalf("block-stm not serial equivalent")
+	}
+	if executor.Metrics.MaximumIncarnation < 2 || executor.Metrics.ReexecutionCount == 0 {
+		t.Fatalf("expected dense nonce conflict to reexecute, got %+v", executor.Metrics)
+	}
+	if executor.Metrics.DependencyWaitCount == 0 || executor.Metrics.DependencyResumeCount == 0 || executor.Metrics.EstimateReadCount == 0 {
+		t.Fatalf("expected dense nonce conflict to exercise ESTIMATE wait/resume, got %+v", executor.Metrics)
+	}
+}
+
+func TestBlockSTMExecutorCompletesHotDatasetSaleShape(t *testing.T) {
+	sender := "0x0f1be46ce4e76e018fe537cdc85f795ded5d5e34"
+	receivers := []string{
+		"receiver_0xcfbb134e83aab817453359a9210079306fe51347",
+		"receiver_0x1e010790e03ab7f23ff6195c1623013dc3b386cc",
+		"receiver_0x37fb0006b93a43ea51c8e5a0210fc5c7cc99b202",
+		"receiver_0xcfbb134e83aab817453359a9210079306fe51347",
+		"receiver_0xcfbb134e83aab817453359a9210079306fe51347",
+		"receiver_0x3196fca892fa79fbb052b451a4d86b3c4aeb990c",
+		"receiver_0xb3ae1f5e603abd59de79a0fb0707fdbea3a90957",
+		"receiver_0xcfbb134e83aab817453359a9210079306fe51347",
+		"receiver_0xb3ae1f5e603abd59de79a0fb0707fdbea3a90957",
+		"receiver_0xb3ae1f5e603abd59de79a0fb0707fdbea3a90957",
+	}
+	markets := []string{
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xbada8a315e84e4d78e3b6914003647226d9b4001",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+	}
+	items := make([]tx.SignedTransaction, 0, len(receivers))
+	for index, receiver := range receivers {
+		items = append(items, tx.SignedTransaction{
+			TxID:      "dataset-hot-" + strconv.Itoa(index),
+			Sender:    sender,
+			Receiver:  receiver,
+			Nonce:     uint64(index),
+			Value:     1,
+			Payload:   "dataset_event:emote",
+			StateKeys: []string{"shard:s0:account", markets[index], "category:emote"},
+			AccessList: []tx.AccessItem{
+				{Key: "balance:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "buyer_balance"},
+				{Key: "balance:" + receiver, Mode: tx.AccessReadWrite, UpdateSemantics: "seller_balance"},
+				{Key: "category:emote", Mode: tx.AccessRead, UpdateSemantics: "category_metadata"},
+				{Key: markets[index], Mode: tx.AccessCommutativeDelta, UpdateSemantics: "market_sale_counter", Delta: 1},
+				{Key: "nonce:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "buyer_nonce"},
+				{Key: "nonce:" + receiver, Mode: tx.AccessRead, UpdateSemantics: "seller_nonce_state"},
+			},
+		})
+	}
+	b := blockForExecutionTest(items)
+	base := map[string]string{"s0::balance:" + sender: "1000000", "s0::nonce:" + sender: "0"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := NewBlockSTMExecutor(8).ExecuteBlock(ctx, b, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial := NewSerialExecutor().ExecuteBlock(b, base)
+	if !sameExecutionOutput(serial, got) {
+		t.Fatalf("hot dataset sale shape diverged from serial")
 	}
 }
 

@@ -25,7 +25,7 @@ from backend.app.services.workload_adapters.registry import get_adapter
 
 SUPPORTED_COUNTS = frozenset({10_000, 50_000, 100_000, 250_000})
 SUPPORTED_ALPHAS = frozenset({0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4})
-GENERATOR_VERSION = "v5_workload_data_plane_v2_generic_record"
+GENERATOR_VERSION = "v5_workload_data_plane_v3_semantic_access_template"
 SELECTOR_VERSION = "contiguous_window_v1"
 MAX_JSONL_RECORD_BYTES = 1024 * 1024
 MANIFEST_ROOT = ROOT / "data" / "workloads" / "manifests"
@@ -338,7 +338,8 @@ def _csv_summary(summary: SourceValidationSummary) -> CsvValidationSummary:
 
 
 def _validate_canonical_record(record: dict[str, Any], *, dataset_id: str, row_number: int) -> dict[str, Any]:
-    if record.get("schema_version") != "mbe_workload_record_v1":
+    schema_version = record.get("schema_version")
+    if schema_version not in {"mbe_workload_record_v1", "mbe_workload_record_v2"}:
         raise WorkloadDataError(f"canonical row {row_number}: unexpected schema_version")
     if record.get("dataset_id") != dataset_id:
         raise WorkloadDataError(f"canonical row {row_number}: dataset_id mismatch")
@@ -349,6 +350,8 @@ def _validate_canonical_record(record: dict[str, Any], *, dataset_id: str, row_n
         raise WorkloadDataError(f"canonical row {row_number}: state_keys must be a non-empty list")
     if not isinstance(record.get("skew_keys", {}), dict):
         raise WorkloadDataError(f"canonical row {row_number}: skew_keys must be an object")
+    if schema_version == "mbe_workload_record_v2":
+        _validate_access_template_record(record, row_number=row_number)
     record.setdefault("source_tx_hash", None)
     record.setdefault("receiver_id", None)
     record.setdefault("routing_target_key", None)
@@ -356,6 +359,38 @@ def _validate_canonical_record(record: dict[str, Any], *, dataset_id: str, row_n
     record.setdefault("provenance", {})
     record.setdefault("metadata", {})
     return record
+
+
+def _validate_access_template_record(record: dict[str, Any], *, row_number: int) -> None:
+    if record.get("access_list_schema") != "dcl_sale_access_template_v1":
+        raise WorkloadDataError(f"canonical row {row_number}: missing access_list_schema")
+    if record.get("access_list_source") != "semantics_derived":
+        raise WorkloadDataError(f"canonical row {row_number}: missing access_list_source")
+    if not record.get("contract") or not record.get("category"):
+        raise WorkloadDataError(f"canonical row {row_number}: missing contract/category for access template")
+    template = record.get("access_template")
+    if not isinstance(template, list) or not template:
+        raise WorkloadDataError(f"canonical row {row_number}: missing access_template")
+    required_roles = {
+        "sender_balance",
+        "sender_nonce",
+        "receiver_balance",
+        "receiver_nonce",
+        "market_contract",
+        "category_metadata",
+    }
+    roles = [str(item.get("role") or "") for item in template if isinstance(item, dict)]
+    if set(roles) != required_roles or len(roles) != len(set(roles)):
+        raise WorkloadDataError(f"canonical row {row_number}: invalid access_template roles")
+    allowed_modes = {"read", "write", "read_write", "commutative_delta"}
+    for item in template:
+        if not isinstance(item, dict) or item.get("mode") not in allowed_modes or not item.get("semantics"):
+            raise WorkloadDataError(f"canonical row {row_number}: invalid access_template item")
+    by_role = {item["role"]: item for item in template}
+    if by_role["market_contract"].get("mode") != "commutative_delta" or int(by_role["market_contract"].get("delta") or 0) != 1:
+        raise WorkloadDataError(f"canonical row {row_number}: invalid market_contract template")
+    if by_role["category_metadata"].get("mode") != "read":
+        raise WorkloadDataError(f"canonical row {row_number}: invalid category_metadata template")
 
 
 def _canonical_bytes(record: dict[str, Any]) -> bytes:

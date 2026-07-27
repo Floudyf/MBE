@@ -93,8 +93,21 @@ def test_canonical_output_is_byte_identical_and_preserves_source_traceability(tm
     assert first_path.read_bytes() == second_path.read_bytes()
     records = _records(first_path)
     assert len(records) == 8
-    assert records[0]["state_keys"][0].startswith("account:sender:")
+    assert records[0]["schema_version"] == "mbe_workload_record_v2"
+    assert records[0]["access_list_schema"] == "dcl_sale_access_template_v1"
+    assert records[0]["access_list_source"] == "semantics_derived"
+    assert {item["role"] for item in records[0]["access_template"]} == {
+        "sender_balance",
+        "sender_nonce",
+        "receiver_balance",
+        "receiver_nonce",
+        "market_contract",
+        "category_metadata",
+    }
+    assert records[0]["state_keys"][0].startswith("market:")
+    assert not any(key.startswith(("account:sender:", "account:receiver:", "contract:")) for key in records[0]["state_keys"])
     assert records[0]["source_event_id"] == "sale-0"
+    assert records[0]["contract"].startswith("0x") and records[0]["category"] in {"wearable", "emote"}
     assert records[0]["runtime_value"] == 1 and isinstance(records[0]["metadata"]["price_raw"], str)
     with gzip.open(first_path, "rb") as stream:
         assert stream.read(1)

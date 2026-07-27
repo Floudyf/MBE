@@ -62,6 +62,19 @@ type SerialExecutor struct {
 	DefaultInitialBalance int64
 }
 
+type txExecutionOverlay interface {
+	get(string) string
+	set(string, string)
+	snapshot() map[string]string
+	logicalWrites() map[string]string
+	ensureAccount(string, int64)
+	balance(string) int64
+	setBalance(string, int64)
+	nonce(string) uint64
+	setNonce(string, uint64)
+	applyCommutativeDeltas([]tx.AccessItem)
+}
+
 func NewSerialExecutor() *SerialExecutor {
 	return &SerialExecutor{DefaultInitialBalance: 1_000_000}
 }
@@ -96,8 +109,9 @@ func (e *SerialExecutor) ExecuteBlock(b block.Block, base map[string]string) Res
 	return result
 }
 
-func (e *SerialExecutor) executeTx(b block.Block, overlay *txOverlay, item tx.SignedTransaction) Receipt {
+func (e *SerialExecutor) executeTx(b block.Block, overlay txExecutionOverlay, item tx.SignedTransaction) Receipt {
 	receipt := Receipt{TxID: item.TxID, BlockHash: b.BlockHash, Height: b.Height, Success: false, ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...)}
+	applyDeclaredSemanticReads(overlay, item.AccessList)
 	if isPureCommutativeDelta(item.AccessList) {
 		overlay.applyCommutativeDeltas(item.AccessList)
 		receipt.Success = true
@@ -136,6 +150,18 @@ func (e *SerialExecutor) executeTx(b block.Block, overlay *txOverlay, item tx.Si
 	receipt.Success = true
 	receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
 	return receipt
+}
+
+func applyDeclaredSemanticReads(overlay txExecutionOverlay, accesses []tx.AccessItem) {
+	for _, access := range accesses {
+		if access.Mode != tx.AccessRead || access.Key == "" {
+			continue
+		}
+		switch access.UpdateSemantics {
+		case "category_metadata":
+			overlay.get(access.Key)
+		}
+	}
 }
 
 type txOverlay struct {

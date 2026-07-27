@@ -21,6 +21,14 @@ class DecentralandSalesAdapter:
     _columns = ("id", "tx_hash", "buyer", "seller", "price", "timestamp", "category", "raw_contract_candidates")
     _address = re.compile(r"^0x[a-fA-F0-9]{40}$")
     _tx_hash = re.compile(r"^0x[a-fA-F0-9]{64}$")
+    _access_template = (
+        {"role": "sender_balance", "mode": "read_write", "semantics": "buyer_balance", "delta": 0},
+        {"role": "sender_nonce", "mode": "read_write", "semantics": "buyer_nonce", "delta": 0},
+        {"role": "receiver_balance", "mode": "read_write", "semantics": "seller_balance", "delta": 0},
+        {"role": "receiver_nonce", "mode": "read", "semantics": "seller_nonce_state", "delta": 0},
+        {"role": "market_contract", "mode": "commutative_delta", "semantics": "market_sale_counter", "delta": 1},
+        {"role": "category_metadata", "mode": "read", "semantics": "category_metadata", "delta": 0},
+    )
 
     def validate_source(self, path: Path, manifest: dict[str, Any], *, expected_sha256: str | None = None) -> SourceValidationSummary:
         source_hash = _sha256_file(path)
@@ -54,8 +62,9 @@ class DecentralandSalesAdapter:
                 receiver = row["seller"].strip().lower()
                 contract = self._single_contract(row["raw_contract_candidates"], source_row_index)
                 operation_type = row["category"].strip()
+                self._validate_access_template(source_row_index)
                 yield {
-                    "schema_version": "mbe_workload_record_v1",
+                    "schema_version": "mbe_workload_record_v2",
                     "dataset_id": manifest["dataset_id"],
                     "source_row_index": source_row_index,
                     "source_event_id": row["id"].strip(),
@@ -64,13 +73,18 @@ class DecentralandSalesAdapter:
                     "sender_id": sender,
                     "receiver_id": receiver,
                     "operation_type": operation_type,
+                    "category": operation_type,
+                    "contract": contract,
                     "runtime_value": 1,
-                    "state_keys": [f"account:sender:{sender}", f"account:receiver:{receiver}", f"contract:{contract}"],
-                    "routing_source_key": f"account:sender:{sender}",
-                    "routing_target_key": f"contract:{contract}",
-                    "skew_keys": {"contract": f"contract:{contract}", "receiver": f"account:receiver:{receiver}"},
+                    "access_list_schema": "dcl_sale_access_template_v1",
+                    "access_list_source": "semantics_derived",
+                    "access_template": [dict(item) for item in self._access_template],
+                    "state_keys": [f"market:{contract}", f"category:{operation_type}"],
+                    "routing_source_key": f"sender_identity:{sender}",
+                    "routing_target_key": f"market:{contract}",
+                    "skew_keys": {"contract": f"market:{contract}", "receiver": f"receiver_identity:{receiver}"},
                     "provenance": {"source_platform": "decentraland_marketplace", "source_chain": "polygon_mainnet", "adapter_id": self.adapter_id},
-                    "metadata": {"price_raw": row["price"].strip(), "price_bucket": _price_bucket(row["price"].strip()), "source_category": operation_type},
+                    "metadata": {"price_raw": row["price"].strip(), "price_bucket": _price_bucket(row["price"].strip()), "source_category": operation_type, "contract": contract},
                 }
 
     def _validate_row(self, row: dict[str, str], source_row_index: int, ids: set[str], tx_hashes: set[str]) -> None:
@@ -112,6 +126,29 @@ class DecentralandSalesAdapter:
         if len(candidates) != 1:
             raise AdapterDataError(f"row {row_index}: raw_contract_candidates must contain exactly one address")
         return candidates[0].lower()
+
+    def _validate_access_template(self, source_row_index: int) -> None:
+        expected_roles = {
+            "sender_balance",
+            "sender_nonce",
+            "receiver_balance",
+            "receiver_nonce",
+            "market_contract",
+            "category_metadata",
+        }
+        roles = [item["role"] for item in self._access_template]
+        if set(roles) != expected_roles or len(roles) != len(set(roles)):
+            raise AdapterDataError(f"row {source_row_index}: invalid access template roles")
+        allowed_modes = {"read", "write", "read_write", "commutative_delta"}
+        for item in self._access_template:
+            if item["mode"] not in allowed_modes:
+                raise AdapterDataError(f"row {source_row_index}: invalid access template mode")
+        market = next(item for item in self._access_template if item["role"] == "market_contract")
+        category = next(item for item in self._access_template if item["role"] == "category_metadata")
+        if market["mode"] != "commutative_delta" or market["delta"] != 1:
+            raise AdapterDataError(f"row {source_row_index}: invalid market access template")
+        if category["mode"] != "read":
+            raise AdapterDataError(f"row {source_row_index}: invalid category access template")
 
 
 def _sha256_file(path: Path) -> str:

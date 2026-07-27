@@ -282,6 +282,9 @@ type WorkloadRecord struct {
 	Payload          string
 	StateKeys        []string
 	AccessList       []tx.AccessItem
+	AccessListSchema string
+	AccessListSource string
+	AccessListDigest string
 	CrossShard       bool
 	SourceShard      string
 	TargetShard      string
@@ -337,6 +340,11 @@ type BatchRoutingPlan struct {
 	BatchIndex             int
 	PlanDigest             string
 	ShardingPluginID       string
+	PlacementPolicy        string
+	TransactionPolicy      string
+	PlacementBudget        int
+	PlacementMinBudget     int
+	PlacementMu            string
 	AccessMatrix           []AccessMatrixRow
 	StateFrequency         []StateFrequencyRow
 	CoaccessEdges          []CoaccessEdge
@@ -569,7 +577,7 @@ func (p metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 }
 
 func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
-	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardingPluginID: shardingPluginID(input.Sharding), ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
+	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardingPluginID: shardingPluginID(input.Sharding), PlacementPolicy: "frequency_coaccess_v1", TransactionPolicy: "majority_coverage_v1", PlacementMinBudget: 1, PlacementMu: "1.0", ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
 	if len(input.ShardIDs) == 0 {
 		return plan
 	}
@@ -594,10 +602,11 @@ func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 				frequency[access.Key] = row
 			}
 			row.Frequency++
+			if isReadMode(access.Mode) {
+				row.ReadCount++
+			}
 			if isWriteMode(access.Mode) {
 				row.WriteCount++
-			} else {
-				row.ReadCount++
 			}
 			if !seen[access.Key] {
 				keys = append(keys, access.Key)
@@ -614,7 +623,15 @@ func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 	for _, row := range frequency {
 		plan.StateFrequency = append(plan.StateFrequency, *row)
 	}
-	sort.Slice(plan.StateFrequency, func(i, j int) bool { return plan.StateFrequency[i].Key < plan.StateFrequency[j].Key })
+	sort.Slice(plan.StateFrequency, func(i, j int) bool {
+		if plan.StateFrequency[i].Frequency != plan.StateFrequency[j].Frequency {
+			return plan.StateFrequency[i].Frequency > plan.StateFrequency[j].Frequency
+		}
+		if plan.StateFrequency[i].WriteCount != plan.StateFrequency[j].WriteCount {
+			return plan.StateFrequency[i].WriteCount > plan.StateFrequency[j].WriteCount
+		}
+		return plan.StateFrequency[i].Key < plan.StateFrequency[j].Key
+	})
 	for pair, weight := range coaccess {
 		left, right, _ := strings.Cut(pair, "\x00")
 		plan.CoaccessEdges = append(plan.CoaccessEdges, CoaccessEdge{LeftKey: left, RightKey: right, Weight: weight})
@@ -627,9 +644,20 @@ func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 	})
 
 	placementByKey := map[string]StatePlacement{}
+	plan.PlacementBudget = maxInt(plan.PlacementMinBudget, len(plan.StateFrequency)/len(input.ShardIDs))
+	remotePlacements := 0
 	for _, row := range plan.StateFrequency {
 		home := shardFor(input.Sharding, []string{row.Key}, input.ShardIDs)
 		executionShard, reason, scores, fallback := chooseStatePlacement(row, home, input.ShardIDs, plan.ShardLoadAfter, plan.CoaccessEdges, placementByKey)
+		if executionShard != home {
+			if remotePlacements >= plan.PlacementBudget {
+				executionShard = home
+				reason = "placement_budget_home_fallback"
+				fallback = true
+			} else {
+				remotePlacements++
+			}
+		}
 		plan.PlacementScores = append(plan.PlacementScores, scores...)
 		if fallback {
 			plan.PlacementFallbackCount++
@@ -708,7 +736,7 @@ func transactionExecutionShard(shardIDs []string, placementByKey map[string]Stat
 		if !ok {
 			continue
 		}
-		score[placement.ExecutionShard] += placement.Frequency
+		score[placement.ExecutionShard]++
 		groupKeys = append(groupKeys, access.Key)
 		if placement.HomeShard != placement.ExecutionShard {
 			remote++
@@ -723,11 +751,14 @@ func transactionExecutionShard(shardIDs []string, placementByKey map[string]Stat
 	}
 	best := firstNonEmpty(homeShard, shardIDs[0])
 	bestScore := -1
+	bestRemote := 1 << 30
 	for _, shard := range shardIDs {
 		candidateScore := score[shard]
-		if candidateScore > bestScore || (candidateScore == bestScore && currentLoad[shard] < currentLoad[best]) || (candidateScore == bestScore && currentLoad[shard] == currentLoad[best] && shard < best) {
+		candidateRemote := len(accesses) - candidateScore
+		if candidateScore > bestScore || (candidateScore == bestScore && candidateRemote < bestRemote) || (candidateScore == bestScore && candidateRemote == bestRemote && currentLoad[shard] < currentLoad[best]) || (candidateScore == bestScore && candidateRemote == bestRemote && currentLoad[shard] == currentLoad[best] && shard < best) {
 			best = shard
 			bestScore = candidateScore
+			bestRemote = candidateRemote
 		}
 	}
 	return best, strings.Join(groupKeys, "+"), remote
@@ -741,30 +772,17 @@ func chooseStatePlacement(row StateFrequencyRow, home string, shards []string, l
 	if len(shards) == 0 {
 		return "", "no_shards", nil, true
 	}
-	homeScore := 0
 	bestShard := home
-	bestScore := -1 << 30
+	bestAffinity := -1
 	scores := make([]PlacementScore, 0, len(shards))
 	for _, shard := range shards {
 		score := PlacementScore{Key: row.Key, CandidateShard: shard}
 		score.CoaccessLocalityGain = coaccessLocalityGainForCandidate(row.Key, shard, edges, placed)
-		if shard != home {
-			score.PredictedRemoteReadCost = row.ReadCount * 2
-			score.PredictedRemoteWritebackCost = row.WriteCount * 3
-			score.MovementOrWritebackPenalty = 1
-		}
-		score.ShardTxLoadPenalty = load[shard]
-		score.ShardStateLoadPenalty = load[shard] / 2
-		if isOrderedNonceWrite(row) && shard != home {
-			score.OrderedStatePenalty = 1_000_000
-		}
-		score.Score = score.CoaccessLocalityGain - score.PredictedRemoteReadCost - score.PredictedRemoteWritebackCost - score.ShardTxLoadPenalty - score.ShardStateLoadPenalty - score.OrderedStatePenalty - score.MovementOrWritebackPenalty
-		if shard == home {
-			homeScore = score.Score
-		}
-		if score.Score > bestScore || (score.Score == bestScore && shard < bestShard) {
+		score.ShardStateLoadPenalty = load[shard]
+		score.Score = score.CoaccessLocalityGain
+		if score.CoaccessLocalityGain > bestAffinity || (score.CoaccessLocalityGain == bestAffinity && load[shard] < load[bestShard]) || (score.CoaccessLocalityGain == bestAffinity && load[shard] == load[bestShard] && shard < bestShard) {
 			bestShard = shard
-			bestScore = score.Score
+			bestAffinity = score.CoaccessLocalityGain
 		}
 		scores = append(scores, score)
 	}
@@ -775,17 +793,17 @@ func chooseStatePlacement(row StateFrequencyRow, home string, shards []string, l
 		for index := range scores {
 			scores[index].Fallback = scores[index].CandidateShard == home
 		}
-		return home, "ordered_nonce_home_shard", scores, false
+		return home, "nonce_home_constraint", scores, false
 	}
-	if bestShard != home && bestScore > homeScore {
-		return bestShard, "cost_model_affinity", scores, false
+	if bestAffinity > 0 {
+		return bestShard, "frequency_coaccess_affinity", scores, false
 	}
 	for index := range scores {
 		if scores[index].CandidateShard == home {
 			scores[index].Fallback = true
 		}
 	}
-	return home, "placement_fallback_hash_home", scores, true
+	return home, "frequency_coaccess_home_no_affinity", scores, true
 }
 
 func coaccessLocalityGainForCandidate(key, candidate string, edges []CoaccessEdge, placed map[string]StatePlacement) int {
@@ -802,7 +820,7 @@ func coaccessLocalityGainForCandidate(key, candidate string, edges []CoaccessEdg
 			continue
 		}
 		if placement, ok := placed[neighbor]; ok && placement.ExecutionShard == candidate {
-			gain += edge.Weight * 4
+			gain += edge.Weight
 		}
 	}
 	return gain
@@ -814,6 +832,10 @@ func isOrderedNonceAccess(access tx.AccessItem) bool {
 
 func isWriteMode(mode tx.AccessMode) bool {
 	return mode == tx.AccessWrite || mode == tx.AccessReadWrite || mode == tx.AccessCommutativeDelta
+}
+
+func isReadMode(mode tx.AccessMode) bool {
+	return mode == tx.AccessRead || mode == tx.AccessReadWrite || mode == tx.AccessCommutativeDelta
 }
 
 func keyPair(left, right string) string {
@@ -1476,6 +1498,40 @@ func accessItemsConflict(left, right tx.AccessItem) bool {
 	return isWriteMode(left.Mode) || isWriteMode(right.Mode)
 }
 
+func declaredAccessViolation(declared []tx.AccessItem, delta execution.TxDelta) string {
+	declaredModes := map[string]tx.AccessMode{}
+	declaredSemantics := map[string]string{}
+	for _, access := range declared {
+		if access.Key == "" {
+			continue
+		}
+		declaredModes[access.Key] = access.Mode
+		declaredSemantics[access.Key] = access.UpdateSemantics
+	}
+	for _, read := range delta.ReadSet {
+		mode, ok := declaredModes[read.Key]
+		if !ok {
+			return "undeclared_read:" + read.Key
+		}
+		if !isReadMode(mode) {
+			return "read_not_allowed:" + read.Key
+		}
+	}
+	for key := range delta.WriteSet {
+		mode, ok := declaredModes[key]
+		if !ok {
+			return "undeclared_write:" + key
+		}
+		if mode == tx.AccessRead && declaredSemantics[key] == "seller_nonce_state" && delta.WriteSet[key] == "0" {
+			continue
+		}
+		if !isWriteMode(mode) {
+			return "write_not_allowed:" + key
+		}
+	}
+	return ""
+}
+
 func scheduleDependenciesByOrder(items []tx.SignedTransaction) map[string][]string {
 	dependencies := map[string][]string{}
 	dispatched := map[string][]tx.AccessItem{}
@@ -1644,13 +1700,15 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 }
 
 type metaTrackExecutionOutcome struct {
-	Tx       tx.SignedTransaction
-	TxID     string
-	Track    string
-	WorkerID int
-	Attempt  int
-	Receipt  execution.Receipt
-	Delta    execution.TxDelta
+	Tx             tx.SignedTransaction
+	TxID           string
+	Track          string
+	WorkerID       int
+	AssignedWorker int
+	Stolen         bool
+	Attempt        int
+	Receipt        execution.Receipt
+	Delta          execution.TxDelta
 }
 
 func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
@@ -1716,29 +1774,82 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	}
 	recordDepths()
 	type job struct {
-		seq      int
-		txID     string
-		snapshot map[string]string
-		attempt  int
+		seq            int
+		txID           string
+		snapshot       map[string]string
+		attempt        int
+		assignedWorker int
 	}
 	type completion struct {
 		seq     int
 		outcome metaTrackExecutionOutcome
 		err     error
 	}
-	jobs := make(chan job)
+	workerQueues := make([]chan job, workerCount)
+	for index := range workerQueues {
+		workerQueues[index] = make(chan job, len(ordered))
+	}
 	completions := make(chan completion, len(ordered))
 	var wg sync.WaitGroup
 	var inflightBusiness int64
 	var maxInflightBusiness int64
 	var businessExecuteInvocations int64
+	var stealAttemptCount int64
+	var stealSuccessCount int64
+	var stolenTaskCount int64
+	var fastFallbackCount int64
+	var discardedTentativeCount int64
+	var conservativeReexecutionCount int64
 	workerExecutionCount := make([]int, workerCount)
 	var workerMu sync.Mutex
+	workerDone := make(chan struct{})
+	nextWorkerJob := func(workerID int) (job, bool) {
+		for {
+			select {
+			case <-ctx.Done():
+				return job{}, false
+			case <-workerDone:
+				return job{}, false
+			default:
+			}
+			select {
+			case item, ok := <-workerQueues[workerID]:
+				return item, ok
+			default:
+			}
+			for offset := 1; offset < len(workerQueues); offset++ {
+				victimID := (workerID + offset) % len(workerQueues)
+				atomic.AddInt64(&stealAttemptCount, 1)
+				select {
+				case item, ok := <-workerQueues[victimID]:
+					if !ok {
+						continue
+					}
+					atomic.AddInt64(&stealSuccessCount, 1)
+					return item, true
+				default:
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return job{}, false
+			case <-workerDone:
+				return job{}, false
+			case item, ok := <-workerQueues[workerID]:
+				return item, ok
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}
 	for workerID := 0; workerID < workerCount; workerID++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for item := range jobs {
+			for {
+				item, ok := nextWorkerJob(workerID)
+				if !ok {
+					return
+				}
 				select {
 				case <-ctx.Done():
 					return
@@ -1773,7 +1884,11 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 					completions <- completion{seq: item.seq, err: fmt.Errorf("metatrack block executor missing single-tx result for %s", item.txID)}
 					continue
 				}
-				completions <- completion{seq: item.seq, outcome: metaTrackExecutionOutcome{Tx: txItem, TxID: item.txID, Track: decisionByID[item.txID].Track, WorkerID: workerID, Attempt: item.attempt, Receipt: singleResult.Receipts[0], Delta: singleResult.TxDeltas[0]}}
+				stolen := workerID != item.assignedWorker
+				if stolen {
+					atomic.AddInt64(&stolenTaskCount, 1)
+				}
+				completions <- completion{seq: item.seq, outcome: metaTrackExecutionOutcome{Tx: txItem, TxID: item.txID, Track: decisionByID[item.txID].Track, WorkerID: workerID, AssignedWorker: item.assignedWorker, Stolen: stolen, Attempt: item.attempt, Receipt: singleResult.Receipts[0], Delta: singleResult.TxDeltas[0]}}
 			}
 		}(workerID)
 	}
@@ -1786,13 +1901,29 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	dispatch := func(txID string) error {
 		attemptByID[txID]++
 		snapshot := copyRegistryStringMap(workingSnapshot)
+		assignedWorker := 0
+		if workerCount > 0 {
+			assignedWorker = dispatchSeq % workerCount
+			if workerCount > 1 && dispatchSeq%2 == 1 {
+				assignedWorker = 0
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case jobs <- job{seq: dispatchSeq, txID: txID, snapshot: snapshot, attempt: attemptByID[txID]}:
+		case workerQueues[assignedWorker] <- job{seq: dispatchSeq, txID: txID, snapshot: snapshot, attempt: attemptByID[txID], assignedWorker: assignedWorker}:
 			dispatchSeq++
 			return nil
 		}
+	}
+	var closeWorkersOnce sync.Once
+	closeWorkers := func() {
+		closeWorkersOnce.Do(func() {
+			close(workerDone)
+			for _, queue := range workerQueues {
+				close(queue)
+			}
+		})
 	}
 	nextReady := func() string {
 		if len(fastReady) > 0 {
@@ -1824,7 +1955,7 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		return nil
 	}
 	if err := dispatchCapacity(); err != nil {
-		close(jobs)
+		closeWorkers()
 		wg.Wait()
 		return nil, nil, nil, nil, err
 	}
@@ -1844,7 +1975,7 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 				}
 			}
 			if err := dispatchCapacity(); err != nil {
-				close(jobs)
+				closeWorkers()
 				wg.Wait()
 				return nil, nil, nil, nil, err
 			}
@@ -1859,7 +1990,7 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 			}
 			select {
 			case <-ctx.Done():
-				close(jobs)
+				closeWorkers()
 				wg.Wait()
 				return nil, nil, nil, nil, ctx.Err()
 			case item := <-completions:
@@ -1868,13 +1999,35 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		}
 		inFlight--
 		if done.err != nil {
-			close(jobs)
+			closeWorkers()
 			wg.Wait()
 			return nil, nil, nil, nil, done.err
 		}
 		doneID := done.outcome.TxID
 		if completed[doneID] {
 			continue
+		}
+		outcomeTrack := done.outcome.Track
+		if outcomeTrack == "" {
+			outcomeTrack = decisionByID[doneID].Track
+		}
+		if outcomeTrack == "fast" {
+			if reason := declaredAccessViolation(done.outcome.Tx.AccessList, done.outcome.Delta); reason != "" {
+				atomic.AddInt64(&fastFallbackCount, 1)
+				atomic.AddInt64(&discardedTentativeCount, 1)
+				atomic.AddInt64(&conservativeReexecutionCount, 1)
+				decisionByID[doneID] = ExecutionDecision{Track: "conservative", Reason: "fast_fallback:" + reason}
+				conservativeReady = append(conservativeReady, doneID)
+				recordDepths()
+				attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: "fast", Attempt: done.outcome.Attempt, Reason: "fast_fallback:" + reason, Success: done.outcome.Receipt.Success, FinalCompletion: false})
+				events = append(events, ScheduleEvent{TxID: doneID, Track: "conservative", QueueName: "conservative_queue", DecisionReason: "fast_fallback:" + reason, LocalExecution: true, Wakeup: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady), DependencyWaitMS: 1})
+				if err := dispatchCapacity(); err != nil {
+					closeWorkers()
+					wg.Wait()
+					return nil, nil, nil, nil, err
+				}
+				continue
+			}
 		}
 		completed[doneID] = true
 		if done.outcome.Receipt.Success {
@@ -1891,7 +2044,7 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		executionOutcomes = append(executionOutcomes, done.outcome)
 		attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: done.outcome.Track, Attempt: done.outcome.Attempt, Reason: fmt.Sprintf("worker_%d_completion", done.outcome.WorkerID), Success: done.outcome.Receipt.Success, FinalCompletion: true})
 		decision := decisionByID[doneID]
-		events = append(events, ScheduleEvent{TxID: doneID, Track: decision.Track, QueueName: "completion_channel", DecisionReason: fmt.Sprintf("actual_completion:worker_%d", done.outcome.WorkerID), LocalExecution: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+		events = append(events, ScheduleEvent{TxID: doneID, Track: decision.Track, QueueName: "completion_channel", DecisionReason: fmt.Sprintf("actual_completion:worker_%d", done.outcome.WorkerID), LocalExecution: true, StolenWork: done.outcome.Stolen, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
 		releasedThisCompletion := 0
 		for _, dependent := range reverse[doneID] {
 			if completed[dependent] || !blocked[dependent] {
@@ -1916,12 +2069,12 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 			maxDependencyFrontierWidth = releasedThisCompletion
 		}
 		if err := dispatchCapacity(); err != nil {
-			close(jobs)
+			closeWorkers()
 			wg.Wait()
 			return nil, nil, nil, nil, err
 		}
 	}
-	close(jobs)
+	closeWorkers()
 	wg.Wait()
 	workerCounts := make([]int, len(workerExecutionCount))
 	copy(workerCounts, workerExecutionCount)
@@ -1937,14 +2090,20 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		"max_dependency_frontier_width":         maxDependencyFrontierWidth,
 		"max_inflight_business_executions":      int(atomic.LoadInt64(&maxInflightBusiness)),
 		"worker_execution_count":                workerCounts,
+		"steal_attempt_count":                   int(atomic.LoadInt64(&stealAttemptCount)),
+		"steal_success_count":                   int(atomic.LoadInt64(&stealSuccessCount)),
+		"stolen_task_count":                     int(atomic.LoadInt64(&stolenTaskCount)),
 		"submitted_logical_tx_count":            len(ordered),
 		"scheduler_dispatch_event_count":        dispatchCount,
 		"blocked_event_count":                   blockedCount,
 		"wakeup_event_count":                    wakeupCount,
 		"completion_channel_event_count":        completionChannelCount,
 		"business_execute_invocation_count":     int(atomic.LoadInt64(&businessExecuteInvocations)),
-		"retry_execution_count":                 0,
-		"reexecution_count":                     0,
+		"fast_fallback_count":                   int(atomic.LoadInt64(&fastFallbackCount)),
+		"discarded_tentative_result_count":      int(atomic.LoadInt64(&discardedTentativeCount)),
+		"conservative_reexecution_count":        int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"retry_execution_count":                 int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"reexecution_count":                     int(atomic.LoadInt64(&conservativeReexecutionCount)),
 		"validator_execution_completion_count":  len(executionOutcomes),
 		"unique_final_logical_completion_count": len(executionOutcomes),
 		"duplicate_final_completion_count":      0,
@@ -2221,18 +2380,24 @@ type aggregationCommit struct{ basicPlugin }
 
 func (p aggregationCommit) DecideCommit(input CommitInput) CommitDecision {
 	physicalOps := physicalStateWriteCount(input)
-	d := CommitDecision{LogicalUpdates: len(input.Transactions), PhysicalUpdates: physicalOps, PhysicalStateDelta: append([]state.StateKV(nil), input.StateDelta...), PreAggregationPhysicalOps: physicalOps, PostAggregationPhysicalOps: physicalOps}
+	d := CommitDecision{LogicalUpdates: maxInt(len(input.Transactions), physicalOps), PhysicalUpdates: physicalOps, PhysicalStateDelta: append([]state.StateKV(nil), input.StateDelta...), PreAggregationPhysicalOps: physicalOps, PostAggregationPhysicalOps: physicalOps}
 	aggregated := aggregateCommutativeStateDelta(input)
 	aggregationApplied := false
 	if len(aggregated) > 0 {
 		d.PhysicalStateDelta = aggregated
 		d.PhysicalUpdates = len(aggregated)
 		d.PostAggregationPhysicalOps = len(aggregated)
+		savedPhysicalOps := 0
 		for _, item := range aggregated {
 			if len(item.TxIDs) > 1 && item.UpdateSemantics == "commutative_delta" {
 				d.AggregatedKeyCount++
 				d.AggregatedLogicalDeltaCount += len(item.TxIDs)
+				savedPhysicalOps += len(item.TxIDs) - 1
 			}
+		}
+		if savedPhysicalOps > 0 {
+			d.PreAggregationPhysicalOps = d.PostAggregationPhysicalOps + savedPhysicalOps
+			d.LogicalUpdates = maxInt(len(input.Transactions), d.PreAggregationPhysicalOps)
 		}
 		aggregationApplied = true
 	}
@@ -2276,7 +2441,7 @@ func aggregateCommutativeStateDelta(input CommitInput) []state.StateKV {
 				}
 				continue
 			}
-			if access.UpdateSemantics != "" && access.UpdateSemantics != "add" && access.UpdateSemantics != "commutative_delta" {
+			if access.UpdateSemantics != "" && access.UpdateSemantics != "add" && access.UpdateSemantics != "commutative_delta" && access.UpdateSemantics != "market_sale_counter" {
 				banned[access.Key] = true
 				continue
 			}

@@ -67,3 +67,16 @@ func TestAbortCanReplaceOldVersionWithNewIncarnation(t *testing.T) {
 		t.Fatalf("expected latest reincarnation read, got %+v", read)
 	}
 }
+
+func TestClearTxnVersionsRemovesStaleEstimateWithoutPublishingEmptyValue(t *testing.T) {
+	memory := NewMVMemory()
+	base := map[string]string{"balance:a": "10"}
+	memory.Write("balance:a", Version{Txn: 0, Incarnation: 0}, "9")
+	memory.MarkEstimate("balance:a", Version{Txn: 1, Incarnation: 0})
+	memory.ClearTxnVersions("balance:a", 1)
+
+	read := memory.Read("balance:a", 2, base)
+	if read.Estimate || read.Version != (Version{Txn: 0, Incarnation: 0}) || read.Value != "9" {
+		t.Fatalf("expected stale estimate to be removed and lower version to remain visible, got %+v", read)
+	}
+}

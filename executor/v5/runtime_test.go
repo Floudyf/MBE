@@ -464,8 +464,11 @@ func TestRuntimeScheduleBlockUsesSchedulerPluginAndRehashesProposal(t *testing.T
 	if scheduled.TxIDs[0] != "conservative" || scheduled.TxIDs[1] != "fast" {
 		t.Fatalf("metatrack proposal should preserve consensus order and defer execution ordering to block executor: %#v", scheduled.TxIDs)
 	}
-	if scheduled.BlockHash != originalHash {
-		t.Fatal("planned dependency proposal changed block hash without changing transaction semantics")
+	if scheduled.ExecutionPlan == nil || scheduled.ExecutionPlan.PayloadDigest == "" {
+		t.Fatalf("metatrack proposal did not bind an execution plan: %#v", scheduled.ExecutionPlan)
+	}
+	if scheduled.BlockHash == originalHash {
+		t.Fatal("metatrack execution plan must be bound into the block hash")
 	}
 	if len(runtime.schedulerRows) == 0 {
 		t.Fatal("runtime did not record scheduler trace rows")
@@ -475,6 +478,94 @@ func TestRuntimeScheduleBlockUsesSchedulerPluginAndRehashesProposal(t *testing.T
 	}
 	if !schedulerRowsCarryQueueDepths(runtime.schedulerRows) {
 		t.Fatalf("runtime scheduler trace missing queue depth columns: %#v", runtime.schedulerRows)
+	}
+}
+
+func TestRuntimeScheduleBlockBindsMetaTrackPlanForBlockSTMBackend(t *testing.T) {
+	profile := testMetaTrackProfile()
+	profile["block_executor"] = PluginConfig{PluginID: "block_stm_block_executor", Config: map[string]any{"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off"}}
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	runtime, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := tx.SignedTransaction{TxID: "metatrack-stm", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
+	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
+	realblock.AssignHash(&block)
+
+	scheduled := runtime.scheduleBlock(block)
+
+	if scheduled.ExecutionPlan == nil || scheduled.ExecutionPlan.PayloadDigest == "" {
+		t.Fatalf("metatrack block-stm proposal did not bind an execution plan: %#v", scheduled.ExecutionPlan)
+	}
+	if err := runtime.verifyExecutionPlanEnvelope(scheduled); err != nil {
+		t.Fatalf("validator should accept independently recomputed metatrack block-stm plan: %v", err)
+	}
+}
+
+func TestRuntimeValidatorRejectsSemanticallyTamperedMetaTrackPlan(t *testing.T) {
+	profile := testMetaTrackProfile()
+	profile["block_executor"] = PluginConfig{PluginID: "block_stm_block_executor", Config: map[string]any{"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off"}}
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	runtime, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := tx.SignedTransaction{TxID: "metatrack-tamper", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
+	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
+	realblock.AssignHash(&block)
+	scheduled := runtime.scheduleBlock(block)
+
+	var payload map[string]any
+	if err := json.Unmarshal(scheduled.ExecutionPlan.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["remote_access_estimate"] = float64(999)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduled.ExecutionPlan.Payload = raw
+	scheduled.ExecutionPlan.PayloadDigest = stableTextDigest(string(raw))
+	scheduled.ExecutionPlan.PlanDigest = scheduled.ExecutionPlan.PayloadDigest
+	realblock.AssignHash(&scheduled)
+
+	if err := runtime.verifyExecutionPlanEnvelope(scheduled); err == nil || !strings.Contains(err.Error(), "semantic recompute mismatch") {
+		t.Fatalf("validator should reject digest-self-consistent semantic plan tamper, got %v", err)
+	}
+}
+
+func TestRuntimeRejectsMetaTrackPlanExecutionShardMismatch(t *testing.T) {
+	profile := testMetaTrackProfile()
+	profile["block_executor"] = PluginConfig{PluginID: "block_stm_block_executor", Config: map[string]any{"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off"}}
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	runtime, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := tx.SignedTransaction{TxID: "metatrack-plan-drive", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
+	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
+	realblock.AssignHash(&block)
+	scheduled := runtime.scheduleBlock(block)
+	if err := runtime.validateMetaTrackPlanDrivesExecution(scheduled); err != nil {
+		t.Fatalf("expected local plan execution shard to pass: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(scheduled.ExecutionPlan.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	placements := payload["transaction_placements"].([]any)
+	first := placements[0].(map[string]any)
+	first["ExecutionShard"] = "s1"
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduled.ExecutionPlan.Payload = raw
+
+	if err := runtime.validateMetaTrackPlanDrivesExecution(scheduled); err == nil || !strings.Contains(err.Error(), "plan drives execution mismatch") {
+		t.Fatalf("expected execution shard mismatch, got %v", err)
 	}
 }
 
@@ -998,7 +1089,19 @@ func TestBlockSTMArtifactsPreserveKernelSerialEquivalenceEvidence(t *testing.T) 
 		"receipt_root":          "receipts",
 		"execution_plan_digest": "plan",
 		"serial_equivalent":     false,
-		"block_stm_metrics":     execution.BlockSTMMetrics{WorkerCount: 4, MaximumParallelWidth: 2, ExecutionTaskCount: 1, ValidationTaskCount: 1, IncarnationHistogram: map[int]int{0: 1}},
+		"block_stm_metrics": execution.BlockSTMMetrics{
+			WorkerCount:                     4,
+			MaximumParallelWidth:            2,
+			ExecutionTaskCount:              1,
+			ValidationTaskCount:             1,
+			EstimateMarkCount:               3,
+			EstimateReadCount:               2,
+			ValidatedSpeculativeResultCount: 1,
+			MaximumConcurrentExecutions:     2,
+			SchedulerQueuePeak:              5,
+			StaleTaskCount:                  1,
+			IncarnationHistogram:            map[int]int{0: 1},
+		},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -1007,6 +1110,19 @@ func TestBlockSTMArtifactsPreserveKernelSerialEquivalenceEvidence(t *testing.T) 
 	summary := readJSONMap(t, filepath.Join(dataDir, "block_stm_summary.json"))
 	if summary["serial_equivalent"] != false {
 		t.Fatalf("block_stm_summary.json must preserve kernel equivalence evidence, got %#v", summary["serial_equivalent"])
+	}
+	metrics := summary["block_stm_metrics"].(map[string]any)
+	for key, want := range map[string]float64{
+		"estimate_mark_count":                3,
+		"estimate_read_count":                2,
+		"validated_speculative_result_count": 1,
+		"maximum_concurrent_executions":      2,
+		"scheduler_queue_peak":               5,
+		"stale_task_count":                   1,
+	} {
+		if metrics[key] != want {
+			t.Fatalf("block_stm_summary.json did not aggregate %s: got %#v want %.0f", key, metrics[key], want)
+		}
 	}
 	equivalence := readJSONMap(t, filepath.Join(dataDir, "serial_equivalence.json"))
 	if equivalence["serial_equivalent"] != false {
