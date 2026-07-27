@@ -154,11 +154,35 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
     };
   }
 
-  function methodSpec(method: V5FormalMethod, source: V5WorkloadSourceSpec): V5ExperimentSpec {
-    const base: V5ExperimentSpec = { name: "v5_formal_real_cluster", execution_backend: "real_cluster", plugin_selections: defaultV5PluginSelections(catalog), topology, tx_count: source.requested_tx_count, seed: source.seed, workload_source: source, duration_ms: 6000, fault_policy: { mode: "disabled" }, requested_metrics: [] };
-    const spec = applyV5MethodSelections(base, method, catalog);
-    return { ...spec, plugin_selections: patchWorkloadSelections(spec.plugin_selections, source) };
-  }
+  function methodSpec(
+  method: V5FormalMethod,
+  source: V5WorkloadSourceSpec,
+): V5ExperimentSpec {
+  const base: V5ExperimentSpec = {
+    name: "v5_formal_real_cluster",
+    execution_backend: "real_cluster",
+    plugin_selections: defaultV5PluginSelections(catalog),
+    topology,
+    tx_count: source.requested_tx_count,
+    seed: source.seed,
+    workload_source: source,
+    duration_ms: 3_600_000,
+    fault_policy: {
+      mode: "disabled",
+    },
+    requested_metrics: [],
+  };
+
+  const spec = applyV5MethodSelections(base, method, catalog);
+
+  return {
+    ...spec,
+    plugin_selections: patchWorkloadSelections(
+      spec.plugin_selections,
+      source,
+    ),
+  };
+}
 
   function patchWorkloadSelections(selections: V5PluginSelection[], source: V5WorkloadSourceSpec): V5PluginSelection[] {
     return selections.map((selection) => {

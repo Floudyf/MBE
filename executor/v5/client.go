@@ -1,16 +1,20 @@
 package v5
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +48,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	transactionPlacementRows := [][]string{}
 	dependencyRows := [][]string{}
 	remoteStateRows := [][]string{}
+	resolvedAccessRows := []resolvedAccessEntry{}
 	connections := map[string]net.Conn{}
 	generatedCrossShardCount := 0
 	defer func() {
@@ -62,7 +67,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	for shardIndex := 0; shardIndex < shards; shardIndex++ {
 		shardIDs = append(shardIDs, fmt.Sprintf("s%d", shardIndex))
 	}
-	iterator, err := plugins.Workload.NewIterator(plan.WorkloadPlan, shards, outDir)
+	iterator, err := plugins.Workload.NewIterator(plan.WorkloadPlan, shards, outDir, plugins.Sharding)
 	if err != nil {
 		return err
 	}
@@ -137,6 +142,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			reason = strings.TrimSuffix(reason+";execution_shard="+executionShard, ";")
 		}
 		routingRows = append(routingRows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, plugins.Routing.ID(), strings.Join(item.StateKeys, "|"), shardID, fmt.Sprint(isCrossShard), reason})
+		resolvedAccessRows = append(resolvedAccessRows, resolvedAccessEntryFromTransaction(record, item, shardID, executionShard, route.Reason))
 		return err
 	}
 	submitBatch := func(records []WorkloadRecord) error {
@@ -145,16 +151,19 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 		decisions := map[int]RoutingDecision{}
 		if planner, ok := plugins.Routing.(BatchRoutingPlugin); ok {
-			routingRecords := records
-			if datasetIterator, ok := iterator.(*CanonicalTraceIterator); ok {
-				routingRecords = make([]WorkloadRecord, 0, len(records))
-				for _, record := range records {
-					next := record
-					next.AccessList = canonicalRuntimeAccessList(datasetIterator.plan, record)
-					routingRecords = append(routingRecords, next)
+			routingRecords := append([]WorkloadRecord(nil), records...)
+			if _, ok := iterator.(*CanonicalTraceIterator); ok {
+				for index, record := range routingRecords {
+					if len(record.AccessList) == 0 || record.AccessListDigest == "" {
+						return fmt.Errorf("dataset record %s missing resolved access list before batch planning", record.LogicalID)
+					}
+					if digest := CanonicalAccessListDigest(record.AccessList); digest != record.AccessListDigest {
+						return fmt.Errorf("dataset record %s resolved access digest mismatch before batch planning", record.LogicalID)
+					}
+					routingRecords[index].AccessList = append([]tx.AccessItem(nil), record.AccessList...)
 				}
 			}
-			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs})
+			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding})
 			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
 			for _, placement := range routePlan.TransactionPlacements {
 				decisions[placement.TxIndex] = RoutingDecision{ShardID: placement.ExecutionShard, Reason: placement.Reason}
@@ -163,7 +172,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		for _, record := range records {
 			route := decisions[record.Index]
 			if route.ShardID == "" {
-				route = plugins.Routing.Route(RoutingInput{Index: record.Index, StateKeys: record.StateKeys, AccessList: record.AccessList, SourceShard: record.SourceShard, ShardIDs: shardIDs, CrossShard: record.CrossShard})
+				route = plugins.Routing.Route(RoutingInput{Index: record.Index, StateKeys: record.StateKeys, AccessList: record.AccessList, SourceShard: record.SourceShard, ShardIDs: shardIDs, CrossShard: record.CrossShard, Sharding: plugins.Sharding})
 			}
 			if err := submitRecord(record, route); err != nil {
 				return err
@@ -209,6 +218,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if err := metrics.WriteCSV(filepath.Join(outDir, "routing_decision_log.csv"), []string{"timestamp", "tx_id", "routing_plugin", "access_keys", "assigned_shard", "cross_shard", "source"}, routingRows); err != nil {
 		return err
 	}
+	if err := writeResolvedAccessArtifacts(outDir, resolvedAccessRows); err != nil {
+		return err
+	}
 	if len(metatrackBatchRows) > 0 {
 		if err := writeJSONL(filepath.Join(outDir, "metatrack_batch_plan.jsonl"), metatrackBatchRows); err != nil {
 			return err
@@ -239,6 +251,10 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if plan.WorkloadPlan.SourceType == "dataset" {
 		requestedCrossShardCount = replaySummary.ExpectedCrossShardCount
 	}
+	replaySummary.ActualCrossShardCount = generatedCrossShardCount
+	if replaySummary.ReadCount > 0 {
+		replaySummary.ActualCrossShardRatio = float64(generatedCrossShardCount) / float64(replaySummary.ReadCount)
+	}
 	if err := SaveJSON(filepath.Join(outDir, "workload_replay_summary.json"), replaySummary); err != nil {
 		return err
 	}
@@ -253,6 +269,176 @@ func workloadIngressShard(record WorkloadRecord, route RoutingDecision) string {
 		return record.SourceShard
 	}
 	return route.ShardID
+}
+
+type resolvedAccessEntry struct {
+	Index            int             `json:"index"`
+	LogicalID        string          `json:"logical_id"`
+	TxID             string          `json:"tx_id"`
+	Sender           string          `json:"sender"`
+	Receiver         string          `json:"receiver"`
+	SourceShard      string          `json:"source_shard"`
+	ExecutionShard   string          `json:"execution_shard"`
+	RoutingReason    string          `json:"routing_reason"`
+	AccessListDigest string          `json:"access_list_digest"`
+	AccessListSchema string          `json:"access_list_schema,omitempty"`
+	AccessListSource string          `json:"access_list_source,omitempty"`
+	AccessList       []tx.AccessItem `json:"access_list"`
+}
+
+func resolvedAccessEntryFromTransaction(record WorkloadRecord, item tx.SignedTransaction, sourceShard, executionShard, reason string) resolvedAccessEntry {
+	digest := item.AccessListDigest
+	if digest == "" {
+		digest = CanonicalAccessListDigest(item.AccessList)
+	}
+	return resolvedAccessEntry{Index: record.Index, LogicalID: firstNonEmpty(record.LogicalID, item.TxID), TxID: item.TxID, Sender: item.Sender, Receiver: item.Receiver, SourceShard: sourceShard, ExecutionShard: executionShard, RoutingReason: reason, AccessListDigest: digest, AccessListSchema: item.AccessListSchema, AccessListSource: item.AccessListSource, AccessList: append([]tx.AccessItem(nil), item.AccessList...)}
+}
+
+func writeResolvedAccessArtifacts(outDir string, rows []resolvedAccessEntry) error {
+	path := filepath.Join(outDir, "resolved_access_lists.jsonl.gz")
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	gz := gzip.NewWriter(file)
+	overall := sha256.New()
+	for _, row := range rows {
+		payload, err := json.Marshal(row)
+		if err != nil {
+			_ = gz.Close()
+			_ = file.Close()
+			return err
+		}
+		if _, err := gz.Write(payload); err != nil {
+			_ = gz.Close()
+			_ = file.Close()
+			return err
+		}
+		if _, err := gz.Write([]byte("\n")); err != nil {
+			_ = gz.Close()
+			_ = file.Close()
+			return err
+		}
+		digestPayload, err := json.Marshal(resolvedAccessDigestEntry(row))
+		if err != nil {
+			_ = gz.Close()
+			_ = file.Close()
+			return err
+		}
+		overall.Write(digestPayload)
+		overall.Write([]byte("\n"))
+	}
+	if err := gz.Close(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	digest := hex.EncodeToString(overall.Sum(nil))
+	if err := os.WriteFile(filepath.Join(outDir, "access_list_digest.txt"), []byte(digest+"\n"), 0o644); err != nil {
+		return err
+	}
+	return SaveJSON(filepath.Join(outDir, "access_list_summary.json"), resolvedAccessSummary(rows, digest))
+}
+
+func resolvedAccessDigestEntry(row resolvedAccessEntry) map[string]any {
+	return map[string]any{
+		"index":              row.Index,
+		"logical_id":         row.LogicalID,
+		"access_list_digest": row.AccessListDigest,
+		"access_list_schema": row.AccessListSchema,
+		"access_list_source": row.AccessListSource,
+		"access_list":        row.AccessList,
+	}
+}
+
+func resolvedAccessSummary(rows []resolvedAccessEntry, digest string) map[string]any {
+	modeCounts := map[tx.AccessMode]int{}
+	keyCounts := map[string]int{}
+	edgeCounts := map[string]int{}
+	empty := 0
+	duplicates := 0
+	legacyAliases := 0
+	totalKeys := 0
+	minKeys := 0
+	maxKeys := 0
+	for _, row := range rows {
+		keyCount := len(row.AccessList)
+		if keyCount == 0 {
+			empty++
+		}
+		if minKeys == 0 || keyCount < minKeys {
+			minKeys = keyCount
+		}
+		if keyCount > maxKeys {
+			maxKeys = keyCount
+		}
+		totalKeys += keyCount
+		seen := map[string]bool{}
+		uniqueKeys := []string{}
+		for _, access := range row.AccessList {
+			modeCounts[access.Mode]++
+			keyCounts[access.Key]++
+			if strings.HasPrefix(access.Key, "account:sender:") || strings.HasPrefix(access.Key, "account:receiver:") || strings.HasPrefix(access.Key, "contract:") {
+				legacyAliases++
+			}
+			if seen[access.Key] {
+				duplicates++
+				continue
+			}
+			seen[access.Key] = true
+			uniqueKeys = append(uniqueKeys, access.Key)
+		}
+		sort.Strings(uniqueKeys)
+		for left := 0; left < len(uniqueKeys); left++ {
+			for right := left + 1; right < len(uniqueKeys); right++ {
+				edgeCounts[uniqueKeys[left]+"|"+uniqueKeys[right]]++
+			}
+		}
+	}
+	average := 0.0
+	if len(rows) > 0 {
+		average = float64(totalKeys) / float64(len(rows))
+	}
+	return map[string]any{
+		"transaction_count":            len(rows),
+		"access_list_digest":           digest,
+		"empty_access_list_count":      empty,
+		"duplicate_key_count":          duplicates,
+		"legacy_account_alias_count":   legacyAliases,
+		"average_keys_per_transaction": average,
+		"minimum_keys_per_transaction": minKeys,
+		"maximum_keys_per_transaction": maxKeys,
+		"unique_state_key_count":       len(keyCounts),
+		"read_count":                   modeCounts[tx.AccessRead],
+		"write_count":                  modeCounts[tx.AccessWrite],
+		"read_write_count":             modeCounts[tx.AccessReadWrite],
+		"commutative_delta_count":      modeCounts[tx.AccessCommutativeDelta],
+		"top_state_keys":               topCounts(keyCounts, 20),
+		"top_coaccess_edges":           topCounts(edgeCounts, 20),
+	}
+}
+
+func topCounts(counts map[string]int, limit int) []map[string]any {
+	keys := make([]string, 0, len(counts))
+	for key := range counts {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if counts[keys[i]] == counts[keys[j]] {
+			return keys[i] < keys[j]
+		}
+		return counts[keys[i]] > counts[keys[j]]
+	})
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	out := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, map[string]any{"key": key, "count": counts[key]})
+	}
+	return out
 }
 
 func syntheticSignedAccessList(sender, receiver string, declared []tx.AccessItem) []tx.AccessItem {
@@ -309,15 +495,23 @@ func requestedCrossShardCount(total int, ratio float64) int {
 
 func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any, accessRows, frequencyRows, coaccessRows, placementRows, transactionRows, dependencyRows, remoteStateRows *[][]string) {
 	*planRows = append(*planRows, map[string]any{
-		"batch_index":            plan.BatchIndex,
-		"plan_digest":            plan.PlanDigest,
-		"transaction_count":      len(plan.TransactionPlacements),
-		"state_key_count":        len(plan.StateFrequency),
-		"coaccess_edge_count":    len(plan.CoaccessEdges),
-		"remote_access_estimate": plan.RemoteAccessEstimate,
-		"routing_overhead":       plan.RoutingOverhead,
-		"shard_load_before":      plan.ShardLoadBefore,
-		"shard_load_after":       plan.ShardLoadAfter,
+		"batch_index":                   plan.BatchIndex,
+		"plan_digest":                   plan.PlanDigest,
+		"sharding_plugin_id":            plan.ShardingPluginID,
+		"placement_policy":              plan.PlacementPolicy,
+		"transaction_policy":            plan.TransactionPolicy,
+		"placement_budget":              plan.PlacementBudget,
+		"placement_min_budget":          plan.PlacementMinBudget,
+		"placement_mu":                  plan.PlacementMu,
+		"transaction_count":             len(plan.TransactionPlacements),
+		"state_key_count":               len(plan.StateFrequency),
+		"coaccess_edge_count":           len(plan.CoaccessEdges),
+		"remote_access_estimate":        plan.RemoteAccessEstimate,
+		"predicted_remote_access_count": plan.RemoteAccessEstimate,
+		"placement_fallback_count":      plan.PlacementFallbackCount,
+		"routing_overhead":              plan.RoutingOverhead,
+		"shard_load_before":             plan.ShardLoadBefore,
+		"shard_load_after":              plan.ShardLoadAfter,
 	})
 	for _, row := range plan.AccessMatrix {
 		*accessRows = append(*accessRows, []string{fmt.Sprint(plan.BatchIndex), row.LogicalID, fmt.Sprint(row.TxIndex), row.Key, string(row.Mode)})

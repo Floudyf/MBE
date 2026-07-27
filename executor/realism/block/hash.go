@@ -25,10 +25,22 @@ func Hash(b Block) string {
 		StateRootAfter    string             `json:"state_root_after"`
 		ReceiptRoot       string             `json:"receipt_root"`
 		SystemStateDeltas []SystemStateDelta `json:"system_state_deltas,omitempty"`
+		ExecutionPlan     *struct {
+			AlgorithmID   string `json:"algorithm_id"`
+			PayloadDigest string `json:"payload_digest"`
+			PlanDigest    string `json:"plan_digest"`
+		} `json:"execution_plan,omitempty"`
 	}{
 		ShardID: b.ShardID, Height: b.Height, PreviousHash: b.PreviousHash, ProposerID: b.ProposerID,
 		Timestamp: b.Timestamp, TxIDs: b.TxIDs, TxRoot: b.TxRoot, StateRootBefore: b.StateRootBefore,
 		StateRootAfter: b.StateRootAfter, ReceiptRoot: b.ReceiptRoot, SystemStateDeltas: b.SystemStateDeltas,
+	}
+	if b.ExecutionPlan != nil {
+		core.ExecutionPlan = &struct {
+			AlgorithmID   string `json:"algorithm_id"`
+			PayloadDigest string `json:"payload_digest"`
+			PlanDigest    string `json:"plan_digest"`
+		}{AlgorithmID: b.ExecutionPlan.AlgorithmID, PayloadDigest: b.ExecutionPlan.PayloadDigest, PlanDigest: b.ExecutionPlan.PlanDigest}
 	}
 	payload, _ := json.Marshal(core)
 	sum := sha256.Sum256(payload)

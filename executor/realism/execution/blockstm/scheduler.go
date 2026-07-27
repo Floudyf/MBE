@@ -96,17 +96,26 @@ func defaultTxnOrder(txCount int) []TxnIndex {
 func (s *Scheduler) Next() (SchedulerTask, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.queue) == 0 {
-		return SchedulerTask{}, false
+	for len(s.queue) > 0 {
+		task := s.queue[0]
+		s.queue = s.queue[1:]
+		if s.statuses[task.Version.Txn] == StatusWaiting {
+			continue
+		}
+		if task.Kind == TaskExecute {
+			s.statuses[task.Version.Txn] = StatusExecuting
+		} else {
+			s.statuses[task.Version.Txn] = StatusValidating
+		}
+		return task, true
 	}
-	task := s.queue[0]
-	s.queue = s.queue[1:]
-	if task.Kind == TaskExecute {
-		s.statuses[task.Version.Txn] = StatusExecuting
-	} else {
-		s.statuses[task.Version.Txn] = StatusValidating
-	}
-	return task, true
+	return SchedulerTask{}, false
+}
+
+func (s *Scheduler) QueueLen() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.queue)
 }
 
 func (s *Scheduler) ScheduleValidation(version Version) {
@@ -114,6 +123,13 @@ func (s *Scheduler) ScheduleValidation(version Version) {
 	defer s.mu.Unlock()
 	s.queue = append(s.queue, SchedulerTask{Kind: TaskValidate, Version: version})
 	s.statuses[version.Txn] = StatusValidating
+}
+
+func (s *Scheduler) ScheduleExecution(version Version) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queue = append(s.queue, SchedulerTask{Kind: TaskExecute, Version: version})
+	s.statuses[version.Txn] = StatusPending
 }
 
 func (s *Scheduler) Commit(version Version) {

@@ -3,10 +3,10 @@ import type { V3SavedConfig, V5ExperimentSpec, V5FormalMethod, V5PluginManifest,
 export const V5_METHOD_PROFILE_SCHEMA_VERSION = "v5_plugin_profile_v1";
 export const V5_METHOD_EXCLUDED_CATEGORIES = new Set(["workload", "fault_injection"]);
 export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
-  { method_id: "hash_serial", display_name: "Hash + Serial", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
-  { method_id: "hash_block_stm", display_name: "Hash + Block-STM", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
-  { method_id: "metatrack_serial", display_name: "MetaTrack + Serial", role: "main", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "serial_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
-  { method_id: "metatrack_block_stm", display_name: "MetaTrack + Block-STM", role: "main", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "block_stm_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
+  { method_id: "hash_serial", display_name: "Baseline", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
+  { method_id: "hash_block_stm", display_name: "Block-STM", role: "main", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 16, incarnation_limit_action: "fail" } } },
+  { method_id: "metatrack_serial", display_name: "MetaTrack", role: "main", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "metatrack_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
+  { method_id: "metatrack_block_stm", display_name: "MetaTrack with Block-STM backend", role: "compatibility", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "block_stm_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 16, incarnation_limit_action: "fail" } } },
 ];
 
 export function defaultV5PluginSelections(catalog: V5PluginManifest[]): V5PluginSelection[] {
@@ -34,7 +34,7 @@ export function parseSavedV5Method(saved: V3SavedConfig, catalog: V5PluginManife
     overrides.block_executor = fallback.plugin_id;
   }
   const draft = record(payload.source_composer_draft) ? payload.source_composer_draft : {};
-  const role = typeof draft.role === "string" && ["main", "baseline", "ablation", "custom"].includes(draft.role) ? draft.role : saved.tags.find((tag) => ["main", "baseline", "ablation", "custom"].includes(tag)) ?? "custom";
+  const role = typeof draft.role === "string" && ["main", "baseline", "ablation", "compatibility", "custom"].includes(draft.role) ? draft.role : saved.tags.find((tag) => ["main", "baseline", "ablation", "compatibility", "custom"].includes(tag)) ?? "custom";
   const configOverrides = record(payload.plugin_config_overrides) ? payload.plugin_config_overrides as Record<string, Record<string, unknown>> : {};
   return { method_id: saved.config_id, display_name: saved.name, plugin_overrides: overrides, plugin_config_overrides: configOverrides, role: role as V5FormalMethod["role"] };
 }

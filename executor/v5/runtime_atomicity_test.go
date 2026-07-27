@@ -73,6 +73,57 @@ func TestCommitRollbackFailureFreezesRuntime(t *testing.T) {
 	}
 }
 
+func TestCommitRejectsStaleRemoteSetWithoutDurableSuccess(t *testing.T) {
+	root := t.TempDir()
+	storeDir := filepath.Join(root, "store")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := map[string]PluginConfig{}
+	for _, category := range Categories {
+		profile[category] = PluginConfig{PluginID: firstPlugin(category), Config: map[string]any{}}
+	}
+	plugins, err := InstantiatePlugins(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := mempool.New("n0", "s0", mempool.DefaultPolicy(), account.NewNonceManager())
+	db := state.NewDB(root, "s0")
+	db.Set("object:parcel-1", "new-owner")
+	if err := db.Save(); err != nil {
+		t.Fatal(err)
+	}
+	beforeRoot := db.Root()
+	store := storage.NewBlockStore(storeDir, "n0", "s0")
+	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n0", Timestamp: nowForTest().UnixMilli(), TxIDs: []string{}, TxList: []tx.SignedTransaction{}, StateRootBefore: beforeRoot, StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed", SystemStateDeltas: []realblock.SystemStateDelta{{DeltaID: "stale-delta", Key: "object:parcel-1", Value: "stale-owner", TxID: "tx-stale", TxIDs: []string{"tx-stale"}, BaseValue: "old-owner", BaseValueDigest: stateValueDigest("old-owner"), HomeShard: "s0", ExecutionShard: "s1", SourceKey: "s1::object:parcel-1", SourceHeight: 1, SourceBlockHash: "source-block"}}}
+	realblock.AssignHash(&block)
+	runtime := &NodeRuntime{node: NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root}, pool: pool, proposer: realblock.NewProposer("n0", "s0"), db: db, store: store, proposals: map[string]realblock.Block{block.BlockHash: block}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, committedHash: "genesis", pluginSnapshot: profile, plugins: plugins}
+	if _, err := runtime.commitWithOrigin(context.Background(), block, CommitOriginConsensus); err == nil {
+		t.Fatal("expected stale remote set CAS mismatch")
+	}
+	if got := db.Get("object:parcel-1"); got != "new-owner" {
+		t.Fatalf("stale CAS failure changed DB state: %q", got)
+	}
+	if runtime.committedHeight != 0 || runtime.committedHash != "genesis" || runtime.blockCount != 0 || runtime.committed[block.BlockHash] {
+		t.Fatalf("stale CAS failure advanced runtime: height=%d hash=%s count=%d committed=%t", runtime.committedHeight, runtime.committedHash, runtime.blockCount, runtime.committed[block.BlockHash])
+	}
+	if _, err := os.Stat(filepath.Join(root, "state_delta.1.wal")); err == nil {
+		t.Fatal("stale CAS failure wrote a WAL record")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(storeDir, "blocks.jsonl")); err == nil {
+		t.Fatal("stale CAS failure wrote durable block")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	for _, event := range runtime.lifecycle {
+		if event.Stage == "durable_committed" && event.Success {
+			t.Fatalf("stale CAS failure produced durable success lifecycle: %#v", event)
+		}
+	}
+}
+
 func testCommitDurableFailure(t *testing.T, failpoint string) {
 	root := t.TempDir()
 	storeDir := filepath.Join(root, "store")
@@ -219,6 +270,27 @@ func TestExpireStaleProposalDoesNotReleaseQuorumOrCommittingProposal(t *testing.
 	}
 	if runtime.blockCount != 1 {
 		t.Fatal("duplicate durable commit advanced block count")
+	}
+}
+
+func TestRetryPendingRelaysDoesNotReadmitDurablyCommittedTransaction(t *testing.T) {
+	runtime, block, generated := proposalRuntimeForTest(t, "committed-relay-retry")
+	if _, err := runtime.commitWithOrigin(context.Background(), block, CommitOriginConsensus); err != nil {
+		t.Fatalf("commit failed: %v", err)
+	}
+	item := generated[0]
+	runtime.node.Leader = false
+	runtime.relaySource = map[string]Relay{
+		item.TxID: {
+			Tx:          item,
+			LogicalTxID: item.TxID,
+			SourceShard: "s1",
+			TargetShard: "s0",
+		},
+	}
+	runtime.retryPendingRelays()
+	if runtime.pool.Has(item.TxID) || runtime.pool.ReservedCount() != 0 {
+		t.Fatal("durably committed relay was re-admitted to the target mempool")
 	}
 }
 

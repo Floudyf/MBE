@@ -34,6 +34,13 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
         "metatrack_serial",
         "metatrack_block_stm",
     ]
+    assert [method.display_name for method in checked.plan.methods] == [
+        "Baseline",
+        "Block-STM",
+        "MetaTrack",
+        "MetaTrack with Block-STM backend",
+    ]
+    assert checked.plan.methods[-1].role == "compatibility"
     assert checked.plan.methods[1].plugin_overrides["block_executor"] == "block_stm_block_executor"
     assert checked.plan.methods[1].plugin_config_overrides["block_executor"]["worker_count"] == 4
 

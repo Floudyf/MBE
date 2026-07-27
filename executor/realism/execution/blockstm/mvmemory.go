@@ -32,6 +32,26 @@ func (m *MVMemory) MarkEstimate(key string, version Version) {
 	m.upsertLocked(key, VersionedValue{Version: version, Estimate: true})
 }
 
+func (m *MVMemory) ClearTxnVersions(key string, txn TxnIndex) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := m.values[key]
+	if len(items) == 0 {
+		return
+	}
+	kept := items[:0]
+	for _, item := range items {
+		if item.Version.Txn != txn {
+			kept = append(kept, item)
+		}
+	}
+	if len(kept) == 0 {
+		delete(m.values, key)
+		return
+	}
+	m.values[key] = kept
+}
+
 func (m *MVMemory) upsertLocked(key string, item VersionedValue) {
 	items := m.values[key]
 	replaced := false

@@ -110,6 +110,7 @@ func (m *Mempool) removeLocked(txID string) bool {
 		return false
 	}
 	delete(m.byID, txID)
+	delete(m.reserved, txID)
 	m.order = filterID(m.order, txID)
 	return true
 }

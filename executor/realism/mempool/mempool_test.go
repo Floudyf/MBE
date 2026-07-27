@@ -126,3 +126,21 @@ func TestPopReadyDeterministicAndNodeIsolation(t *testing.T) {
 		t.Fatalf("expected isolated sizes, got a=%d b=%d", a.Len(), b.Len())
 	}
 }
+
+func TestRemoveClearsReservation(t *testing.T) {
+	m := New("n0", "s0", Policy{Capacity: 2, TTL: time.Minute}, account.NewNonceManager())
+	item := signed(t, "reserved-remove", 0)
+	if result := m.Admit(item); !result.Accepted {
+		t.Fatalf("admit failed: %+v", result)
+	}
+	reserved := m.ReserveReady(1)
+	if len(reserved) != 1 || m.ReservedCount() != 1 {
+		t.Fatal("test setup did not reserve transaction")
+	}
+	if !m.Remove(item.TxID) {
+		t.Fatal("remove did not find reserved transaction")
+	}
+	if m.Has(item.TxID) || m.ReservedCount() != 0 {
+		t.Fatal("remove left transaction or reservation behind")
+	}
+}

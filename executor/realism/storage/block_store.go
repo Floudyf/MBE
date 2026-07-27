@@ -53,6 +53,7 @@ func (s *BlockStore) Checkpoint() (ArtifactCheckpoint, error) {
 		filepath.Join(s.DataDir, "blocks.jsonl"),
 		filepath.Join(s.DataDir, "receipts.jsonl"),
 		filepath.Join(s.DataDir, "tx_index.jsonl"),
+		filepath.Join(s.DataDir, "commit_markers.jsonl"),
 	} {
 		info, err := os.Stat(path)
 		if err == nil {
@@ -149,6 +150,10 @@ func (s *BlockStore) AppendCommitted(b block.Block, record CommitRecord) error {
 }
 
 func (s *BlockStore) ReadCommitted() ([]block.Block, error) {
+	markers, err := s.committedMarkerHashes()
+	if err != nil {
+		return nil, err
+	}
 	path := filepath.Join(s.DataDir, "committed_blocks.jsonl")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		// V5 durable commits are stored in the existing blocks.jsonl artifact.
@@ -179,6 +184,12 @@ func (s *BlockStore) ReadCommitted() ([]block.Block, error) {
 		if item.Height == 0 || item.BlockHash == "" {
 			return nil, fmt.Errorf("invalid committed block row: height=%d block_hash=%q", item.Height, item.BlockHash)
 		}
+		if len(markers) > 0 && !markers[item.BlockHash] {
+			continue
+		}
+		if len(markers) == 0 && filepath.Base(path) == "blocks.jsonl" {
+			continue
+		}
 		out = append(out, item)
 	}
 	return out, scanner.Err()
@@ -198,6 +209,13 @@ func (s *BlockStore) ReadCommittedAtHeight(height uint64) (block.Block, bool, er
 }
 
 func (s *BlockStore) HasTransaction(txID string) (bool, error) {
+	committed, err := s.committedMarkerHashes()
+	if err != nil {
+		return false, err
+	}
+	if len(committed) == 0 {
+		return false, nil
+	}
 	path := filepath.Join(s.DataDir, "tx_index.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
@@ -213,11 +231,36 @@ func (s *BlockStore) HasTransaction(txID string) (bool, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
 			return false, err
 		}
-		if row.TxID == txID {
+		if row.TxID == txID && committed[row.BlockHash] {
 			return true, nil
 		}
 	}
 	return false, scanner.Err()
+}
+
+func (s *BlockStore) committedMarkerHashes() (map[string]bool, error) {
+	path := filepath.Join(s.DataDir, "commit_markers.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	hashes := map[string]bool{}
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var row CommitMarker
+		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
+			return nil, err
+		}
+		if row.Version != "durable_commit_marker_v1" || !row.Committed || row.BlockHash == "" {
+			return nil, fmt.Errorf("invalid durable commit marker for block %q", row.BlockHash)
+		}
+		hashes[row.BlockHash] = true
+	}
+	return hashes, scanner.Err()
 }
 
 func WriteCommitCSV(path string, records []CommitRecord) error {

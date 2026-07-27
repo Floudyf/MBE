@@ -3,7 +3,9 @@ package execution
 import (
 	"context"
 	"reflect"
+	"strconv"
 	"testing"
+	"time"
 
 	"metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/execution/blockstm"
@@ -70,10 +72,14 @@ func TestSerialBlockExecutorDuplicateBlockMatchesLegacy(t *testing.T) {
 	serial := NewSerialExecutor()
 	_ = legacy.ExecuteBlock(b, legacyDB)
 	first := serial.ExecuteBlock(b, serialDB.Snapshot())
-	serialDB.ApplyDeterministicBatch(toStateKV(first.StateDelta))
+	if err := serialDB.ApplyDeterministicBatch(toStateKV(first.StateDelta)); err != nil {
+		t.Fatal(err)
+	}
 	legacySecond := legacy.ExecuteBlock(b, legacyDB)
 	serialSecond := serial.ExecuteBlock(b, serialDB.Snapshot())
-	serialDB.ApplyDeterministicBatch(toStateKV(serialSecond.StateDelta))
+	if err := serialDB.ApplyDeterministicBatch(toStateKV(serialSecond.StateDelta)); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(legacySecond.Receipts, serialSecond.Receipts) || !reflect.DeepEqual(legacyDB.Snapshot(), serialDB.Snapshot()) {
 		t.Fatalf("duplicate execution diverged legacy=%+v serial=%+v", legacySecond, serialSecond)
 	}
@@ -152,11 +158,117 @@ func TestBlockSTMExecutorRecordsAbortAndReexecutionOnHotNonceSequence(t *testing
 	if got.BlockSTMMetrics.AbortCount != executor.Metrics.AbortCount || got.BlockSTMMetrics.ReexecutionCount != executor.Metrics.ReexecutionCount {
 		t.Fatalf("block-stm result did not carry kernel metrics: result=%+v executor=%+v", got.BlockSTMMetrics, executor.Metrics)
 	}
-	if executor.Metrics.ValidationTaskCount != len(b.TxList) || executor.Metrics.ExecutionTaskCount != len(b.TxList) {
+	if executor.Metrics.ValidationTaskCount < len(b.TxList) || executor.Metrics.ExecutionTaskCount < len(b.TxList) {
 		t.Fatalf("expected execution and validation tasks for every transaction, got %+v", executor.Metrics)
+	}
+	if executor.Metrics.ValidatedSpeculativeResultCount != len(b.TxList) || executor.Metrics.MaximumIncarnation < 1 {
+		t.Fatalf("expected validated final incarnations for every transaction, got %+v", executor.Metrics)
 	}
 	if executor.Metrics.MaximumParallelWidth < 1 || executor.Metrics.MaximumParallelWidth > executor.Metrics.WorkerCount {
 		t.Fatalf("unexpected maximum parallel width: %+v", executor.Metrics)
+	}
+}
+
+func TestBlockSTMExecutorReexecutesDenseNonceConflict(t *testing.T) {
+	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-hot-nonce-second-incarnation", 8, "alice", "bob", 1, "v5_safe"))
+	executor := NewBlockSTMExecutor(8)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := executor.ExecuteBlock(ctx, b, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial := NewSerialExecutor().ExecuteBlock(b, map[string]string{})
+	if got.StateRootAfter != serial.StateRootAfter || got.ReceiptRoot != serial.ReceiptRoot {
+		t.Fatalf("block-stm not serial equivalent")
+	}
+	if executor.Metrics.MaximumIncarnation < 1 ||
+		executor.Metrics.ReexecutionCount == 0 ||
+		executor.Metrics.AbortCount == 0 ||
+		executor.Metrics.ValidationFailureCount == 0 {
+		t.Fatalf("expected dense nonce conflict to abort and reexecute, got %+v", executor.Metrics)
+	}
+	if executor.Metrics.EstimateCount == 0 || executor.Metrics.EstimateMarkCount == 0 {
+		t.Fatalf("expected dense nonce conflict to publish ESTIMATE markers, got %+v", executor.Metrics)
+	}
+}
+
+func TestBlockSTMExecutorDenseNonceConflictRemainsLive(t *testing.T) {
+	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-dense-liveness", 8, "alice", "bob", 1, "v5_safe"))
+	serial := NewSerialExecutor().ExecuteBlock(b, map[string]string{})
+
+	for iteration := 0; iteration < 25; iteration++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		executor := NewBlockSTMExecutor(8)
+		got, err := executor.ExecuteBlock(ctx, b, map[string]string{})
+		cancel()
+
+		if err != nil {
+			t.Fatalf("dense conflict iteration %d did not complete: %v", iteration, err)
+		}
+		if got.StateRootAfter != serial.StateRootAfter || got.ReceiptRoot != serial.ReceiptRoot {
+			t.Fatalf("dense conflict iteration %d diverged from serial execution", iteration)
+		}
+	}
+}
+
+func TestBlockSTMExecutorCompletesHotDatasetSaleShape(t *testing.T) {
+	sender := "0x0f1be46ce4e76e018fe537cdc85f795ded5d5e34"
+	receivers := []string{
+		"receiver_0xcfbb134e83aab817453359a9210079306fe51347",
+		"receiver_0x1e010790e03ab7f23ff6195c1623013dc3b386cc",
+		"receiver_0x37fb0006b93a43ea51c8e5a0210fc5c7cc99b202",
+		"receiver_0xcfbb134e83aab817453359a9210079306fe51347",
+		"receiver_0xcfbb134e83aab817453359a9210079306fe51347",
+		"receiver_0x3196fca892fa79fbb052b451a4d86b3c4aeb990c",
+		"receiver_0xb3ae1f5e603abd59de79a0fb0707fdbea3a90957",
+		"receiver_0xcfbb134e83aab817453359a9210079306fe51347",
+		"receiver_0xb3ae1f5e603abd59de79a0fb0707fdbea3a90957",
+		"receiver_0xb3ae1f5e603abd59de79a0fb0707fdbea3a90957",
+	}
+	markets := []string{
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xbada8a315e84e4d78e3b6914003647226d9b4001",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+		"market:0xa25c20f58ac447621a5f854067b857709cbd60eb",
+	}
+	items := make([]tx.SignedTransaction, 0, len(receivers))
+	for index, receiver := range receivers {
+		items = append(items, tx.SignedTransaction{
+			TxID:      "dataset-hot-" + strconv.Itoa(index),
+			Sender:    sender,
+			Receiver:  receiver,
+			Nonce:     uint64(index),
+			Value:     1,
+			Payload:   "dataset_event:emote",
+			StateKeys: []string{"shard:s0:account", markets[index], "category:emote"},
+			AccessList: []tx.AccessItem{
+				{Key: "balance:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "buyer_balance"},
+				{Key: "balance:" + receiver, Mode: tx.AccessReadWrite, UpdateSemantics: "seller_balance"},
+				{Key: "category:emote", Mode: tx.AccessRead, UpdateSemantics: "category_metadata"},
+				{Key: markets[index], Mode: tx.AccessCommutativeDelta, UpdateSemantics: "market_sale_counter", Delta: 1},
+				{Key: "nonce:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "buyer_nonce"},
+				{Key: "nonce:" + receiver, Mode: tx.AccessRead, UpdateSemantics: "seller_nonce_state"},
+			},
+		})
+	}
+	b := blockForExecutionTest(items)
+	base := map[string]string{"s0::balance:" + sender: "1000000", "s0::nonce:" + sender: "0"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := NewBlockSTMExecutor(8).ExecuteBlock(ctx, b, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serial := NewSerialExecutor().ExecuteBlock(b, base)
+	if !sameExecutionOutput(serial, got) {
+		t.Fatalf("hot dataset sale shape diverged from serial")
 	}
 }
 
@@ -196,6 +308,86 @@ func TestBlockSTMExecutorHonorsCanceledContext(t *testing.T) {
 	cancel()
 	if _, err := NewBlockSTMExecutor(4).ExecuteBlock(ctx, b, map[string]string{}); err == nil {
 		t.Fatal("expected canceled context to stop block-stm execution")
+	}
+}
+
+func TestBlockSTMPerformanceModeSkipsFullSerialOracle(t *testing.T) {
+	items := append(
+		mustGenerateForExecutionTest(t, "perf-a", 1, "alice", "bob", 5, "v5_safe"),
+		mustGenerateForExecutionTest(t, "perf-b", 1, "carol", "dave", 7, "v5_safe")...,
+	)
+	b := blockForExecutionTest(items)
+	base := map[string]string{}
+	correct := NewBlockSTMExecutor(4)
+	correct.ExecutionMode = "correctness"
+	correct.OracleMode = "full"
+	expected, err := correct.ExecuteBlock(testContext(t), b, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perf := NewBlockSTMExecutor(4)
+	perf.ExecutionMode = "performance"
+	perf.OracleMode = "off"
+	actual, err := perf.ExecuteBlock(testContext(t), b, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actual.BlockSTMMetrics.SerialOracleMS != 0 {
+		t.Fatalf("performance mode must not run full serial oracle: %+v", actual.BlockSTMMetrics)
+	}
+	expectedBusinessCalls := actual.BlockSTMMetrics.ExecutionTaskCount + actual.BlockSTMMetrics.ReexecutionCount
+	if actual.BlockSTMMetrics.BusinessExecutionCount != expectedBusinessCalls {
+		t.Fatalf("performance mode must not add hidden materialization business execution: got %d want %d metrics=%+v", actual.BlockSTMMetrics.BusinessExecutionCount, expectedBusinessCalls, actual.BlockSTMMetrics)
+	}
+	if !sameExecutionOutput(expected, actual) {
+		t.Fatalf("performance output diverged from correctness output")
+	}
+}
+
+func TestBlockSTMIncarnationLimitFailDoesNotReturnPartialResults(t *testing.T) {
+	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-limit-fail", 4, "alice", "bob", 1, "v5_safe"))
+	executor := NewBlockSTMExecutor(4)
+	executor.MaximumIncarnations = 0
+	executor.IncarnationLimitAction = "fail"
+	result, err := executor.ExecuteBlock(testContext(t), b, map[string]string{})
+	if err != nil {
+		t.Fatalf("maximum_incarnations=0 disables the limit and should not fail: %v", err)
+	}
+	if len(result.Receipts) != len(b.TxList) || len(result.TxDeltas) != len(b.TxList) {
+		t.Fatalf("all transactions must have results when limit is disabled: receipts=%d deltas=%d", len(result.Receipts), len(result.TxDeltas))
+	}
+
+	limited := NewBlockSTMExecutor(4)
+	limited.MaximumIncarnations = 1
+	limited.IncarnationLimitAction = "fail"
+	if _, err := limited.ExecuteBlock(testContext(t), b, map[string]string{}); err == nil {
+		t.Fatal("expected incarnation limit failure")
+	}
+}
+
+func TestBlockSTMIncarnationLimitSerialFallbackReturnsCompleteEquivalentBlock(t *testing.T) {
+	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-limit-fallback", 4, "alice", "bob", 1, "v5_safe"))
+	serial := NewSerialExecutor().ExecuteBlock(b, map[string]string{})
+	executor := NewBlockSTMExecutor(4)
+	executor.MaximumIncarnations = 1
+	executor.IncarnationLimitAction = "serial_fallback"
+	result, err := executor.ExecuteBlock(testContext(t), b, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BlockSTMMetrics.SerialFallbackCount == 0 || result.BlockSTMMetrics.IncarnationLimitHitCount == 0 {
+		t.Fatalf("fallback metrics missing: %+v", result.BlockSTMMetrics)
+	}
+	if len(result.Receipts) != len(b.TxList) || len(result.TxDeltas) != len(b.TxList) {
+		t.Fatalf("fallback must return complete results: receipts=%d deltas=%d", len(result.Receipts), len(result.TxDeltas))
+	}
+	if result.StateRootAfter != serial.StateRootAfter || result.ReceiptRoot != serial.ReceiptRoot {
+		t.Fatalf("fallback diverged from serial: state %s/%s receipt %s/%s", result.StateRootAfter, serial.StateRootAfter, result.ReceiptRoot, serial.ReceiptRoot)
+	}
+	for index := range b.TxList {
+		if result.Receipts[index].TxID == "" || result.TxDeltas[index].TxID == "" {
+			t.Fatalf("transaction %d lacks final result: receipts=%+v deltas=%+v", index, result.Receipts, result.TxDeltas)
+		}
 	}
 }
 
@@ -255,7 +447,9 @@ func assertSerialEquivalent(t *testing.T, b block.Block) {
 	serialDB := state.NewDB(t.TempDir(), "s0")
 	legacyResult := NewEngine().ExecuteBlock(b, legacyDB)
 	serialResult := NewSerialExecutor().ExecuteBlock(b, serialDB.Snapshot())
-	serialDB.ApplyDeterministicBatch(toStateKV(serialResult.StateDelta))
+	if err := serialDB.ApplyDeterministicBatch(toStateKV(serialResult.StateDelta)); err != nil {
+		t.Fatal(err)
+	}
 	if !reflect.DeepEqual(legacyResult.Receipts, serialResult.Receipts) {
 		t.Fatalf("receipts diverged\nlegacy=%+v\nserial=%+v", legacyResult.Receipts, serialResult.Receipts)
 	}

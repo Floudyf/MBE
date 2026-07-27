@@ -8,9 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from backend.app.core.paths import ROOT
+from backend.app.core.paths import FORMAL_RUN_ROOT
 
-ROOT_DIR = ROOT / ".cache" / "v5_formal_runs"
+ROOT_DIR = FORMAL_RUN_ROOT
 _LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.Lock] = {}
 

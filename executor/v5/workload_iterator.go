@@ -31,7 +31,8 @@ type SyntheticIterator struct {
 
 func NewSyntheticIterator(plugin builtinWorkload, plan WorkloadPlan, shards int) *SyntheticIterator {
 	expected := requestedCrossShardCount(plan.TxCount, plan.CrossShardRatio)
-	return &SyntheticIterator{plugin: plugin, plan: plan, shards: shards, summary: WorkloadReplaySummary{ExpectedCount: plan.TxCount, ExpectedCrossShardCount: expected, ExpectedCrossShardRatio: plan.CrossShardRatio, ReplayMode: "max_throughput", NoFallback: true, NonceContinuity: true}}
+	digest := sha256.Sum256([]byte(fmt.Sprintf("synthetic:v2:%s:%d:%d:%d:%0.12f:%d", plan.PluginID, plan.TxCount, plan.Seed, plan.TimeoutEvery, plan.CrossShardRatio, shards)))
+	return &SyntheticIterator{plugin: plugin, plan: plan, shards: shards, summary: WorkloadReplaySummary{MaterializedSHA256: hex.EncodeToString(digest[:]), ExpectedCount: plan.TxCount, ExpectedCrossShardCount: expected, ExpectedCrossShardRatio: plan.CrossShardRatio, ReplayMode: "max_throughput", NoFallback: true, NonceContinuity: true}}
 }
 
 func (it *SyntheticIterator) Next(context.Context) (WorkloadRecord, error) {
@@ -50,26 +51,39 @@ func (it *SyntheticIterator) Close() error                   { return nil }
 func (it *SyntheticIterator) Summary() WorkloadReplaySummary { return it.summary }
 
 type canonicalWireRecord struct {
-	SchemaVersion     string   `json:"schema_version"`
-	DatasetID         string   `json:"dataset_id"`
-	SourceRowIndex    int      `json:"source_row_index"`
-	SourceEventID     string   `json:"source_event_id"`
-	SourceTxHash      string   `json:"source_tx_hash"`
-	TimestampMS       int64    `json:"timestamp_ms"`
-	SenderID          string   `json:"sender_id"`
-	ReceiverID        string   `json:"receiver_id"`
-	OperationType     string   `json:"operation_type"`
-	RuntimeValue      int64    `json:"runtime_value"`
-	StateKeys         []string `json:"state_keys"`
-	RoutingSourceKey  string   `json:"routing_source_key"`
-	RoutingTargetKey  string   `json:"routing_target_key"`
-	MaterializedIndex int      `json:"materialized_index"`
-	LogicalEventID    string   `json:"logical_event_id"`
+	SchemaVersion     string                        `json:"schema_version"`
+	DatasetID         string                        `json:"dataset_id"`
+	SourceRowIndex    int                           `json:"source_row_index"`
+	SourceEventID     string                        `json:"source_event_id"`
+	SourceTxHash      string                        `json:"source_tx_hash"`
+	TimestampMS       int64                         `json:"timestamp_ms"`
+	SenderID          string                        `json:"sender_id"`
+	ReceiverID        string                        `json:"receiver_id"`
+	OperationType     string                        `json:"operation_type"`
+	RuntimeValue      int64                         `json:"runtime_value"`
+	StateKeys         []string                      `json:"state_keys"`
+	RoutingSourceKey  string                        `json:"routing_source_key"`
+	RoutingTargetKey  string                        `json:"routing_target_key"`
+	AccessListSchema  string                        `json:"access_list_schema"`
+	AccessListSource  string                        `json:"access_list_source"`
+	AccessTemplate    []canonicalWireAccessTemplate `json:"access_template"`
+	Category          string                        `json:"category,omitempty"`
+	Contract          string                        `json:"contract,omitempty"`
+	MaterializedIndex int                           `json:"materialized_index"`
+	LogicalEventID    string                        `json:"logical_event_id"`
+}
+
+type canonicalWireAccessTemplate struct {
+	Role      string `json:"role"`
+	Mode      string `json:"mode"`
+	Semantics string `json:"semantics"`
+	Delta     int64  `json:"delta,omitempty"`
 }
 
 type CanonicalTraceIterator struct {
 	plan       WorkloadPlan
 	shards     int
+	sharding   ShardingPlugin
 	file       *os.File
 	gzip       *gzip.Reader
 	scanner    *bufio.Scanner
@@ -82,6 +96,10 @@ type CanonicalTraceIterator struct {
 }
 
 func NewCanonicalTraceIterator(plan WorkloadPlan, shards int, dataDir string) (*CanonicalTraceIterator, error) {
+	return NewCanonicalTraceIteratorWithSharding(plan, shards, dataDir, nil)
+}
+
+func NewCanonicalTraceIteratorWithSharding(plan WorkloadPlan, shards int, dataDir string, sharding ShardingPlugin) (*CanonicalTraceIterator, error) {
 	if plan.PluginID != "canonical_trace_replay" || plan.SourceType != "dataset" {
 		return nil, fmt.Errorf("canonical trace iterator requires dataset canonical_trace_replay plan")
 	}
@@ -115,7 +133,7 @@ func NewCanonicalTraceIterator(plan WorkloadPlan, shards int, dataDir string) (*
 		expected = plan.TxCount
 	}
 	return &CanonicalTraceIterator{
-		plan: plan, shards: shards, file: file, gzip: gz, scanner: scanner,
+		plan: plan, shards: shards, sharding: sharding, file: file, gzip: gz, scanner: scanner,
 		identities: map[string]string{}, nonces: map[string]uint64{}, hash: hash,
 		summary: WorkloadReplaySummary{DatasetID: plan.DatasetID, VariantID: plan.VariantID, TruthLabel: plan.TruthLabel, SourceSHA256: plan.SourceSHA256, MaterializedSHA256: plan.MaterializedSHA256, ExpectedCount: expected, ExpectedCrossShardCount: plan.ExpectedCrossShardCount, ExpectedCrossShardRatio: plan.ExpectedCrossShardRatio, ReplayMode: plan.ReplayMode, NoFallback: true, NonceContinuity: true, ShardLoadDistribution: map[string]int{}, IdentityMappingVersion: firstNonEmpty(plan.IdentityMappingVersion, "mbe_dataset_identity_v1")},
 	}, nil
@@ -135,17 +153,17 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 	if err := json.Unmarshal(it.scanner.Bytes(), &wire); err != nil {
 		return WorkloadRecord{}, fmt.Errorf("malformed canonical workload JSON: %w", err)
 	}
-	if wire.SchemaVersion != "mbe_workload_record_v1" || wire.DatasetID != it.plan.DatasetID || wire.SenderID == "" || wire.OperationType == "" || len(wire.StateKeys) < 1 || wire.RoutingSourceKey == "" {
+	if wire.DatasetID != it.plan.DatasetID || wire.SenderID == "" || wire.OperationType == "" || len(wire.StateKeys) < 1 || wire.RoutingSourceKey == "" {
 		return WorkloadRecord{}, fmt.Errorf("canonical workload schema error")
 	}
 	if it.index >= it.summary.ExpectedCount {
 		return WorkloadRecord{}, fmt.Errorf("canonical workload has excess records")
 	}
 	senderID := strings.ToLower(wire.SenderID)
-	sourceShard := canonicalRuntimeSourceShard(it.plan, senderID, it.shards)
+	sourceShard := canonicalRuntimeSourceShardWithSharding(it.plan, senderID, it.shards, it.sharding)
 	targetShard := sourceShard
 	if wire.RoutingTargetKey != "" {
-		targetShard = stableShard([]string{strings.ToLower(wire.RoutingTargetKey)}, it.shards)
+		targetShard = shardIndexFor(it.sharding, []string{strings.ToLower(wire.RoutingTargetKey)}, it.shards)
 	}
 	cross := wire.RoutingTargetKey != "" && sourceShard != targetShard
 	target := ""
@@ -155,11 +173,14 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 		payload = "v5_cross:" + target + ":" + payload
 		it.summary.ActualCrossShardCount++
 	}
-	accessList := canonicalAccessList(wire)
+	accessList, accessSchema, accessSource, accessDigest, err := resolveCanonicalAccessList(it.plan, wire)
+	if err != nil {
+		return WorkloadRecord{}, err
+	}
 	it.summary.ShardLoadDistribution[fmt.Sprintf("s%d", sourceShard)]++
 	it.summary.ReadCount++
 	it.index++
-	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), SenderID: senderID, ReceiverID: strings.ToLower(wire.ReceiverID), OperationType: wire.OperationType, RoutingSourceKey: wire.RoutingSourceKey, RoutingTargetKey: wire.RoutingTargetKey, Payload: payload, StateKeys: wire.StateKeys, AccessList: accessList, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", sourceShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
+	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), SenderID: senderID, ReceiverID: strings.ToLower(wire.ReceiverID), OperationType: wire.OperationType, RoutingSourceKey: wire.RoutingSourceKey, RoutingTargetKey: wire.RoutingTargetKey, Payload: payload, StateKeys: wire.StateKeys, AccessList: accessList, AccessListSchema: accessSchema, AccessListSource: accessSource, AccessListDigest: accessDigest, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", sourceShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
 }
 
 func (it *CanonicalTraceIterator) Close() error {
@@ -208,8 +229,16 @@ func (it *CanonicalTraceIterator) SignedTransaction(record WorkloadRecord) (tx.S
 	nonce := it.nonces[record.SenderID]
 	it.nonces[record.SenderID] = nonce + 1
 	receiver := "receiver_" + record.ReceiverID
-	accessList := canonicalRuntimeAccessList(it.plan, record)
-	item := tx.SignedTransaction{Sender: sender, Receiver: receiver, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, AccessList: accessList, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
+	if len(record.AccessList) == 0 {
+		return tx.SignedTransaction{}, fmt.Errorf("empty resolved access list for source_event_id=%s", record.SourceEventID)
+	}
+	if digest := CanonicalAccessListDigest(record.AccessList); digest != record.AccessListDigest {
+		return tx.SignedTransaction{}, fmt.Errorf("access list digest mismatch for source_event_id=%s", record.SourceEventID)
+	}
+	if !accessListHasKey(record.AccessList, "balance:"+sender) || !accessListHasKey(record.AccessList, "nonce:"+sender) || !accessListHasKey(record.AccessList, "balance:"+receiver) || !accessListHasKey(record.AccessList, "nonce:"+receiver) {
+		return tx.SignedTransaction{}, fmt.Errorf("resolved access list does not match runtime sender/receiver for source_event_id=%s", record.SourceEventID)
+	}
+	item := tx.SignedTransaction{Sender: sender, Receiver: receiver, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, AccessList: append([]tx.AccessItem(nil), record.AccessList...), AccessListDigest: record.AccessListDigest, AccessListSchema: record.AccessListSchema, AccessListSource: record.AccessListSource, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
 	if err := tx.Sign(&item, privateKey); err != nil {
 		return item, err
 	}
@@ -234,20 +263,114 @@ func canonicalRuntimeSenderAddress(plan WorkloadPlan, senderID string) string {
 }
 
 func canonicalRuntimeSourceShard(plan WorkloadPlan, senderID string, shards int) int {
+	return canonicalRuntimeSourceShardWithSharding(plan, senderID, shards, nil)
+}
+
+func canonicalRuntimeSourceShardWithSharding(plan WorkloadPlan, senderID string, shards int, sharding ShardingPlugin) int {
 	if shards <= 0 {
 		return 0
 	}
-	return stableShard([]string{"nonce:" + canonicalRuntimeSenderAddress(plan, senderID)}, shards)
+	return shardIndexFor(sharding, []string{"nonce:" + canonicalRuntimeSenderAddress(plan, senderID)}, shards)
 }
 
 func canonicalRuntimeAccessList(plan WorkloadPlan, record WorkloadRecord) []tx.AccessItem {
-	sender := canonicalRuntimeSenderAddress(plan, record.SenderID)
-	receiver := "receiver_" + record.ReceiverID
-	accessList := append([]tx.AccessItem{}, tx.DefaultTransferAccessList(sender, receiver)...)
-	return append(accessList, record.AccessList...)
+	return append([]tx.AccessItem(nil), record.AccessList...)
 }
 
-func canonicalAccessList(wire canonicalWireRecord) []tx.AccessItem {
+func resolveCanonicalAccessList(plan WorkloadPlan, wire canonicalWireRecord) ([]tx.AccessItem, string, string, string, error) {
+	if wire.SchemaVersion == "mbe_workload_record_v2" {
+		items, err := resolveAccessTemplate(plan, wire)
+		if err != nil {
+			return nil, "", "", "", err
+		}
+		digest := CanonicalAccessListDigest(items)
+		return items, wire.AccessListSchema, wire.AccessListSource, digest, nil
+	}
+	if wire.SchemaVersion == "mbe_workload_record_v1" {
+		items, err := canonicalLegacyAccessList(wire)
+		if err != nil {
+			return nil, "", "", "", err
+		}
+		digest := CanonicalAccessListDigest(items)
+		return items, "legacy_access_inference_v1", "legacy_state_keys", digest, nil
+	}
+	return nil, "", "", "", fmt.Errorf("canonical workload schema error source_row_index=%d source_event_id=%s schema=%s", wire.SourceRowIndex, wire.SourceEventID, wire.SchemaVersion)
+}
+
+func resolveAccessTemplate(plan WorkloadPlan, wire canonicalWireRecord) ([]tx.AccessItem, error) {
+	if wire.AccessListSchema != "dcl_sale_access_template_v1" || wire.AccessListSource != "semantics_derived" {
+		return nil, fmt.Errorf("canonical access template error source_row_index=%d source_event_id=%s schema=%s role=<schema>", wire.SourceRowIndex, wire.SourceEventID, wire.AccessListSchema)
+	}
+	if strings.TrimSpace(wire.Category) == "" || strings.TrimSpace(wire.Contract) == "" {
+		return nil, fmt.Errorf("canonical access template error source_row_index=%d source_event_id=%s schema=%s role=<category_contract>", wire.SourceRowIndex, wire.SourceEventID, wire.AccessListSchema)
+	}
+	byKey := map[string]tx.AccessItem{}
+	for _, template := range wire.AccessTemplate {
+		key, mode, err := resolveTemplateRole(plan, wire, template)
+		if err != nil {
+			return nil, err
+		}
+		if existing, ok := byKey[key]; ok {
+			return nil, fmt.Errorf("duplicate resolved access key source_row_index=%d source_event_id=%s role=%s schema=%s key=%s existing_mode=%s new_mode=%s", wire.SourceRowIndex, wire.SourceEventID, template.Role, wire.AccessListSchema, key, existing.Mode, mode)
+		}
+		byKey[key] = tx.AccessItem{Key: key, Mode: mode, UpdateSemantics: template.Semantics, Delta: template.Delta}
+	}
+	required := []string{"balance:" + canonicalRuntimeSenderAddress(plan, strings.ToLower(wire.SenderID)), "nonce:" + canonicalRuntimeSenderAddress(plan, strings.ToLower(wire.SenderID)), "balance:receiver_" + strings.ToLower(wire.ReceiverID), "market:" + strings.ToLower(wire.Contract), "category:" + strings.ToLower(wire.Category)}
+	for _, key := range required {
+		if _, ok := byKey[key]; !ok {
+			return nil, fmt.Errorf("missing resolved access key source_row_index=%d source_event_id=%s schema=%s key=%s", wire.SourceRowIndex, wire.SourceEventID, wire.AccessListSchema, key)
+		}
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]tx.AccessItem, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, byKey[key])
+	}
+	return out, nil
+}
+
+func resolveTemplateRole(plan WorkloadPlan, wire canonicalWireRecord, template canonicalWireAccessTemplate) (string, tx.AccessMode, error) {
+	mode, err := parseAccessMode(template.Mode)
+	if err != nil {
+		return "", "", fmt.Errorf("canonical access template error source_row_index=%d source_event_id=%s role=%s schema=%s: %w", wire.SourceRowIndex, wire.SourceEventID, template.Role, wire.AccessListSchema, err)
+	}
+	senderID := strings.ToLower(wire.SenderID)
+	receiverID := strings.ToLower(wire.ReceiverID)
+	switch template.Role {
+	case "sender_balance":
+		return "balance:" + canonicalRuntimeSenderAddress(plan, senderID), mode, nil
+	case "sender_nonce":
+		return "nonce:" + canonicalRuntimeSenderAddress(plan, senderID), mode, nil
+	case "receiver_balance":
+		return "balance:receiver_" + receiverID, mode, nil
+	case "receiver_nonce":
+		return "nonce:receiver_" + receiverID, mode, nil
+	case "market_contract":
+		if mode != tx.AccessCommutativeDelta || template.Delta != 1 {
+			return "", "", fmt.Errorf("canonical access template error source_row_index=%d source_event_id=%s role=%s schema=%s: market delta must be commutative_delta(+1)", wire.SourceRowIndex, wire.SourceEventID, template.Role, wire.AccessListSchema)
+		}
+		return "market:" + strings.ToLower(wire.Contract), mode, nil
+	case "category_metadata":
+		return "category:" + strings.ToLower(wire.Category), mode, nil
+	default:
+		return "", "", fmt.Errorf("canonical access template error source_row_index=%d source_event_id=%s role=%s schema=%s: unknown role", wire.SourceRowIndex, wire.SourceEventID, template.Role, wire.AccessListSchema)
+	}
+}
+
+func parseAccessMode(value string) (tx.AccessMode, error) {
+	switch tx.AccessMode(value) {
+	case tx.AccessRead, tx.AccessWrite, tx.AccessReadWrite, tx.AccessCommutativeDelta:
+		return tx.AccessMode(value), nil
+	default:
+		return "", fmt.Errorf("invalid access mode %q", value)
+	}
+}
+
+func canonicalLegacyAccessList(wire canonicalWireRecord) ([]tx.AccessItem, error) {
 	type accessSpec struct {
 		mode      tx.AccessMode
 		semantics string
@@ -283,7 +406,38 @@ func canonicalAccessList(wire canonicalWireRecord) []tx.AccessItem {
 		spec := byKey[key]
 		out = append(out, tx.AccessItem{Key: key, Mode: spec.mode, UpdateSemantics: spec.semantics})
 	}
-	return out
+	if len(out) == 0 {
+		return nil, fmt.Errorf("canonical legacy access inference error source_row_index=%d source_event_id=%s schema=%s", wire.SourceRowIndex, wire.SourceEventID, wire.SchemaVersion)
+	}
+	return out, nil
+}
+
+func CanonicalAccessListDigest(items []tx.AccessItem) string {
+	normalized := append([]tx.AccessItem(nil), items...)
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].Key != normalized[j].Key {
+			return normalized[i].Key < normalized[j].Key
+		}
+		if normalized[i].Mode != normalized[j].Mode {
+			return normalized[i].Mode < normalized[j].Mode
+		}
+		if normalized[i].UpdateSemantics != normalized[j].UpdateSemantics {
+			return normalized[i].UpdateSemantics < normalized[j].UpdateSemantics
+		}
+		return normalized[i].Delta < normalized[j].Delta
+	})
+	payload, _ := json.Marshal(normalized)
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func accessListHasKey(items []tx.AccessItem, key string) bool {
+	for _, item := range items {
+		if item.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func accessModeRank(mode tx.AccessMode) int {
@@ -306,12 +460,16 @@ func workloadPath(dataDir, relative string) (string, error) {
 		return "", fmt.Errorf("unsafe materialized workload path")
 	}
 	cwd, _ := os.Getwd()
-	candidates := []string{
+	candidates := []string{}
+	if envRoot := strings.TrimSpace(os.Getenv("MBE_WORKLOAD_CACHE_ROOT")); envRoot != "" {
+		candidates = append(candidates, envRoot)
+	}
+	candidates = append(candidates,
 		filepath.Join(dataDir, ".cache", "workloads"),
 		filepath.Join(dataDir, "..", "..", "workloads"),
 		filepath.Join(cwd, ".cache", "workloads"),
 		filepath.Join(cwd, "..", ".cache", "workloads"),
-	}
+	)
 	for _, root := range candidates {
 		root = filepath.Clean(root)
 		path := filepath.Clean(filepath.Join(root, relative))
@@ -343,6 +501,25 @@ func stableShard(keys []string, shards int) int {
 		return 0
 	}
 	return stableKey(keys) % shards
+}
+
+func shardIndexFor(sharding ShardingPlugin, keys []string, shards int) int {
+	if shards <= 0 {
+		return 0
+	}
+	if sharding != nil {
+		shardIDs := make([]string, 0, shards)
+		for index := 0; index < shards; index++ {
+			shardIDs = append(shardIDs, fmt.Sprintf("s%d", index))
+		}
+		selected := sharding.ShardFor(keys, shardIDs)
+		for index, shard := range shardIDs {
+			if shard == selected {
+				return index
+			}
+		}
+	}
+	return stableShard(keys, shards)
 }
 
 func mappingDigest(items map[string]string) string {

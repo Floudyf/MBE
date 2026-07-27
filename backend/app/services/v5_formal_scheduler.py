@@ -196,7 +196,13 @@ def _run_worker(group_id: str) -> None:
         child_id = row["child_run_id"]
         existing_attempt = next((item.get("attempt", 0) for item in children(group_id) if item.get("child_run_id") == child_id), 0)
         attempt_number = existing_attempt + 1
-        child = {"child_run_id": child_id, "run_group_id": group_id, "status": "running", "attempt": attempt_number, **row}
+        child = {
+            **row,
+            "child_run_id": child_id,
+            "run_group_id": group_id,
+            "status": "running",
+            "attempt": attempt_number,
+        }
         write_child(group_id, child)
         _refresh_child_counts(group, children(group_id))
         write_group(group)
@@ -228,15 +234,31 @@ def _run_worker(group_id: str) -> None:
 
 
 def finalize(group_id: str) -> dict:
+    directory = group_dir(group_id)
     group = read_group(group_id)
     items = children(group_id)
+
     statuses = [item["status"] for item in items]
-    group["status"] = "completed" if statuses and all(status == "completed" for status in statuses) else "completed_with_failures"
+    group["status"] = (
+        "completed"
+        if statuses and all(status == "completed" for status in statuses)
+        else "completed_with_failures"
+    )
+
     _refresh_child_counts(group, items)
-    group["aggregate"] = export_paper(group_dir(group_id), group, items)
-    group["bundle_path"] = str(build_bundle(group_dir(group_id), group))
+
+    # 先生成最终汇总文件。这些文件只依赖当前 group 和最终 child 记录。
+    group["aggregate"] = export_paper(directory, group, items)
+
+    # 在打包前写入最终状态，确保 ZIP 内的 run_group.json
+    # 与 API 查询到的最终状态完全一致。
     group["finished_at"] = datetime.now(UTC).isoformat()
+    group["bundle_path"] = str(directory / "artifacts.zip")
     write_group(group)
+
+    # 此时目录中已经包含最终 run_group.json 和论文汇总文件。
+    build_bundle(directory, group)
+
     return group
 
 

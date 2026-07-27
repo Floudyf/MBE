@@ -1,6 +1,10 @@
 package block
 
-import "metaverse-chainlab/executor/realism/tx"
+import (
+	"encoding/json"
+
+	"metaverse-chainlab/executor/realism/tx"
+)
 
 type SystemStateDelta struct {
 	DeltaID         string   `json:"delta_id"`
@@ -10,6 +14,12 @@ type SystemStateDelta struct {
 	TxIDs           []string `json:"tx_ids,omitempty"`
 	UpdateSemantics string   `json:"update_semantics,omitempty"`
 	Delta           int64    `json:"delta,omitempty"`
+	BaseValue       string   `json:"base_value,omitempty"`
+	BaseValueDigest string   `json:"base_value_digest,omitempty"`
+	ApplyOrigin     string   `json:"apply_origin,omitempty"`
+	DeltaKind       string   `json:"delta_kind,omitempty"`
+	HasInitialValue bool     `json:"has_initial_value,omitempty"`
+	InitialValue    int64    `json:"initial_value"`
 	HomeShard       string   `json:"home_shard"`
 	ExecutionShard  string   `json:"execution_shard"`
 	SourceKey       string   `json:"source_key"`
@@ -34,4 +44,12 @@ type Block struct {
 	StateCommit        bool                   `json:"state_commit"`
 	CrossShardProtocol bool                   `json:"cross_shard_protocol"`
 	SystemStateDeltas  []SystemStateDelta     `json:"system_state_deltas,omitempty"`
+	ExecutionPlan      *ExecutionPlanEnvelope `json:"execution_plan,omitempty"`
+}
+
+type ExecutionPlanEnvelope struct {
+	AlgorithmID   string          `json:"algorithm_id"`
+	PayloadDigest string          `json:"payload_digest"`
+	PlanDigest    string          `json:"plan_digest"`
+	Payload       json.RawMessage `json:"payload,omitempty"`
 }
