@@ -99,6 +99,18 @@ func TestSubmitWorkloadUsesConfiguredCrossShardRatioAcrossStream(t *testing.T) {
 			if int(summary["requested_cross_shard_count"].(float64)) != expected || int(summary["generated_cross_shard_count"].(float64)) != count {
 				t.Fatalf("client summary does not reflect ratio: %#v", summary)
 			}
+			var replaySummary WorkloadReplaySummary
+			data, err = os.ReadFile(filepath.Join(out, "workload_replay_summary.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &replaySummary); err != nil {
+				t.Fatal(err)
+			}
+			expectedActualRatio := float64(count) / float64(len(rows)-1)
+			if replaySummary.ActualCrossShardCount != count || replaySummary.ActualCrossShardRatio != expectedActualRatio {
+				t.Fatalf("workload replay summary lost actual cross-shard evidence: %#v", replaySummary)
+			}
 		})
 	}
 }

@@ -49,7 +49,7 @@ def main() -> int:
     required_stages = {"submitted", "received", "admitted", "proposed", "quorum_committed", "durable_committed", "sourcelock", "targetcommit", "sourcefinalize", "refund"}
     if not required_stages.issubset(stages):
         raise RuntimeError(f"lifecycle stages missing: {sorted(required_stages - stages)}")
-    if finality.get("metric_truth") != "derived_from_raw_runtime_lifecycle" or finality.get("tcp_send_latency_excluded") is not True:
+    if finality.get("metric_truth") != "derived_from_raw_runtime_lifecycle_and_drain_completion" or finality.get("tcp_send_latency_excluded") is not True:
         raise RuntimeError("finality truth boundary invalid")
     if (
         finality.get("logical_transaction_count") != 100

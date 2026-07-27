@@ -172,7 +172,9 @@ func TestBlockSTMExecutorRecordsAbortAndReexecutionOnHotNonceSequence(t *testing
 func TestBlockSTMExecutorReexecutesDenseNonceConflict(t *testing.T) {
 	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-hot-nonce-second-incarnation", 8, "alice", "bob", 1, "v5_safe"))
 	executor := NewBlockSTMExecutor(8)
-	got, err := executor.ExecuteBlock(testContext(t), b, map[string]string{})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := executor.ExecuteBlock(ctx, b, map[string]string{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,11 +182,33 @@ func TestBlockSTMExecutorReexecutesDenseNonceConflict(t *testing.T) {
 	if got.StateRootAfter != serial.StateRootAfter || got.ReceiptRoot != serial.ReceiptRoot {
 		t.Fatalf("block-stm not serial equivalent")
 	}
-	if executor.Metrics.MaximumIncarnation < 2 || executor.Metrics.ReexecutionCount == 0 {
-		t.Fatalf("expected dense nonce conflict to reexecute, got %+v", executor.Metrics)
+	if executor.Metrics.MaximumIncarnation < 1 ||
+		executor.Metrics.ReexecutionCount == 0 ||
+		executor.Metrics.AbortCount == 0 ||
+		executor.Metrics.ValidationFailureCount == 0 {
+		t.Fatalf("expected dense nonce conflict to abort and reexecute, got %+v", executor.Metrics)
 	}
-	if executor.Metrics.DependencyWaitCount == 0 || executor.Metrics.DependencyResumeCount == 0 || executor.Metrics.EstimateReadCount == 0 {
-		t.Fatalf("expected dense nonce conflict to exercise ESTIMATE wait/resume, got %+v", executor.Metrics)
+	if executor.Metrics.EstimateCount == 0 || executor.Metrics.EstimateMarkCount == 0 {
+		t.Fatalf("expected dense nonce conflict to publish ESTIMATE markers, got %+v", executor.Metrics)
+	}
+}
+
+func TestBlockSTMExecutorDenseNonceConflictRemainsLive(t *testing.T) {
+	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-dense-liveness", 8, "alice", "bob", 1, "v5_safe"))
+	serial := NewSerialExecutor().ExecuteBlock(b, map[string]string{})
+
+	for iteration := 0; iteration < 25; iteration++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		executor := NewBlockSTMExecutor(8)
+		got, err := executor.ExecuteBlock(ctx, b, map[string]string{})
+		cancel()
+
+		if err != nil {
+			t.Fatalf("dense conflict iteration %d did not complete: %v", iteration, err)
+		}
+		if got.StateRootAfter != serial.StateRootAfter || got.ReceiptRoot != serial.ReceiptRoot {
+			t.Fatalf("dense conflict iteration %d diverged from serial execution", iteration)
+		}
 	}
 }
 

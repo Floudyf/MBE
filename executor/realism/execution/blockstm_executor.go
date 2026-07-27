@@ -91,7 +91,6 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 	validatedCount := 0
 	jobs := make(chan blockstm.SchedulerTask)
 	results := make(chan blockSTMTaskResult, workerCount)
-	var activeWorkerTasks int64
 	var activeExecutions int64
 	var maxExecutions int64
 	var workers sync.WaitGroup
@@ -100,10 +99,8 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 		go func(workerID int) {
 			defer workers.Done()
 			for task := range jobs {
-				atomic.AddInt64(&activeWorkerTasks, 1)
 				taskResult := e.runBlockSTMTask(ctx, b, base, logicalBase, memory, captured, readSets, validated, writeSets, task, workerID, &activeExecutions, &maxExecutions)
 				results <- taskResult
-				atomic.AddInt64(&activeWorkerTasks, -1)
 			}
 		}(worker)
 	}
@@ -129,6 +126,9 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 		}
 	}
 	for validatedCount < len(b.TxList) {
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
 		for activeTasks < workerCount && dispatch() {
 		}
 		if activeTasks == 0 {
@@ -205,12 +205,11 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 						for _, waiter := range dependencies.Resolve(resolved) {
 							waiterIndex := int(waiter.Txn)
 							if waiterIndex >= 0 && waiterIndex < len(waiting) && waiting[waiterIndex] {
-								nextWaiter := blockstm.Version{Txn: waiter.Txn, Incarnation: blockstm.Incarnation(incarnations[waiterIndex] + 1)}
-								incarnations[waiterIndex] = int(nextWaiter.Incarnation)
+								incarnations[waiterIndex] = int(waiter.Incarnation)
 								waiting[waiterIndex] = false
 								executed[waiterIndex] = false
 								validationQueued[waiterIndex] = false
-								scheduler.ScheduleExecution(nextWaiter)
+								scheduler.ScheduleExecution(waiter)
 							} else {
 								scheduler.Resume(waiter)
 							}
@@ -280,11 +279,6 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 			}
 		case <-ctx.Done():
 			return Result{}, ctx.Err()
-		case <-time.After(50 * time.Millisecond):
-			if atomic.LoadInt64(&activeWorkerTasks) == 0 && len(results) == 0 {
-				activeTasks = 0
-				metrics.StaleTaskCount++
-			}
 		}
 	}
 	metrics.MaximumConcurrentExecutions = int(atomic.LoadInt64(&maxExecutions))

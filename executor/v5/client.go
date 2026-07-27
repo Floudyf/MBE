@@ -251,6 +251,10 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if plan.WorkloadPlan.SourceType == "dataset" {
 		requestedCrossShardCount = replaySummary.ExpectedCrossShardCount
 	}
+	replaySummary.ActualCrossShardCount = generatedCrossShardCount
+	if replaySummary.ReadCount > 0 {
+		replaySummary.ActualCrossShardRatio = float64(generatedCrossShardCount) / float64(replaySummary.ReadCount)
+	}
 	if err := SaveJSON(filepath.Join(outDir, "workload_replay_summary.json"), replaySummary); err != nil {
 		return err
 	}
