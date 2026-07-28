@@ -1390,6 +1390,19 @@ export type V5FormalRunGroupDetail = { group: V5FormalRunGroup; children: V5Form
 export type V5FormalArtifactCatalog = { run_group_id: string; status: "ready" | "pending"; bundle_ready: boolean; bundle_size_bytes: number; file_count: number; files: Array<{ name: string; size_bytes: number }> };
 export type V5FormalRunGroupSummary = { run_group_id: string; status: string; plan_name: string; execution_backend: string; runtime_truth: string; created_at?: string; updated_at?: string; finished_at?: string | null; total_child_runs: number; completed_child_runs: number; failed_child_runs: number; suite_names: string[]; method_names: string[]; method_ids: string[]; aggregate?: V5FormalAggregate; source_label: "user" | "e2e" | "script"; tags: string[]; is_test: boolean };
 export type V5FormalRunGroupSummaryPage = { items: V5FormalRunGroupSummary[]; total: number; next_cursor: string | null };
+export type V5CleanupReport = {
+  schema_version: string;
+  dry_run: boolean;
+  deleted_run_group_ids: string[];
+  deleted_output_dirs: string[];
+  deleted_orphan_dirs: string[];
+  preserved_run_group_ids: string[];
+  skipped_active_runs: string[];
+  skipped_output_dirs: string[];
+  released_bytes: number;
+  errors: string[];
+};
+export type V5OrphanRealClusterScan = { schema_version: string; orphan_dirs: Array<{ path: string; size_bytes: number; age_hours: number }> };
 export type V5PaperMetricRow = {
   method_id: string;
   method_name: string;
@@ -1512,6 +1525,26 @@ export function v5FormalBundleURL(groupId: string): string {
 
 export function v5RealClusterArtifactURL(downloadURL: string): string {
   return `${requestBaseURL}${downloadURL}`;
+}
+
+export async function deleteV5FormalRunGroup(groupId: string, dryRun = true): Promise<V5CleanupReport> {
+  return request<V5CleanupReport>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/delete?dry_run=${String(dryRun)}`, { method: "POST" });
+}
+
+export async function deleteSelectedV5FormalRunGroups(runGroupIds: string[], dryRun = true): Promise<V5CleanupReport> {
+  return request<V5CleanupReport>(`/api/v5/formal/cleanup/run-groups/selected?dry_run=${String(dryRun)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run_group_ids: runGroupIds }) });
+}
+
+export async function deleteFailedV5FormalRunGroups(dryRun = true): Promise<V5CleanupReport> {
+  return request<V5CleanupReport>(`/api/v5/formal/cleanup/run-groups/failed?dry_run=${String(dryRun)}`, { method: "POST" });
+}
+
+export async function scanV5OrphanRealClusterDirs(minAgeHours = 24): Promise<V5OrphanRealClusterScan> {
+  return request<V5OrphanRealClusterScan>(`/api/v5/formal/cleanup/orphan-real-cluster-dirs?min_age_hours=${minAgeHours}`);
+}
+
+export async function cleanupV5OrphanRealClusterDirs(dryRun = true, minAgeHours = 24): Promise<V5CleanupReport> {
+  return request<V5CleanupReport>(`/api/v5/formal/cleanup/orphan-real-cluster-dirs?dry_run=${String(dryRun)}&min_age_hours=${minAgeHours}`, { method: "POST" });
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {

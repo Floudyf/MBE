@@ -1,18 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  cleanupV5OrphanRealClusterDirs,
+  deleteFailedV5FormalRunGroups,
+  deleteSelectedV5FormalRunGroups,
+  deleteV5FormalRunGroup,
   fetchV5FormalArtifactCatalog,
   fetchV5FormalChildRun,
   fetchV5FormalGroupAnalysis,
   fetchV5FormalGroupMetrics,
   fetchV5FormalRunGroup,
   listV5FormalRunGroupSummaries,
+  scanV5OrphanRealClusterDirs,
   type V5FormalAggregate,
   type V5FormalAnalysis,
   type V5FormalArtifactCatalog,
+  type V5CleanupReport,
   type V5FormalChildRun,
   type V5FormalRunGroupDetail,
   type V5FormalRunGroupSummary,
+  type V5OrphanRealClusterScan,
 } from "../api";
 import V5AnalysisPanel from "../components/v5/V5AnalysisPanel";
 import V5ArtifactCatalog from "../components/v5/V5ArtifactCatalog";
@@ -39,6 +46,10 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   const [historyBusy, setHistoryBusy] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupReport, setCleanupReport] = useState<V5CleanupReport | null>(null);
+  const [orphanScan, setOrphanScan] = useState<V5OrphanRealClusterScan | null>(null);
+  const [selectedCleanupIds, setSelectedCleanupIds] = useState<string[]>([]);
   const [includeTests, setIncludeTests] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -219,6 +230,86 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     historyRevision.current += 1;
   }
 
+  function toggleCleanupSelection(groupId: string, checked: boolean) {
+    setSelectedCleanupIds((current) => checked ? Array.from(new Set([...current, groupId])) : current.filter((item) => item !== groupId));
+  }
+
+  async function cleanupCurrentGroup(dryRun: boolean) {
+    if (!selectedGroupId) return;
+    if (!dryRun && !window.confirm(`删除当前 RunGroup ${selectedGroupId}？其独占 real-cluster 输出目录也会被清理。`)) return;
+    setCleanupBusy(true);
+    try {
+      const report = await deleteV5FormalRunGroup(selectedGroupId, dryRun);
+      setCleanupReport(report);
+      setOrphanScan(null);
+      setNotice(dryRun ? "当前 RunGroup 清理 dry-run 已完成。" : "当前 RunGroup 清理已完成。");
+      if (!dryRun) { clearSelection(); await refreshHistory(); }
+    } catch (caught) {
+      setHistoryError(message(caught));
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
+  async function cleanupSelectedGroups(dryRun: boolean) {
+    if (!selectedCleanupIds.length) { setHistoryError("请先选择至少一个 RunGroup。"); return; }
+    if (!dryRun && !window.confirm(`删除 ${selectedCleanupIds.length} 个已选择 RunGroup？其独占 real-cluster 输出目录也可能被清理。`)) return;
+    setCleanupBusy(true);
+    try {
+      const report = await deleteSelectedV5FormalRunGroups(selectedCleanupIds, dryRun);
+      setCleanupReport(report);
+      setOrphanScan(null);
+      setNotice(dryRun ? "批量清理 dry-run 已完成。" : "批量清理已完成。");
+      if (!dryRun) { setSelectedCleanupIds([]); clearSelection(); await refreshHistory(); }
+    } catch (caught) {
+      setHistoryError(message(caught));
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
+  async function dryRunFailedGroups() {
+    setCleanupBusy(true);
+    try {
+      setCleanupReport(await deleteFailedV5FormalRunGroups(true));
+      setOrphanScan(null);
+      setNotice("失败 RunGroup 清理 dry-run 已完成。");
+    } catch (caught) {
+      setHistoryError(message(caught));
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
+  async function scanOrphans() {
+    setCleanupBusy(true);
+    try {
+      setOrphanScan(await scanV5OrphanRealClusterDirs(24));
+      setCleanupReport(null);
+      setNotice("孤儿 real-cluster 目录扫描已完成。");
+    } catch (caught) {
+      setHistoryError(message(caught));
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
+  async function cleanupOrphans(dryRun: boolean) {
+    if (!dryRun && !window.confirm("删除超过 24 小时且无 RunGroup 引用的孤儿 real-cluster 目录？")) return;
+    setCleanupBusy(true);
+    try {
+      const report = await cleanupV5OrphanRealClusterDirs(dryRun, 24);
+      setCleanupReport(report);
+      setOrphanScan(null);
+      setNotice(dryRun ? "孤儿目录清理 dry-run 已完成。" : "孤儿目录清理已完成。");
+      if (!dryRun) await refreshHistory();
+    } catch (caught) {
+      setHistoryError(message(caught));
+    } finally {
+      setCleanupBusy(false);
+    }
+  }
+
   const selectedGroup = detail?.group;
   return <section className="page-grid" data-testid="v5-results-page">
     <article className="final-card wide page-hero">
@@ -228,6 +319,10 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       {notice && <p className="notice">{notice}</p>}
       {error && <p className="file-error">{error}</p>}
       {childError && <p className="file-error">子实验详情错误：{childError}</p>}
+      {selectedGroup && <div className="button-row">
+        <button type="button" onClick={() => void cleanupCurrentGroup(true)} disabled={cleanupBusy}>当前组 dry-run</button>
+        <button type="button" onClick={() => void cleanupCurrentGroup(false)} disabled={cleanupBusy}>删除当前组</button>
+      </div>}
     </article>
     {selectedGroup && <V5GroupSummary group={selectedGroup} aggregate={aggregate} children={detail?.children ?? []} />}
     <V5AnalysisPanel analysis={analysis} />
@@ -250,9 +345,19 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
         <label><input type="checkbox" checked={includeTests} onChange={(event) => { invalidateHistoryRequest(); setIncludeTests(event.target.checked); setOffset(0); }} /> 显示测试记录</label>
         <button type="button" onClick={() => void refreshHistory()} disabled={historyBusy}>刷新实验组</button>
       </div>
+      <div className="button-row">
+        <button type="button" onClick={() => void cleanupSelectedGroups(true)} disabled={cleanupBusy || !selectedCleanupIds.length}>选中 dry-run</button>
+        <button type="button" onClick={() => void cleanupSelectedGroups(false)} disabled={cleanupBusy || !selectedCleanupIds.length}>删除选中</button>
+        <button type="button" onClick={() => void dryRunFailedGroups()} disabled={cleanupBusy}>失败实验 dry-run</button>
+        <button type="button" onClick={() => void scanOrphans()} disabled={cleanupBusy}>扫描孤儿目录</button>
+        <button type="button" onClick={() => void cleanupOrphans(true)} disabled={cleanupBusy}>孤儿目录 dry-run</button>
+        <button type="button" onClick={() => void cleanupOrphans(false)} disabled={cleanupBusy}>删除孤儿目录</button>
+      </div>
+      <CleanupEvidence report={cleanupReport} scan={orphanScan} />
       {historyError && <p className="file-error">历史列表错误：{historyError}</p>}
-      {groups.length ? <div className="table-wrap"><table><thead><tr><th>ID</th><th>状态</th><th>计划</th><th>后端</th><th>更新时间</th><th>子实验</th><th>失败</th><th>实验类型</th><th>方法</th></tr></thead><tbody>
+      {groups.length ? <div className="table-wrap"><table><thead><tr><th>清理</th><th>ID</th><th>状态</th><th>计划</th><th>后端</th><th>更新时间</th><th>子实验</th><th>失败</th><th>实验类型</th><th>方法</th></tr></thead><tbody>
         {groups.map((group) => <tr key={group.run_group_id} className={group.run_group_id === selectedGroupId ? "selected-row" : ""}>
+          <td><input aria-label={`选择 ${group.run_group_id} 清理`} type="checkbox" checked={selectedCleanupIds.includes(group.run_group_id)} onChange={(event) => toggleCleanupSelection(group.run_group_id, event.target.checked)} /></td>
           <td><button type="button" data-testid="v5-run-group-select" onClick={() => void loadGroup(group.run_group_id)}>{group.run_group_id}</button></td>
           <td><span>{statusLabel(group.status)}</span><small>{group.status}</small></td>
           <td>{group.plan_name || "—"}</td>
@@ -267,6 +372,28 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       <div className="button-row"><button type="button" disabled={offset === 0} onClick={() => { invalidateHistoryRequest(); setOffset(Math.max(0, offset - 20)); }}>上一页</button><span>{total ? `${offset + 1}–${Math.min(offset + groups.length, total)} / ${total}` : "0 / 0"}</span><button type="button" disabled={offset + 20 >= total} onClick={() => { invalidateHistoryRequest(); setOffset(offset + 20); }}>下一页</button></div>
     </details>
   </section>;
+}
+
+function CleanupEvidence({ report, scan }: { report: V5CleanupReport | null; scan: V5OrphanRealClusterScan | null }) {
+  if (!report && !scan) return null;
+  if (scan) {
+    return <div className="notice" data-testid="v5-cleanup-evidence">
+      <strong>孤儿目录扫描</strong>
+      <span>候选目录：{scan.orphan_dirs.length}</span>
+      <span>预计释放：{formatBytes(scan.orphan_dirs.reduce((total, item) => total + item.size_bytes, 0))}</span>
+    </div>;
+  }
+  const deletedGroups = report?.deleted_run_group_ids.length ?? 0;
+  const deletedOutputs = (report?.deleted_output_dirs.length ?? 0) + (report?.deleted_orphan_dirs.length ?? 0);
+  return <div className="notice" data-testid="v5-cleanup-evidence">
+    <strong>{report?.dry_run ? "清理 dry-run" : "清理结果"}</strong>
+    <span>RunGroup：{deletedGroups}</span>
+    <span>输出目录：{deletedOutputs}</span>
+    <span>预计释放：{formatBytes(report?.released_bytes ?? 0)}</span>
+    {(report?.preserved_run_group_ids.length ?? 0) > 0 && <span>保留：{report?.preserved_run_group_ids.join(", ")}</span>}
+    {(report?.skipped_active_runs.length ?? 0) > 0 && <span>运行中跳过：{report?.skipped_active_runs.join(", ")}</span>}
+    {(report?.errors.length ?? 0) > 0 && <span>原因：{report?.errors.slice(0, 3).join("; ")}</span>}
+  </div>;
 }
 
 function ChildRow({ child, selected, onSelect }: { child: V5FormalChildRun; selected: boolean; onSelect: () => void }) {
@@ -284,3 +411,8 @@ function ChildRow({ child, selected, onSelect }: { child: V5FormalChildRun; sele
 function metric(value: unknown): string { return value === undefined || value === null ? "—" : String(value); }
 function terminal(status: string): boolean { return terminalStatuses.includes(status); }
 function message(value: unknown): string { return value instanceof Error ? value.message : String(value); }
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MiB`;
+}
