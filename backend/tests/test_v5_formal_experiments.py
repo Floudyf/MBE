@@ -97,3 +97,50 @@ def test_v5_formal_dto_strips_internal_paths_and_process_details():
     body = child_detail(child)
     assert "output_dir" not in body and "stdout" not in body and "stderr" not in body
     assert "output_dir" not in body["result"] and body["result"]["summary"] == {"ok": True}
+
+
+def test_cleanup_delete_run_group_defaults_to_dry_run(monkeypatch):
+    calls = []
+
+    def fake_delete(group_id: str, *, dry_run: bool = True):
+        calls.append((group_id, dry_run))
+        return {"deleted_run_group_ids": [group_id], "dry_run": dry_run}
+
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.v5_cleanup_service.delete_run_group", fake_delete)
+
+    response = client.post("/api/v5/formal/run-groups/v5grp_cleanup/delete")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted_run_group_ids": ["v5grp_cleanup"], "dry_run": True}
+    assert calls == [("v5grp_cleanup", True)]
+
+
+def test_cleanup_selected_run_groups_validates_payload(monkeypatch):
+    monkeypatch.setattr(
+        "backend.app.api.v5_formal_experiments.v5_cleanup_service.delete_selected_run_groups",
+        lambda ids, *, dry_run=True: {"deleted_run_group_ids": ids, "dry_run": dry_run},
+    )
+
+    bad = client.post("/api/v5/formal/cleanup/run-groups/selected", json={"run_group_ids": "v5grp_bad"})
+    assert bad.status_code == 422
+
+    ok = client.post("/api/v5/formal/cleanup/run-groups/selected?dry_run=false", json={"run_group_ids": ["v5grp_a", "v5grp_b"]})
+    assert ok.status_code == 200
+    assert ok.json() == {"deleted_run_group_ids": ["v5grp_a", "v5grp_b"], "dry_run": False}
+
+
+def test_cleanup_orphan_scan_and_cleanup_are_separate(monkeypatch):
+    monkeypatch.setattr(
+        "backend.app.api.v5_formal_experiments.v5_cleanup_service.scan_orphan_real_cluster_dirs",
+        lambda *, min_age_hours=24: {"orphan_dirs": [{"path": "v5_old"}], "min_age_hours": min_age_hours},
+    )
+    monkeypatch.setattr(
+        "backend.app.api.v5_formal_experiments.v5_cleanup_service.cleanup_orphan_real_cluster_dirs",
+        lambda *, dry_run=True, min_age_hours=24: {"deleted_orphan_dirs": ["v5_old"], "dry_run": dry_run, "min_age_hours": min_age_hours},
+    )
+
+    scan = client.get("/api/v5/formal/cleanup/orphan-real-cluster-dirs?min_age_hours=48")
+    cleanup_response = client.post("/api/v5/formal/cleanup/orphan-real-cluster-dirs?dry_run=false&min_age_hours=48")
+
+    assert scan.json() == {"orphan_dirs": [{"path": "v5_old"}], "min_age_hours": 48}
+    assert cleanup_response.json() == {"deleted_orphan_dirs": ["v5_old"], "dry_run": False, "min_age_hours": 48}

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from backend.app.services.v5_formal_run_store import ROOT_DIR, group_dir
@@ -12,6 +14,7 @@ from backend.app.services.v5_formal_dto import child_detail as child_detail_dto,
 from backend.app.services.v5_formal_plan_validator import FormalPlanValidationError, validate_request
 from backend.app.services.v3_saved_config_store import create_saved_config
 from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest
+from backend.app.services import v5_cleanup_service
 
 
 router = APIRouter(prefix="/api/v5/formal", tags=["v5"])
@@ -74,6 +77,49 @@ def get_run_group(group_id: str) -> dict:
 @router.get("/run-groups")
 def list_run_groups() -> list[dict]:
     return [_summary_for_group(group) for group in _groups()]
+
+
+@router.post("/run-groups/{group_id}/delete")
+def delete_run_group(group_id: str, dry_run: bool = Query(True)) -> dict:
+    try:
+        return v5_cleanup_service.delete_run_group(group_id, dry_run=dry_run)
+    except ValueError as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+
+
+@router.post("/cleanup/run-groups/selected")
+def delete_selected_run_groups(payload: dict, dry_run: bool = Query(True)) -> dict:
+    run_group_ids = payload.get("run_group_ids")
+    if not isinstance(run_group_ids, list) or not all(isinstance(item, str) for item in run_group_ids):
+        raise HTTPException(422, "run_group_ids must be a list of strings")
+    return v5_cleanup_service.delete_selected_run_groups(run_group_ids, dry_run=dry_run)
+
+
+@router.post("/cleanup/run-groups/failed")
+def delete_failed_run_groups(dry_run: bool = Query(True)) -> dict:
+    return v5_cleanup_service.delete_failed_run_groups(dry_run=dry_run)
+
+
+@router.post("/cleanup/run-groups/old-unpinned")
+def delete_old_unpinned_run_groups(payload: dict, dry_run: bool = Query(True)) -> dict:
+    before_time = payload.get("before_time")
+    if not isinstance(before_time, str):
+        raise HTTPException(422, "before_time must be an ISO datetime string")
+    try:
+        parsed = datetime.fromisoformat(before_time.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(422, "before_time must be an ISO datetime string") from exc
+    return v5_cleanup_service.delete_old_unpinned_run_groups(parsed, dry_run=dry_run)
+
+
+@router.get("/cleanup/orphan-real-cluster-dirs")
+def scan_orphan_real_cluster_dirs(min_age_hours: int = Query(24, ge=1)) -> dict:
+    return v5_cleanup_service.scan_orphan_real_cluster_dirs(min_age_hours=min_age_hours)
+
+
+@router.post("/cleanup/orphan-real-cluster-dirs")
+def cleanup_orphan_real_cluster_dirs(dry_run: bool = Query(True), min_age_hours: int = Query(24, ge=1)) -> dict:
+    return v5_cleanup_service.cleanup_orphan_real_cluster_dirs(dry_run=dry_run, min_age_hours=min_age_hours)
 
 
 @router.get("/run-groups/{group_id}/children")
