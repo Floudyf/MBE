@@ -41,7 +41,7 @@ def _finality(**overrides: object) -> dict:
 
 
 def test_metric_extractor_preserves_logical_tps_and_uses_end_to_end_throughput(tmp_path: Path) -> None:
-    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True})
+    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True, "state_root_consistent": True, "receipt_root_consistent": True, "plan_digest_consistent": True})
     _write_json(tmp_path / "finality_summary.json", _finality())
     _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
     _write_required_files(tmp_path)
@@ -57,7 +57,7 @@ def test_metric_extractor_preserves_logical_tps_and_uses_end_to_end_throughput(t
 
 
 def test_metric_extractor_blocks_missing_drain_completion_fields(tmp_path: Path) -> None:
-    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True})
+    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True, "state_root_consistent": True, "receipt_root_consistent": True, "plan_digest_consistent": True})
     finality = _finality()
     finality.pop("completion_duration_ms")
     _write_json(tmp_path / "finality_summary.json", finality)
@@ -95,7 +95,7 @@ def test_completion_gate_passes_after_drain_quiescence_and_zero_pending(tmp_path
 
 
 def test_paper_candidate_inputs_block_old_throughput_window(tmp_path: Path) -> None:
-    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True})
+    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True, "state_root_consistent": True, "receipt_root_consistent": True, "plan_digest_consistent": True})
     _write_json(tmp_path / "finality_summary.json", _finality(throughput_tps=15.0))
     _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
     _write_required_files(tmp_path)

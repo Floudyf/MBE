@@ -126,6 +126,21 @@ def test_original_materialization_is_reproducible_and_cache_is_atomic(tmp_path: 
     assert not list((tmp_path / "cache" / "materialized").glob(".*"))
 
 
+def test_1k_is_formally_supported_without_local_smoke_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MBE_V5_LOCAL_SMOKE_COUNTS", "123")
+    assert 1_000 in plane.supported_workload_counts()
+    assert 123 not in plane.supported_workload_counts()
+
+    source = tmp_path / "source.csv"
+    _write_source(source, 1_200)
+    canonical = build_canonical(source, tmp_path / "cache", _manifest(source))
+    path = tmp_path / "cache" / canonical["canonical_relative_path"]
+    result = materialize(path, tmp_path / "cache", dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=1_000, seed=73)
+
+    assert result["actual_tx_count"] == 1_000
+    assert result["requested_tx_count"] == 1_000
+
+
 @pytest.mark.parametrize("label,count", [("10K", 3), ("50K", 4), ("100K", 5), ("250K", 6)])
 def test_original_window_boundary_modes_are_deterministic_on_small_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, label: str, count: int) -> None:
     source = tmp_path / "source.csv"; _write_source(source, 8)

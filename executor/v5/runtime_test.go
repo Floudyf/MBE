@@ -699,6 +699,75 @@ func TestMetaTrackRuntimeRecordsRemoteStateDeltaEvidenceWithoutBypassingConsensu
 	}
 }
 
+func TestSummarizeRemoteStateRowsClassifiesWriteApplyPrefixes(t *testing.T) {
+	row := func(kind, success, latency string) []string {
+		return []string{"1", "n0", "s1", "1", "b1", "tx", "k", "s0::k", "s0", "s1", kind, latency, "w", "root", success, ""}
+	}
+	summary := summarizeRemoteStateRows([][]string{
+		row("read", "true", "1"),
+		row("read_write", "true", "2"),
+		row("commutative_delta", "true", "3"),
+		row("write_apply", "true", "4"),
+		row("write_apply:commutative_delta", "true", "5"),
+		row("future_kind", "true", "6"),
+		row("read", "false", "7"),
+	})
+
+	if summary.total != 6 || summary.reads != 3 || summary.writes != 2 || summary.unknown != 1 || summary.failed != 1 {
+		t.Fatalf("unexpected remote state summary: %#v", summary)
+	}
+	if summary.avgLatency != 3.5 {
+		t.Fatalf("unexpected average latency: %v", summary.avgLatency)
+	}
+}
+
+func TestSummarizeMethodRowsUsesUnifiedAggregationMetrics(t *testing.T) {
+	executionRows := [][]string{
+		{"1", "n0", "s0", "tx-a", "1", "dual_track_execution", "fast", "independent"},
+		{"2", "n0", "s0", "tx-b", "1", "dual_track_execution", "conservative", "conflict"},
+		{"3", "n0", "s0", "tx-b", "1", "dual_track_execution", "conservative", "validator_replay"},
+	}
+	commitRows := [][]string{
+		{"1", "n0", "s0", "1", "normal_commit", "", "2", "5", "false", "5", "5", "0", "0"},
+		{"2", "n0", "s0", "2", "commutative_hot_update_aggregation", "s0:2", "4", "2", "true", "4", "2", "1", "3"},
+	}
+
+	summary := summarizeMethodRows(executionRows, commitRows)
+
+	if summary.fastTrackCount != 1 || summary.conservativeTrackCount != 2 {
+		t.Fatalf("unexpected track counts: %#v", summary)
+	}
+	if summary.executedLogicalTransactionCount != 2 || summary.executedTransactionInstanceCount != 3 {
+		t.Fatalf("unexpected execution counts: %#v", summary)
+	}
+	if summary.preAggregationPhysicalOps != 9 || summary.postAggregationPhysicalOps != 7 {
+		t.Fatalf("pre/post aggregation metrics must use state-op units: %#v", summary)
+	}
+	if summary.aggregatedKeyCount != 1 || summary.aggregatedLogicalDeltaCount != 3 {
+		t.Fatalf("aggregation evidence was not summarized: %#v", summary)
+	}
+	if summary.physicalOpsSavedCount() != 2 || summary.aggregationReductionRatio() != float64(2)/float64(9) {
+		t.Fatalf("unexpected reduction metrics: saved=%d ratio=%f", summary.physicalOpsSavedCount(), summary.aggregationReductionRatio())
+	}
+}
+
+func TestSummarizeBlockProductionRowsUsesCommittedChainEvidence(t *testing.T) {
+	rows := [][]string{
+		{"n0", "s0", "1", "0", "b1", "genesis", "100", "txroot", "before", "after", "receipt", "1000", "1010"},
+		{"n0", "s0", "2", "0", "b2", "b1", "80", "txroot", "before", "after", "receipt", "1070", "1085"},
+		{"n0", "s0", "3", "0", "b3", "b2", "20", "txroot", "before", "after", "receipt", "1170", "1210"},
+	}
+
+	summary := summarizeBlockProductionRows(rows)
+
+	if summary.count != 3 || summary.averageTxPerBlock != float64(200)/3 || summary.minTxPerBlock != 20 || summary.maxTxPerBlock != 100 {
+		t.Fatalf("unexpected block tx statistics: %#v", summary)
+	}
+	if summary.intervalMeanMS != 100 || summary.intervalP95MS != 75 {
+		t.Fatalf("unexpected block interval statistics: %#v", summary)
+	}
+}
+
 func TestMetaTrackRemoteStateDeltaSideEffectsAreLeaderOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

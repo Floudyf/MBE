@@ -32,6 +32,7 @@ const suites: V5FormalSuite[] = ["main_experiment", "comparison_experiment", "ab
 const alphaValues = [0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4];
 
 type Topology = { nodes: number; shards: number; validators_per_shard: number };
+type BlockProduction = { block_size: number; block_interval_ms: number };
 type WorkloadPoint = { tx_count: number; cross_shard_ratio?: number; timeout_every?: number; target_alpha?: number };
 type FaultMode = "disabled" | "delay_only" | "network_drop";
 type FaultPoint = { mode: FaultMode; delay_ms?: number; drop_rate?: number; drop_message_types?: string[] };
@@ -57,6 +58,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   const [selectedMethods, setSelectedMethods] = useState<string[]>(["v5_catalog_default"]);
   const [selectedSuites, setSelectedSuites] = useState<V5FormalSuite[]>(["main_experiment"]);
   const [topology, setTopology] = useState<Topology>({ nodes: 4, shards: 1, validators_per_shard: 4 });
+  const [blockProduction, setBlockProduction] = useState<BlockProduction>({ block_size: 100, block_interval_ms: 75 });
   const [workload, setWorkload] = useState<WorkloadEditorState>(defaultWorkload);
   const [repeats, setRepeats] = useState(1);
   const [workloadPoints, setWorkloadPoints] = useState<WorkloadPoint[]>([]);
@@ -90,6 +92,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   const previewRunnable = Boolean(preview?.rows.length && preview.rows.every((row) => row.runnable && !row.blockers.length));
   const workloadRunnable = Boolean(workloadPreview && !workloadPreviewDirty && !workloadPreview.blockers.length && !workloadPreviewError);
   const resources = estimateFormalResources(selectedSuites, selected.length, seeds.length, repeats, topology, workload.txCount, workloadPoints, topologyPoints, faultPoints);
+  const estimatedPrimaryBlockCount = Math.max(1, Math.ceil(workload.txCount / Math.max(1, blockProduction.block_size)));
 
   useEffect(() => { void loadCatalog(); const stored = window.localStorage.getItem(recentGroupKey); if (stored) void queryGroup(stored, true); return stopPolling; }, []);
   useEffect(() => { if (datasets.length && !workload.datasetId) setWorkload((current) => ({ ...current, datasetId: datasets[0].dataset_id })); }, [datasets.length, workload.datasetId]);
@@ -177,9 +180,12 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
 
   return {
     ...spec,
-    plugin_selections: patchWorkloadSelections(
-      spec.plugin_selections,
-      source,
+    plugin_selections: patchBlockProducerSelections(
+      patchWorkloadSelections(
+        spec.plugin_selections,
+        source,
+      ),
+      blockProduction,
     ),
   };
 }
@@ -189,6 +195,13 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
       if (selection.category !== "workload") return selection;
       if (source?.source_type === "dataset") return { ...selection, plugin_id: "canonical_trace_replay", config: {} };
       return { ...selection, plugin_id: "deterministic_signed_synthetic", config: { ...selection.config, cross_shard_ratio: workload.crossShardRatio, timeout_every: workload.timeoutEnabled ? workload.timeoutEvery : 0 } };
+    });
+  }
+
+  function patchBlockProducerSelections(selections: V5PluginSelection[], production: BlockProduction): V5PluginSelection[] {
+    return selections.map((selection) => {
+      if (selection.category !== "block_producer") return selection;
+      return { ...selection, config: { ...selection.config, block_size: production.block_size, interval_ms: production.block_interval_ms } };
     });
   }
 
@@ -238,7 +251,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
         localWorkloadRunnable = false;
       }
     }
-    const form = formError({ catalogReady, selected, selectedSuites, topology, workload, source, seeds, repeats, workloadPoints, topologyPoints, faultPoints, estimatedChildren: resources.children, workloadRunnable: localWorkloadRunnable });
+    const form = formError({ catalogReady, selected, selectedSuites, topology, blockProduction, workload, source, seeds, repeats, workloadPoints, topologyPoints, faultPoints, estimatedChildren: resources.children, workloadRunnable: localWorkloadRunnable });
     if (!request || form) { setError(form ?? "无法构造 Formal RunGroup 请求。"); return; }
     setBusy(true);
     try {
@@ -319,6 +332,19 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
     <WorkloadSourceEditor state={workload} datasets={datasets} onChange={updateWorkload} />
 
     <article className="final-card wide">
+      <h3>Block Production</h3>
+      <div className="experiment-condition-grid">
+        <NumericInput label="Transactions per block" aria="block size" value={blockProduction.block_size} min={10} max={5000} step={10} onChange={(value) => update(() => setBlockProduction({ ...blockProduction, block_size: boundedInteger(value, 10, 5000) }))} />
+        <NumericInput label="Block interval (ms)" aria="block interval ms" value={blockProduction.block_interval_ms} min={25} max={5000} step={25} onChange={(value) => update(() => setBlockProduction({ ...blockProduction, block_interval_ms: boundedInteger(value, 25, 5000) }))} />
+      </div>
+      <div className="button-row">
+        {[100, 250, 500, 1000].map((value) => <button type="button" key={value} className="ghost-button" onClick={() => update(() => setBlockProduction({ ...blockProduction, block_size: value }))}>{value} tx</button>)}
+        {[50, 75, 100, 200, 500].map((value) => <button type="button" key={value} className="ghost-button" onClick={() => update(() => setBlockProduction({ ...blockProduction, block_interval_ms: value }))}>{value} ms</button>)}
+      </div>
+      <p className="muted">Smaller interval values cut blocks faster. Estimated primary block count: <strong data-testid="v5-estimated-block-count">{estimatedPrimaryBlockCount}</strong>.</p>
+    </article>
+
+    <article className="final-card wide">
       <h3>拓扑与重复</h3>
       <div className="experiment-condition-grid">
         <NumericInput label="节点数" aria="nodes" value={topology.nodes} onChange={(value) => update(() => setTopology({ ...topology, nodes: value }))} />
@@ -368,7 +394,47 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
 }
 
 function PreviewTable({ preview, source }: { preview: V5FormalPreviewResponse; source: V5WorkloadSourceSpec | null }) {
-    return <div className="table-wrap"><p data-testid="v5-formal-preview-summary"><strong>执行后端：</strong>{preview.execution_backend}；<strong>矩阵行数：</strong>{preview.rows.length}</p><table><thead><tr><th>实验类型</th><th>方法</th><th>source_type</th><th>dataset_id</th><th>variant</th><th>count</th><th>seed</th><th>axis</th><th>alpha</th><th>truth</th><th>materialization</th><th>兼容性</th></tr></thead><tbody>{preview.rows.map((row) => <tr key={row.child_run_id} data-method-config-id={row.method_config_id}><td>{suiteLabel(row.suite_type)}</td><td>{row.method.display_name}</td><td>{source?.source_type ?? "synthetic"}</td><td>{source?.dataset_id ?? "synthetic"}</td><td>{source?.variant_mode ?? "synthetic"}</td><td>{row.estimated_transactions}</td><td>{row.seed}</td><td>{stringValue(source?.skew_axis)}</td><td>{stringValue(row.workload_point.target_alpha ?? source?.target_alpha)}</td><td>{source?.source_type === "dataset" ? (source.variant_mode === "key_zipf" || source.variant_mode === "contract_zipf" ? "real_derived_resampled" : "real_observed") : "synthetic_generated"}</td><td>{source?.source_type === "dataset" ? "child_start_before_materialization" : "not_required"}</td><td>{row.runnable ? "可运行" : row.blockers.map(blockerLabel).join("；") || "已阻止"}</td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap">
+    <p data-testid="v5-formal-preview-summary"><strong>执行后端：</strong>{preview.execution_backend}；<strong>矩阵行数：</strong>{preview.rows.length}</p>
+    <table>
+      <thead>
+        <tr>
+          <th>实验类型</th>
+          <th>方法</th>
+          <th>source_type</th>
+          <th>dataset_id</th>
+          <th>variant</th>
+          <th>count</th>
+          <th>seed</th>
+          <th>axis</th>
+          <th>alpha</th>
+          <th>block_size</th>
+          <th>block_interval_ms</th>
+          <th>estimated_blocks</th>
+          <th>truth</th>
+          <th>materialization</th>
+          <th>兼容性</th>
+        </tr>
+      </thead>
+      <tbody>{preview.rows.map((row) => <tr key={row.child_run_id} data-method-config-id={row.method_config_id}>
+        <td>{suiteLabel(row.suite_type)}</td>
+        <td>{row.method.display_name}</td>
+        <td>{source?.source_type ?? "synthetic"}</td>
+        <td>{source?.dataset_id ?? "synthetic"}</td>
+        <td>{source?.variant_mode ?? "synthetic"}</td>
+        <td>{row.estimated_transactions}</td>
+        <td>{row.seed}</td>
+        <td>{stringValue(source?.skew_axis)}</td>
+        <td>{stringValue(row.workload_point.target_alpha ?? source?.target_alpha)}</td>
+        <td>{stringValue(row.block_size)}</td>
+        <td>{stringValue(row.block_interval_ms)}</td>
+        <td>{stringValue(row.estimated_block_count)}</td>
+        <td>{source?.source_type === "dataset" ? (source.variant_mode === "key_zipf" || source.variant_mode === "contract_zipf" ? "real_derived_resampled" : "real_observed") : "synthetic_generated"}</td>
+        <td>{source?.source_type === "dataset" ? "child_start_before_materialization" : "not_required"}</td>
+        <td>{row.runnable ? "可运行" : row.blockers.map(blockerLabel).join("；") || "已阻止"}</td>
+      </tr>)}</tbody>
+    </table>
+  </div>;
 }
 
 function CurrentMethods({ methods, preferredMethodId }: { methods: V5FormalMethod[]; preferredMethodId: string }) {
@@ -388,7 +454,7 @@ function GroupStatus({ detail }: { detail: V5FormalRunGroupDetail }) {
   return <><p data-testid="v5-formal-group-summary"><strong>状态：</strong>{statusLabel(detail.group.status)}；<strong>执行后端：</strong>{backendLabel(detail.group.execution_backend)}；<strong>子实验：</strong>{detail.group.completed_child_runs}/{detail.group.total_child_runs}；<strong>失败：</strong>{failed}</p><div className="table-wrap"><table data-testid="v5-formal-child-table"><thead><tr><th>子实验</th><th>实验类型</th><th>方法</th><th>种子</th><th>交易</th><th>状态</th><th>无回退</th></tr></thead><tbody>{detail.children.map((child) => <tr key={child.child_run_id}><td>{child.child_run_id}</td><td>{suiteLabel(child.suite_type)}</td><td>{child.method.display_name}</td><td>{child.seed}</td><td>{child.estimated_transactions}</td><td>{child.status}</td><td>{child.result?.summary?.no_fallback === undefined ? "未提供" : String(child.result.summary.no_fallback)}</td></tr>)}</tbody></table></div></>;
 }
 
-function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; selectedSuites: V5FormalSuite[]; topology: Topology; workload: WorkloadEditorState; source: V5WorkloadSourceSpec | null; seeds: number[]; repeats: number; workloadPoints: WorkloadPoint[]; topologyPoints: Topology[]; faultPoints: FaultPoint[]; estimatedChildren: number; workloadRunnable: boolean }): string | null {
+function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; selectedSuites: V5FormalSuite[]; topology: Topology; blockProduction: BlockProduction; workload: WorkloadEditorState; source: V5WorkloadSourceSpec | null; seeds: number[]; repeats: number; workloadPoints: WorkloadPoint[]; topologyPoints: Topology[]; faultPoints: FaultPoint[]; estimatedChildren: number; workloadRunnable: boolean }): string | null {
   if (!input.catalogReady) return "真实集群插件目录不完整，无法预览。";
   if (!input.selected.length) return "请至少选择一个执行方法。";
   if (!input.selectedSuites.length) return "请至少选择一种实验类型。";
@@ -396,6 +462,8 @@ function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; s
   if (!input.source) return "workload_source 无法构造，请检查数据集和 seed。";
   if (!input.workloadRunnable) return "配置已变化，请先重新运行 workload preview。";
   if (input.topology.nodes < 1 || input.topology.shards < 1 || input.topology.validators_per_shard < 1 || input.topology.nodes !== input.topology.shards * input.topology.validators_per_shard) return "节点数必须等于分片数乘以每片验证节点数。";
+  if (!globalThis.Number.isInteger(input.blockProduction.block_size) || input.blockProduction.block_size < 10 || input.blockProduction.block_size > 5000) return "block_size must be an integer between 10 and 5000.";
+  if (!globalThis.Number.isInteger(input.blockProduction.block_interval_ms) || input.blockProduction.block_interval_ms < 25 || input.blockProduction.block_interval_ms > 5000) return "block_interval_ms must be an integer between 25 and 5000.";
   if (input.selectedSuites.includes("comparison_experiment") && input.selected.length < 2) return "方法对比实验至少需要两个方法。";
   if (input.selectedSuites.includes("workload_sensitivity") && input.workloadPoints.length < 2) return "负载敏感性实验至少需要两个负载扫描点。";
   if (input.selectedSuites.includes("topology_scaling") && input.topologyPoints.length < 2) return "拓扑扩展实验至少需要两个拓扑扫描点。";
@@ -418,6 +486,7 @@ function estimateFormalResources(selectedSuites: V5FormalSuite[], methods: numbe
   }, { children: 0, processStarts: 0, transactions: 0 });
 }
 function parseSeeds(value: string): number[] { const values = value.split(",").map((item) => item.trim()).filter(Boolean).map((item) => globalThis.Number(item)); return !values.length || values.length > 10 || values.some((item) => !globalThis.Number.isInteger(item)) ? [] : [...new Set(values)]; }
+function boundedInteger(value: number, min: number, max: number): number { if (!globalThis.Number.isFinite(value)) return min; return Math.min(max, Math.max(min, Math.round(value))); }
 function snapAlpha(value: number): number { return alphaValues.reduce((best, item) => Math.abs(item - value) < Math.abs(best - value) ? item : best, 0); }
 function toggle<T>(item: T, values: T[]): T[] { return values.includes(item) ? values.filter((value) => value !== item) : [...values, item]; }
 function replace<T>(items: T[], index: number, value: T): T[] { return items.map((item, current) => current === index ? value : item); }

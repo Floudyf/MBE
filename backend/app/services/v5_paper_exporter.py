@@ -20,11 +20,17 @@ GROUP_FIELDS = [
 
 PAPER_TABLE_FIELDS = ["suite_type", "method_id", "method_name", "method_role", "scan_variable", "scan_value", "nodes", "shards", "validators_per_shard", "tx_count", "cross_shard_ratio", "timeout_every", "fault_mode", "sample_count", "success_sample_count", "failed_sample_count", "tps_mean", "tps_std", "tps_min", "tps_max", "latency_p50_mean", "latency_p95_mean", "latency_p99_mean", "terminal_mean", "incomplete_mean", "orphan_mean", "cross_shard_requested_mean", "cross_shard_finalized_mean", "no_fallback_all", "state_root_consistent_all"]
 
+PAPER_ANALYSIS_FIELDS = [
+    "metric", "metric_unit", "method_id", "method_name", "valid_sample_count", "excluded_sample_count",
+    "mean", "median", "std", "min", "max", "ci95_low", "ci95_high", "statistical_note", "source_child_ids",
+]
+
 
 def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     raw_rows = [_raw_row(child) for child in children]
     grouped = _group_rows(group, children)
     overall = _overall(children)
+    paper = paper_result_analysis(group, children)
     _write(group_dir / "raw_summary.csv", raw_rows, list(raw_rows[0]) if raw_rows else ["child_run_id", "status"])
     _write(group_dir / "aggregate_summary.csv", [_overall_row(overall)], list(_overall_row(overall)))
     _write(group_dir / "confidence_interval.csv", grouped, GROUP_FIELDS)
@@ -39,13 +45,192 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     failures = [item for item in children if item.get("status") != "completed"]
     _write(group_dir / "failed_children.csv", [{key: item.get(key, "") for key in ("child_run_id", "status", "error")} for item in failures], ["child_run_id", "status", "error"])
     (group_dir / "missing_metrics.csv").write_text("child_run_id,missing\n" + "\n".join(f"{item.get('child_run_id')},{json.dumps(item.get('metrics', {}).get('missing', []))}" for item in children if item.get("metrics", {}).get("missing")), encoding="utf-8")
+    aggregate_dir = group_dir / "aggregate"
+    aggregate_dir.mkdir(parents=True, exist_ok=True)
+    (aggregate_dir / "paper_result_analysis.json").write_text(json.dumps(paper, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write(aggregate_dir / "paper_result_analysis.csv", _paper_analysis_csv_rows(paper), PAPER_ANALYSIS_FIELDS)
     (group_dir / "run_group_report.md").write_text(f"# {group['run_group_id']}\n\nCompleted: {overall['completed_count']}\nFailed: {overall['failed_count']}\n", encoding="utf-8")
     return overall
 
 
 def analysis(group: dict, children: list[dict]) -> dict:
     rows = _group_rows(group, children)
-    return {"run_group_id": group.get("run_group_id"), "groups": rows, "charts": _charts(rows)}
+    return {"run_group_id": group.get("run_group_id"), "groups": rows, "charts": _charts(rows), "paper_result_analysis": paper_result_analysis(group, children)}
+
+
+def paper_result_analysis(group: dict, children: list[dict]) -> dict:
+    fairness = _fairness_status(group)
+    accepted: list[dict] = []
+    excluded: list[dict] = []
+    for child in children:
+        reasons = _paper_exclusion_reasons(child)
+        if reasons:
+            excluded.append({
+                "child_run_id": child.get("child_run_id"),
+                "method_id": child.get("method_config_id"),
+                "method_name": (child.get("method") or {}).get("display_name"),
+                "suite_type": child.get("suite_type"),
+                "reasons": reasons,
+            })
+        else:
+            accepted.append(child)
+
+    metrics = {
+        "end_to_end_tps": _metric_rows(accepted, excluded, "end_to_end_tps", "tps"),
+        "p99_finality_ms": _metric_rows(accepted, excluded, "p99_finality_ms", "ms"),
+    }
+    return {
+        "schema_version": "mbe_paper_result_analysis_v1",
+        "run_group_id": group.get("run_group_id"),
+        "analysis_status": "complete" if fairness == "passed" and any(metrics.values()) and not excluded else "incomplete",
+        "fairness_status": fairness,
+        "metrics": metrics,
+        "excluded_samples": excluded,
+    }
+
+
+def _fairness_status(group: dict) -> str:
+    fairness = group.get("fairness") or group.get("fairness_validation") or {}
+    if isinstance(fairness, dict):
+        status = fairness.get("status") or fairness.get("fairness_status")
+        if status:
+            return "passed" if str(status).lower() in {"passed", "pass", "true"} else "failed"
+        if fairness.get("passed") is False:
+            return "failed"
+    return "passed"
+
+
+def _paper_exclusion_reasons(child: dict) -> list[str]:
+    reasons: list[str] = []
+    metrics = child.get("metrics") or {}
+    finality = _finality(child)
+    summary = ((child.get("result") or {}).get("summary") or {})
+    if child.get("status") != "completed":
+        reasons.append("status_not_completed")
+    submitted = _first_number(metrics, finality, name="submitted_unique_tx_count")
+    terminal = _first_number(metrics, finality, name="terminal_unique_tx_count")
+    incomplete = _first_number(metrics, finality, name="incomplete_unique_tx_count")
+    if submitted is None or terminal is None or submitted != terminal:
+        reasons.append("terminal_not_equal_submitted")
+    if incomplete is None or incomplete != 0:
+        reasons.append("incomplete_not_zero")
+    for name in ("no_fallback", "state_root_consistent", "receipt_root_consistent", "plan_digest_consistent"):
+        if _first_bool(metrics, summary, name=name) is not True:
+            reasons.append(f"{name}_not_true")
+    if metrics.get("metric_completeness") != "complete":
+        reasons.append("metric_completeness_not_complete")
+    if _requires_block_stm(child) and _first_bool(metrics, summary, name="serial_equivalent") is not True:
+        reasons.append("serial_equivalent_not_true")
+    if _metric_value(child, "end_to_end_tps") is None:
+        reasons.append("end_to_end_tps_missing")
+    if _metric_value(child, "p99_finality_ms") is None:
+        reasons.append("p99_finality_ms_missing")
+    return reasons
+
+
+def _metric_rows(accepted: list[dict], excluded: list[dict], metric: str, unit: str) -> list[dict]:
+    buckets: dict[tuple[str, str], list[tuple[dict, float]]] = defaultdict(list)
+    excluded_by_method: dict[tuple[str, str], int] = defaultdict(int)
+    for child in accepted:
+        value = _metric_value(child, metric)
+        if value is None:
+            continue
+        key = (str(child.get("method_config_id") or ""), str((child.get("method") or {}).get("display_name") or child.get("method_config_id") or ""))
+        buckets[key].append((child, value))
+    for sample in excluded:
+        key = (str(sample.get("method_id") or ""), str(sample.get("method_name") or sample.get("method_id") or ""))
+        excluded_by_method[key] += 1
+    rows = []
+    for key in sorted(set(buckets) | set(excluded_by_method), key=lambda item: item[0]):
+        entries = buckets.get(key, [])
+        values = [value for _, value in entries]
+        stats = summarize(values, completed_count=len(values), failed_count=0, missing_count=excluded_by_method.get(key, 0))
+        rows.append({
+            "method_id": key[0],
+            "method_name": key[1],
+            "metric": metric,
+            "metric_unit": unit,
+            "valid_sample_count": stats["count"],
+            "excluded_sample_count": excluded_by_method.get(key, 0),
+            "raw_values": values,
+            "mean": stats["mean"],
+            "median": stats["median"],
+            "std": stats["std"],
+            "min": stats["min"],
+            "max": stats["max"],
+            "ci95_low": stats["ci95_low"],
+            "ci95_high": stats["ci95_high"],
+            "statistical_note": "single_sample_no_variance_or_ci" if stats["count"] == 1 else ("no_valid_samples" if stats["count"] == 0 else "multi_sample_ci95"),
+            "source_child_ids": [str(child.get("child_run_id")) for child, _ in entries],
+        })
+    return rows
+
+
+def _paper_analysis_csv_rows(paper: dict) -> list[dict]:
+    rows: list[dict] = []
+    for metric, items in (paper.get("metrics") or {}).items():
+        for item in items:
+            rows.append({
+                "metric": metric,
+                "metric_unit": item.get("metric_unit"),
+                "method_id": item.get("method_id"),
+                "method_name": item.get("method_name"),
+                "valid_sample_count": item.get("valid_sample_count"),
+                "excluded_sample_count": item.get("excluded_sample_count"),
+                "mean": item.get("mean"),
+                "median": item.get("median"),
+                "std": item.get("std"),
+                "min": item.get("min"),
+                "max": item.get("max"),
+                "ci95_low": item.get("ci95_low"),
+                "ci95_high": item.get("ci95_high"),
+                "statistical_note": item.get("statistical_note"),
+                "source_child_ids": json.dumps(item.get("source_child_ids") or []),
+            })
+    return rows
+
+
+def _finality(child: dict) -> dict:
+    return ((child.get("result") or {}).get("summary") or {}).get("finality_evidence") or {}
+
+
+def _first_number(*sources: dict, name: str) -> int | None:
+    for source in sources:
+        value = source.get(name) if isinstance(source, dict) else None
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return int(value)
+    return None
+
+
+def _first_bool(*sources: dict, name: str) -> bool | None:
+    for source in sources:
+        value = source.get(name) if isinstance(source, dict) else None
+        if isinstance(value, bool):
+            return value
+    return None
+
+
+def _metric_value(child: dict, metric: str) -> float | None:
+    metrics = child.get("metrics") or {}
+    if metric == "end_to_end_tps":
+        value = metrics.get("end_to_end_tps", metrics.get("throughput_tps"))
+    elif metric == "p99_finality_ms":
+        value = metrics.get("p99_finality_ms", metrics.get("p99_latency_ms"))
+    else:
+        value = metrics.get(metric)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _requires_block_stm(child: dict) -> bool:
+    method_id = str(child.get("method_config_id") or "")
+    method = child.get("method") or {}
+    overrides = method.get("plugin_overrides") if isinstance(method, dict) else {}
+    executor = overrides.get("block_executor") if isinstance(overrides, dict) else ""
+    return "block_stm" in method_id or executor == "block_stm_block_executor"
 
 
 def _group_rows(group: dict, children: list[dict]) -> list[dict]:

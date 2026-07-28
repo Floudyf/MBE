@@ -1339,6 +1339,9 @@ export type V5FormalMatrixRow = {
   execution_backend: string;
   estimated_processes: number;
   estimated_transactions: number;
+  block_size?: number;
+  block_interval_ms?: number;
+  estimated_block_count?: number;
   runnable: boolean;
   blockers: string[];
   warnings: string[];
@@ -1387,7 +1390,33 @@ export type V5FormalRunGroupDetail = { group: V5FormalRunGroup; children: V5Form
 export type V5FormalArtifactCatalog = { run_group_id: string; status: "ready" | "pending"; bundle_ready: boolean; bundle_size_bytes: number; file_count: number; files: Array<{ name: string; size_bytes: number }> };
 export type V5FormalRunGroupSummary = { run_group_id: string; status: string; plan_name: string; execution_backend: string; runtime_truth: string; created_at?: string; updated_at?: string; finished_at?: string | null; total_child_runs: number; completed_child_runs: number; failed_child_runs: number; suite_names: string[]; method_names: string[]; method_ids: string[]; aggregate?: V5FormalAggregate; source_label: "user" | "e2e" | "script"; tags: string[]; is_test: boolean };
 export type V5FormalRunGroupSummaryPage = { items: V5FormalRunGroupSummary[]; total: number; next_cursor: string | null };
-export type V5FormalAnalysis = { run_group_id: string; groups: Array<Record<string, unknown>>; charts: Array<{ suite_type: string; kind: "summary" | "bar" | "line"; rows: Array<Record<string, unknown>> }> };
+export type V5PaperMetricRow = {
+  method_id: string;
+  method_name: string;
+  metric: string;
+  metric_unit: string;
+  valid_sample_count: number;
+  excluded_sample_count: number;
+  raw_values: number[];
+  mean: number | null;
+  median: number | null;
+  std: number | null;
+  min: number | null;
+  max: number | null;
+  ci95_low: number | null;
+  ci95_high: number | null;
+  statistical_note: string;
+  source_child_ids: string[];
+};
+export type V5PaperResultAnalysis = {
+  schema_version: string;
+  run_group_id: string;
+  analysis_status: string;
+  fairness_status: string;
+  metrics: Record<string, V5PaperMetricRow[]>;
+  excluded_samples: Array<Record<string, unknown>>;
+};
+export type V5FormalAnalysis = { run_group_id: string; groups: Array<Record<string, unknown>>; charts: Array<{ suite_type: string; kind: "summary" | "bar" | "line"; rows: Array<Record<string, unknown>> }>; paper_result_analysis?: V5PaperResultAnalysis };
 export type V5WorkloadDatasetSummary = { schema_version: string; dataset_id: string; display_name: string; description: string; source_platform: string; source_chain: string; truth_label: string; row_count: number; operation_counts?: Record<string, number>; category_counts: Record<string, number>; source_sha256: string; available: boolean; selectable: boolean; validation_status: string; blockers: string[]; warnings: string[]; supported_skew_axes?: string[]; default_skew_axis?: string | null };
 export type V5WorkloadDatasetDetail = V5WorkloadDatasetSummary & { dataset_type: string; included_categories: string[]; excluded_categories: string[]; unique_source_tx_hash_count: number; time_start_ms: number; time_end_ms: number; verification_method: string; verification_sample_count: number; verification_results: string; usage_note: string; generator_version: string; variants: Array<Record<string, unknown>>; adapter_id?: string; supported_variants?: string[] };
 export type V5WorkloadPreviewRequest = V5WorkloadSourceSpec;

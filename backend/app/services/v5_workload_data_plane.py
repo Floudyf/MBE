@@ -23,7 +23,7 @@ from backend.app.core.paths import ROOT, WORKLOAD_CACHE_ROOT
 from backend.app.services.workload_adapters.base import SourceValidationSummary
 from backend.app.services.workload_adapters.registry import get_adapter
 
-SUPPORTED_COUNTS = frozenset({10_000, 50_000, 100_000, 250_000})
+SUPPORTED_COUNTS = frozenset({1_000, 10_000, 50_000, 100_000, 250_000})
 SUPPORTED_ALPHAS = frozenset({0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4})
 GENERATOR_VERSION = "v5_workload_data_plane_v3_semantic_access_template"
 SELECTOR_VERSION = "contiguous_window_v1"
@@ -552,20 +552,12 @@ def _skew_statistics(skew_keys: Counter[str], senders: set[str], receivers: set[
     }
 
 
+def supported_workload_counts() -> tuple[int, ...]:
+    return tuple(sorted(SUPPORTED_COUNTS))
+
+
 def _supported_counts() -> frozenset[int]:
-    counts = set(SUPPORTED_COUNTS)
-    extra = os.environ.get("MBE_V5_LOCAL_SMOKE_COUNTS", "")
-    for item in extra.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            value = int(item)
-        except ValueError:
-            continue
-        if value > 0:
-            counts.add(value)
-    return frozenset(counts)
+    return SUPPORTED_COUNTS
 
 
 def _is_derived_variant(variant_mode: str) -> bool:

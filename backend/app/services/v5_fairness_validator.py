@@ -14,6 +14,8 @@ _FIXED = (
     "topology_snapshot_digest",
     "fault_snapshot_digest",
     "fairness_key",
+    "block_size",
+    "block_interval_ms",
 )
 
 
@@ -51,6 +53,9 @@ def write_artifacts(root: Path, rows: list[dict], result: dict) -> None:
         "repeat_index",
         "execution_backend",
         "estimated_transactions",
+        "block_size",
+        "block_interval_ms",
+        "estimated_block_count",
         "workload_snapshot_digest",
         "topology_snapshot_digest",
         "fault_snapshot_digest",

@@ -119,6 +119,9 @@ type v5NodeSummary struct {
 	BlockExecutorVersion          string  `json:"block_executor_version"`
 	WorkerCount                   int     `json:"worker_count"`
 	PlanDigestConsistent          bool    `json:"plan_digest_consistent"`
+	FastTrackCount                int     `json:"fast_track_count"`
+	ConservativeTrackCount        int     `json:"conservative_track_count"`
+	AggregationGroupCount         int     `json:"aggregation_group_count"`
 	SchedulerEventCount           int     `json:"scheduler_event_count"`
 	SchedulerBlockedCount         int     `json:"scheduler_blocked_count"`
 	SchedulerWakeupCount          int     `json:"scheduler_wakeup_count"`
@@ -133,10 +136,31 @@ type v5NodeSummary struct {
 	RemoteStateAccessCount        int     `json:"remote_state_access_count"`
 	RemoteStateReadCount          int     `json:"remote_state_read_count"`
 	RemoteStateWriteApplyCount    int     `json:"remote_state_write_apply_count"`
+	RemoteOperationUnknownCount   int     `json:"remote_operation_unknown_kind_count"`
+	PhysicalRemoteOperationCount  int     `json:"physical_remote_operation_count"`
+	PhysicalRemoteFetchCount      int     `json:"physical_remote_fetch_count"`
+	PhysicalRemoteWritebackCount  int     `json:"physical_remote_writeback_count"`
+	PhysicalRemoteFailedCount     int     `json:"physical_remote_failed_count"`
 	RemoteStateAccessFailedCount  int     `json:"remote_state_access_failed_count"`
 	RemoteStateAccessAvgLatencyMS float64 `json:"remote_state_access_avg_latency_ms"`
 	LogicalUpdateCount            int     `json:"logical_update_count"`
 	PhysicalUpdateCount           int     `json:"physical_update_count"`
+	ExecutedLogicalTxCount        int     `json:"executed_logical_transaction_count"`
+	ExecutedTxInstanceCount       int     `json:"executed_transaction_instance_count"`
+	PreAggregationPhysicalOps     int     `json:"pre_aggregation_physical_op_count"`
+	PostAggregationPhysicalOps    int     `json:"post_aggregation_physical_op_count"`
+	AggregatedKeyCount            int     `json:"aggregated_key_count"`
+	AggregatedLogicalDeltaCount   int     `json:"aggregated_logical_delta_count"`
+	PhysicalOpsSavedCount         int     `json:"physical_ops_saved_count"`
+	AggregationReductionRatio     float64 `json:"aggregation_reduction_ratio"`
+	ConfiguredBlockSize           int     `json:"configured_block_size"`
+	ConfiguredBlockIntervalMS     int     `json:"configured_block_interval_ms"`
+	ActualCommittedBlockCount     int     `json:"actual_committed_block_count"`
+	ActualAverageTxPerBlock       float64 `json:"actual_average_tx_per_block"`
+	ActualMinTxPerBlock           int     `json:"actual_min_tx_per_block"`
+	ActualMaxTxPerBlock           int     `json:"actual_max_tx_per_block"`
+	ActualBlockIntervalMeanMS     float64 `json:"actual_block_interval_mean_ms"`
+	ActualBlockIntervalP95MS      int64   `json:"actual_block_interval_p95_ms"`
 }
 
 func runV5(planPath, dataDir string) error {
@@ -459,8 +483,8 @@ func drainBudget(plan v5.Plan) drainTimeoutBudget {
 }
 
 func blockProducerTiming(plan v5.Plan) (int, time.Duration) {
-	blockSize := 10
-	interval := 150 * time.Millisecond
+	blockSize := 100
+	interval := 75 * time.Millisecond
 	if len(plan.NodeConfigs) > 0 {
 		if producer, ok := plan.NodeConfigs[0].PluginProfile["block_producer"]; ok {
 			if value := number(producer.Config["block_size"]); value > 0 {
@@ -1100,7 +1124,7 @@ func shutdownBlockInterval(plan v5.Plan) time.Duration {
 			}
 		}
 	}
-	return 100 * time.Millisecond
+	return 75 * time.Millisecond
 }
 
 func errorString(err error) string {
@@ -1130,9 +1154,21 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	remoteStateReadCount := 0
 	remoteStateWriteApplyCount := 0
 	remoteStateFailedCount := 0
+	remoteOperationUnknownCount := 0
+	physicalRemoteOperationCount := 0
+	physicalRemoteFetchCount := 0
+	physicalRemoteWritebackCount := 0
+	physicalRemoteFailedCount := 0
 	remoteStateLatencyWeightedSum := 0.0
 	logicalUpdateCount := 0
 	physicalUpdateCount := 0
+	executedLogicalTxCount := 0
+	executedTxInstanceCount := 0
+	preAggregationPhysicalOps := 0
+	postAggregationPhysicalOps := 0
+	aggregatedKeyCount := 0
+	aggregatedLogicalDeltaCount := 0
+	physicalOpsSavedCount := 0
 	schedulerEventCount := 0
 	schedulerBlockedCount := 0
 	schedulerWakeupCount := 0
@@ -1168,9 +1204,21 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		remoteStateReadCount += item.RemoteStateReadCount
 		remoteStateWriteApplyCount += item.RemoteStateWriteApplyCount
 		remoteStateFailedCount += item.RemoteStateAccessFailedCount
+		remoteOperationUnknownCount += item.RemoteOperationUnknownCount
+		physicalRemoteOperationCount += item.PhysicalRemoteOperationCount
+		physicalRemoteFetchCount += item.PhysicalRemoteFetchCount
+		physicalRemoteWritebackCount += item.PhysicalRemoteWritebackCount
+		physicalRemoteFailedCount += item.PhysicalRemoteFailedCount
 		remoteStateLatencyWeightedSum += item.RemoteStateAccessAvgLatencyMS * float64(item.RemoteStateAccessCount)
 		logicalUpdateCount += item.LogicalUpdateCount
 		physicalUpdateCount += item.PhysicalUpdateCount
+		executedLogicalTxCount += item.ExecutedLogicalTxCount
+		executedTxInstanceCount += item.ExecutedTxInstanceCount
+		preAggregationPhysicalOps += item.PreAggregationPhysicalOps
+		postAggregationPhysicalOps += item.PostAggregationPhysicalOps
+		aggregatedKeyCount += item.AggregatedKeyCount
+		aggregatedLogicalDeltaCount += item.AggregatedLogicalDeltaCount
+		physicalOpsSavedCount += item.PhysicalOpsSavedCount
 		schedulerEventCount += item.SchedulerEventCount
 		schedulerBlockedCount += item.SchedulerBlockedCount
 		schedulerWakeupCount += item.SchedulerWakeupCount
@@ -1232,11 +1280,107 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	if remoteStateAccessCount > 0 {
 		remoteStateAvgLatency = remoteStateLatencyWeightedSum / float64(remoteStateAccessCount)
 	}
+	remoteStateAggregate, err := writeRemoteStateAggregate(dataDir, plan.NodeConfigs, logicalTxCount(plan))
+	if err != nil {
+		return nil, err
+	}
+	blockProductionAggregate, err := writeBlockProductionAggregate(dataDir, plan.NodeConfigs)
+	if err != nil {
+		return nil, err
+	}
+	mechanismMetrics, err := writeMechanismAggregates(dataDir, summaries, plan.NodeConfigs, remoteStateAggregate)
+	if err != nil {
+		return nil, err
+	}
 	schedulerIdleRatio := 0.0
 	if schedulerEventCount > 0 {
 		schedulerIdleRatio = schedulerIdleRatioWeightedSum / float64(schedulerEventCount)
 	}
-	return map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "one_node_one_os_process": true, "distinct_process_count": len(pids), "expected_process_count": len(plan.NodeConfigs), "independent_tcp_ports": len(ports) == len(plan.NodeConfigs), "real_client_submission": clientInfo != nil, "real_signed_tx": true, "plugin_driven_runtime": true, "block_executor_id": singleMapKey(blockExecutors), "block_executor_consistent": len(blockExecutors) == 1, "plan_digest_consistent": planDigestConsistent, "continuous_multi_shard": true, "shard_count": len(roots), "all_shards_active": allActive, "per_shard_multiple_blocks": allActive, "real_pbft_style_messages": pbftCount == len(plan.NodeConfigs), "persistent_state": true, "state_root_consistent": consistent, "receipt_root_consistent": matrixReceiptConsistent, "real_cross_shard_network": crossSuccess > 0, "cross_shard_success_count": crossSuccess, "cross_shard_refund_count": crossRefund, "logical_update_count": logicalUpdateCount, "physical_update_count": physicalUpdateCount, "scheduler_event_count": schedulerEventCount, "scheduler_blocked_count": schedulerBlockedCount, "scheduler_wakeup_count": schedulerWakeupCount, "scheduler_stolen_work_count": schedulerStolenWorkCount, "scheduler_local_execution_count": schedulerLocalExecutionCount, "scheduler_ready_queue_max_depth": schedulerReadyQueueMaxDepth, "scheduler_fast_queue_max_depth": schedulerFastQueueMaxDepth, "scheduler_conservative_queue_max_depth": schedulerConsQueueMaxDepth, "scheduler_dependency_wait_ms": schedulerDependencyWaitMS, "scheduler_idle_ms": schedulerIdleMS, "scheduler_idle_ratio": schedulerIdleRatio, "remote_state_access_count": remoteStateAccessCount, "remote_state_read_count": remoteStateReadCount, "remote_state_write_apply_count": remoteStateWriteApplyCount, "remote_state_access_failed_count": remoteStateFailedCount, "remote_state_access_avg_latency_ms": remoteStateAvgLatency, "fault_injection_real": faultEvidence, "fault_injection_requested": faultRequested, "orphan_process_count": 0, "no_fallback": true, "node_summaries": summaries, "processes": redactV5Processes(processes, dataDir), "shard_blocks": shardBlocks, "ready_to_commit": ready}, nil
+	return map[string]any{
+		"runtime_stage":                                 "v5_1_real_plugin_driven_multi_process_multishard_runtime",
+		"runtime_truth":                                 "v5_real_cluster_candidate",
+		"one_node_one_os_process":                       true,
+		"distinct_process_count":                        len(pids),
+		"expected_process_count":                        len(plan.NodeConfigs),
+		"independent_tcp_ports":                         len(ports) == len(plan.NodeConfigs),
+		"real_client_submission":                        clientInfo != nil,
+		"real_signed_tx":                                true,
+		"plugin_driven_runtime":                         true,
+		"block_executor_id":                             singleMapKey(blockExecutors),
+		"block_executor_consistent":                     len(blockExecutors) == 1,
+		"plan_digest_consistent":                        planDigestConsistent,
+		"continuous_multi_shard":                        true,
+		"shard_count":                                   len(roots),
+		"all_shards_active":                             allActive,
+		"per_shard_multiple_blocks":                     allActive,
+		"real_pbft_style_messages":                      pbftCount == len(plan.NodeConfigs),
+		"persistent_state":                              true,
+		"state_root_consistent":                         consistent,
+		"receipt_root_consistent":                       matrixReceiptConsistent,
+		"real_cross_shard_network":                      crossSuccess > 0,
+		"cross_shard_success_count":                     crossSuccess,
+		"cross_shard_refund_count":                      crossRefund,
+		"configured_block_size":                         blockProductionAggregate["configured_block_size"],
+		"configured_block_interval_ms":                  blockProductionAggregate["configured_block_interval_ms"],
+		"actual_committed_block_count":                  blockProductionAggregate["actual_committed_block_count"],
+		"actual_average_tx_per_block":                   blockProductionAggregate["actual_average_tx_per_block"],
+		"actual_min_tx_per_block":                       blockProductionAggregate["actual_min_tx_per_block"],
+		"actual_max_tx_per_block":                       blockProductionAggregate["actual_max_tx_per_block"],
+		"actual_block_interval_mean_ms":                 blockProductionAggregate["actual_block_interval_mean_ms"],
+		"actual_block_interval_p95_ms":                  blockProductionAggregate["actual_block_interval_p95_ms"],
+		"block_production_summary":                      blockProductionAggregate,
+		"logical_update_count":                          logicalUpdateCount,
+		"physical_update_count":                         physicalUpdateCount,
+		"logical_update_count_deprecated":               true,
+		"physical_update_count_deprecated":              true,
+		"executed_logical_transaction_count":            executedLogicalTxCount,
+		"executed_transaction_instance_count":           executedTxInstanceCount,
+		"pre_aggregation_physical_op_count":             preAggregationPhysicalOps,
+		"post_aggregation_physical_op_count":            postAggregationPhysicalOps,
+		"aggregated_key_count":                          aggregatedKeyCount,
+		"aggregated_logical_delta_count":                aggregatedLogicalDeltaCount,
+		"physical_ops_saved_count":                      physicalOpsSavedCount,
+		"aggregation_reduction_ratio":                   ratio(physicalOpsSavedCount, preAggregationPhysicalOps),
+		"scheduler_event_count":                         schedulerEventCount,
+		"scheduler_blocked_count":                       schedulerBlockedCount,
+		"scheduler_wakeup_count":                        schedulerWakeupCount,
+		"scheduler_stolen_work_count":                   schedulerStolenWorkCount,
+		"scheduler_local_execution_count":               schedulerLocalExecutionCount,
+		"scheduler_ready_queue_max_depth":               schedulerReadyQueueMaxDepth,
+		"scheduler_fast_queue_max_depth":                schedulerFastQueueMaxDepth,
+		"scheduler_conservative_queue_max_depth":        schedulerConsQueueMaxDepth,
+		"scheduler_dependency_wait_ms":                  schedulerDependencyWaitMS,
+		"scheduler_idle_ms":                             schedulerIdleMS,
+		"scheduler_idle_ratio":                          schedulerIdleRatio,
+		"remote_state_access_count":                     remoteStateAccessCount,
+		"remote_state_read_count":                       remoteStateReadCount,
+		"remote_state_write_apply_count":                remoteStateWriteApplyCount,
+		"remote_operation_unknown_kind_count":           remoteOperationUnknownCount,
+		"physical_remote_operation_count":               physicalRemoteOperationCount,
+		"physical_remote_fetch_count":                   physicalRemoteFetchCount,
+		"physical_remote_writeback_count":               physicalRemoteWritebackCount,
+		"physical_remote_failed_count":                  physicalRemoteFailedCount,
+		"replica_deduplicated_remote_operation_count":   remoteStateAggregate["replica_deduplicated_remote_operation_count"],
+		"replica_deduplicated_remote_fetch_count":       remoteStateAggregate["replica_deduplicated_remote_fetch_count"],
+		"replica_deduplicated_remote_writeback_count":   remoteStateAggregate["replica_deduplicated_remote_writeback_count"],
+		"remote_fetches_per_logical_tx":                 remoteStateAggregate["remote_fetches_per_logical_tx"],
+		"remote_writebacks_per_logical_tx":              remoteStateAggregate["remote_writebacks_per_logical_tx"],
+		"remote_operations_per_logical_tx":              remoteStateAggregate["remote_operations_per_logical_tx"],
+		"replica_amplification_factor":                  remoteStateAggregate["replica_amplification_factor"],
+		"remote_fetch_replica_amplification_factor":     remoteStateAggregate["remote_fetch_replica_amplification_factor"],
+		"remote_writeback_replica_amplification_factor": remoteStateAggregate["remote_writeback_replica_amplification_factor"],
+		"mechanism_metrics":                             mechanismMetrics,
+		"remote_state_access_failed_count":              remoteStateFailedCount,
+		"remote_state_access_avg_latency_ms":            remoteStateAvgLatency,
+		"fault_injection_real":                          faultEvidence,
+		"fault_injection_requested":                     faultRequested,
+		"orphan_process_count":                          0,
+		"no_fallback":                                   true,
+		"node_summaries":                                summaries,
+		"processes":                                     redactV5Processes(processes, dataDir),
+		"shard_blocks":                                  shardBlocks,
+		"ready_to_commit":                               ready,
+	}, nil
 }
 
 func singleMapKey(values map[string]bool) string {
@@ -1247,6 +1391,530 @@ func singleMapKey(values map[string]bool) string {
 		return key
 	}
 	return ""
+}
+
+func logicalTxCount(plan v5.Plan) int {
+	if plan.WorkloadPlan.ActualTxCount > 0 {
+		return plan.WorkloadPlan.ActualTxCount
+	}
+	if plan.WorkloadPlan.TxCount > 0 {
+		return plan.WorkloadPlan.TxCount
+	}
+	return plan.WorkloadPlan.RequestedTxCount
+}
+
+func writeRemoteStateAggregate(dataDir string, nodes []v5.NodePlan, logicalTxCount int) (map[string]any, error) {
+	type op struct {
+		key            string
+		normalizedKind string
+		nodeID         string
+		executionShard string
+		homeShard      string
+		stateKey       string
+		blockHash      string
+		sourceBlock    string
+		sourceHeight   string
+		deltaID        string
+		txID           string
+		latencyMS      string
+	}
+	physicalTotal := 0
+	physicalFetch := 0
+	physicalWriteback := 0
+	physicalFailed := 0
+	unknown := 0
+	dedup := map[string]op{}
+	for _, node := range nodes {
+		path := filepath.Join(node.DataDir, "remote_state_access.csv")
+		file, err := os.Open(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		reader := csv.NewReader(file)
+		reader.FieldsPerRecord = -1
+		records, err := reader.ReadAll()
+		closeErr := file.Close()
+		if err != nil {
+			return nil, err
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		if len(records) == 0 {
+			continue
+		}
+		header := map[string]int{}
+		for index, name := range records[0] {
+			header[name] = index
+		}
+		for _, row := range records[1:] {
+			if !csvBool(row, header, "success") {
+				physicalFailed++
+				continue
+			}
+			kind := v5.NormalizeRemoteOperationKind(csvValue(row, header, "access_kind", ""))
+			switch kind {
+			case "fetch":
+				physicalFetch++
+			case "writeback":
+				physicalWriteback++
+			default:
+				unknown++
+			}
+			physicalTotal++
+			key := remoteStateDedupKey(row, header, kind)
+			if _, ok := dedup[key]; !ok {
+				dedup[key] = op{
+					key:            key,
+					normalizedKind: kind,
+					nodeID:         csvValue(row, header, "node_id", ""),
+					executionShard: csvValue(row, header, "execution_shard", ""),
+					homeShard:      csvValue(row, header, "home_shard", ""),
+					stateKey:       csvValue(row, header, "state_key", ""),
+					blockHash:      csvValue(row, header, "block_hash", ""),
+					sourceBlock:    csvValue(row, header, "source_block_hash", ""),
+					sourceHeight:   csvValue(row, header, "source_height", ""),
+					deltaID:        csvValue(row, header, "delta_id", ""),
+					txID:           csvValue(row, header, "tx_id", ""),
+					latencyMS:      csvValue(row, header, "latency_ms", ""),
+				}
+			}
+		}
+	}
+	dedupFetch := 0
+	dedupWriteback := 0
+	dedupUnknown := 0
+	rows := make([][]string, 0, len(dedup))
+	keys := make([]string, 0, len(dedup))
+	for key := range dedup {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		item := dedup[key]
+		switch item.normalizedKind {
+		case "fetch":
+			dedupFetch++
+		case "writeback":
+			dedupWriteback++
+		default:
+			dedupUnknown++
+		}
+		rows = append(rows, []string{item.normalizedKind, item.blockHash, item.sourceBlock, item.sourceHeight, item.executionShard, item.homeShard, item.stateKey, item.deltaID, item.txID, item.nodeID, item.latencyMS, item.key})
+	}
+	aggregateDir := filepath.Join(dataDir, "aggregate")
+	if err := os.MkdirAll(aggregateDir, 0o755); err != nil {
+		return nil, err
+	}
+	if err := metrics.WriteCSV(filepath.Join(aggregateDir, "replica_deduplicated_remote_operations.csv"), []string{"normalized_kind", "block_hash", "source_block_hash", "source_height", "execution_shard", "home_shard", "state_key", "delta_id", "tx_id", "example_node_id", "example_latency_ms", "dedup_key"}, rows); err != nil {
+		return nil, err
+	}
+	dedupTotal := len(dedup)
+	summary := map[string]any{
+		"schema_version":                                 "mbe_remote_state_metrics_v2",
+		"truth_scope":                                    "node_physical_and_replica_deduplicated",
+		"physical_remote_operation_count":                physicalTotal,
+		"physical_remote_fetch_count":                    physicalFetch,
+		"physical_remote_writeback_count":                physicalWriteback,
+		"physical_remote_failed_count":                   physicalFailed,
+		"remote_operation_unknown_kind_count":            unknown,
+		"replica_deduplicated_remote_operation_count":    dedupTotal,
+		"replica_deduplicated_remote_fetch_count":        dedupFetch,
+		"replica_deduplicated_remote_writeback_count":    dedupWriteback,
+		"replica_deduplicated_remote_unknown_kind_count": dedupUnknown,
+		"remote_fetches_per_logical_tx":                  ratio(dedupFetch, logicalTxCount),
+		"remote_writebacks_per_logical_tx":               ratio(dedupWriteback, logicalTxCount),
+		"remote_operations_per_logical_tx":               ratio(dedupTotal, logicalTxCount),
+		"replica_amplification_factor":                   ratio(physicalTotal, dedupTotal),
+		"remote_fetch_replica_amplification_factor":      ratio(physicalFetch, dedupFetch),
+		"remote_writeback_replica_amplification_factor":  ratio(physicalWriteback, dedupWriteback),
+		"logical_tx_count":                               logicalTxCount,
+		"replica_deduplicated_operation_artifact":        "aggregate/replica_deduplicated_remote_operations.csv",
+	}
+	return summary, v5.SaveJSON(filepath.Join(aggregateDir, "remote_state_metrics_summary.json"), summary)
+}
+
+func writeBlockProductionAggregate(dataDir string, nodes []v5.NodePlan) (map[string]any, error) {
+	type blockRow struct {
+		shardID    string
+		height     string
+		blockHash  string
+		txCount    int
+		finishedAt int64
+	}
+	dedup := map[string]blockRow{}
+	configuredBlockSize := 100
+	configuredIntervalMS := 75
+	for index, node := range nodes {
+		if index == 0 {
+			if producer, ok := node.PluginProfile["block_producer"]; ok {
+				if value := number(producer.Config["block_size"]); value > 0 {
+					configuredBlockSize = value
+				}
+				if value := number(producer.Config["interval_ms"]); value > 0 {
+					configuredIntervalMS = value
+				}
+			}
+		}
+		file, err := os.Open(filepath.Join(node.DataDir, "committed_chain.csv"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		records, err := csv.NewReader(file).ReadAll()
+		_ = file.Close()
+		if err != nil {
+			return nil, err
+		}
+		for rowIndex, row := range records {
+			if rowIndex == 0 || len(row) < 13 {
+				continue
+			}
+			txCount := 0
+			_, _ = fmt.Sscan(row[6], &txCount)
+			var finishedAt int64
+			_, _ = fmt.Sscan(row[12], &finishedAt)
+			key := strings.Join([]string{row[1], row[2], row[4]}, "|")
+			dedup[key] = blockRow{shardID: row[1], height: row[2], blockHash: row[4], txCount: txCount, finishedAt: finishedAt}
+		}
+	}
+	rows := make([]blockRow, 0, len(dedup))
+	for _, item := range dedup {
+		rows = append(rows, item)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].shardID != rows[j].shardID {
+			return rows[i].shardID < rows[j].shardID
+		}
+		if rows[i].height != rows[j].height {
+			return rows[i].height < rows[j].height
+		}
+		return rows[i].blockHash < rows[j].blockHash
+	})
+	txSum := 0
+	minTx := 0
+	maxTx := 0
+	byShard := map[string][]blockRow{}
+	for index, item := range rows {
+		txSum += item.txCount
+		if index == 0 || item.txCount < minTx {
+			minTx = item.txCount
+		}
+		if index == 0 || item.txCount > maxTx {
+			maxTx = item.txCount
+		}
+		byShard[item.shardID] = append(byShard[item.shardID], item)
+	}
+	intervals := []int64{}
+	for _, shardRows := range byShard {
+		sort.Slice(shardRows, func(i, j int) bool { return shardRows[i].finishedAt < shardRows[j].finishedAt })
+		for index := 1; index < len(shardRows); index++ {
+			if shardRows[index].finishedAt > 0 && shardRows[index-1].finishedAt > 0 {
+				if delta := shardRows[index].finishedAt - shardRows[index-1].finishedAt; delta >= 0 {
+					intervals = append(intervals, delta)
+				}
+			}
+		}
+	}
+	intervalSum := int64(0)
+	for _, value := range intervals {
+		intervalSum += value
+	}
+	averageTx := 0.0
+	if len(rows) > 0 {
+		averageTx = float64(txSum) / float64(len(rows))
+	}
+	intervalMean := 0.0
+	if len(intervals) > 0 {
+		intervalMean = float64(intervalSum) / float64(len(intervals))
+	}
+	summary := map[string]any{
+		"schema_version":                "mbe_block_production_summary_v1",
+		"truth_scope":                   "replica_deduplicated_committed_chain",
+		"configured_block_size":         configuredBlockSize,
+		"configured_block_interval_ms":  configuredIntervalMS,
+		"actual_committed_block_count":  len(rows),
+		"actual_average_tx_per_block":   averageTx,
+		"actual_min_tx_per_block":       minTx,
+		"actual_max_tx_per_block":       maxTx,
+		"actual_block_interval_mean_ms": intervalMean,
+		"actual_block_interval_p95_ms":  int64Percentile(intervals, 0.95),
+		"replica_deduplication_key":     "shard_id|height|block_hash",
+		"source_artifact":               "nodes/*/committed_chain.csv",
+	}
+	aggregateDir := filepath.Join(dataDir, "aggregate")
+	if err := os.MkdirAll(aggregateDir, 0o755); err != nil {
+		return nil, err
+	}
+	return summary, v5.SaveJSON(filepath.Join(aggregateDir, "block_production_summary.json"), summary)
+}
+
+func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes []v5.NodePlan, remoteState map[string]any) (map[string]any, error) {
+	aggregateDir := filepath.Join(dataDir, "aggregate")
+	if err := os.MkdirAll(aggregateDir, 0o755); err != nil {
+		return nil, err
+	}
+	metatrackApplicable := false
+	metatrack := map[string]any{
+		"schema_version": "mbe_metatrack_aggregate_summary_v1",
+		"status":         "not_applicable",
+	}
+	fast := 0
+	conservative := 0
+	aggregationGroups := 0
+	schedulerEvents := 0
+	blocked := 0
+	wakeup := 0
+	preOps := 0
+	postOps := 0
+	aggregatedKeys := 0
+	aggregatedLogicalDeltas := 0
+	for _, item := range summaries {
+		if item.FastTrackCount > 0 || item.ConservativeTrackCount > 0 || item.AggregationGroupCount > 0 || item.RemoteStateAccessCount > 0 {
+			metatrackApplicable = true
+		}
+		fast += item.FastTrackCount
+		conservative += item.ConservativeTrackCount
+		aggregationGroups += item.AggregationGroupCount
+		schedulerEvents += item.SchedulerEventCount
+		blocked += item.SchedulerBlockedCount
+		wakeup += item.SchedulerWakeupCount
+		preOps += item.PreAggregationPhysicalOps
+		postOps += item.PostAggregationPhysicalOps
+		aggregatedKeys += item.AggregatedKeyCount
+		aggregatedLogicalDeltas += item.AggregatedLogicalDeltaCount
+	}
+	if metatrackApplicable {
+		totalTracks := fast + conservative
+		metatrack = map[string]any{
+			"schema_version":                              "mbe_metatrack_aggregate_summary_v1",
+			"status":                                      "available",
+			"fast_track_logical_tx_count":                 fast,
+			"conservative_track_logical_tx_count":         conservative,
+			"fast_track_ratio":                            ratio(fast, totalTracks),
+			"conservative_track_ratio":                    ratio(conservative, totalTracks),
+			"runtime_scheduler_event_count":               schedulerEvents,
+			"blocked_logical_tx_count":                    blocked,
+			"wakeup_logical_tx_count":                     wakeup,
+			"aggregation_group_count":                     aggregationGroups,
+			"aggregated_key_count":                        aggregatedKeys,
+			"aggregated_logical_delta_count":              aggregatedLogicalDeltas,
+			"pre_aggregation_physical_op_count":           preOps,
+			"post_aggregation_physical_op_count":          postOps,
+			"physical_ops_saved_count":                    maxInt(preOps-postOps, 0),
+			"aggregation_reduction_ratio":                 ratio(maxInt(preOps-postOps, 0), preOps),
+			"physical_remote_fetch_count":                 remoteState["physical_remote_fetch_count"],
+			"physical_remote_writeback_count":             remoteState["physical_remote_writeback_count"],
+			"replica_deduplicated_remote_fetch_count":     remoteState["replica_deduplicated_remote_fetch_count"],
+			"replica_deduplicated_remote_writeback_count": remoteState["replica_deduplicated_remote_writeback_count"],
+		}
+	}
+	blockSTM, err := aggregateBlockSTM(nodes)
+	if err != nil {
+		return nil, err
+	}
+	if err := v5.SaveJSON(filepath.Join(aggregateDir, "metatrack_aggregate_summary.json"), metatrack); err != nil {
+		return nil, err
+	}
+	if err := v5.SaveJSON(filepath.Join(aggregateDir, "block_stm_aggregate_summary.json"), blockSTM); err != nil {
+		return nil, err
+	}
+	mechanism := map[string]any{
+		"schema_version": "mbe_mechanism_metrics_summary_v1",
+		"metatrack":      metatrack,
+		"block_stm":      blockSTM,
+		"remote_state":   remoteState,
+	}
+	return mechanism, v5.SaveJSON(filepath.Join(aggregateDir, "mechanism_metrics_summary.json"), mechanism)
+}
+
+func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
+	type nodeMetrics struct {
+		nodeID               string
+		workerCount          int
+		maximumParallelWidth int
+		abortCount           int
+		reexecutionCount     int
+		validationFailure    int
+		dependencyWaitCount  int
+		estimatePublishCount int
+		serialEquivalent     bool
+	}
+	values := []nodeMetrics{}
+	for _, node := range nodes {
+		raw := map[string]any{}
+		path := filepath.Join(node.DataDir, "block_stm_summary.json")
+		if err := readJSONMap(path, &raw); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		metricsMap, _ := raw["block_stm_metrics"].(map[string]any)
+		if metricsMap == nil {
+			continue
+		}
+		values = append(values, nodeMetrics{
+			nodeID:               node.NodeID,
+			workerCount:          intFromAny(metricsMap["worker_count"]),
+			maximumParallelWidth: intFromAny(metricsMap["maximum_parallel_width"]),
+			abortCount:           intFromAny(metricsMap["abort_count"]),
+			reexecutionCount:     intFromAny(metricsMap["reexecution_count"]),
+			validationFailure:    intFromAny(metricsMap["validation_failure_count"]),
+			dependencyWaitCount:  intFromAny(metricsMap["dependency_wait_count"]),
+			estimatePublishCount: intFromAny(metricsMap["estimate_publish_count"]),
+			serialEquivalent:     boolFromAny(raw["serial_equivalent"]),
+		})
+	}
+	if len(values) == 0 {
+		return map[string]any{"schema_version": "mbe_block_stm_aggregate_summary_v1", "status": "not_applicable"}, nil
+	}
+	workerCounts := map[int]bool{}
+	serialEquivalent := true
+	abortSum := 0
+	reexecutionSum := 0
+	validationFailureSum := 0
+	dependencyWaitSum := 0
+	estimatePublishSum := 0
+	maxWidth := 0
+	for _, item := range values {
+		workerCounts[item.workerCount] = true
+		serialEquivalent = serialEquivalent && item.serialEquivalent
+		abortSum += item.abortCount
+		reexecutionSum += item.reexecutionCount
+		validationFailureSum += item.validationFailure
+		dependencyWaitSum += item.dependencyWaitCount
+		estimatePublishSum += item.estimatePublishCount
+		maxWidth = maxInt(maxWidth, item.maximumParallelWidth)
+	}
+	return map[string]any{
+		"schema_version":                       "mbe_block_stm_aggregate_summary_v1",
+		"status":                               "available",
+		"worker_count":                         singleIntKey(workerCounts),
+		"worker_count_replica_consistent":      len(workerCounts) == 1,
+		"maximum_parallel_width":               maxWidth,
+		"abort_count":                          abortSum,
+		"reexecution_count":                    reexecutionSum,
+		"validation_failure_count":             validationFailureSum,
+		"dependency_wait_count":                dependencyWaitSum,
+		"estimate_publish_count":               estimatePublishSum,
+		"serial_equivalent":                    serialEquivalent,
+		"physical_replica_count":               len(values),
+		"abort_count_per_validator_mean":       ratio(abortSum, len(values)),
+		"reexecution_count_per_validator_mean": ratio(reexecutionSum, len(values)),
+	}, nil
+}
+
+func readJSONMap(path string, out *map[string]any) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
+}
+
+func singleIntKey(values map[int]bool) int {
+	if len(values) != 1 {
+		return 0
+	}
+	for key := range values {
+		return key
+	}
+	return 0
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func intFromAny(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(typed))
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func boolFromAny(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(typed))
+		return normalized == "true" || normalized == "1" || normalized == "yes"
+	default:
+		return false
+	}
+}
+
+func csvValue(row []string, header map[string]int, name, fallback string) string {
+	index, ok := header[name]
+	if !ok || index < 0 || index >= len(row) {
+		return fallback
+	}
+	return row[index]
+}
+
+func csvBool(row []string, header map[string]int, name string) bool {
+	value := strings.ToLower(strings.TrimSpace(csvValue(row, header, name, "")))
+	return value == "true" || value == "1" || value == "yes"
+}
+
+func remoteStateDedupKey(row []string, header map[string]int, normalizedKind string) string {
+	executionShard := csvValue(row, header, "execution_shard", "")
+	homeShard := csvValue(row, header, "home_shard", "")
+	stateKey := csvValue(row, header, "state_key", "")
+	if normalizedKind == "writeback" {
+		sourceBlock := csvValue(row, header, "source_block_hash", "")
+		if sourceBlock == "" {
+			sourceBlock = csvValue(row, header, "block_hash", "")
+		}
+		deltaID := csvValue(row, header, "delta_id", "")
+		if deltaID == "" {
+			deltaID = strings.Join([]string{csvValue(row, header, "tx_id", ""), csvValue(row, header, "update_semantics", ""), csvValue(row, header, "witness_digest", "")}, "|")
+		}
+		return strings.Join([]string{normalizedKind, sourceBlock, executionShard, homeShard, stateKey, deltaID}, "|")
+	}
+	return strings.Join([]string{normalizedKind, csvValue(row, header, "block_hash", ""), executionShard, homeShard, stateKey}, "|")
+}
+
+func ratio(numerator, denominator int) float64 {
+	if denominator <= 0 {
+		return 0
+	}
+	return float64(numerator) / float64(denominator)
+}
+
+func int64Percentile(values []int64, p float64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+	copyValues := append([]int64(nil), values...)
+	sort.Slice(copyValues, func(i, j int) bool { return copyValues[i] < copyValues[j] })
+	index := int(float64(len(copyValues)-1) * p)
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(copyValues) {
+		index = len(copyValues) - 1
+	}
+	return copyValues[index]
 }
 
 func redactV5Processes(processes []v5NodeProcess, dataDir string) []v5NodeProcess {

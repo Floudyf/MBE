@@ -17,6 +17,18 @@ test("previews and runs a V5 real-cluster Formal RunGroup", async ({ page }) => 
   await page.getByTestId("v5-formal-preview-button").click();
   await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("矩阵行数：1");
   await expect(page.getByText("可运行", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("v5-estimated-block-count")).toHaveText("1");
+  await expect(page.getByTestId("v5-start-run-group-button")).toBeEnabled();
+  await page.getByLabel("block size").fill("10");
+  await expect(page.getByTestId("v5-start-run-group-button")).toBeDisabled();
+  await page.getByTestId("v5-formal-preview-button").click();
+  await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("矩阵行数：1");
+  await expect(page.getByTestId("v5-estimated-block-count")).toHaveText("2");
+  await expect(page.getByTestId("v5-start-run-group-button")).toBeEnabled();
+  await page.getByLabel("block size").fill("100");
+  await expect(page.getByTestId("v5-start-run-group-button")).toBeDisabled();
+  await page.getByTestId("v5-formal-preview-button").click();
+  await expect(page.getByTestId("v5-estimated-block-count")).toHaveText("1");
   await expect(page.getByTestId("v5-start-run-group-button")).toBeEnabled();
   await page.getByLabel("tx_count").fill("21");
   await expect(page.getByTestId("v5-start-run-group-button")).toBeDisabled();
