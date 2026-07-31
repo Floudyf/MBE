@@ -64,7 +64,7 @@ DATASET_ARTIFACTS = [
     "workload_identity_mapping_summary.json",
     "workload_replay_summary.json",
 ]
-METATRACK_ARTIFACTS = [
+METATRACK_CLIENT_ARTIFACTS = [
     "metatrack_batch_plan.jsonl",
     "access_matrix_summary.csv",
     "state_frequency.csv",
@@ -72,24 +72,23 @@ METATRACK_ARTIFACTS = [
     "placement_plan.csv",
     "transaction_placement.csv",
     "dependency_graph.csv",
+    "predicted_remote_access.csv",
+]
+
+METATRACK_NODE_ARTIFACTS = [
     "track_classification.csv",
     "metatrack_scheduler_trace.csv",
-    "predicted_remote_access.csv",
-    "physical_remote_state_operations.csv",
-    "aggregate/replica_deduplicated_remote_operations.csv",
-    "aggregate/remote_state_metrics_summary.json",
-    "aggregate/metatrack_aggregate_summary.json",
     "aggregation_plan.csv",
     "logical_physical_update_mapping.csv",
 ]
-BLOCK_STM_ARTIFACTS = [
+
+BLOCK_STM_NODE_ARTIFACTS = [
     "block_stm_summary.json",
     "block_stm_task_trace.csv",
     "block_stm_validation_trace.csv",
     "block_stm_abort_trace.csv",
     "block_stm_dependency_trace.csv",
     "incarnation_summary.csv",
-    "aggregate/block_stm_aggregate_summary.json",
     "serial_equivalence.json",
 ]
 
@@ -122,9 +121,22 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
     node_expected_artifacts = [f"nodes/{node.node_id}/{artifact}" for node in nodes for artifact in NODE_EXPECTED_ARTIFACTS]
     expected_artifacts = EXPECTED_ARTIFACTS + node_expected_artifacts + (DATASET_ARTIFACTS if workload.get("source_type") == "dataset" else [])
     if profile.get("routing", {}).get("plugin_id") == "metatrack_coaccess_routing":
-        expected_artifacts += METATRACK_ARTIFACTS
+        expected_artifacts += [
+            f"client/{artifact}"
+            for artifact in METATRACK_CLIENT_ARTIFACTS
+        ]
+        expected_artifacts += [
+            f"nodes/{node.node_id}/{artifact}"
+            for node in nodes
+            for artifact in METATRACK_NODE_ARTIFACTS
+        ]
+
     if profile.get("block_executor", {}).get("plugin_id") == "block_stm_block_executor":
-        expected_artifacts += BLOCK_STM_ARTIFACTS
+        expected_artifacts += [
+            f"nodes/{node.node_id}/{artifact}"
+            for node in nodes
+            for artifact in BLOCK_STM_NODE_ARTIFACTS
+        ]
     return V5CompiledRunPlan(
         plan_id=f"v5plan_{digest[:16]}", plan_digest=digest,
         execution_backend=spec.execution_backend, duration_ms=spec.duration_ms,

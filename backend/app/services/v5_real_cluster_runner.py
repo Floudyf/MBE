@@ -100,7 +100,20 @@ def run(spec: V5ExperimentSpec) -> dict:
     summary["unexpected_artifacts"] = artifact_contract["unexpected_artifacts"]
     completion_gate = _completion_gate(run_dir, summary)
     summary["completion_gate"] = completion_gate
-    status_value = _run_status_from_completion(result.returncode, completion_gate)
+
+    (run_dir / "real_cluster_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    # real_cluster_summary.json 已更新，需要重新生成 catalog，
+    # 保证其中记录的 SHA-256 对应最终文件内容。
+    write_run_artifact_catalog(run_dir, run_id=run_id)
+
+    status_value = _run_status_from_completion(
+        result.returncode,
+        completion_gate,
+    )
     return {
         "run_id": run_id,
         "status": status_value,

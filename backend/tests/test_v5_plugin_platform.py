@@ -96,17 +96,27 @@ def test_metatrack_expected_artifacts_are_declared_only_for_metatrack_routing(tm
         for item in spec.plugin_selections
     ]
     metatrack_plan = compile_plan(spec, tmp_path / "metatrack")
-    assert "metatrack_batch_plan.jsonl" in metatrack_plan.expected_artifacts
-    assert "access_matrix_summary.csv" in metatrack_plan.expected_artifacts
-    assert "transaction_placement.csv" in metatrack_plan.expected_artifacts
-    assert "dependency_graph.csv" in metatrack_plan.expected_artifacts
-    assert "track_classification.csv" in metatrack_plan.expected_artifacts
-    assert "predicted_remote_access.csv" in metatrack_plan.expected_artifacts
+    assert "client/metatrack_batch_plan.jsonl" in metatrack_plan.expected_artifacts
+    assert "client/access_matrix_summary.csv" in metatrack_plan.expected_artifacts
+    assert "client/transaction_placement.csv" in metatrack_plan.expected_artifacts
+    assert "client/dependency_graph.csv" in metatrack_plan.expected_artifacts
+    assert "client/predicted_remote_access.csv" in metatrack_plan.expected_artifacts
+
+    assert "nodes/n0/track_classification.csv" in metatrack_plan.expected_artifacts
+    assert "nodes/n0/metatrack_scheduler_trace.csv" in metatrack_plan.expected_artifacts
+    assert "nodes/n0/aggregation_plan.csv" in metatrack_plan.expected_artifacts
+    assert "nodes/n0/logical_physical_update_mapping.csv" in metatrack_plan.expected_artifacts
+
     assert "physical_remote_state_operations.csv" in metatrack_plan.expected_artifacts
     assert "aggregate/replica_deduplicated_remote_operations.csv" in metatrack_plan.expected_artifacts
     assert "aggregate/remote_state_metrics_summary.json" in metatrack_plan.expected_artifacts
+    assert "aggregate/metatrack_aggregate_summary.json" in metatrack_plan.expected_artifacts
+
+    assert "metatrack_batch_plan.jsonl" not in metatrack_plan.expected_artifacts
+    assert "track_classification.csv" not in metatrack_plan.expected_artifacts
+    assert "predicted_remote_access.csv" not in metatrack_plan.expected_artifacts
+    assert "logical_physical_update_mapping.csv" not in metatrack_plan.expected_artifacts
     assert "remote_state_access.csv" not in metatrack_plan.expected_artifacts
-    assert "logical_physical_update_mapping.csv" in metatrack_plan.expected_artifacts
 
 
 def test_block_stm_expected_artifacts_are_declared_only_for_block_stm_executor(tmp_path: Path) -> None:
@@ -119,11 +129,16 @@ def test_block_stm_expected_artifacts_are_declared_only_for_block_stm_executor(t
         for item in spec.plugin_selections
     ]
     block_stm_plan = compile_plan(spec, tmp_path / "block_stm")
-    assert "block_stm_summary.json" in block_stm_plan.expected_artifacts
-    assert "block_stm_validation_trace.csv" in block_stm_plan.expected_artifacts
+    assert "nodes/n0/block_stm_summary.json" in block_stm_plan.expected_artifacts
+    assert "nodes/n0/block_stm_validation_trace.csv" in block_stm_plan.expected_artifacts
+    assert "nodes/n0/block_stm_task_trace.csv" in block_stm_plan.expected_artifacts
+    assert "nodes/n0/serial_equivalence.json" in block_stm_plan.expected_artifacts
     assert "aggregate/block_stm_aggregate_summary.json" in block_stm_plan.expected_artifacts
     assert "aggregate/mechanism_metrics_summary.json" in block_stm_plan.expected_artifacts
-    assert "serial_equivalence.json" in block_stm_plan.expected_artifacts
+
+    assert "block_stm_summary.json" not in block_stm_plan.expected_artifacts
+    assert "block_stm_validation_trace.csv" not in block_stm_plan.expected_artifacts
+    assert "serial_equivalence.json" not in block_stm_plan.expected_artifacts
 
 
 def test_artifact_contract_reports_missing_expected_artifacts(tmp_path: Path) -> None:

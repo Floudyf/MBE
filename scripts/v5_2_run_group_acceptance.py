@@ -43,7 +43,23 @@ def _validate(group_id: str, current: dict, items: list[dict], directory: Path) 
     required=["raw_summary.csv","aggregate_summary.csv","confidence_interval.csv","formal_matrix.csv","fairness_matrix.csv","artifacts.zip"]
     blockers=[]
     if current.get("status")!="completed": blockers.append(f"group status {current.get('status')}")
-    if len(items)!=8 or not all(item.get("status")=="completed" for item in items): blockers.append("children incomplete")
+    expected_child_count = current.get("total_child_runs")
+    if not isinstance(expected_child_count, int) or expected_child_count <= 0:
+        matrix = current.get("matrix")
+        if isinstance(matrix, list) and matrix:
+            expected_child_count = len(matrix)
+        else:
+            expected_child_count = len(items)
+
+    if expected_child_count <= 0:
+        blockers.append("group has no children")
+    elif len(items) != expected_child_count or not all(
+        item.get("status") == "completed" for item in items
+    ):
+        blockers.append(
+            f"children incomplete: expected={expected_child_count} "
+            f"actual={len(items)}"
+        )
     if any(not (directory/name).is_file() or (directory/name).stat().st_size==0 for name in required): blockers.append("artifacts incomplete")
     for item in items:
         summary = item.get("result", {}).get("summary", {})

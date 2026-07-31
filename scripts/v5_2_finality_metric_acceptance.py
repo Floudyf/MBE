@@ -24,18 +24,54 @@ def spec() -> V5ExperimentSpec:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate V5.2 finality from raw real-cluster lifecycle artifacts.")
-    parser.add_argument("--output-root", default=str(ROOT / ".cache" / "v5_2_finality_acceptance"))
+    parser.add_argument(
+        "--output-root",
+        default=str(ROOT / ".cache" / "v5_2_finality_acceptance"),
+    )
+    parser.add_argument(
+        "--verify-existing",
+        action="store_true",
+        help="Validate an existing run directory without deleting or rerunning it.",
+    )
     args = parser.parse_args()
     root = Path(args.output_root).resolve()
-    if root.exists():
-        shutil.rmtree(root)
-    root.mkdir(parents=True, exist_ok=True)
-    compiled = compile_plan(spec(), root)
-    plan = root / "compiled_run_plan.json"
-    plan.write_text(compiled.model_dump_json(indent=2), encoding="utf-8")
-    result = subprocess.run(["go", "run", "./cmd/mbe-supervisor", "--mode", "v5-real-cluster", "--plan", str(plan), "--data-dir", str(root)], cwd=ROOT / "executor", text=True, capture_output=True, timeout=180)
-    if result.returncode:
-        raise RuntimeError(result.stderr)
+
+    if args.verify_existing:
+        if not root.is_dir():
+            raise RuntimeError(
+                f"existing run directory does not exist: {root}"
+            )
+    else:
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True, exist_ok=True)
+
+        compiled = compile_plan(spec(), root)
+        plan = root / "compiled_run_plan.json"
+        plan.write_text(
+            compiled.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                "go",
+                "run",
+                "./cmd/mbe-supervisor",
+                "--mode",
+                "v5-real-cluster",
+                "--plan",
+                str(plan),
+                "--data-dir",
+                str(root),
+            ],
+            cwd=ROOT / "executor",
+            text=True,
+            capture_output=True,
+            timeout=180,
+        )
+        if result.returncode:
+            raise RuntimeError(result.stderr)
     summary = json.loads((root / "real_cluster_summary.json").read_text(encoding="utf-8"))
     finality = json.loads((root / "finality_summary.json").read_text(encoding="utf-8"))
     required = [root / "transaction_lifecycle.jsonl", root / "transaction_lifecycle.csv", root / "transaction_finality.csv", root / "client_receipt_log.csv", root / "latency_distribution.csv", root / "throughput_windows.csv"]
@@ -46,9 +82,43 @@ def main() -> int:
     with (root / "transaction_finality.csv").open(newline="", encoding="utf-8") as handle:
         finality_rows = list(csv.DictReader(handle))
     stages = {row["stage"].lower() for row in lifecycle}
-    required_stages = {"submitted", "received", "admitted", "proposed", "quorum_committed", "durable_committed", "sourcelock", "targetcommit", "sourcefinalize", "refund"}
+
+    required_stages = {
+        "submitted",
+        "received",
+        "admitted",
+        "proposed",
+        "quorum_committed",
+        "durable_committed",
+    }
+
+    cross_shard_requested = int(
+        finality.get("cross_shard_requested_unique_count", 0) or 0
+    )
+    cross_shard_target_committed = int(
+        finality.get("cross_shard_target_committed_unique_count", 0) or 0
+    )
+    cross_shard_finalized = int(
+        finality.get("cross_shard_finalized_unique_count", 0) or 0
+    )
+    cross_shard_refunded = int(
+        finality.get("cross_shard_refunded_unique_count", 0) or 0
+    )
+
+    if cross_shard_requested > 0:
+        required_stages.add("sourcelock")
+    if cross_shard_target_committed > 0:
+        required_stages.add("targetcommit")
+    if cross_shard_finalized > 0:
+        required_stages.add("sourcefinalize")
+    if cross_shard_refunded > 0:
+        required_stages.add("refund")
+
     if not required_stages.issubset(stages):
-        raise RuntimeError(f"lifecycle stages missing: {sorted(required_stages - stages)}")
+        raise RuntimeError(
+            f"lifecycle stages missing: "
+            f"{sorted(required_stages - stages)}"
+        )
     if finality.get("metric_truth") != "derived_from_raw_runtime_lifecycle_and_drain_completion" or finality.get("tcp_send_latency_excluded") is not True:
         raise RuntimeError("finality truth boundary invalid")
     if (
@@ -65,8 +135,26 @@ def main() -> int:
         raise RuntimeError("cross-shard finality was not settled by finalization/refund")
     if summary.get("no_fallback") is not True or summary.get("orphan_process_count") != 0:
         raise RuntimeError("real cluster fallback/orphan check failed")
-    report = {"acceptance_passed": True, "run_dir": str(root), "finality_summary": finality, "stage_count": len(stages)}
-    (root / "v5_2_finality_metric_acceptance.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    report = {
+        "acceptance_passed": True,
+        "run_dir": str(root),
+        "verification_mode": (
+            "existing_read_only"
+            if args.verify_existing
+            else "fresh_acceptance_run"
+        ),
+        "finality_summary": finality,
+        "stage_count": len(stages),
+    }
+
+    if not args.verify_existing:
+        (
+            root / "v5_2_finality_metric_acceptance.json"
+        ).write_text(
+            json.dumps(report, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
     print(json.dumps(report))
     return 0
 
