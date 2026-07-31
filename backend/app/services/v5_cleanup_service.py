@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from backend.app.core.paths import FORMAL_RUN_ROOT, ROOT, V5_REAL_CLUSTER_RUNS_ROOT
+from backend.app.services.v3_saved_config_store import SAVED_CONFIG_ROOT, delete_saved_config, list_saved_configs
 
 
 TERMINAL_STATUSES = {"completed", "completed_with_failures", "failed", "blocked", "cancelled"}
@@ -21,7 +22,9 @@ class CleanupPlan:
     deleted_run_group_ids: list[str] = field(default_factory=list)
     deleted_output_dirs: list[str] = field(default_factory=list)
     deleted_orphan_dirs: list[str] = field(default_factory=list)
+    deleted_saved_config_ids: list[str] = field(default_factory=list)
     preserved_run_group_ids: list[str] = field(default_factory=list)
+    preserved_saved_config_ids: list[str] = field(default_factory=list)
     skipped_active_runs: list[str] = field(default_factory=list)
     skipped_output_dirs: list[str] = field(default_factory=list)
     released_bytes: int = 0
@@ -34,7 +37,9 @@ class CleanupPlan:
             "deleted_run_group_ids": self.deleted_run_group_ids,
             "deleted_output_dirs": self.deleted_output_dirs,
             "deleted_orphan_dirs": self.deleted_orphan_dirs,
+            "deleted_saved_config_ids": self.deleted_saved_config_ids,
             "preserved_run_group_ids": self.preserved_run_group_ids,
+            "preserved_saved_config_ids": self.preserved_saved_config_ids,
             "skipped_active_runs": self.skipped_active_runs,
             "skipped_output_dirs": self.skipped_output_dirs,
             "released_bytes": self.released_bytes,
@@ -178,6 +183,53 @@ def cleanup_orphan_real_cluster_dirs(
     return plan.as_dict()
 
 
+def scan_legacy_saved_configs(*, saved_config_root: Path = SAVED_CONFIG_ROOT) -> dict:
+    candidates: list[dict] = []
+    preserved: list[dict] = []
+    for config in list_saved_configs(root=saved_config_root):
+        decision = _legacy_saved_config_decision(config)
+        item = {
+            "config_id": config.get("config_id"),
+            "config_kind": config.get("config_kind"),
+            "name": config.get("name", ""),
+            "validation_status": config.get("validation_status", ""),
+            "reason": decision,
+        }
+        if decision:
+            candidates.append(item)
+        else:
+            preserved.append({**item, "reason": "current_runnable_v5_method_profile_or_non_formal_config"})
+    return {
+        "schema_version": "mbe_v5_legacy_saved_config_scan_v1",
+        "candidate_configs": candidates,
+        "preserved_configs": preserved,
+        "candidate_count": len(candidates),
+    }
+
+
+def cleanup_legacy_saved_configs(
+    *,
+    dry_run: bool = True,
+    saved_config_root: Path = SAVED_CONFIG_ROOT,
+) -> dict:
+    plan = CleanupPlan(dry_run=dry_run)
+    scan = scan_legacy_saved_configs(saved_config_root=saved_config_root)
+    for item in scan["candidate_configs"]:
+        config_id = str(item.get("config_id") or "")
+        try:
+            path = (saved_config_root / f"{config_id}.json").resolve()
+            _assert_within(path, saved_config_root)
+            if path.is_file():
+                plan.released_bytes += path.stat().st_size
+            plan.deleted_saved_config_ids.append(config_id)
+            if not dry_run:
+                delete_saved_config(config_id, root=saved_config_root)
+        except Exception as exc:
+            plan.errors.append(f"{config_id}:{exc}")
+    plan.preserved_saved_config_ids = [str(item.get("config_id") or "") for item in scan["preserved_configs"]]
+    return plan.as_dict()
+
+
 def write_cleanup_report(report: dict, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "cleanup_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -190,6 +242,15 @@ def write_cleanup_report(report: dict, output_dir: Path) -> None:
                     writer.writerow({"category": key, "value": item})
             else:
                 writer.writerow({"category": key, "value": value})
+
+
+def cleanup_report_output_dir(action: str, *, formal_root: Path = FORMAL_RUN_ROOT, now_time: datetime | None = None) -> Path:
+    now_time = now_time or datetime.now(UTC)
+    safe_action = "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in action).strip("_")
+    if not safe_action:
+        safe_action = "cleanup"
+    report_id = now_time.strftime("%Y%m%d_%H%M%S_%f")
+    return formal_root / "cleanup_reports" / safe_action / report_id
 
 
 def _load_groups(formal_root: Path) -> dict[str, dict]:
@@ -246,7 +307,21 @@ def _is_paper_candidate(group: dict) -> bool:
             return True
     aggregate = group.get("aggregate") or {}
     analysis = aggregate.get("paper_result_analysis") if isinstance(aggregate, dict) else None
-    return isinstance(analysis, dict) and analysis.get("analysis_status") == "ready"
+    if _paper_analysis_complete(analysis):
+        return True
+    group_path = group.get("_group_path")
+    if group_path:
+        try:
+            payload = json.loads((Path(group_path) / "aggregate" / "paper_result_analysis.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        if _paper_analysis_complete(payload):
+            return True
+    return False
+
+
+def _paper_analysis_complete(value: object) -> bool:
+    return isinstance(value, dict) and str(value.get("analysis_status") or "").lower() in {"complete", "ready"}
 
 
 def _group_children(group: dict) -> list[dict]:
@@ -378,3 +453,21 @@ def _parse_time(value: object) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def _legacy_saved_config_decision(config: dict) -> str:
+    kind = config.get("config_kind")
+    if kind == "formal_plan":
+        return "legacy_v3_formal_plan_config"
+    if kind != "method":
+        return ""
+    payload = config.get("payload") if isinstance(config.get("payload"), dict) else {}
+    if payload.get("schema_version") != "v5_plugin_profile_v1":
+        return "legacy_or_unknown_method_schema"
+    if config.get("validation_status") != "runnable":
+        return "non_runnable_v5_method_profile"
+    snapshot = payload.get("compatibility_snapshot") if isinstance(payload.get("compatibility_snapshot"), dict) else {}
+    selections = payload.get("plugin_selections")
+    if snapshot.get("valid") is not True or not isinstance(selections, list) or not selections:
+        return "invalid_v5_method_profile"
+    return ""

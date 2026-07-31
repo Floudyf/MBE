@@ -140,6 +140,12 @@ func TestRemoteStateAggregateDeduplicatesByStableOperationKeys(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "aggregate", "remote_state_metrics_summary.json")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(root, "physical_remote_state_operations.csv")); err != nil {
+		t.Fatal(err)
+	}
+	if summary["physical_remote_operation_artifact"] != "physical_remote_state_operations.csv" {
+		t.Fatalf("missing physical artifact pointer: %#v", summary)
+	}
 	if _, err := os.Stat(filepath.Join(root, "aggregate", "replica_deduplicated_remote_operations.csv")); err != nil {
 		t.Fatal(err)
 	}

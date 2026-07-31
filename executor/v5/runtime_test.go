@@ -1206,7 +1206,7 @@ func testMetaTrackProfile() map[string]PluginConfig {
 		"txpool":                {PluginID: "fifo_per_node_mempool", Config: map[string]any{"capacity": 100}},
 		"sharding":              {PluginID: "deterministic_state_key_sharding", Config: map[string]any{}},
 		"routing":               {PluginID: "metatrack_coaccess_routing", Config: map[string]any{}},
-		"block_producer":        {PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 10, "interval_ms": 150}},
+		"block_producer":        {PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 100, "interval_ms": 75}},
 		"consensus":             {PluginID: "pbft_style_consensus", Config: map[string]any{}},
 		"network":               {PluginID: "localhost_tcp_typed_network", Config: map[string]any{}},
 		"execution":             {PluginID: "dual_track_execution", Config: map[string]any{}},
@@ -1361,4 +1361,44 @@ func schedulerRowsCarryQueueDepths(rows [][]string) bool {
 		}
 	}
 	return false
+}
+func TestRemoteStateDeltaDrainStateKeepsPendingWorkLiveBeforeReady(t *testing.T) {
+	request := StateDeltaApplyRequest{
+		RequestID:      "request-1",
+		TxID:           "tx-1",
+		BlockHash:      "source-block-100",
+		Key:            "balance:alice",
+		Value:          "10",
+		HomeShard:      "s1",
+		ExecutionShard: "s0",
+		SourceHeight:   100,
+	}
+
+	runtime := &NodeRuntime{
+		pendingStateDeltas: []StateDeltaApplyRequest{request},
+	}
+
+	ready, pending := runtime.remoteStateDeltaDrainState(1)
+	if !pending {
+		t.Fatal("pending remote state delta must keep system drain work active")
+	}
+	if len(ready) != 0 {
+		t.Fatalf("delta became ready before source-height boundary: %d", len(ready))
+	}
+
+	readyHeight := request.SourceHeight + remoteStateDeltaApplyLagBlocks
+	ready, pending = runtime.remoteStateDeltaDrainState(readyHeight)
+	if !pending {
+		t.Fatal("delta remains pending until its consensus block commits")
+	}
+	if len(ready) != 1 {
+		t.Fatalf("expected one ready remote state delta, got %d", len(ready))
+	}
+	if ready[0].SourceHeight != request.SourceHeight {
+		t.Fatalf(
+			"source height mismatch: got %d want %d",
+			ready[0].SourceHeight,
+			request.SourceHeight,
+		)
+	}
 }

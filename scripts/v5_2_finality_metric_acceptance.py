@@ -19,7 +19,7 @@ from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
 
 def spec() -> V5ExperimentSpec:
     selections = [V5PluginSelection(category=category, plugin_id=next(item for item in STORE.list() if item.category == category).plugin_id) for category in CATEGORIES]
-    return V5ExperimentSpec(execution_backend="real_cluster", plugin_selections=selections, topology=V5Topology(nodes=8, shards=2, validators_per_shard=4), tx_count=100, seed=29, duration_ms=9000)
+    return V5ExperimentSpec(execution_backend="real_cluster", plugin_selections=selections, topology=V5Topology(nodes=8, shards=2, validators_per_shard=4), tx_count=1000, seed=29, duration_ms=9000)
 
 
 def main() -> int:
@@ -52,11 +52,11 @@ def main() -> int:
     if finality.get("metric_truth") != "derived_from_raw_runtime_lifecycle_and_drain_completion" or finality.get("tcp_send_latency_excluded") is not True:
         raise RuntimeError("finality truth boundary invalid")
     if (
-        finality.get("logical_transaction_count") != 100
-        or finality.get("submitted_unique_tx_count") != 100
-        or finality.get("terminal_unique_tx_count") != 100
+        finality.get("logical_transaction_count") != 1000
+        or finality.get("submitted_unique_tx_count") != 1000
+        or finality.get("terminal_unique_tx_count") != 1000
         or finality.get("incomplete_unique_tx_count") != 0
-        or finality.get("finalized_unique_logical_tx_count", 0) < 100
+        or finality.get("finalized_unique_logical_tx_count", 0) < 1000
     ):
         raise RuntimeError("logical transaction finality incomplete")
     if any(row["finality_ms"] == "-1" for row in finality_rows):

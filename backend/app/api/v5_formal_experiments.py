@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -9,11 +10,9 @@ from backend.app.services.v5_formal_run_store import ROOT_DIR, group_dir
 from backend.app.models.v5_formal_experiment import V5FormalRunRequest
 from backend.app.services.v5_formal_run_store import children, create_group, read_child, read_group, write_group
 from backend.app.services.v5_formal_scheduler import start
-from backend.app.services.v5_formal_artifact_catalog import read_catalog
+from backend.app.services.v5_formal_artifact_catalog import read_catalog, safe_artifact_name
 from backend.app.services.v5_formal_dto import child_detail as child_detail_dto, child_summary, group_detail, group_summary
 from backend.app.services.v5_formal_plan_validator import FormalPlanValidationError, validate_request
-from backend.app.services.v3_saved_config_store import create_saved_config
-from backend.app.models.v3_saved_config import V3SavedConfigCreateRequest
 from backend.app.services import v5_cleanup_service
 
 
@@ -35,8 +34,20 @@ def create_run_group(payload: V5FormalRunRequest) -> dict:
         checked = validate_request(payload)
     except FormalPlanValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
-    saved = create_saved_config(V3SavedConfigCreateRequest(config_kind="formal_plan", name=checked.plan.name, payload=checked.plan.model_dump(), validation_status="valid", source="user_saved"))
-    group = create_group({"execution_backend": payload.execution_backend, "runtime_truth": "v5_real_cluster_candidate", "plan_config_id": saved["config_id"], "plan": checked.plan.model_dump(), "matrix": checked.rows, "total_child_runs": len(checked.rows), "completed_child_runs": 0, "failed_child_runs": 0, "max_concurrent_real_clusters": 1})
+    plan = checked.plan.model_dump()
+    group = create_group(
+        {
+            "execution_backend": payload.execution_backend,
+            "runtime_truth": "v5_real_cluster_candidate",
+            "formal_experiment_profile": _formal_experiment_profile(plan, checked.rows),
+            "plan": plan,
+            "matrix": checked.rows,
+            "total_child_runs": len(checked.rows),
+            "completed_child_runs": 0,
+            "failed_child_runs": 0,
+            "max_concurrent_real_clusters": 1,
+        }
+    )
     start(group["run_group_id"])
     return group_summary(group, children=[])
 
@@ -82,7 +93,10 @@ def list_run_groups() -> list[dict]:
 @router.post("/run-groups/{group_id}/delete")
 def delete_run_group(group_id: str, dry_run: bool = Query(True)) -> dict:
     try:
-        return v5_cleanup_service.delete_run_group(group_id, dry_run=dry_run)
+        return _persist_cleanup_report(
+            "delete_run_group",
+            v5_cleanup_service.delete_run_group(group_id, dry_run=dry_run),
+        )
     except ValueError as exc:
         raise HTTPException(404, "unknown formal run group") from exc
 
@@ -92,12 +106,18 @@ def delete_selected_run_groups(payload: dict, dry_run: bool = Query(True)) -> di
     run_group_ids = payload.get("run_group_ids")
     if not isinstance(run_group_ids, list) or not all(isinstance(item, str) for item in run_group_ids):
         raise HTTPException(422, "run_group_ids must be a list of strings")
-    return v5_cleanup_service.delete_selected_run_groups(run_group_ids, dry_run=dry_run)
+    return _persist_cleanup_report(
+        "delete_selected_run_groups",
+        v5_cleanup_service.delete_selected_run_groups(run_group_ids, dry_run=dry_run),
+    )
 
 
 @router.post("/cleanup/run-groups/failed")
 def delete_failed_run_groups(dry_run: bool = Query(True)) -> dict:
-    return v5_cleanup_service.delete_failed_run_groups(dry_run=dry_run)
+    return _persist_cleanup_report(
+        "delete_failed_run_groups",
+        v5_cleanup_service.delete_failed_run_groups(dry_run=dry_run),
+    )
 
 
 @router.post("/cleanup/run-groups/old-unpinned")
@@ -109,7 +129,10 @@ def delete_old_unpinned_run_groups(payload: dict, dry_run: bool = Query(True)) -
         parsed = datetime.fromisoformat(before_time.replace("Z", "+00:00"))
     except ValueError as exc:
         raise HTTPException(422, "before_time must be an ISO datetime string") from exc
-    return v5_cleanup_service.delete_old_unpinned_run_groups(parsed, dry_run=dry_run)
+    return _persist_cleanup_report(
+        "delete_old_unpinned_run_groups",
+        v5_cleanup_service.delete_old_unpinned_run_groups(parsed, dry_run=dry_run),
+    )
 
 
 @router.get("/cleanup/orphan-real-cluster-dirs")
@@ -119,7 +142,23 @@ def scan_orphan_real_cluster_dirs(min_age_hours: int = Query(24, ge=1)) -> dict:
 
 @router.post("/cleanup/orphan-real-cluster-dirs")
 def cleanup_orphan_real_cluster_dirs(dry_run: bool = Query(True), min_age_hours: int = Query(24, ge=1)) -> dict:
-    return v5_cleanup_service.cleanup_orphan_real_cluster_dirs(dry_run=dry_run, min_age_hours=min_age_hours)
+    return _persist_cleanup_report(
+        "cleanup_orphan_real_cluster_dirs",
+        v5_cleanup_service.cleanup_orphan_real_cluster_dirs(dry_run=dry_run, min_age_hours=min_age_hours),
+    )
+
+
+@router.get("/cleanup/legacy-saved-configs")
+def scan_legacy_saved_configs() -> dict:
+    return v5_cleanup_service.scan_legacy_saved_configs()
+
+
+@router.post("/cleanup/legacy-saved-configs")
+def cleanup_legacy_saved_configs(dry_run: bool = Query(True)) -> dict:
+    return _persist_cleanup_report(
+        "cleanup_legacy_saved_configs",
+        v5_cleanup_service.cleanup_legacy_saved_configs(dry_run=dry_run),
+    )
 
 
 @router.get("/run-groups/{group_id}/children")
@@ -166,6 +205,27 @@ def bundle(group_id: str):
     return FileResponse(path, filename="artifacts.zip")
 
 
+@router.get("/run-groups/{group_id}/artifacts/{artifact_path:path}")
+def download_artifact(group_id: str, artifact_path: str):
+    safe_name = safe_artifact_name(artifact_path)
+    if safe_name is None:
+        raise HTTPException(404, "unknown artifact")
+    try:
+        read_group(group_id)
+        directory = group_dir(group_id).resolve()
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    catalog = read_catalog(directory, group_id)
+    if not any(item.get("name") == safe_name for item in catalog.get("files", [])):
+        raise HTTPException(404, "unknown artifact")
+    path = (directory / safe_name).resolve()
+    if directory != path and directory not in path.parents:
+        raise HTTPException(404, "unknown artifact")
+    if not path.is_file():
+        raise HTTPException(404, "unknown artifact")
+    return FileResponse(path, filename=Path(safe_name).name)
+
+
 @router.post("/run-groups/{group_id}/cancel")
 def cancel_run_group(group_id: str) -> dict:
     try:
@@ -210,3 +270,79 @@ def ensure_persisted_child_counts(group: dict) -> dict:
     group["failed_child_runs"] = sum(item.get("status") in {"failed", "blocked", "cancelled"} for item in items)
     write_group(group)
     return group
+
+
+def _formal_experiment_profile(plan: dict, rows: list[dict]) -> dict:
+    base_spec = plan.get("base_spec") if isinstance(plan.get("base_spec"), dict) else {}
+    workload = base_spec.get("workload_source") if isinstance(base_spec.get("workload_source"), dict) else {}
+    topology = base_spec.get("topology") if isinstance(base_spec.get("topology"), dict) else {}
+    methods = [item for item in plan.get("methods", []) if isinstance(item, dict)]
+    block_producer = next(
+        (
+            item
+            for item in base_spec.get("plugin_selections", [])
+            if isinstance(item, dict) and item.get("category") == "block_producer"
+        ),
+        {},
+    )
+    block_config = block_producer.get("config") if isinstance(block_producer.get("config"), dict) else {}
+    now = datetime.now().isoformat()
+    return {
+        "schema_version": "v5_formal_experiment_profile_v2",
+        "profile_id": "formal_four_method_comparison",
+        "method_ids": [str(item.get("method_id", "")) for item in methods],
+        "workload_settings": {
+            "source_type": workload.get("source_type", "synthetic"),
+            "dataset_id": workload.get("dataset_id"),
+            "variant_mode": workload.get("variant_mode"),
+            "requested_tx_count": workload.get("requested_tx_count", base_spec.get("tx_count")),
+            "seed": workload.get("seed", base_spec.get("seed")),
+            "selection_mode": workload.get("selection_mode"),
+            "replay_mode": workload.get("replay_mode"),
+            "skew_axis": workload.get("skew_axis"),
+            "target_alpha": workload.get("target_alpha"),
+        },
+        "topology": {
+            "nodes": topology.get("nodes"),
+            "shards": topology.get("shards"),
+            "validators_per_shard": topology.get("validators_per_shard"),
+        },
+        "block_size": block_config.get("block_size", 100),
+        "block_interval_ms": block_config.get("interval_ms", block_config.get("block_interval_ms", 75)),
+        "worker_settings": {
+            str(item.get("method_id", "")): (item.get("plugin_config_overrides") or {}).get("block_executor", {})
+            for item in methods
+        },
+        "repeat_settings": {
+            "seeds": list(plan.get("seeds") or []),
+            "repeats": plan.get("repeats", 1),
+            "suites": list(plan.get("suites") or []),
+        },
+        "compatibility_snapshot": {
+            "row_count": len(rows),
+            "runnable_row_count": sum(1 for row in rows if row.get("runnable") is True),
+            "blocked_row_count": sum(1 for row in rows if row.get("blockers")),
+        },
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def _persist_cleanup_report(action: str, report: dict) -> dict:
+    output_dir = v5_cleanup_service.cleanup_report_output_dir(action)
+    v5_cleanup_service.write_cleanup_report(report, output_dir)
+    enriched = dict(report)
+    enriched["cleanup_report"] = {
+        "report_id": output_dir.name,
+        "action": action,
+        "json": _relative_to_root(output_dir / "cleanup_report.json"),
+        "csv": _relative_to_root(output_dir / "cleanup_report.csv"),
+    }
+    return enriched
+
+
+def _relative_to_root(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ROOT_DIR.parent.resolve()).as_posix()
+    except ValueError:
+        return path.name

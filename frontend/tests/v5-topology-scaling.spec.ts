@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { selectOnlySuite } from "./v5-formal-test-helpers";
+import { selectOnlyMethod, selectOnlySuite } from "./v5-formal-test-helpers";
 
 test("topology scaling expands explicit topology points and blocks invalid topology", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("primary-navigation").getByRole("button", { name: "② 运行实验" }).click();
-  await page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox").check();
+  await selectOnlyMethod(page, "hash_serial");
   await selectOnlySuite(page, "topology_scaling");
   await page.getByLabel("tx_count").fill("20");
   const editor = page.getByTestId("v5-point-editor-拓扑扫描点");

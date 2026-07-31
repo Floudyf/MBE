@@ -5,7 +5,6 @@ import {
   fetchV5FormalRunGroup,
   fetchV5PluginCatalog,
   fetchV5WorkloadDatasets,
-  listV3SavedConfigs,
   previewV5FormalRun,
   previewV5Workload,
   validateV5ExperimentSpec,
@@ -25,7 +24,7 @@ import {
 import WorkloadPreviewPanel from "../components/v5/WorkloadPreviewPanel";
 import WorkloadSourceEditor, { type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
 import { backendLabel, blockerLabel, faultModeLabel, roleLabel, statusLabel, suiteLabel } from "../v5Labels";
-import { V5_BUILTIN_METHODS, applyV5MethodSelections, defaultV5PluginSelections, parseSavedV5Method } from "../v5MethodProfile";
+import { V5_BUILTIN_METHODS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
 const suites: V5FormalSuite[] = ["main_experiment", "comparison_experiment", "ablation_experiment", "workload_sensitivity", "topology_scaling", "fault_recovery_experiment"];
@@ -54,10 +53,9 @@ const defaultWorkload: WorkloadEditorState = {
 export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavailable, preferredMethodId = "" }: Props) {
   const [catalog, setCatalog] = useState<V5PluginManifest[]>([]);
   const [datasets, setDatasets] = useState<V5WorkloadDatasetSummary[]>([]);
-  const [savedMethods, setSavedMethods] = useState<V5FormalMethod[]>([]);
-  const [selectedMethods, setSelectedMethods] = useState<string[]>(["v5_catalog_default"]);
-  const [selectedSuites, setSelectedSuites] = useState<V5FormalSuite[]>(["main_experiment"]);
-  const [topology, setTopology] = useState<Topology>({ nodes: 4, shards: 1, validators_per_shard: 4 });
+  const [selectedMethods, setSelectedMethods] = useState<string[]>(V5_BUILTIN_METHODS.map((method) => method.method_id));
+  const [selectedSuites, setSelectedSuites] = useState<V5FormalSuite[]>(["comparison_experiment"]);
+  const [topology, setTopology] = useState<Topology>({ nodes: 8, shards: 2, validators_per_shard: 4 });
   const [blockProduction, setBlockProduction] = useState<BlockProduction>({ block_size: 100, block_interval_ms: 75 });
   const [workload, setWorkload] = useState<WorkloadEditorState>(defaultWorkload);
   const [repeats, setRepeats] = useState(1);
@@ -75,14 +73,12 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [catalogError, setCatalogError] = useState("");
-  const [savedError, setSavedError] = useState("");
   const [busy, setBusy] = useState(false);
   const pollTimer = useRef<number | null>(null);
   const formRevision = useRef(0);
   const preferredConsumed = useRef(false);
 
-  const catalogDefault = useMemo<V5FormalMethod>(() => ({ method_id: "v5_catalog_default", display_name: "目录默认基线", plugin_overrides: {}, role: "baseline" }), []);
-  const methods = useMemo(() => [catalogDefault, ...V5_BUILTIN_METHODS, ...savedMethods], [catalogDefault, savedMethods]);
+  const methods = useMemo(() => V5_BUILTIN_METHODS, []);
   const seeds = useMemo(() => parseSeeds(workload.seedText), [workload.seedText]);
   const catalogReady = useMemo(() => {
     const categories = new Set(catalog.map((item) => item.category));
@@ -101,21 +97,17 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   async function loadCatalog() {
     setBusy(true);
     try {
-      const [pluginResponse, savedResponse, datasetResponse] = await Promise.all([fetchV5PluginCatalog("real_cluster"), listV3SavedConfigs("method"), fetchV5WorkloadDatasets()]);
+      const [pluginResponse, datasetResponse] = await Promise.all([fetchV5PluginCatalog("real_cluster"), fetchV5WorkloadDatasets()]);
       setCatalog(pluginResponse);
       setDatasets(datasetResponse);
       const categories = new Set(pluginResponse.map((item) => item.category));
       setCatalogError(pluginResponse.length > 0 && defaultV5PluginSelections(pluginResponse).length === categories.size ? "" : "真实集群插件目录不完整。");
-      const parsed = savedResponse.flatMap((item) => { const method = parseSavedV5Method(item, pluginResponse); return method ? [method] : []; });
-      setSavedMethods(parsed);
-      setSavedError("");
-        const available = ["v5_catalog_default", ...V5_BUILTIN_METHODS.map((item) => item.method_id), ...parsed.map((item) => item.method_id)];
+      const available = V5_BUILTIN_METHODS.map((item) => item.method_id);
       if (preferredMethodId && available.includes(preferredMethodId)) { setSelectedMethods([preferredMethodId]); preferredConsumed.current = true; }
-      else { setSelectedMethods(["v5_catalog_default"]); if (preferredMethodId && !preferredConsumed.current) { preferredConsumed.current = true; onPreferredMethodUnavailable?.(preferredMethodId); } }
+      else { setSelectedMethods(available); if (preferredMethodId && !preferredConsumed.current) { preferredConsumed.current = true; onPreferredMethodUnavailable?.(preferredMethodId); } }
     } catch (caught) {
       setCatalogError(errorMessage(caught));
-      setSavedMethods([]);
-      setSelectedMethods(["v5_catalog_default"]);
+      setSelectedMethods(V5_BUILTIN_METHODS.map((method) => method.method_id));
     } finally {
       setBusy(false);
     }
@@ -208,7 +200,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   function buildRequest(): V5FormalRunRequest | null {
     const source = currentWorkloadSource();
     if (!source) return null;
-    const base_spec = methodSpec(selected[0] ?? catalogDefault, source);
+    const base_spec = methodSpec(selected[0] ?? V5_BUILTIN_METHODS[0], source);
     const e2e = new URLSearchParams(window.location.search).get("e2e") === "1";
     return { execution_backend: "real_cluster", plan: { name: "v5_formal_real_cluster", base_spec, suites: selectedSuites, methods: selected, seeds, repeats, workload_points: cleanWorkloadPoints(workloadPoints), topology_points: topologyPoints, fault_points: faultPoints, source_label: e2e ? "e2e" : "user", tags: e2e ? ["e2e"] : [] } };
   }
@@ -312,7 +304,6 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
       <h2>运行正式实验</h2>
       <p>负载来源进入 immutable Child ExperimentSpec。数据集 preview 和 Formal Matrix preview 都必须随配置变化重新生成。</p>
       {catalogError && <p className="file-error">{catalogError}</p>}
-      {savedError && <p className="file-error">{savedError}</p>}
       {message && <p className="notice">{message}</p>}
       {error && <p className="file-error">{error}</p>}
       <CurrentMethods methods={selected} preferredMethodId={preferredMethodId} />
@@ -438,7 +429,7 @@ function PreviewTable({ preview, source }: { preview: V5FormalPreviewResponse; s
 }
 
 function CurrentMethods({ methods, preferredMethodId }: { methods: V5FormalMethod[]; preferredMethodId: string }) {
-  return <div data-testid="v5-run-preferred-method"><strong>当前执行方法：</strong>{methods.length ? methods.map((method) => <span key={method.method_id}> {method.display_name}（{method.method_id}，{method.method_id === preferredMethodId ? "来源：实验设计" : method.method_id === "v5_catalog_default" ? "来源：目录默认基线" : "来源：已保存方法"}，{roleLabel(method.role ?? "custom")}）</span>) : "未选择"}</div>;
+  return <div data-testid="v5-run-preferred-method"><strong>当前执行方法：</strong>{methods.length ? methods.map((method) => <span key={method.method_id}> {method.display_name}（{method.method_id}，{method.method_id === preferredMethodId ? "来源：实验设计" : "来源：正式四方法 Profile"}，{roleLabel(method.role ?? "custom")}）</span>) : "未选择"}</div>;
 }
 
 function NumericInput({ label, aria, value, onChange, step = 1, min = 0, max }: { label: string; aria?: string; value: number; onChange: (value: number) => void; step?: number; min?: number; max?: number }) {

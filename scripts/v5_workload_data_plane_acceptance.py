@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 import time
 from dataclasses import asdict
@@ -27,6 +26,7 @@ from backend.app.services.v5_workload_data_plane import (
     materialize,
     preview_workload,
     raw_source_path,
+    supported_workload_counts,
     validate_csv,
     write_validation_report,
 )
@@ -414,8 +414,8 @@ def main() -> int:
     parser.add_argument("--variants", default="original,derived", help="Comma-separated: original,derived")
     args = parser.parse_args()
     TX_COUNT = args.tx_count
-    if TX_COUNT not in {10_000, 50_000, 100_000, 250_000}:
-        os.environ["MBE_V5_LOCAL_SMOKE_COUNTS"] = ",".join(sorted({*os.environ.get("MBE_V5_LOCAL_SMOKE_COUNTS", "").split(","), str(TX_COUNT)}))
+    if TX_COUNT not in supported_workload_counts():
+        raise SystemExit(f"tx-count must be one of {list(supported_workload_counts())} or use_full_dataset through the formal API")
     requested_variants = {item.strip() for item in args.variants.split(",") if item.strip()}
     unknown_variants = requested_variants - {"original", "derived"}
     if unknown_variants:

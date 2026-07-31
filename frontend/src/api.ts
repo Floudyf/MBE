@@ -1348,9 +1348,19 @@ export type V5FormalMatrixRow = {
 };
 export type V5FormalPreviewResponse = { execution_backend: string; rows: V5FormalMatrixRow[]; paper_candidate: boolean };
 export type V5FormalAggregate = { count?: number | null; mean?: number | null; median?: number | null; std?: number | null; min?: number | null; max?: number | null; ci95_low?: number | null; ci95_high?: number | null; completed_count?: number | null; failed_count?: number | null; missing_count?: number | null };
-export type V5FinalityEvidence = { [key: string]: unknown; logical_transaction_count?: number; submitted_unique_tx_count?: number; terminal_unique_tx_count?: number; incomplete_unique_tx_count?: number; finalized_unique_logical_tx_count?: number; intra_shard_committed_unique_count?: number; intra_shard_terminal_unique_count?: number; cross_shard_requested_unique_count?: number; cross_shard_target_committed_unique_count?: number; cross_shard_finalized_unique_count?: number; cross_shard_refunded_unique_count?: number; cross_shard_failed_unique_count?: number; throughput_tps?: number; p50_finality_ms?: number; p95_finality_ms?: number; p99_finality_ms?: number; metric_truth?: string; tcp_send_latency_excluded?: boolean };
+export type V5FinalityEvidence = { [key: string]: unknown; logical_transaction_count?: number; submitted_unique_tx_count?: number; terminal_unique_tx_count?: number; incomplete_unique_tx_count?: number; finalized_unique_logical_tx_count?: number; intra_shard_committed_unique_count?: number; intra_shard_terminal_unique_count?: number; cross_shard_requested_unique_count?: number; cross_shard_target_committed_unique_count?: number; cross_shard_finalized_unique_count?: number; cross_shard_refunded_unique_count?: number; cross_shard_failed_unique_count?: number; throughput_tps?: number; end_to_end_tps?: number; logical_finality_tps?: number; completion_duration_ms?: number; logical_finality_duration_ms?: number; tail_completion_overhead_ms?: number; p50_finality_ms?: number; p95_finality_ms?: number; p99_finality_ms?: number; metric_truth?: string; tcp_send_latency_excluded?: boolean };
 export type V5RealClusterSummary = Record<string, unknown> & { runtime_stage?: string; runtime_truth?: string; ready_to_commit?: boolean; one_node_one_os_process?: boolean; independent_tcp_ports?: boolean; all_shards_active?: boolean; per_shard_multiple_blocks?: boolean; real_client_submission?: boolean; real_cross_shard_network?: boolean; real_pbft_style_messages?: boolean; real_signed_tx?: boolean; persistent_state?: boolean; plugin_driven_runtime?: boolean; block_executor_id?: string; block_executor_consistent?: boolean; plan_digest_consistent?: boolean; state_root_consistent?: boolean; no_fallback?: boolean; orphan_process_count?: number; distinct_process_count?: number; expected_process_count?: number; shard_count?: number; shard_blocks?: Record<string, number>; finality_evidence?: V5FinalityEvidence };
-export type V5RuntimeArtifact = { name: string; size_bytes: number; truth_category: string; download_url: string };
+export type V5RuntimeArtifact = {
+  name: string;
+  size_bytes: number;
+  truth_category?: string;
+  artifact_role?: string;
+  truth_scope?: string;
+  producer?: string;
+  schema_version?: string;
+  sha256?: string | null;
+  download_url: string;
+};
 export type V5FormalChildResult = { run_id?: string; status?: string; summary?: V5RealClusterSummary; artifacts?: V5RuntimeArtifact[]; no_fallback?: boolean };
 export type V5FormalChildRun = V5FormalMatrixRow & {
   run_group_id: string;
@@ -1373,6 +1383,7 @@ export type V5FormalRunGroup = {
   aggregate?: V5FormalAggregate;
   cancel_requested?: boolean;
   plan_config_id?: string;
+  formal_experiment_profile?: Record<string, unknown>;
   bundle_path?: string;
   created_at?: string;
   updated_at?: string;
@@ -1387,7 +1398,17 @@ export type V5FormalRunGroup = {
   is_test?: boolean;
 };
 export type V5FormalRunGroupDetail = { group: V5FormalRunGroup; children: V5FormalChildRun[] };
-export type V5FormalArtifactCatalog = { run_group_id: string; status: "ready" | "pending"; bundle_ready: boolean; bundle_size_bytes: number; file_count: number; files: Array<{ name: string; size_bytes: number }> };
+export type V5FormalArtifactCatalogEntry = {
+  name: string;
+  size_bytes: number;
+  artifact_role?: string;
+  truth_scope?: string;
+  producer?: string;
+  schema_version?: string;
+  sha256?: string | null;
+  download_url?: string;
+};
+export type V5FormalArtifactCatalog = { run_group_id: string; status: "ready" | "pending"; bundle_ready: boolean; bundle_size_bytes: number; file_count: number; files: V5FormalArtifactCatalogEntry[] };
 export type V5FormalRunGroupSummary = { run_group_id: string; status: string; plan_name: string; execution_backend: string; runtime_truth: string; created_at?: string; updated_at?: string; finished_at?: string | null; total_child_runs: number; completed_child_runs: number; failed_child_runs: number; suite_names: string[]; method_names: string[]; method_ids: string[]; aggregate?: V5FormalAggregate; source_label: "user" | "e2e" | "script"; tags: string[]; is_test: boolean };
 export type V5FormalRunGroupSummaryPage = { items: V5FormalRunGroupSummary[]; total: number; next_cursor: string | null };
 export type V5CleanupReport = {
@@ -1396,13 +1417,27 @@ export type V5CleanupReport = {
   deleted_run_group_ids: string[];
   deleted_output_dirs: string[];
   deleted_orphan_dirs: string[];
+  deleted_saved_config_ids?: string[];
   preserved_run_group_ids: string[];
+  preserved_saved_config_ids?: string[];
   skipped_active_runs: string[];
   skipped_output_dirs: string[];
   released_bytes: number;
   errors: string[];
+  cleanup_report?: {
+    report_id: string;
+    action: string;
+    json: string;
+    csv: string;
+  };
 };
 export type V5OrphanRealClusterScan = { schema_version: string; orphan_dirs: Array<{ path: string; size_bytes: number; age_hours: number }> };
+export type V5LegacySavedConfigScan = {
+  schema_version: string;
+  candidate_configs: Array<{ config_id: string; config_kind: string; name: string; validation_status: string; reason: string }>;
+  preserved_configs: Array<{ config_id: string; config_kind: string; name: string; validation_status: string; reason: string }>;
+  candidate_count: number;
+};
 export type V5PaperMetricRow = {
   method_id: string;
   method_name: string;
@@ -1447,6 +1482,19 @@ export type V5WorkloadPreview = {
   expected_cross_shard: Record<string, unknown>;
   shard_distribution: Record<string, number>;
   materialization_cache_status: Record<string, unknown>;
+  selected_window_preview?: {
+    requested_tx_count?: number;
+    actual_selected_count?: number;
+    selected_time_range?: { start_ms?: number | null; end_ms?: number | null };
+    category_counts?: Record<string, number>;
+    operation_counts?: Record<string, number>;
+    category_percentages?: Record<string, number>;
+    realized_skew?: Record<string, unknown>;
+    cross_shard_count?: number;
+    cross_shard_ratio?: number;
+    shard_distribution?: Record<string, number>;
+    selection_digest?: string | null;
+  };
   blockers: string[];
   warnings: string[];
 };
@@ -1545,6 +1593,14 @@ export async function scanV5OrphanRealClusterDirs(minAgeHours = 24): Promise<V5O
 
 export async function cleanupV5OrphanRealClusterDirs(dryRun = true, minAgeHours = 24): Promise<V5CleanupReport> {
   return request<V5CleanupReport>(`/api/v5/formal/cleanup/orphan-real-cluster-dirs?dry_run=${String(dryRun)}&min_age_hours=${minAgeHours}`, { method: "POST" });
+}
+
+export async function scanV5LegacySavedConfigs(): Promise<V5LegacySavedConfigScan> {
+  return request<V5LegacySavedConfigScan>("/api/v5/formal/cleanup/legacy-saved-configs");
+}
+
+export async function cleanupV5LegacySavedConfigs(dryRun = true): Promise<V5CleanupReport> {
+  return request<V5CleanupReport>(`/api/v5/formal/cleanup/legacy-saved-configs?dry_run=${String(dryRun)}`, { method: "POST" });
 }
 
 async function request<T = unknown>(path: string, init?: RequestInit): Promise<T> {

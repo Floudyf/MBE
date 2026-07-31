@@ -16,13 +16,44 @@ EXPECTED_ARTIFACTS = [
     "compiled_run_plan.json",
     "process_manifest.json",
     "real_cluster_summary.json",
-    "client_submission_log.csv",
     "artifact_catalog.json",
+    "finality_summary.json",
+    "transaction_lifecycle.jsonl",
+    "transaction_lifecycle.csv",
+    "transaction_finality.csv",
+    "client_receipt_log.csv",
+    "drain_status.json",
+    "throughput_windows.csv",
+    "physical_remote_state_operations.csv",
+    "client/client_submission_log.csv",
+    "client/client_lifecycle.csv",
+    "client/resolved_access_lists.jsonl.gz",
+    "client/workload_replay_summary.json",
+    "client/workload_identity_mapping_summary.json",
+    "aggregate/block_production_summary.json",
+    "aggregate/mechanism_metrics_summary.json",
+    "aggregate/remote_state_metrics_summary.json",
+    "aggregate/replica_deduplicated_remote_operations.csv",
+    "aggregate/metatrack_aggregate_summary.json",
+    "aggregate/block_stm_aggregate_summary.json",
+]
+NODE_EXPECTED_ARTIFACTS = [
     "block_execution_summary.json",
+    "blocks.jsonl",
+    "commit_markers.jsonl",
+    "committed_chain.csv",
+    "execution_log.csv",
     "execution_plan.jsonl",
-    "transaction_execution_trace.csv",
-    "state_delta_log.csv",
+    "node_summary.json",
     "plan_digest_consistency.csv",
+    "receipts.jsonl",
+    "runtime_events.csv",
+    "state_delta_log.csv",
+    "state_wal_manifest.json",
+    "transaction_execution_trace.csv",
+    "transaction_lifecycle.csv",
+    "transaction_lifecycle.jsonl",
+    "tx_index.jsonl",
 ]
 DATASET_ARTIFACTS = [
     "workload_manifest_snapshot.json",
@@ -43,7 +74,11 @@ METATRACK_ARTIFACTS = [
     "dependency_graph.csv",
     "track_classification.csv",
     "metatrack_scheduler_trace.csv",
-    "remote_state_access.csv",
+    "predicted_remote_access.csv",
+    "physical_remote_state_operations.csv",
+    "aggregate/replica_deduplicated_remote_operations.csv",
+    "aggregate/remote_state_metrics_summary.json",
+    "aggregate/metatrack_aggregate_summary.json",
     "aggregation_plan.csv",
     "logical_physical_update_mapping.csv",
 ]
@@ -54,6 +89,7 @@ BLOCK_STM_ARTIFACTS = [
     "block_stm_abort_trace.csv",
     "block_stm_dependency_trace.csv",
     "incarnation_summary.csv",
+    "aggregate/block_stm_aggregate_summary.json",
     "serial_equivalence.json",
 ]
 
@@ -83,7 +119,8 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
         nodes.append(V5CompiledNodeConfig(node_id=node_id, shard_id=f"s{shard_index}", role="leader" if node_id == validators[0] else "validator", leader=node_id == validators[0], listen_addr="127.0.0.1:0", data_dir=str(run_dir / "nodes" / node_id), validators=validators, plugin_profile=profile))
     snapshot = [STORE.get(item.plugin_id).model_dump() | {"selected_config": item.config} for item in compatibility.resolved_plugins]
     workload = _compile_workload_plan(spec, profile, run_dir)
-    expected_artifacts = EXPECTED_ARTIFACTS + (DATASET_ARTIFACTS if workload.get("source_type") == "dataset" else [])
+    node_expected_artifacts = [f"nodes/{node.node_id}/{artifact}" for node in nodes for artifact in NODE_EXPECTED_ARTIFACTS]
+    expected_artifacts = EXPECTED_ARTIFACTS + node_expected_artifacts + (DATASET_ARTIFACTS if workload.get("source_type") == "dataset" else [])
     if profile.get("routing", {}).get("plugin_id") == "metatrack_coaccess_routing":
         expected_artifacts += METATRACK_ARTIFACTS
     if profile.get("block_executor", {}).get("plugin_id") == "block_stm_block_executor":

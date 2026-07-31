@@ -12,13 +12,13 @@ from backend.app.services.v5_statistics_service import summarize
 GROUP_FIELDS = [
     "suite_type", "method_config_id", "method_name", "method_role", "scan_variable", "scan_value",
     "topology_nodes", "topology_shards", "validators_per_shard", "tx_count", "cross_shard_ratio",
-    "timeout_every", "fault_mode", "sample_count", "completed_count", "failed_count", "missing_count",
+    "timeout_every", "fault_mode", "block_size", "block_interval_ms", "sample_count", "completed_count", "failed_count", "missing_count",
     "mean_tps", "median_tps", "std_tps", "min_tps", "max_tps", "ci95_low_tps", "ci95_high_tps",
     "mean_p50_ms", "mean_p95_ms", "mean_p99_ms", "submitted", "terminal", "incomplete",
     "cross_requested", "cross_finalized", "cross_refunded", "cross_failed", "changed_plugin_categories",
 ]
 
-PAPER_TABLE_FIELDS = ["suite_type", "method_id", "method_name", "method_role", "scan_variable", "scan_value", "nodes", "shards", "validators_per_shard", "tx_count", "cross_shard_ratio", "timeout_every", "fault_mode", "sample_count", "success_sample_count", "failed_sample_count", "tps_mean", "tps_std", "tps_min", "tps_max", "latency_p50_mean", "latency_p95_mean", "latency_p99_mean", "terminal_mean", "incomplete_mean", "orphan_mean", "cross_shard_requested_mean", "cross_shard_finalized_mean", "no_fallback_all", "state_root_consistent_all"]
+PAPER_TABLE_FIELDS = ["suite_type", "method_id", "method_name", "method_role", "scan_variable", "scan_value", "nodes", "shards", "validators_per_shard", "tx_count", "cross_shard_ratio", "timeout_every", "fault_mode", "block_size", "block_interval_ms", "sample_count", "success_sample_count", "failed_sample_count", "tps_mean", "tps_std", "tps_min", "tps_max", "latency_p50_mean", "latency_p95_mean", "latency_p99_mean", "terminal_mean", "incomplete_mean", "orphan_mean", "cross_shard_requested_mean", "cross_shard_finalized_mean", "no_fallback_all", "state_root_consistent_all"]
 
 PAPER_ANALYSIS_FIELDS = [
     "metric", "metric_unit", "method_id", "method_name", "valid_sample_count", "excluded_sample_count",
@@ -77,6 +77,7 @@ def paper_result_analysis(group: dict, children: list[dict]) -> dict:
 
     metrics = {
         "end_to_end_tps": _metric_rows(accepted, excluded, "end_to_end_tps", "tps"),
+        "p95_finality_ms": _metric_rows(accepted, excluded, "p95_finality_ms", "ms"),
         "p99_finality_ms": _metric_rows(accepted, excluded, "p99_finality_ms", "ms"),
     }
     return {
@@ -123,6 +124,8 @@ def _paper_exclusion_reasons(child: dict) -> list[str]:
         reasons.append("serial_equivalent_not_true")
     if _metric_value(child, "end_to_end_tps") is None:
         reasons.append("end_to_end_tps_missing")
+    if _metric_value(child, "p95_finality_ms") is None:
+        reasons.append("p95_finality_ms_missing")
     if _metric_value(child, "p99_finality_ms") is None:
         reasons.append("p99_finality_ms_missing")
     return reasons
@@ -216,6 +219,8 @@ def _metric_value(child: dict, metric: str) -> float | None:
     metrics = child.get("metrics") or {}
     if metric == "end_to_end_tps":
         value = metrics.get("end_to_end_tps", metrics.get("throughput_tps"))
+    elif metric == "p95_finality_ms":
+        value = metrics.get("p95_finality_ms", metrics.get("p95_latency_ms"))
     elif metric == "p99_finality_ms":
         value = metrics.get("p99_finality_ms", metrics.get("p99_latency_ms"))
     else:
@@ -251,17 +256,18 @@ def _group_key(child: dict, base_workload: dict) -> tuple:
     workload = {**base_workload, **(child.get("workload_point") or {})}
     fault = child.get("fault_point") or {}
     method = child.get("method") or {}
+    block_size, block_interval_ms = _block_settings(child)
     return (
         child.get("suite_type", ""), child.get("method_config_id", ""), method.get("display_name", ""),
         child.get("method_role", method.get("role", "custom")), child.get("scan_variable", ""), child.get("scan_value", ""),
         topology.get("nodes"), topology.get("shards"), topology.get("validators_per_shard"),
         workload.get("tx_count", child.get("estimated_transactions")), workload.get("cross_shard_ratio"), workload.get("timeout_every"),
-        fault.get("mode", "disabled"), tuple(child.get("changed_plugin_categories") or []),
+        fault.get("mode", "disabled"), block_size, block_interval_ms, tuple(child.get("changed_plugin_categories") or []),
     )
 
 
 def _aggregate(key: tuple, entries: list[dict]) -> dict:
-    suite, method_id, method_name, role, scan_variable, scan_value, nodes, shards, validators, tx_count, ratio, timeout, fault, changed = key
+    suite, method_id, method_name, role, scan_variable, scan_value, nodes, shards, validators, tx_count, ratio, timeout, fault, block_size, block_interval_ms, changed = key
     completed = [entry for entry in entries if entry.get("status") == "completed"]
     metrics = [entry.get("metrics", {}) for entry in completed]
     finalities = [((entry.get("result") or {}).get("summary") or {}).get("finality_evidence", {}) for entry in completed]
@@ -271,7 +277,7 @@ def _aggregate(key: tuple, entries: list[dict]) -> dict:
         "suite_type": suite, "method_config_id": method_id, "method_name": method_name, "method_role": role,
         "scan_variable": scan_variable, "scan_value": scan_value, "topology_nodes": nodes, "topology_shards": shards,
         "validators_per_shard": validators, "tx_count": tx_count, "cross_shard_ratio": ratio, "timeout_every": timeout,
-        "fault_mode": fault, "sample_count": stats["count"], "completed_count": stats["completed_count"], "failed_count": stats["failed_count"], "missing_count": stats["missing_count"],
+        "fault_mode": fault, "block_size": block_size, "block_interval_ms": block_interval_ms, "sample_count": stats["count"], "completed_count": stats["completed_count"], "failed_count": stats["failed_count"], "missing_count": stats["missing_count"],
         "mean_tps": stats["mean"], "median_tps": stats["median"], "std_tps": stats["std"], "min_tps": stats["min"], "max_tps": stats["max"], "ci95_low_tps": stats["ci95_low"], "ci95_high_tps": stats["ci95_high"],
         "mean_p50_ms": mean("p50_latency_ms"), "mean_p95_ms": mean("p95_latency_ms"), "mean_p99_ms": mean("p99_latency_ms"),
         "submitted": sum(_number(item.get("submitted_unique_tx_count")) for item in finalities), "terminal": sum(_number(item.get("terminal_unique_tx_count")) for item in finalities), "incomplete": sum(_number(item.get("incomplete_unique_tx_count")) for item in finalities),
@@ -300,7 +306,7 @@ def _figure_rows(groups: list[dict]) -> list[dict]:
     for item in groups:
         x_variable = item["scan_variable"] or "method"
         x_value = item["scan_value"] or item["method_name"]
-        for metric, value, low, high in (("throughput_tps", item["mean_tps"], item["ci95_low_tps"], item["ci95_high_tps"]), ("p99_latency_ms", item["mean_p99_ms"], None, None)):
+        for metric, value, low, high in (("end_to_end_tps", item["mean_tps"], item["ci95_low_tps"], item["ci95_high_tps"]), ("p99_finality_ms", item["mean_p99_ms"], None, None)):
             if value is not None:
                 rows.append({"suite_type": item["suite_type"], "x_variable": x_variable, "x_value": x_value, "series": item["method_name"], "metric": metric, "value": value, "ci95_low": low, "ci95_high": high})
     return rows
@@ -309,8 +315,17 @@ def _figure_rows(groups: list[dict]) -> list[dict]:
 def _paper_table_rows(groups: list[dict]) -> list[dict]:
     rows = []
     for row in groups:
-        rows.append({"suite_type": row["suite_type"], "method_id": row["method_config_id"], "method_name": row["method_name"], "method_role": row["method_role"], "scan_variable": row["scan_variable"], "scan_value": row["scan_value"], "nodes": row["topology_nodes"], "shards": row["topology_shards"], "validators_per_shard": row["validators_per_shard"], "tx_count": row["tx_count"], "cross_shard_ratio": row["cross_shard_ratio"], "timeout_every": row["timeout_every"], "fault_mode": row["fault_mode"], "sample_count": row["sample_count"], "success_sample_count": row["completed_count"], "failed_sample_count": row["failed_count"], "tps_mean": row["mean_tps"], "tps_std": row["std_tps"], "tps_min": row["min_tps"], "tps_max": row["max_tps"], "latency_p50_mean": row["mean_p50_ms"], "latency_p95_mean": row["mean_p95_ms"], "latency_p99_mean": row["mean_p99_ms"], "terminal_mean": row["terminal"], "incomplete_mean": row["incomplete"], "orphan_mean": "", "cross_shard_requested_mean": row["cross_requested"], "cross_shard_finalized_mean": row["cross_finalized"], "no_fallback_all": "", "state_root_consistent_all": ""})
+        rows.append({"suite_type": row["suite_type"], "method_id": row["method_config_id"], "method_name": row["method_name"], "method_role": row["method_role"], "scan_variable": row["scan_variable"], "scan_value": row["scan_value"], "nodes": row["topology_nodes"], "shards": row["topology_shards"], "validators_per_shard": row["validators_per_shard"], "tx_count": row["tx_count"], "cross_shard_ratio": row["cross_shard_ratio"], "timeout_every": row["timeout_every"], "fault_mode": row["fault_mode"], "block_size": row["block_size"], "block_interval_ms": row["block_interval_ms"], "sample_count": row["sample_count"], "success_sample_count": row["completed_count"], "failed_sample_count": row["failed_count"], "tps_mean": row["mean_tps"], "tps_std": row["std_tps"], "tps_min": row["min_tps"], "tps_max": row["max_tps"], "latency_p50_mean": row["mean_p50_ms"], "latency_p95_mean": row["mean_p95_ms"], "latency_p99_mean": row["mean_p99_ms"], "terminal_mean": row["terminal"], "incomplete_mean": row["incomplete"], "orphan_mean": "", "cross_shard_requested_mean": row["cross_requested"], "cross_shard_finalized_mean": row["cross_finalized"], "no_fallback_all": "", "state_root_consistent_all": ""})
     return rows
+
+
+def _block_settings(child: dict) -> tuple[Any, Any]:
+    metrics = child.get("metrics") or {}
+    summary = (child.get("result") or {}).get("summary") or {}
+    return (
+        child.get("block_size") or metrics.get("configured_block_size") or summary.get("configured_block_size"),
+        child.get("block_interval_ms") or metrics.get("configured_block_interval_ms") or summary.get("configured_block_interval_ms"),
+    )
 
 
 def _charts(groups: list[dict]) -> list[dict]:

@@ -707,13 +707,25 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	}
 	r.mu.Unlock()
 	nextHeight := r.proposer.NextHeight
-	readySystemDeltas := r.readyRemoteStateDeltasForConsensus(nextHeight)
-	input := BlockProductionInput{Pool: r.pool, Proposer: r.proposer, Limit: r.blockSize(), Now: time.Now(), SystemDeltaReady: len(readySystemDeltas) > 0}
+	readySystemDeltas, systemDrainPending := r.remoteStateDeltaDrainState(nextHeight)
+
+	// SystemDeltaReady also acts as the block-producer wake-up signal.
+	// Pending deltas that are not ready yet still require deterministic
+	// PBFT height-advance blocks, otherwise the home shard can stop below
+	// the source-height readiness boundary forever.
+	input := BlockProductionInput{
+		Pool:             r.pool,
+		Proposer:         r.proposer,
+		Limit:            r.blockSize(),
+		Now:              time.Now(),
+		SystemDeltaReady: systemDrainPending,
+	}
 	if !r.plugins.BlockProducer.ShouldProduce(input) {
 		return
 	}
+
 	block, err := r.plugins.BlockProducer.BuildCandidate(input)
-	if err != nil && err.Error() == "empty_mempool" && len(readySystemDeltas) > 0 {
+	if err != nil && err.Error() == "empty_mempool" && systemDrainPending {
 		block = r.buildSystemDeltaDrainBlock(input.Now, readySystemDeltas)
 		err = nil
 	}
@@ -2090,23 +2102,39 @@ func (r *NodeRuntime) flushQueuedStateDeltas() {
 	// Pending deltas stay pending until a home-shard block commits them.
 }
 
-func (r *NodeRuntime) readyRemoteStateDeltasForConsensus(homeBlockHeight uint64) []realblock.SystemStateDelta {
+func (r *NodeRuntime) remoteStateDeltaDrainState(
+	homeBlockHeight uint64,
+) ([]realblock.SystemStateDelta, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	pending := len(r.pendingStateDeltas) > 0
 	ready := make([]StateDeltaApplyRequest, 0, len(r.pendingStateDeltas))
+
 	for _, request := range r.pendingStateDeltas {
 		if remoteStateDeltaReadyForHomeBlock(request, homeBlockHeight) {
 			ready = append(ready, request)
 		}
 	}
+
 	sort.SliceStable(ready, func(i, j int) bool {
-		return remoteDeltaConsensusOrder(ready[i]) < remoteDeltaConsensusOrder(ready[j])
+		return remoteDeltaConsensusOrder(ready[i]) <
+			remoteDeltaConsensusOrder(ready[j])
 	})
+
 	out := make([]realblock.SystemStateDelta, 0, len(ready))
 	for _, request := range ready {
 		out = append(out, systemStateDeltaFromRequest(request))
 	}
-	return out
+
+	return out, pending
+}
+
+func (r *NodeRuntime) readyRemoteStateDeltasForConsensus(
+	homeBlockHeight uint64,
+) []realblock.SystemStateDelta {
+	ready, _ := r.remoteStateDeltaDrainState(homeBlockHeight)
+	return ready
 }
 
 func (r *NodeRuntime) markRemoteStateDeltasApplied(applied []realblock.SystemStateDelta) {

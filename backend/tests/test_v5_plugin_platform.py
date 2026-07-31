@@ -1,15 +1,19 @@
 from pathlib import Path
+import json
+import zipfile
 
 import pytest
 
 from backend.app.models.v5_experiment_spec import V5ExperimentSpec, V5PluginSelection, V5Topology
 from backend.app.services.v5_compatibility_engine import validate
+from backend.app.services.v5_artifact_contract import evaluate_expected_artifacts, write_run_artifact_catalog
 from backend.app.services.v5_experiment_compiler import compile_plan
 from backend.app.services.v5_formal_scheduler import _workload_blockers
 from backend.app.services.v5_metric_extractor import extract
 from backend.app.services.v5_metric_truth import normalize_remote_operation_kind
 from backend.app.services.v5_metric_truth import summarize_remote_operations
 from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
+from backend.app.services.v5_reproducibility_bundle import build as build_bundle
 from backend.app.services.v5_saved_config_adapter import adapt_saved_method
 
 
@@ -53,8 +57,9 @@ def test_block_executor_manifest_and_compiled_plan(tmp_path: Path) -> None:
     assert manifest.supported_backends == ["real_cluster"]
     assert manifest.truth_boundary == "legacy_faithful_reference_baseline"
     plan = compile_plan(_spec(), tmp_path)
-    assert "block_execution_summary.json" in plan.expected_artifacts
-    assert "execution_plan.jsonl" in plan.expected_artifacts
+    assert "nodes/n0/block_execution_summary.json" in plan.expected_artifacts
+    assert "nodes/n0/execution_plan.jsonl" in plan.expected_artifacts
+    assert "block_execution_summary.json" not in plan.expected_artifacts
     assert all(node.plugin_profile["block_executor"]["plugin_id"] == "serial_block_executor" for node in plan.node_configs)
     assert plan.node_configs[0].plugin_profile["block_executor"]["migrated_default"] is False
 
@@ -96,6 +101,11 @@ def test_metatrack_expected_artifacts_are_declared_only_for_metatrack_routing(tm
     assert "transaction_placement.csv" in metatrack_plan.expected_artifacts
     assert "dependency_graph.csv" in metatrack_plan.expected_artifacts
     assert "track_classification.csv" in metatrack_plan.expected_artifacts
+    assert "predicted_remote_access.csv" in metatrack_plan.expected_artifacts
+    assert "physical_remote_state_operations.csv" in metatrack_plan.expected_artifacts
+    assert "aggregate/replica_deduplicated_remote_operations.csv" in metatrack_plan.expected_artifacts
+    assert "aggregate/remote_state_metrics_summary.json" in metatrack_plan.expected_artifacts
+    assert "remote_state_access.csv" not in metatrack_plan.expected_artifacts
     assert "logical_physical_update_mapping.csv" in metatrack_plan.expected_artifacts
 
 
@@ -111,7 +121,118 @@ def test_block_stm_expected_artifacts_are_declared_only_for_block_stm_executor(t
     block_stm_plan = compile_plan(spec, tmp_path / "block_stm")
     assert "block_stm_summary.json" in block_stm_plan.expected_artifacts
     assert "block_stm_validation_trace.csv" in block_stm_plan.expected_artifacts
+    assert "aggregate/block_stm_aggregate_summary.json" in block_stm_plan.expected_artifacts
+    assert "aggregate/mechanism_metrics_summary.json" in block_stm_plan.expected_artifacts
     assert "serial_equivalence.json" in block_stm_plan.expected_artifacts
+
+
+def test_artifact_contract_reports_missing_expected_artifacts(tmp_path: Path) -> None:
+    (tmp_path / "compiled_run_plan.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "aggregate").mkdir()
+    (tmp_path / "aggregate" / "mechanism_metrics_summary.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "extra.log").write_text("extra\n", encoding="utf-8")
+
+    contract = evaluate_expected_artifacts(
+        tmp_path,
+        [
+            "compiled_run_plan.json",
+            "aggregate/mechanism_metrics_summary.json",
+            "missing.csv",
+            "../escape",
+            "C:/absolute",
+            "",
+        ],
+    )
+
+    assert contract["artifact_contract_status"] == "incomplete"
+    assert contract["expected_artifact_count"] == 3
+    assert contract["missing_expected_artifacts"] == ["missing.csv"]
+    assert "extra.log" in contract["unexpected_artifacts"]
+
+
+def test_run_artifact_catalog_records_role_truth_and_hash(tmp_path: Path) -> None:
+    (tmp_path / "aggregate").mkdir()
+    (tmp_path / "aggregate" / "remote_state_metrics_summary.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "client_submission_log.csv").write_text("tx_id\n", encoding="utf-8")
+    (tmp_path / "node_0").mkdir()
+    (tmp_path / "node_0" / "block_stm_summary.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "supervisor_stdout.log").write_text("ok\n", encoding="utf-8")
+    (tmp_path / "artifact_catalog.json").write_text('{"placeholder":true}', encoding="utf-8")
+
+    catalog = write_run_artifact_catalog(tmp_path, run_id="v5_test")
+    by_name = {item["name"]: item for item in catalog["files"]}
+
+    assert "artifact_catalog.json" not in by_name
+    assert by_name["aggregate/remote_state_metrics_summary.json"]["artifact_role"] == "aggregate_metric"
+    assert by_name["aggregate/remote_state_metrics_summary.json"]["truth_scope"] == "node_physical_and_replica_deduplicated"
+    assert by_name["client_submission_log.csv"]["artifact_role"] == "client_workload_evidence"
+    assert by_name["node_0/block_stm_summary.json"]["artifact_role"] == "node_mechanism_evidence"
+    assert by_name["supervisor_stdout.log"]["artifact_role"] == "audit_log"
+    assert len(by_name["supervisor_stdout.log"]["sha256"]) == 64
+    written = (tmp_path / "artifact_catalog.json").read_text(encoding="utf-8")
+    assert "mbe_v5_artifact_catalog_v1" in written
+
+
+def test_artifact_catalog_marks_paper_result_analysis_as_paper_analysis(tmp_path: Path) -> None:
+    aggregate = tmp_path / "aggregate"
+    aggregate.mkdir()
+    (aggregate / "paper_result_analysis.json").write_text("{}", encoding="utf-8")
+    (aggregate / "paper_result_analysis.csv").write_text("metric\n", encoding="utf-8")
+
+    catalog = write_run_artifact_catalog(tmp_path, run_id="v5_test")
+    by_name = {item["name"]: item for item in catalog["files"]}
+
+    for name in ("aggregate/paper_result_analysis.json", "aggregate/paper_result_analysis.csv"):
+        assert by_name[name]["artifact_role"] == "paper_analysis"
+        assert by_name[name]["truth_scope"] == "formal_run_group_analysis"
+        assert by_name[name]["producer"] == "v5_paper_exporter"
+
+
+def test_reproducibility_bundle_manifest_keeps_paper_analysis_with_posix_paths_and_hash(tmp_path: Path) -> None:
+    aggregate = tmp_path / "aggregate"
+    aggregate.mkdir()
+    (tmp_path / "run_group.json").write_text('{"run_group_id":"v5grp_bundle"}', encoding="utf-8")
+    (tmp_path / "paper_figure_data.csv").write_text("metric,value\nend_to_end_tps,1\n", encoding="utf-8")
+    (tmp_path / "paper_table_data.csv").write_text("method_id\nhash_serial\n", encoding="utf-8")
+    (aggregate / "paper_result_analysis.json").write_text('{"schema_version":"mbe_paper_result_analysis_v1"}', encoding="utf-8")
+    (aggregate / "paper_result_analysis.csv").write_text("metric\nend_to_end_tps\n", encoding="utf-8")
+
+    bundle = build_bundle(tmp_path, {"run_group_id": "v5grp_bundle"})
+
+    manifest = json.loads((tmp_path / "artifact_manifest.json").read_text(encoding="utf-8"))
+    by_name = {item["name"]: item for item in manifest["files"]}
+    for name in (
+        "paper_figure_data.csv",
+        "paper_table_data.csv",
+        "aggregate/paper_result_analysis.json",
+        "aggregate/paper_result_analysis.csv",
+    ):
+        assert name in by_name
+        assert "\\" not in name
+        assert len(by_name[name]["sha256"]) == 64
+    with zipfile.ZipFile(bundle) as archive:
+        names = set(archive.namelist())
+    assert "aggregate/paper_result_analysis.json" in names
+    assert "aggregate/paper_result_analysis.csv" in names
+
+
+def test_completion_gate_blocks_missing_expected_artifacts(tmp_path: Path) -> None:
+    from backend.app.services.v5_real_cluster_runner import _completion_gate
+
+    (tmp_path / "drain_status.json").write_text('{"completion_reason":"drain_quiescent","drain_finished_at":100}', encoding="utf-8")
+    (tmp_path / "finality_summary.json").write_text(
+        '{"logical_window_start_ms":1,"logical_window_end_ms":50,"logical_finality_duration_ms":49,"logical_finality_tps":20,"drain_finished_at_ms":100,"drain_duration_ms":50,"completion_window_start_ms":1,"completion_window_end_ms":100,"completion_duration_ms":99,"end_to_end_tps":10,"throughput_tps":10}',
+        encoding="utf-8",
+    )
+    summary = {
+        "finality_evidence": {"incomplete_unique_tx_count": 0},
+        "missing_expected_artifacts": ["aggregate/remote_state_metrics_summary.json"],
+    }
+
+    gate = _completion_gate(tmp_path, summary)
+
+    assert gate["passed"] is False
+    assert "artifact_contract:missing:aggregate/remote_state_metrics_summary.json" in gate["blockers"]
 
 
 def test_metric_extractor_reads_block_stm_and_metatrack_artifact_evidence(tmp_path: Path) -> None:
@@ -123,7 +244,7 @@ def test_metric_extractor_reads_block_stm_and_metatrack_artifact_evidence(tmp_pa
         '{"logical_transaction_count":5,"finalized_unique_logical_tx_count":5,"throughput_tps":10.5,"logical_window_start_ms":1,"logical_window_end_ms":401,"logical_finality_duration_ms":400,"logical_finality_tps":12.5,"drain_started_at_ms":401,"drain_finished_at_ms":477,"drain_duration_ms":76,"system_delta_drain_block_count":1,"completion_window_start_ms":1,"completion_window_end_ms":477,"completion_duration_ms":476,"end_to_end_tps":10.5,"tail_completion_overhead_ms":76,"p95_finality_ms":20,"p99_finality_ms":30}',
         encoding="utf-8",
     )
-    for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "drain_status.json", "throughput_windows.csv", "metatrack_batch_plan.jsonl", "dependency_graph.csv", "track_classification.csv", "aggregation_plan.csv", "logical_physical_update_mapping.csv"]:
+    for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "drain_status.json", "throughput_windows.csv", "metatrack_batch_plan.jsonl", "dependency_graph.csv", "track_classification.csv", "predicted_remote_access.csv", "aggregation_plan.csv", "logical_physical_update_mapping.csv"]:
         (tmp_path / name).write_text("", encoding="utf-8")
     (tmp_path / "metatrack_scheduler_trace.csv").write_text(
         "timestamp,node_id,shard_id,height,scheduler_plugin,tx_id,track,queue_name,decision_reason,local_execution,stolen_work,blocked,wakeup,ready_queue_depth,fast_queue_depth,conservative_queue_depth,dependency_wait_ms,scheduler_idle_ms\n"
@@ -133,6 +254,11 @@ def test_metric_extractor_reads_block_stm_and_metatrack_artifact_evidence(tmp_pa
         encoding="utf-8",
     )
     (tmp_path / "remote_state_access.csv").write_text(
+        "timestamp,node_id,execution_shard,height,block_hash,tx_id,state_key,qualified_home_key,home_shard,response_execution_shard,access_kind,latency_ms,witness_digest,home_state_root,success,error\n"
+        "1,n1,s1,1,b1,legacy,k,s0::k,s0,s1,read,99,w0,r0,true,\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "physical_remote_state_operations.csv").write_text(
         "timestamp,node_id,execution_shard,height,block_hash,tx_id,state_key,qualified_home_key,home_shard,response_execution_shard,access_kind,latency_ms,witness_digest,home_state_root,success,error\n"
         "1,n1,s1,1,b1,tx1,k,s0::k,s0,s1,read,3,w1,r1,true,\n"
         "2,n1,s1,1,b1,tx2,k2,s0::k2,s0,s1,read,7,w2,r1,false,timeout\n"
@@ -145,6 +271,9 @@ def test_metric_extractor_reads_block_stm_and_metatrack_artifact_evidence(tmp_pa
     )
     aggregate = tmp_path / "aggregate"
     aggregate.mkdir()
+    (aggregate / "replica_deduplicated_remote_operations.csv").write_text("normalized_kind,dedup_key\nfetch,k\nwriteback,k2\n", encoding="utf-8")
+    (aggregate / "remote_state_metrics_summary.json").write_text("{}", encoding="utf-8")
+    (aggregate / "metatrack_aggregate_summary.json").write_text("{}", encoding="utf-8")
     (aggregate / "mechanism_metrics_summary.json").write_text(
         '{"metatrack":{"status":"available","fast_track_logical_tx_count":3,"conservative_track_logical_tx_count":2,"aggregation_group_count":1,"pre_aggregation_physical_op_count":5,"post_aggregation_physical_op_count":3},"block_stm":{"status":"available","worker_count":4,"maximum_parallel_width":3,"abort_count":2,"reexecution_count":2,"validation_failure_count":2,"serial_equivalent":true},"remote_state":{"replica_deduplicated_remote_fetch_count":1,"replica_deduplicated_remote_writeback_count":1}}',
         encoding="utf-8",
@@ -157,6 +286,10 @@ def test_metric_extractor_reads_block_stm_and_metatrack_artifact_evidence(tmp_pa
     assert metrics["serial_equivalent"] is True
     assert metrics["track_classification_available"] is True
     assert metrics["metatrack_scheduler_trace_available"] is True
+    assert metrics["physical_remote_state_operations_available"] is True
+    assert metrics["remote_state_access_legacy_available"] is True
+    assert metrics["remote_state_operations_artifact"] == "physical_remote_state_operations.csv"
+    assert metrics["replica_deduplicated_remote_operations_available"] is True
     assert metrics["logical_physical_update_mapping_available"] is True
     assert metrics["scheduler_event_count"] == 3
     assert metrics["scheduler_blocked_count"] == 1
@@ -280,16 +413,83 @@ def test_metric_completeness_is_method_specific(tmp_path: Path) -> None:
     )
     for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "drain_status.json", "throughput_windows.csv"]:
         (tmp_path / name).write_text("", encoding="utf-8")
+    (tmp_path / "physical_remote_state_operations.csv").write_text(
+        "batch_index,logical_id,tx_index,state_key,home_shard,execution_shard,access_kind,success,latency_ms\n",
+        encoding="utf-8",
+    )
 
     baseline = extract(tmp_path, method_id="hash_serial")
     assert baseline["metric_completeness"] == "complete"
+    assert baseline["paper_analysis_status"] == "complete"
+    assert "end_to_end_tps" in baseline["metric_required"]
+    assert "end_to_end_tps" in baseline["metric_available"]
     assert baseline["metric_statuses"]["worker_count"] == "not_applicable"
+    assert baseline["metric_statuses"]["fast_track_logical_tx_count"] == "not_applicable"
+    assert "worker_count" in baseline["metric_not_applicable"]
+    assert "fast_track_logical_tx_count" in baseline["metric_not_applicable"]
+    assert "metric:fast_track_logical_tx_count" not in baseline["missing"]
 
     block_stm = extract(tmp_path, method_id="hash_block_stm")
     assert block_stm["metric_completeness"] == "incomplete"
     assert block_stm["paper_analysis_status"] == "incomplete"
+    assert block_stm["metric_completeness_reason"] == "missing_required_metrics_or_artifacts"
     assert "metric:worker_count" in block_stm["missing"]
     assert block_stm["metric_statuses"]["worker_count"] == "missing"
+    assert block_stm["metric_statuses"]["fast_track_logical_tx_count"] == "not_applicable"
+
+    metatrack = extract(tmp_path, method_id="metatrack_serial")
+    assert metatrack["metric_completeness"] == "incomplete"
+    assert metatrack["paper_analysis_status"] == "incomplete"
+    assert metatrack["metric_statuses"]["worker_count"] == "not_applicable"
+    assert metatrack["metric_statuses"]["fast_track_logical_tx_count"] == "missing"
+    assert metatrack["metric_statuses"]["replica_deduplicated_remote_fetch_count"] == "available"
+    assert "metric:fast_track_logical_tx_count" in metatrack["missing"]
+    assert "metric:replica_deduplicated_remote_fetch_count" not in metatrack["missing"]
+
+
+def test_metric_completeness_includes_artifact_contract_missing_items(tmp_path: Path) -> None:
+    (tmp_path / "real_cluster_summary.json").write_text(
+        '{"block_executor_id":"serial_block_executor","plan_digest_consistent":true,"state_root_consistent":true,"receipt_root_consistent":true,"no_fallback":true,"artifact_contract_status":"incomplete","missing_expected_artifacts":["aggregate/mechanism_metrics_summary.json"],"artifact_contract":{"expected_artifact_count":8,"actual_artifact_count":7}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "finality_summary.json").write_text(
+        '{"logical_transaction_count":1,"submitted_unique_tx_count":1,"terminal_unique_tx_count":1,"finalized_unique_logical_tx_count":1,"throughput_tps":10,"logical_window_start_ms":1,"logical_window_end_ms":101,"logical_finality_duration_ms":100,"logical_finality_tps":10,"drain_started_at_ms":101,"drain_finished_at_ms":101,"drain_duration_ms":0,"system_delta_drain_block_count":0,"completion_window_start_ms":1,"completion_window_end_ms":101,"completion_duration_ms":100,"end_to_end_tps":10,"tail_completion_overhead_ms":0,"p95_finality_ms":20,"p99_finality_ms":30}',
+        encoding="utf-8",
+    )
+    for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "drain_status.json", "throughput_windows.csv"]:
+        (tmp_path / name).write_text("", encoding="utf-8")
+
+    metrics = extract(tmp_path, method_id="hash_serial")
+
+    assert metrics["artifact_contract_status"] == "incomplete"
+    assert metrics["missing_expected_artifacts"] == ["aggregate/mechanism_metrics_summary.json"]
+    assert metrics["expected_artifact_count"] == 8
+    assert metrics["actual_artifact_count"] == 7
+    assert "artifact_contract:missing:aggregate/mechanism_metrics_summary.json" in metrics["missing"]
+    assert metrics["metric_completeness"] == "incomplete"
+    assert metrics["paper_analysis_status"] == "incomplete"
+
+
+def test_metric_extractor_marks_present_contract_without_missing_as_complete(tmp_path: Path) -> None:
+    (tmp_path / "real_cluster_summary.json").write_text(
+        '{"block_executor_id":"serial_block_executor","plan_digest_consistent":true,"state_root_consistent":true,"receipt_root_consistent":true,"no_fallback":true,"artifact_contract":{"expected_artifact_count":8,"actual_artifact_count":12,"missing_expected_artifacts":[],"unexpected_artifacts":["supervisor_stdout.log"]}}',
+        encoding="utf-8",
+    )
+    (tmp_path / "finality_summary.json").write_text(
+        '{"logical_transaction_count":1,"submitted_unique_tx_count":1,"terminal_unique_tx_count":1,"finalized_unique_logical_tx_count":1,"throughput_tps":10,"logical_window_start_ms":1,"logical_window_end_ms":101,"logical_finality_duration_ms":100,"logical_finality_tps":10,"drain_started_at_ms":101,"drain_finished_at_ms":101,"drain_duration_ms":0,"system_delta_drain_block_count":0,"completion_window_start_ms":1,"completion_window_end_ms":101,"completion_duration_ms":100,"end_to_end_tps":10,"tail_completion_overhead_ms":0,"p95_finality_ms":20,"p99_finality_ms":30}',
+        encoding="utf-8",
+    )
+    for name in ["transaction_lifecycle.jsonl", "transaction_finality.csv", "client_receipt_log.csv", "drain_status.json", "throughput_windows.csv"]:
+        (tmp_path / name).write_text("", encoding="utf-8")
+
+    metrics = extract(tmp_path, method_id="hash_serial")
+
+    assert metrics["artifact_contract_status"] == "complete"
+    assert metrics["missing_expected_artifacts"] == []
+    assert metrics["unexpected_artifact_count"] == 1
+    assert metrics["expected_artifact_count"] == 8
+    assert metrics["actual_artifact_count"] == 12
+    assert metrics["metric_completeness"] == "complete"
 
 
 def test_metric_extractor_reads_unified_update_metrics_from_cluster_summary(tmp_path: Path) -> None:

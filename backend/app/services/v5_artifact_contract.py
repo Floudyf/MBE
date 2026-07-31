@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import json
+import hashlib
+from pathlib import Path
+from typing import Iterable
+
+
+def write_run_artifact_catalog(run_dir: Path, *, run_id: str) -> dict:
+    catalog = build_run_artifact_catalog(run_dir, run_id=run_id)
+    (run_dir / "artifact_catalog.json").write_text(json.dumps(catalog, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return catalog
+
+
+def build_run_artifact_catalog(run_dir: Path, *, run_id: str) -> dict:
+    files = []
+    for path in sorted(run_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(run_dir).as_posix()
+        if rel == "artifact_catalog.json":
+            continue
+        files.append(catalog_entry(run_dir, rel, path.stat().st_size, download_url=f"/api/v5/real-cluster/runs/{run_id}/artifacts/{rel}"))
+    return {
+        "schema_version": "mbe_v5_artifact_catalog_v1",
+        "run_id": run_id,
+        "file_count": len(files),
+        "files": files,
+    }
+
+
+def evaluate_expected_artifacts(run_dir: Path, expected_artifacts: Iterable[object]) -> dict:
+    expected = sorted({item for item in (_safe_relative_path(value) for value in expected_artifacts) if item})
+    actual = sorted(path.relative_to(run_dir).as_posix() for path in run_dir.rglob("*") if path.is_file())
+    actual_set = set(actual)
+    expected_set = set(expected)
+    missing = sorted(name for name in expected if name not in actual_set)
+    unexpected = sorted(name for name in actual if name not in expected_set)
+    return {
+        "schema_version": "mbe_v5_artifact_contract_v1",
+        "artifact_contract_status": "complete" if not missing else "incomplete",
+        "expected_artifact_count": len(expected),
+        "actual_artifact_count": len(actual),
+        "missing_expected_artifacts": missing,
+        "unexpected_artifacts": unexpected,
+    }
+
+
+def catalog_entry(run_dir: Path, name: str, size_bytes: int, *, download_url: str, sha256: str | None = None) -> dict:
+    role, truth_scope, producer, schema_version = classify_artifact(name)
+    return {
+        "name": name,
+        "size_bytes": size_bytes,
+        "artifact_role": role,
+        "truth_scope": truth_scope,
+        "producer": producer,
+        "schema_version": schema_version,
+        "sha256": sha256 or file_sha256(run_dir / name),
+        "download_url": download_url,
+    }
+
+
+def file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def classify_artifact(name: str) -> tuple[str, str, str, str]:
+    base = name.split("/")[-1]
+    if name.startswith("children/"):
+        return "child_experiment_record", "child_run_metadata", "v5_formal_scheduler", "mbe_v5_child_record_v1"
+    if base in {"formal_matrix.csv", "fairness_matrix.csv", "fairness_validation.json", "run_group_summary.json", "run_group.json"}:
+        return "formal_run_group_summary", "formal_comparison_group", "v5_formal_scheduler", "mbe_v5_formal_summary_v1"
+    if base in {"comparison_summary.csv", "paper_table_data.csv", "paper_figure_data.csv", "paper_result_analysis.json", "paper_result_analysis.csv", "run_group_report.md"}:
+        return "paper_analysis", "formal_run_group_analysis", "v5_paper_exporter", "mbe_v5_paper_analysis_v1"
+    if base.startswith("workload_"):
+        return "workload_evidence", "selected_workload_window", "v5_workload_data_plane", "mbe_workload_record_v1"
+    if base == "predicted_remote_access.csv":
+        return "metatrack_remote_state_evidence", "predicted_plan", "metatrack_planner", "mbe_metatrack_remote_prediction_v1"
+    if base in {"physical_remote_state_operations.csv", "remote_state_access.csv"}:
+        scope = "node_physical_legacy" if base == "remote_state_access.csv" else "node_physical"
+        return "metatrack_remote_state_evidence", scope, "v5_real_cluster_runtime", "mbe_remote_state_operations_v2"
+    if name == "aggregate/replica_deduplicated_remote_operations.csv":
+        return "aggregate_metric", "cluster_replica_deduplicated", "v5_metric_aggregator", "mbe_replica_deduplicated_remote_operations_v1"
+    if name == "aggregate/remote_state_metrics_summary.json":
+        return "aggregate_metric", "node_physical_and_replica_deduplicated", "v5_metric_aggregator", "mbe_remote_state_metrics_v2"
+    if name.startswith("aggregate/"):
+        return "aggregate_metric", "cluster_aggregate", "v5_metric_aggregator", "mbe_v5_aggregate_metric_v1"
+    if name.startswith("node_") or name.startswith("nodes/"):
+        return "node_mechanism_evidence", "node_physical", "v5_real_cluster_runtime", "mbe_v5_node_artifact_v1"
+    if name.startswith("client/") or base in {"client_submission_log.csv", "resolved_access_lists.jsonl.gz"}:
+        return "client_workload_evidence", "client_logical_submission", "v5_real_cluster_client", "mbe_v5_client_artifact_v1"
+    if name.startswith("logs/") or base.startswith("supervisor_"):
+        return "audit_log", "supervisor_process", "mbe_supervisor", "mbe_v5_log_v1"
+    return "raw_artifact", "unspecified", "unknown", "mbe_v5_artifact_v1"
+
+
+def _safe_relative_path(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    name = value.replace("\\", "/").strip()
+    if not name or name.startswith("/") or ":" in name:
+        return None
+    parts = name.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    return name

@@ -12,6 +12,7 @@ from backend.app.core.paths import ROOT, V5_REAL_CLUSTER_RUNS_ROOT
 from backend.app.models.v5_experiment_spec import V5ExperimentSpec
 from backend.app.services.v5_experiment_compiler import compile_plan
 from backend.app.services import v5_real_cluster_artifacts
+from backend.app.services.v5_artifact_contract import evaluate_expected_artifacts, write_run_artifact_catalog
 
 
 RUNS_ROOT = V5_REAL_CLUSTER_RUNS_ROOT
@@ -90,10 +91,16 @@ def run(spec: V5ExperimentSpec) -> dict:
         raise
     (run_dir / "supervisor_stdout.log").write_text(result.stdout, encoding="utf-8")
     (run_dir / "supervisor_stderr.log").write_text(result.stderr, encoding="utf-8")
+    write_run_artifact_catalog(run_dir, run_id=run_id)
     summary = v5_real_cluster_artifacts.read_summary(run_dir)
+    artifact_contract = evaluate_expected_artifacts(run_dir, plan.expected_artifacts)
+    summary["artifact_contract"] = artifact_contract
+    summary["artifact_contract_status"] = artifact_contract["artifact_contract_status"]
+    summary["missing_expected_artifacts"] = artifact_contract["missing_expected_artifacts"]
+    summary["unexpected_artifacts"] = artifact_contract["unexpected_artifacts"]
     completion_gate = _completion_gate(run_dir, summary)
     summary["completion_gate"] = completion_gate
-    status_value = "completed" if result.returncode == 0 and summary.get("ready_to_commit") is True and completion_gate["passed"] else "failed"
+    status_value = _run_status_from_completion(result.returncode, completion_gate)
     return {
         "run_id": run_id,
         "status": status_value,
@@ -120,6 +127,10 @@ def _logical_output_dir(path: Path) -> str:
             return str(Path("$MBE_RUNTIME_ROOT") / path.relative_to(RUNS_ROOT.parent))
         except ValueError:
             return "$MBE_RUNTIME_ROOT"
+
+
+def _run_status_from_completion(returncode: int, completion_gate: dict) -> str:
+    return "completed" if returncode == 0 and completion_gate.get("passed") is True else "failed"
 
 
 def _completion_gate(run_dir: Path, summary: dict) -> dict:
@@ -154,6 +165,8 @@ def _completion_gate(run_dir: Path, summary: dict) -> dict:
         blockers.append("finality_summary.json:throughput_tps_not_end_to_end")
     if summary.get("finality_evidence", {}).get("incomplete_unique_tx_count") not in {0, 0.0, None}:
         blockers.append("real_cluster_summary.json:incomplete_transactions")
+    for missing in summary.get("missing_expected_artifacts", []) or []:
+        blockers.append(f"artifact_contract:missing:{missing}")
     latest_status = _latest_node_statuses(run_dir)
     for status in latest_status:
         node_id = str(status.get("node_id", "unknown"))
@@ -167,7 +180,12 @@ def _completion_gate(run_dir: Path, summary: dict) -> dict:
 
 def _latest_node_statuses(run_dir: Path) -> list[dict]:
     statuses: list[dict] = []
-    for path in sorted(run_dir.glob("node_*/node_runtime_status.json")):
+    status_paths = {
+        path
+        for pattern in ("nodes/*/node_runtime_status.json", "node_*/node_runtime_status.json")
+        for path in run_dir.glob(pattern)
+    }
+    for path in sorted(status_paths):
         status = _read_json(path)
         if status:
             statuses.append(status)

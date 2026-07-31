@@ -21,6 +21,7 @@ from backend.app.services.v5_experiment_compiler import compile_plan
 from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS, validate_request
 from backend.app.services.v5_formal_scheduler import _spec_for
 from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
+from backend.app.services.v5_workload_data_plane import supported_workload_counts
 
 
 METHOD_ORDER = ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]
@@ -403,7 +404,7 @@ def validate(results: dict[str, dict], *, tx_count: int, workload_source: str) -
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run V5 execution-methods closure acceptance for Hash/MetaTrack x Serial/Block-STM.")
     parser.add_argument("--output-root", default=str(ROOT / ".cache" / "v5_execution_methods_closure"))
-    parser.add_argument("--tx-count", type=int, default=100)
+    parser.add_argument("--tx-count", type=int, default=1000)
     parser.add_argument("--workload-source", choices=["synthetic", "dataset-original", "dataset-derived"], default="synthetic")
     parser.add_argument("--timeout-seconds", type=int, default=240)
     parser.add_argument("--rerun-method", action="append", default=[])
@@ -413,9 +414,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.reuse_existing:
         args.fresh_run_all = True
-    if args.workload_source.startswith("dataset") and args.tx_count not in {10_000, 50_000, 100_000, 250_000}:
-        existing = {item for item in os.environ.get("MBE_V5_LOCAL_SMOKE_COUNTS", "").split(",") if item}
-        os.environ["MBE_V5_LOCAL_SMOKE_COUNTS"] = ",".join(sorted(existing | {str(args.tx_count)}))
+    if args.workload_source.startswith("dataset") and args.tx_count not in supported_workload_counts():
+        raise SystemExit(f"dataset tx-count must be one of {list(supported_workload_counts())}; local smoke env overrides are not part of V5.2 formal validation")
     output = Path(args.output_root).resolve()
     if args.fresh_run_all and output.exists() and any(output.iterdir()):
         raise SystemExit(f"fresh acceptance requires a new empty output root: {logical_path(output)}; use --reuse-existing only for explicit audit")

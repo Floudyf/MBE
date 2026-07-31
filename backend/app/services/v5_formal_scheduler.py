@@ -241,7 +241,14 @@ def _run_worker(group_id: str) -> None:
                 if not result_dir.is_absolute():
                     result_dir = ROOT / result_dir
                 metrics = extract_metrics(result_dir, method_id=row.get("method_config_id"))
-                child.update({"status": result["status"], "result": result, "metrics": metrics, "paper_candidate": result["status"] == "completed" and result["summary"].get("no_fallback") is True and not metrics.get("missing")})
+                child.update(
+                    {
+                        "status": result["status"],
+                        "result": result,
+                        "metrics": metrics,
+                        "paper_candidate": _is_paper_candidate_result(result, metrics),
+                    }
+                )
             else:
                 child.update({"status": "blocked", "error": "simulation dispatch is not yet bound to the V3 logical runtime adapter", "paper_candidate": False})
         except Exception as exc:  # preserve failure evidence for result center and retry policy
@@ -278,6 +285,17 @@ def finalize(group_id: str) -> dict:
     build_bundle(directory, group)
 
     return group
+
+
+def _is_paper_candidate_result(result: dict, metrics: dict) -> bool:
+    summary = result.get("summary") or {}
+    return (
+        result.get("status") == "completed"
+        and summary.get("ready_to_commit") is True
+        and summary.get("no_fallback") is True
+        and metrics.get("metric_completeness") == "complete"
+        and not metrics.get("missing")
+    )
 
 
 def _refresh_child_counts(group: dict, items: list[dict]) -> None:

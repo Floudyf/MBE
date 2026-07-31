@@ -1,3 +1,5 @@
+import { useState, type ReactNode } from "react";
+
 import type { V5FormalAnalysis, V5PaperMetricRow, V5PaperResultAnalysis } from "../../api";
 
 const width = 520;
@@ -20,23 +22,30 @@ export default function V5AnalysisPanel({ analysis }: { analysis: V5FormalAnalys
 
 function PaperAnalysisPanel({ analysis }: { analysis: V5PaperResultAnalysis }) {
   const tps = sortedRows(analysis.metrics.end_to_end_tps ?? []);
+  const p95 = sortedRows(analysis.metrics.p95_finality_ms ?? []);
   const p99 = sortedRows(analysis.metrics.p99_finality_ms ?? []);
+  const [latencyMetric, setLatencyMetric] = useState<"p95_finality_ms" | "p99_finality_ms">("p99_finality_ms");
+  const latencyRows = latencyMetric === "p95_finality_ms" ? p95 : p99;
+  const latencyTitle = latencyMetric === "p95_finality_ms" ? "P95 Finality Latency" : "P99 Finality Latency";
   return <article className="final-card wide" data-testid="v5-analysis-panel">
     <h2>Paper Result Analysis</h2>
     <p className="muted">正式主图只使用通过 fairness 和 metric completeness gate 的样本；单样本显示 n=1，不绘制虚假置信区间。</p>
     <div className="analysis-paper-grid">
       <PaperBarChart title="End-to-End TPS" rows={tps} metric="end_to_end_tps" unit="TPS" higherBetter />
-      <PaperBarChart title="P99 Finality Latency" rows={p99} metric="p99_finality_ms" unit="ms" />
+      <PaperBarChart title={latencyTitle} rows={latencyRows} metric={latencyMetric} unit="ms" controls={<div className="segmented-control" data-testid="v5-latency-percentile-toggle">
+        <button type="button" className={latencyMetric === "p95_finality_ms" ? "active" : ""} onClick={() => setLatencyMetric("p95_finality_ms")}>P95</button>
+        <button type="button" className={latencyMetric === "p99_finality_ms" ? "active" : ""} onClick={() => setLatencyMetric("p99_finality_ms")}>P99</button>
+      </div>} />
     </div>
     <details>
       <summary>查看分析数据</summary>
-      <PaperAnalysisTable rows={[...tps, ...p99]} />
+      <PaperAnalysisTable rows={[...tps, ...p95, ...p99]} />
       {analysis.excluded_samples.length > 0 && <p className="file-error">Excluded samples: {analysis.excluded_samples.length}. Download JSON/CSV artifacts for exact reasons.</p>}
     </details>
   </article>;
 }
 
-function PaperBarChart({ title, rows, metric, unit, higherBetter = false }: { title: string; rows: V5PaperMetricRow[]; metric: string; unit: string; higherBetter?: boolean }) {
+function PaperBarChart({ title, rows, metric, unit, higherBetter = false, controls }: { title: string; rows: V5PaperMetricRow[]; metric: string; unit: string; higherBetter?: boolean; controls?: ReactNode }) {
   const values = rows.map((row) => numeric(row.mean));
   const max = Math.max(...values, 1);
   const innerWidth = width - chartPadding.left - chartPadding.right;
@@ -44,7 +53,7 @@ function PaperBarChart({ title, rows, metric, unit, higherBetter = false }: { ti
   const slot = rows.length ? innerWidth / rows.length : innerWidth;
   const svgId = `v5-paper-chart-${metric}`;
   return <section className="analysis-chart" data-testid={svgId}>
-    <div className="section-heading"><div><h3>{title}</h3><p className="muted">{higherBetter ? "Higher is better" : "Lower is better"} · unit: {unit}</p></div></div>
+    <div className="section-heading"><div><h3>{title}</h3><p className="muted">{higherBetter ? "Higher is better" : "Lower is better"} · unit: {unit}</p></div>{controls}</div>
     {!rows.length ? <p className="file-error">数据不完整，无法绘制正式主图。</p> : <svg id={svgId} data-testid={`${svgId}-svg`} role="img" aria-label={`${title} chart`} viewBox={`0 0 ${width} ${height}`}>
       <title>{title}</title>
       <rect x="0" y="0" width={width} height={height} fill="#ffffff" />
@@ -101,16 +110,19 @@ function format(value: unknown) { if (value === null || value === undefined || v
 function shortName(value: string): string { return value.replace("MetaTrack with Block-STM backend", "Combined").replace("Block-STM", "B-STM"); }
 
 function downloadCSV(filename: string, rows: V5PaperMetricRow[]) {
-  const header = ["method_id", "method_name", "valid_sample_count", "excluded_sample_count", "mean", "median", "std", "min", "max", "ci95_low", "ci95_high", "statistical_note"];
+  const header = ["method_id", "method_name", "metric", "metric_unit", "valid_sample_count", "excluded_sample_count", "mean", "median", "std", "min", "max", "ci95_low", "ci95_high", "statistical_note"];
   const lines = [header.join(","), ...rows.map((row) => header.map((key) => csvCell((row as unknown as Record<string, unknown>)[key])).join(","))];
   downloadBlob(filename, "text/csv;charset=utf-8", `${lines.join("\n")}\n`);
 }
-function downloadSVG(filename: string, svgId: string) { const svg = document.getElementById(svgId); if (svg) downloadBlob(filename, "image/svg+xml;charset=utf-8", svg.outerHTML); }
+function downloadSVG(filename: string, svgId: string) {
+  const svg = serializeSVG(svgId);
+  if (svg) downloadBlob(filename, "image/svg+xml;charset=utf-8", svg);
+}
 async function downloadPNG(filename: string, svgId: string) {
-  const svg = document.getElementById(svgId);
+  const svg = serializeSVG(svgId);
   if (!svg) return;
   const image = new Image();
-  const url = URL.createObjectURL(new Blob([svg.outerHTML], { type: "image/svg+xml;charset=utf-8" }));
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
   await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = reject; image.src = url; });
   const canvas = document.createElement("canvas");
   canvas.width = width; canvas.height = height;
@@ -118,6 +130,15 @@ async function downloadPNG(filename: string, svgId: string) {
   URL.revokeObjectURL(url);
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
   if (blob) downloadObjectURL(filename, blob);
+}
+function serializeSVG(svgId: string): string | null {
+  const svg = document.getElementById(svgId);
+  if (!svg) return null;
+  const clone = svg.cloneNode(true) as SVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("width", String(width));
+  clone.setAttribute("height", String(height));
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
 }
 function downloadPDF(filename: string, title: string, rows: V5PaperMetricRow[]) {
   const body = `${title}\n\n${rows.map((row) => `${row.method_name}: ${format(row.mean)} (${row.statistical_note})`).join("\n")}`;
@@ -130,4 +151,14 @@ function minimalPDF(text: string): string {
 }
 function csvCell(value: unknown): string { return `"${String(value ?? "").replace(/"/g, "\"\"")}"`; }
 function downloadBlob(filename: string, type: string, content: string) { downloadObjectURL(filename, new Blob([content], { type })); }
-function downloadObjectURL(filename: string, blob: Blob) { const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url); }
+function downloadObjectURL(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}

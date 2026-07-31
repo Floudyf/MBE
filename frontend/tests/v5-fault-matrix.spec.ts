@@ -1,10 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { selectOnlySuite } from "./v5-formal-test-helpers";
+import { selectOnlyMethod, selectOnlySuite } from "./v5-formal-test-helpers";
 
 test("fault matrix only exposes runtime-supported modes and blocks cross-shard packet loss", async ({ page }) => {
   await page.goto("/");
   await page.getByTestId("primary-navigation").getByRole("button", { name: "② 运行实验" }).click();
-  await page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox").check();
+  await selectOnlyMethod(page, "hash_serial");
   await selectOnlySuite(page, "fault_recovery_experiment");
   await page.getByLabel("tx_count").fill("20");
   const editor = page.getByTestId("v5-point-editor-故障扫描点");

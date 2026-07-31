@@ -164,13 +164,14 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "source_artifacts": list(required_artifacts),
         "missing": missing,
     }
+    _apply_artifact_contract(metrics, cluster)
 
     _apply_block_stm_metrics(metrics, run_dir)
     _apply_metatrack_artifacts(metrics, run_dir)
     _apply_mechanism_metrics(metrics, run_dir)
 
     logical_tx_count = _int(finality.get("submitted_unique_tx_count") or finality.get("logical_transaction_count"))
-    remote_state_metrics = _read_remote_state_metrics(run_dir / "remote_state_access.csv", logical_tx_count=logical_tx_count)
+    remote_state_metrics = _read_remote_state_metrics(_remote_state_operations_path(run_dir), logical_tx_count=logical_tx_count)
     if remote_state_metrics:
         metrics.update(remote_state_metrics)
 
@@ -181,6 +182,40 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     _derive_update_metrics(metrics)
     _apply_metric_completeness(metrics, method_id=method_id)
     return metrics
+
+
+def _apply_artifact_contract(metrics: dict[str, Any], cluster: dict[str, Any]) -> None:
+    contract = cluster.get("artifact_contract") if isinstance(cluster.get("artifact_contract"), dict) else {}
+    status = cluster.get("artifact_contract_status") or contract.get("artifact_contract_status")
+    missing = cluster.get("missing_expected_artifacts")
+    if missing is None:
+        missing = contract.get("missing_expected_artifacts")
+    unexpected = cluster.get("unexpected_artifacts")
+    if unexpected is None:
+        unexpected = contract.get("unexpected_artifacts")
+
+    missing_items = [str(item) for item in missing] if isinstance(missing, list) else []
+    unexpected_items = [str(item) for item in unexpected] if isinstance(unexpected, list) else []
+
+    if not status:
+        if missing_items:
+            status = "incomplete"
+        elif contract:
+            status = "complete"
+        else:
+            status = "unknown"
+
+    metrics["artifact_contract_status"] = status
+    metrics["missing_expected_artifacts"] = missing_items
+    metrics["unexpected_artifact_count"] = len(unexpected_items)
+    if contract:
+        metrics["expected_artifact_count"] = contract.get("expected_artifact_count")
+        metrics["actual_artifact_count"] = contract.get("actual_artifact_count")
+
+    for item in missing_items:
+        marker = f"artifact_contract:missing:{item}"
+        if marker not in metrics["missing"]:
+            metrics["missing"].append(marker)
 
 
 def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
@@ -209,13 +244,20 @@ def _apply_metatrack_artifacts(metrics: dict[str, Any], run_dir: Path) -> None:
         "dependency_graph.csv": "dependency_graph_available",
         "track_classification.csv": "track_classification_available",
         "metatrack_scheduler_trace.csv": "metatrack_scheduler_trace_available",
-        "remote_state_access.csv": "remote_state_access_available",
+        "predicted_remote_access.csv": "predicted_remote_access_available",
+        "physical_remote_state_operations.csv": "physical_remote_state_operations_available",
+        "aggregate/replica_deduplicated_remote_operations.csv": "replica_deduplicated_remote_operations_available",
+        "aggregate/remote_state_metrics_summary.json": "remote_state_metrics_summary_available",
+        "aggregate/metatrack_aggregate_summary.json": "metatrack_aggregate_summary_available",
         "aggregation_plan.csv": "aggregation_plan_available",
         "logical_physical_update_mapping.csv": "logical_physical_update_mapping_available",
     }.items():
         if (run_dir / name).is_file():
             metrics[key] = True
             metrics["source_artifacts"].append(name)
+    if (run_dir / "remote_state_access.csv").is_file():
+        metrics["remote_state_access_legacy_available"] = True
+        metrics["source_artifacts"].append("remote_state_access.csv")
 
 
 def _apply_mechanism_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
@@ -276,10 +318,18 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         if statuses.get(name) == "missing":
             metric_missing.append(f"metric:{name}")
 
+    metrics["metric_required"] = required
     metrics["metric_statuses"] = statuses
+    metrics["metric_available"] = sorted(name for name, status in statuses.items() if status == "available")
+    metrics["metric_not_applicable"] = sorted(name for name, status in statuses.items() if status == "not_applicable")
     metrics["metric_missing"] = metric_missing
     metrics["metric_completeness"] = "complete" if not metric_missing and not metrics.get("missing") else "incomplete"
     metrics["paper_analysis_status"] = metrics["metric_completeness"]
+    metrics["metric_completeness_reason"] = (
+        "all_required_metrics_available"
+        if metrics["metric_completeness"] == "complete"
+        else "missing_required_metrics_or_artifacts"
+    )
     for item in metric_missing:
         if item not in metrics["missing"]:
             metrics["missing"].append(item)
@@ -307,7 +357,7 @@ def _method_traits(metrics: dict[str, Any], method_id: str | None) -> tuple[bool
                 "conservative_track_logical_tx_count",
                 "metatrack_batch_plan_available",
                 "track_classification_available",
-                "remote_state_access_available",
+                "remote_state_access_legacy_available",
                 "logical_physical_update_mapping_available",
             )
         )
@@ -325,6 +375,13 @@ def _read_json(path: Path) -> dict:
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
     return data if isinstance(data, dict) else {}
+
+
+def _remote_state_operations_path(run_dir: Path) -> Path:
+    preferred = run_dir / "physical_remote_state_operations.csv"
+    if preferred.is_file():
+        return preferred
+    return run_dir / "remote_state_access.csv"
 
 
 def _read_remote_state_metrics(path: Path, *, logical_tx_count: int = 0) -> dict:
@@ -348,6 +405,7 @@ def _read_remote_state_metrics(path: Path, *, logical_tx_count: int = 0) -> dict
         "remote_state_access_failed_count": remote_summary["physical_remote_failed_count"],
         "remote_state_read_count": remote_summary["physical_remote_fetch_count"],
         "remote_state_write_apply_count": remote_summary["physical_remote_writeback_count"],
+        "remote_state_operations_artifact": path.name,
         **remote_summary,
     }
     if latencies:

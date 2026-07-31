@@ -5,8 +5,19 @@ test("previews and runs a V5 real-cluster Formal RunGroup", async ({ page }) => 
   await page.goto("/");
   await page.locator(".final-sidebar").getByRole("button", { name: "② 运行实验", exact: true }).click();
   await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
-  await page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox").check();
+  await expect(page.getByTestId("v5-run-method-v5_catalog_default")).toHaveCount(0);
+  for (const methodId of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
+    await expect(page.getByTestId(`v5-run-method-${methodId}`).getByRole("checkbox")).toBeChecked();
+  }
   await expect(page.getByTestId("v5-formal-preview-button")).toBeEnabled();
+  await expect(page.getByLabel("nodes")).toHaveValue("8");
+  await expect(page.getByLabel("shards")).toHaveValue("2");
+  await expect(page.getByLabel("validators per shard")).toHaveValue("4");
+  await page.getByTestId("v5-run-method-hash_block_stm").getByRole("checkbox").uncheck();
+  await page.getByTestId("v5-run-method-metatrack_serial").getByRole("checkbox").uncheck();
+  await page.getByTestId("v5-run-method-metatrack_block_stm").getByRole("checkbox").uncheck();
+  await page.getByTestId("v5-suite-comparison_experiment").getByRole("checkbox").uncheck();
+  await page.getByTestId("v5-suite-main_experiment").getByRole("checkbox").check();
   await page.getByLabel("nodes").fill("4");
   await page.getByLabel("shards").fill("1");
   await page.getByLabel("validators per shard").fill("4");

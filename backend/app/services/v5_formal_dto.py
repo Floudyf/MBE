@@ -19,7 +19,14 @@ def group_summary(group: dict, *, children: list[dict] | None = None) -> dict:
 
 def group_detail(group: dict, children: list[dict]) -> dict:
     body = group_summary(group, children=children)
-    body.update({"plan_config_id": group.get("plan_config_id"), "plan": deepcopy(group.get("plan")), "cancel_requested": bool(group.get("cancel_requested", False))})
+    body.update(
+        {
+            "plan_config_id": group.get("plan_config_id"),
+            "formal_experiment_profile": deepcopy(group.get("formal_experiment_profile")),
+            "plan": deepcopy(group.get("plan")),
+            "cancel_requested": bool(group.get("cancel_requested", False)),
+        }
+    )
     return {"group": body, "children": [child_summary(item) for item in children]}
 
 

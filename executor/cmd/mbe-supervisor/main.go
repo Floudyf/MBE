@@ -1424,6 +1424,8 @@ func writeRemoteStateAggregate(dataDir string, nodes []v5.NodePlan, logicalTxCou
 	physicalFailed := 0
 	unknown := 0
 	dedup := map[string]op{}
+	physicalRows := [][]string{}
+	physicalHeader := []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "normalized_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error", "delta_id", "source_height", "source_block_hash", "update_semantics"}
 	for _, node := range nodes {
 		path := filepath.Join(node.DataDir, "remote_state_access.csv")
 		file, err := os.Open(path)
@@ -1451,11 +1453,34 @@ func writeRemoteStateAggregate(dataDir string, nodes []v5.NodePlan, logicalTxCou
 			header[name] = index
 		}
 		for _, row := range records[1:] {
+			kind := v5.NormalizeRemoteOperationKind(csvValue(row, header, "access_kind", ""))
+			physicalRows = append(physicalRows, []string{
+				csvValue(row, header, "timestamp", ""),
+				csvValue(row, header, "node_id", node.NodeID),
+				csvValue(row, header, "execution_shard", ""),
+				csvValue(row, header, "height", ""),
+				csvValue(row, header, "block_hash", ""),
+				csvValue(row, header, "tx_id", ""),
+				csvValue(row, header, "state_key", ""),
+				csvValue(row, header, "qualified_home_key", ""),
+				csvValue(row, header, "home_shard", ""),
+				csvValue(row, header, "response_execution_shard", ""),
+				csvValue(row, header, "access_kind", ""),
+				kind,
+				csvValue(row, header, "latency_ms", ""),
+				csvValue(row, header, "witness_digest", ""),
+				csvValue(row, header, "home_state_root", ""),
+				csvValue(row, header, "success", ""),
+				csvValue(row, header, "error", ""),
+				csvValue(row, header, "delta_id", ""),
+				csvValue(row, header, "source_height", ""),
+				csvValue(row, header, "source_block_hash", ""),
+				csvValue(row, header, "update_semantics", ""),
+			})
 			if !csvBool(row, header, "success") {
 				physicalFailed++
 				continue
 			}
-			kind := v5.NormalizeRemoteOperationKind(csvValue(row, header, "access_kind", ""))
 			switch kind {
 			case "fetch":
 				physicalFetch++
@@ -1509,6 +1534,9 @@ func writeRemoteStateAggregate(dataDir string, nodes []v5.NodePlan, logicalTxCou
 	if err := os.MkdirAll(aggregateDir, 0o755); err != nil {
 		return nil, err
 	}
+	if err := metrics.WriteCSV(filepath.Join(dataDir, "physical_remote_state_operations.csv"), physicalHeader, physicalRows); err != nil {
+		return nil, err
+	}
 	if err := metrics.WriteCSV(filepath.Join(aggregateDir, "replica_deduplicated_remote_operations.csv"), []string{"normalized_kind", "block_hash", "source_block_hash", "source_height", "execution_shard", "home_shard", "state_key", "delta_id", "tx_id", "example_node_id", "example_latency_ms", "dedup_key"}, rows); err != nil {
 		return nil, err
 	}
@@ -1532,6 +1560,7 @@ func writeRemoteStateAggregate(dataDir string, nodes []v5.NodePlan, logicalTxCou
 		"remote_fetch_replica_amplification_factor":      ratio(physicalFetch, dedupFetch),
 		"remote_writeback_replica_amplification_factor":  ratio(physicalWriteback, dedupWriteback),
 		"logical_tx_count":                               logicalTxCount,
+		"physical_remote_operation_artifact":             "physical_remote_state_operations.csv",
 		"replica_deduplicated_operation_artifact":        "aggregate/replica_deduplicated_remote_operations.csv",
 	}
 	return summary, v5.SaveJSON(filepath.Join(aggregateDir, "remote_state_metrics_summary.json"), summary)

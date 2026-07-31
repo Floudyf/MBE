@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 
 from backend.app.services import v5_workload_data_plane as plane
-from backend.app.services.v5_workload_data_plane import WorkloadDataError, build_canonical, materialize, validate_csv
+from backend.app.models.v5_experiment_spec import V5ExperimentSpec, V5PluginSelection, V5Topology
+from backend.app.services.v5_workload_data_plane import WorkloadDataError, WorkloadPreviewRequest, build_canonical, materialize, preview_workload, validate_csv
 
 
 FIELDS = ["id", "tx_hash", "buyer", "seller", "price", "timestamp", "category", "raw_contract_candidates"]
@@ -33,9 +34,57 @@ def _manifest(path: Path) -> dict:
     return {"dataset_id": "dcl_sales_polygon_271868", "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def _write_preview_manifest(root: Path, source: Path, *, count: int) -> Path:
+    manifest_root = root / "data" / "workloads" / "manifests"
+    manifest_root.mkdir(parents=True)
+    manifest = {
+        "schema_version": "mbe_dataset_manifest_v1",
+        "dataset_id": "dcl_sales_polygon_271868",
+        "display_name": "DCL preview fixture",
+        "description": "fixture",
+        "source_platform": "decentraland_marketplace",
+        "source_chain": "polygon_mainnet",
+        "dataset_type": "marketplace_sales",
+        "included_categories": ["wearable", "emote"],
+        "excluded_categories": ["land"],
+        "local_raw_relative_path": source.name,
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "row_count": count,
+        "unique_source_tx_hash_count": (count + 1) // 2,
+        "time_start_ms": 1_700_000_000_000,
+        "time_end_ms": 1_700_000_000_000 + count - 1,
+        "category_counts": {"emote": (count + 3) // 4, "wearable": count - ((count + 3) // 4)},
+        "operation_counts": {"emote": (count + 3) // 4, "wearable": count - ((count + 3) // 4)},
+        "truth_label": "real_observed",
+        "verification_method": "fixture",
+        "verification_sample_count": 1,
+        "verification_results": "fixture",
+        "usage_note": "fixture",
+        "generator_version": plane.GENERATOR_VERSION,
+        "supported_variants": ["original_window", "key_zipf", "contract_zipf"],
+        "supported_skew_axes": ["contract"],
+        "default_skew_axis": "contract",
+    }
+    (manifest_root / "dcl_sales_polygon_271868.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return manifest_root
+
+
 def _records(path: Path) -> list[dict]:
     with gzip.open(path, "rt", encoding="utf-8") as stream:
         return [json.loads(line) for line in stream]
+
+
+def _preview_request(**overrides: object) -> WorkloadPreviewRequest:
+    payload = {
+        "source_type": "dataset",
+        "plugin_id": "canonical_trace_replay",
+        "dataset_id": "dcl_sales_polygon_271868",
+        "requested_tx_count": 4,
+        "seed": 11,
+        "variant_mode": "original_window",
+    }
+    payload.update(overrides)
+    return WorkloadPreviewRequest(**payload)
 
 
 def test_csv_accepts_repeated_tx_hash_and_large_decimal_and_rejects_duplicate_sale_id(tmp_path: Path) -> None:
@@ -139,6 +188,100 @@ def test_1k_is_formally_supported_without_local_smoke_env(tmp_path: Path, monkey
 
     assert result["actual_tx_count"] == 1_000
     assert result["requested_tx_count"] == 1_000
+
+
+def test_v5_experiment_spec_default_uses_formal_1k_count() -> None:
+    spec = V5ExperimentSpec(
+        execution_backend="real_cluster",
+        plugin_selections=[V5PluginSelection(category="workload", plugin_id="deterministic_signed_synthetic")],
+        topology=V5Topology(nodes=8, shards=2, validators_per_shard=4),
+    )
+
+    assert spec.tx_count == 1_000
+    assert spec.workload_source is not None
+    assert spec.workload_source.requested_tx_count == 1_000
+
+
+def test_preview_selection_digest_is_stable_and_does_not_materialize(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source.csv"
+    _write_source(source, 6)
+    manifest_root = _write_preview_manifest(tmp_path, source, count=6)
+    cache_root = tmp_path / ".cache" / "workloads"
+    monkeypatch.setattr(plane, "ROOT", tmp_path)
+    monkeypatch.setattr(plane, "MANIFEST_ROOT", manifest_root)
+    monkeypatch.setattr(plane, "WORKLOAD_CACHE_ROOT", cache_root)
+    monkeypatch.setattr(plane, "SUPPORTED_COUNTS", frozenset({4, 5}))
+
+    first = preview_workload(_preview_request(requested_tx_count=4), shards=2).model_dump()
+    second = preview_workload(_preview_request(requested_tx_count=4), shards=2).model_dump()
+
+    assert first["blockers"] == []
+    assert first["selected_window_preview"]["selection_digest"] == second["selected_window_preview"]["selection_digest"]
+    assert first["selected_window_preview"]["actual_selected_count"] == 4
+    assert first["selected_window_preview"]["requested_tx_count"] == 4
+    assert first["selected_window_preview"]["operation_counts"] == first["selected_window_preview"]["category_counts"]
+    assert all(0 <= value <= 1 for value in first["selected_window_preview"]["category_percentages"].values())
+    assert not (cache_root / "materialized").exists()
+    assert not (cache_root / "canonical").exists()
+
+
+def test_preview_and_materialize_share_selection_digest_for_original_and_key_zipf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source.csv"
+    _write_source(source, 6)
+    manifest_root = _write_preview_manifest(tmp_path, source, count=6)
+    cache_root = tmp_path / ".cache" / "workloads"
+    monkeypatch.setattr(plane, "ROOT", tmp_path)
+    monkeypatch.setattr(plane, "MANIFEST_ROOT", manifest_root)
+    monkeypatch.setattr(plane, "WORKLOAD_CACHE_ROOT", cache_root)
+    monkeypatch.setattr(plane, "SUPPORTED_COUNTS", frozenset({4, 5}))
+
+    original_preview = preview_workload(_preview_request(requested_tx_count=4), shards=2).model_dump()["selected_window_preview"]
+    canonical = build_canonical(source, cache_root, _manifest(source))
+    original_materialized = materialize(cache_root / canonical["canonical_relative_path"], cache_root, dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=4, seed=11)
+    assert original_materialized["selection_digest"] == original_preview["selection_digest"]
+    assert original_materialized["selected_window_preview"]["actual_selected_count"] == original_preview["actual_selected_count"]
+    assert len(_records(cache_root / original_materialized["materialized_relative_path"])) == original_preview["actual_selected_count"]
+
+    key_zipf_request = _preview_request(requested_tx_count=4, variant_mode="key_zipf", skew_axis="contract", target_alpha=1.0)
+    key_zipf_preview = preview_workload(key_zipf_request, shards=2).model_dump()["selected_window_preview"]
+    key_zipf_materialized = materialize(cache_root / canonical["canonical_relative_path"], cache_root, dataset_id="dcl_sales_polygon_271868", source_sha256=canonical["source_sha256"], requested_tx_count=4, seed=11, variant_mode="key_zipf", skew_axis="contract", target_alpha=1.0)
+    assert key_zipf_materialized["selection_digest"] == key_zipf_preview["selection_digest"]
+    assert len(_records(cache_root / key_zipf_materialized["materialized_relative_path"])) == key_zipf_preview["actual_selected_count"]
+
+
+def test_selection_digest_changes_with_seed_count_and_alpha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source.csv"
+    _write_source(source, 6)
+    manifest_root = _write_preview_manifest(tmp_path, source, count=6)
+    monkeypatch.setattr(plane, "ROOT", tmp_path)
+    monkeypatch.setattr(plane, "MANIFEST_ROOT", manifest_root)
+    monkeypatch.setattr(plane, "WORKLOAD_CACHE_ROOT", tmp_path / ".cache" / "workloads")
+    monkeypatch.setattr(plane, "SUPPORTED_COUNTS", frozenset({4, 5}))
+
+    base = preview_workload(_preview_request(requested_tx_count=4, seed=11), shards=2).selected_window_preview["selection_digest"]
+    different_seed = preview_workload(_preview_request(requested_tx_count=4, seed=12), shards=2).selected_window_preview["selection_digest"]
+    different_count = preview_workload(_preview_request(requested_tx_count=5, seed=11), shards=2).selected_window_preview["selection_digest"]
+    alpha_low = preview_workload(_preview_request(requested_tx_count=4, variant_mode="key_zipf", skew_axis="contract", target_alpha=0.0), shards=2).selected_window_preview["selection_digest"]
+    alpha_high = preview_workload(_preview_request(requested_tx_count=4, variant_mode="key_zipf", skew_axis="contract", target_alpha=1.4), shards=2).selected_window_preview["selection_digest"]
+
+    assert base != different_seed
+    assert base != different_count
+    assert alpha_low != alpha_high
+
+
+def test_full_dataset_preview_uses_dataset_row_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "source.csv"
+    _write_source(source, 6)
+    manifest_root = _write_preview_manifest(tmp_path, source, count=6)
+    monkeypatch.setattr(plane, "ROOT", tmp_path)
+    monkeypatch.setattr(plane, "MANIFEST_ROOT", manifest_root)
+    monkeypatch.setattr(plane, "WORKLOAD_CACHE_ROOT", tmp_path / ".cache" / "workloads")
+    monkeypatch.setattr(plane, "SUPPORTED_COUNTS", frozenset({4, 5}))
+
+    preview = preview_workload(_preview_request(requested_tx_count=4, use_full_dataset=True), shards=2)
+
+    assert preview.tx_count == 6
+    assert preview.selected_window_preview["actual_selected_count"] == 6
 
 
 @pytest.mark.parametrize("label,count", [("10K", 3), ("50K", 4), ("100K", 5), ("250K", 6)])
