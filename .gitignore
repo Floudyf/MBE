@@ -50,3 +50,19 @@ Thumbs.db
 frontend/tsconfig.tsbuildinfo
 frontend/test-results/
 frontend/playwright-report/
+
+# Root-level local V5 audit and release-validation evidence. These artifacts
+# are generated outside the formal artifact roots and must never be staged.
+/failed_baseline_detail.json
+/metatrack_*.txt
+/registry_test_context.txt
+/run_retry_pacing_green_validation.ps1
+/runtime_commit_receipt_context.txt
+/v5_*.json
+/v5_*.txt
+/v5_*.md
+/v5_*.patch
+/v5_*.zip
+/v5_*/
+/v5grp_*.zip
+/v5grp_*/

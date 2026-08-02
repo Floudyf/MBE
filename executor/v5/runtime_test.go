@@ -89,6 +89,12 @@ func TestMetaTrackRuntimeFetchesRemoteHomeStateBeforeExecution(t *testing.T) {
 	if !transportSaw(exec.transport.Log.Entries(), "receive", stateFetchResponseMessage) {
 		t.Fatal("execution shard did not receive state fetch response over p2p")
 	}
+	if !transportSaw(exec.transport.Log.Entries(), "state_access_send", stateFetchRequestMessage) {
+		t.Fatal("state fetch request did not use the dedicated state-access lane")
+	}
+	if !transportSaw(home.transport.Log.Entries(), "state_access_send", stateFetchResponseMessage) {
+		t.Fatal("state fetch response did not use the dedicated state-access lane")
+	}
 }
 
 func TestMetaTrackRemoteStateFetchFreezesWholeBlockSnapshot(t *testing.T) {
@@ -696,6 +702,12 @@ func TestMetaTrackRuntimeRecordsRemoteStateDeltaEvidenceWithoutBypassingConsensu
 	}
 	if !transportSaw(exec.transport.Log.Entries(), "receive", stateDeltaApplyAckMessage) {
 		t.Fatal("execution shard did not receive state delta apply ack over p2p")
+	}
+	if !transportSaw(exec.transport.Log.Entries(), "state_access_send", stateDeltaApplyMessage) {
+		t.Fatal("state delta apply did not use the dedicated state-access lane")
+	}
+	if !transportSaw(home.transport.Log.Entries(), "state_access_send", stateDeltaApplyAckMessage) {
+		t.Fatal("state delta apply ack did not use the dedicated state-access lane")
 	}
 }
 

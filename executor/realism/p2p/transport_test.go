@@ -177,6 +177,66 @@ func TestPersistentSendReusesConnectionForBurst(t *testing.T) {
 	}
 }
 
+func TestStateAccessLaneBypassesBlockedDefaultPeerStream(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	received := make(chan MessageEnvelope, 2)
+	b := NewTransport("n1", "127.0.0.1:0", nil, func(_ context.Context, msg MessageEnvelope) error {
+		received <- msg
+		return nil
+	})
+	if err := b.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer b.Stop()
+	a := NewTransport("n0", "127.0.0.1:0", []Peer{{NodeID: "n1", ListenAddr: b.ListenAddr}}, nil)
+	defer a.Stop()
+	warmup, err := NewEnvelope(MessagePBFTPrePrepare, "n0", "n1", "s0", 1, 0, 1, map[string]string{"payload": "warmup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Send(ctx, "n1", warmup); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-received:
+	case <-time.After(time.Second):
+		t.Fatal("warmup did not arrive")
+	}
+	a.connMu.Lock()
+	defaultStream := a.outbound["n1"]
+	a.connMu.Unlock()
+	if defaultStream == nil {
+		t.Fatal("warmup did not create the default peer stream")
+	}
+	defaultStream.mu.Lock()
+	defer defaultStream.mu.Unlock()
+	blockedDefault := make(chan error, 1)
+	go func() {
+		blockedDefault <- a.Send(ctx, "n1", warmup)
+	}()
+	stateAccess, err := NewEnvelope("V5_STATE_FETCH_RESPONSE", "n0", "n1", "s0", 1, 0, 1, map[string]string{"payload": "state"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SendStateAccess(ctx, "n1", stateAccess); err != nil {
+		t.Fatalf("state-access send was blocked by the default peer stream: %v", err)
+	}
+	select {
+	case got := <-received:
+		if got.MessageType != "V5_STATE_FETCH_RESPONSE" {
+			t.Fatalf("received %s before state-access response", got.MessageType)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("state-access message was blocked behind default peer stream")
+	}
+	select {
+	case err := <-blockedDefault:
+		t.Fatalf("default send unexpectedly completed while its stream was locked: %v", err)
+	default:
+	}
+}
+
 func TestTransportStopDoesNotPanicAcceptLoop(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
