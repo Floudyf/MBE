@@ -32,8 +32,9 @@ test("shows persisted V5 results, runtime evidence, and real artifacts", async (
 
   const row = page.getByTestId("v5-child-table").locator("tbody tr").first().locator("td");
   await expect(row.nth(7)).toHaveText("已完成completed");
-  await expect(row.nth(10)).toHaveText("40");
-  await expect(row.nth(11)).toHaveText("0");
+  await expect(row.nth(10)).toHaveText("true");
+  await expect(row.nth(14)).toHaveText("40");
+  await expect(row.nth(15)).toHaveText("0");
   await row.nth(0).getByRole("button").click();
   await expect(page.getByTestId("v5-metric-submitted").locator("dd")).toHaveText("40");
   await expect(page.getByTestId("v5-metric-terminal").locator("dd")).toHaveText("40");

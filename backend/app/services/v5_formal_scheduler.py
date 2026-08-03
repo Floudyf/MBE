@@ -5,6 +5,7 @@ import json
 import os
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 from backend.app.core.paths import ROOT
@@ -237,9 +238,7 @@ def _run_worker(group_id: str) -> None:
                 child.update({"status": "completed", "result": result, "paper_candidate": False})
             elif backend == "real_cluster":
                 result = v5_real_cluster_runner.run(spec)
-                result_dir = __import__("pathlib").Path(result["output_dir"])
-                if not result_dir.is_absolute():
-                    result_dir = ROOT / result_dir
+                result_dir = _physical_result_dir(result)
                 metrics = extract_metrics(result_dir, method_id=row.get("method_config_id"))
                 child.update(
                     {
@@ -295,6 +294,24 @@ def finalize(group_id: str) -> dict:
     build_bundle(directory, group)
 
     return group
+
+
+def _physical_result_dir(result: dict) -> Path:
+    """Resolve the real local run directory without exposing it through the API.
+
+    ``v5_real_cluster_runner`` intentionally returns a logical output path when
+    runs live outside the repository.  Metric extraction must use the physical
+    run root, so the authoritative run id is resolved through the runner.
+    Absolute paths remain supported for test doubles and legacy records.
+    """
+    run_id = str(result.get("run_id") or "")
+    if run_id:
+        return v5_real_cluster_runner.run_dir(run_id)
+
+    output_dir = Path(str(result.get("output_dir") or ""))
+    if output_dir.is_absolute():
+        return output_dir
+    return ROOT / output_dir
 
 
 def _is_paper_candidate_result(result: dict, metrics: dict) -> bool:

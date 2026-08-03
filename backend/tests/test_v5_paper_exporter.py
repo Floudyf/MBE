@@ -11,7 +11,7 @@ def _child(child_id: str, suite: str, method_id: str, name: str, *, scan: str = 
         "scan_variable": scan, "scan_value": value, "topology_point": {"nodes": nodes, "shards": 1, "validators_per_shard": nodes},
         "workload_point": {"cross_shard_ratio": 0, "timeout_every": 0}, "fault_point": {"mode": fault}, "estimated_transactions": 20,
         "block_size": block_size, "block_interval_ms": block_interval_ms,
-        "metrics": {"throughput_tps": 10.0 if method_id == "main" else 8.0, "p50_latency_ms": 1.0, "p95_latency_ms": 2.0, "p99_latency_ms": 3.0},
+        "metrics": {"throughput_tps": 10.0 if method_id == "main" else 8.0, "end_to_end_tps": 10.0 if method_id == "main" else 8.0, "p50_latency_ms": 1.0, "p95_latency_ms": 2.0, "p99_latency_ms": 3.0},
         "result": {"summary": {"finality_evidence": {"submitted_unique_tx_count": 20, "terminal_unique_tx_count": 20, "incomplete_unique_tx_count": 0, "cross_shard_requested_unique_count": 0, "cross_shard_finalized_unique_count": 0}}},
     }
 
@@ -69,6 +69,7 @@ def _paper_child(child_id: str, method_id: str, name: str, *, tps: float = 10.0,
     child = _child(child_id, "comparison_experiment", method_id, name)
     child["metrics"].update({
         "end_to_end_tps": tps,
+        "logical_finality_tps": tps,
         "p95_finality_ms": p95,
         "p99_finality_ms": p99,
         "no_fallback": True,
