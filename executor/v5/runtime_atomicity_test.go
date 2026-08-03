@@ -200,23 +200,123 @@ func testCommitDurableFailure(t *testing.T, failpoint string) {
 
 func TestFinalizeClearsSourceRelayAfterTargetCommit(t *testing.T) {
 	root := t.TempDir()
-	runtime := &NodeRuntime{
-		node:                   NodePlan{NodeID: "n0", ShardID: "s0", Leader: true, DataDir: root},
-		relaySource:            map[string]Relay{"tx-1": {Tx: tx.SignedTransaction{TxID: "tx-1"}, SourceShard: "s0", TargetShard: "s1"}},
-		relayAdmissionFailures: map[string]string{"tx-1": "stale_nonce"},
+
+	relay := Relay{
+		Tx: tx.SignedTransaction{
+			TxID: "tx-1",
+		},
+		LogicalTxID: "tx-1",
+		SourceShard: "s0",
+		TargetShard: "s1",
 	}
-	envelope, err := p2p.NewEnvelope(finalizeMessage, "s1-leader", "n0", "s1", 0, 0, 0, Finalize{TxID: "tx-1", SourceShard: "s0", TargetShard: "s1"})
+
+	ackSent := false
+
+	runtime := &NodeRuntime{
+		plan: Plan{
+			NodeConfigs: []NodePlan{
+				{
+					NodeID:  "n0",
+					ShardID: "s0",
+					Leader:  true,
+				},
+				{
+					NodeID:  "s1-leader",
+					ShardID: "s1",
+					Leader:  true,
+				},
+			},
+		},
+		node: NodePlan{
+			NodeID:  "n0",
+			ShardID: "s0",
+			Leader:  true,
+			DataDir: root,
+		},
+		relaySource: map[string]Relay{
+			"tx-1": relay,
+		},
+		pendingOutboundRelays: map[string]Relay{
+			"tx-1": relay,
+		},
+		outboundRelaySendErrors: map[string]string{
+			"tx-1": "previous_send_failure",
+		},
+		relayAdmissionFailures: map[string]string{
+			"tx-1": "stale_nonce",
+		},
+		crossEventSeen: map[string]bool{},
+	}
+
+	runtime.sendToNodeHook = func(
+		_ context.Context,
+		nodeID string,
+		envelope p2p.MessageEnvelope,
+	) error {
+		if nodeID == "s1-leader" &&
+			envelope.MessageType == finalizeAckMessage {
+			ackSent = true
+		}
+		return nil
+	}
+
+	envelope, err := p2p.NewEnvelope(
+		finalizeMessage,
+		"s1-leader",
+		"n0",
+		"s1",
+		0,
+		0,
+		0,
+		Finalize{
+			TxID:        "tx-1",
+			LogicalTxID: "tx-1",
+			SourceShard: "s0",
+			TargetShard: "s1",
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.handle(context.Background(), envelope); err != nil {
+
+	if err := runtime.handle(
+		context.Background(),
+		envelope,
+	); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, ok := runtime.relaySource["tx-1"]; ok {
-		t.Fatal("source relay remained pending after finalize")
+		t.Fatal(
+			"source relay remained pending after finalize",
+		)
 	}
-	if _, ok := runtime.relayAdmissionFailures["tx-1"]; ok {
-		t.Fatal("stale relay failure remained after finalize")
+
+	if _, ok :=
+		runtime.pendingOutboundRelays["tx-1"]; ok {
+		t.Fatal(
+			"source outbound relay remained pending after finalize",
+		)
+	}
+
+	if _, ok :=
+		runtime.outboundRelaySendErrors["tx-1"]; ok {
+		t.Fatal(
+			"outbound relay send error remained after finalize",
+		)
+	}
+
+	if _, ok :=
+		runtime.relayAdmissionFailures["tx-1"]; ok {
+		t.Fatal(
+			"stale relay failure remained after finalize",
+		)
+	}
+
+	if !ackSent {
+		t.Fatal(
+			"source leader did not send FinalizeAck",
+		)
 	}
 }
 

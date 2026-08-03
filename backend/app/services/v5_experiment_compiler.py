@@ -16,13 +16,44 @@ EXPECTED_ARTIFACTS = [
     "compiled_run_plan.json",
     "process_manifest.json",
     "real_cluster_summary.json",
-    "client_submission_log.csv",
     "artifact_catalog.json",
+    "finality_summary.json",
+    "transaction_lifecycle.jsonl",
+    "transaction_lifecycle.csv",
+    "transaction_finality.csv",
+    "client_receipt_log.csv",
+    "drain_status.json",
+    "throughput_windows.csv",
+    "physical_remote_state_operations.csv",
+    "client/client_submission_log.csv",
+    "client/client_lifecycle.csv",
+    "client/resolved_access_lists.jsonl.gz",
+    "client/workload_replay_summary.json",
+    "client/workload_identity_mapping_summary.json",
+    "aggregate/block_production_summary.json",
+    "aggregate/mechanism_metrics_summary.json",
+    "aggregate/remote_state_metrics_summary.json",
+    "aggregate/replica_deduplicated_remote_operations.csv",
+    "aggregate/metatrack_aggregate_summary.json",
+    "aggregate/block_stm_aggregate_summary.json",
+]
+NODE_EXPECTED_ARTIFACTS = [
     "block_execution_summary.json",
+    "blocks.jsonl",
+    "commit_markers.jsonl",
+    "committed_chain.csv",
+    "execution_log.csv",
     "execution_plan.jsonl",
-    "transaction_execution_trace.csv",
-    "state_delta_log.csv",
+    "node_summary.json",
     "plan_digest_consistency.csv",
+    "receipts.jsonl",
+    "runtime_events.csv",
+    "state_delta_log.csv",
+    "state_wal_manifest.json",
+    "transaction_execution_trace.csv",
+    "transaction_lifecycle.csv",
+    "transaction_lifecycle.jsonl",
+    "tx_index.jsonl",
 ]
 DATASET_ARTIFACTS = [
     "workload_manifest_snapshot.json",
@@ -33,7 +64,7 @@ DATASET_ARTIFACTS = [
     "workload_identity_mapping_summary.json",
     "workload_replay_summary.json",
 ]
-METATRACK_ARTIFACTS = [
+METATRACK_CLIENT_ARTIFACTS = [
     "metatrack_batch_plan.jsonl",
     "access_matrix_summary.csv",
     "state_frequency.csv",
@@ -41,13 +72,17 @@ METATRACK_ARTIFACTS = [
     "placement_plan.csv",
     "transaction_placement.csv",
     "dependency_graph.csv",
+    "predicted_remote_access.csv",
+]
+
+METATRACK_NODE_ARTIFACTS = [
     "track_classification.csv",
     "metatrack_scheduler_trace.csv",
-    "remote_state_access.csv",
     "aggregation_plan.csv",
     "logical_physical_update_mapping.csv",
 ]
-BLOCK_STM_ARTIFACTS = [
+
+BLOCK_STM_NODE_ARTIFACTS = [
     "block_stm_summary.json",
     "block_stm_task_trace.csv",
     "block_stm_validation_trace.csv",
@@ -60,6 +95,44 @@ BLOCK_STM_ARTIFACTS = [
 
 def requested_cross_shard_count(tx_count: int, ratio: float) -> int:
     return int(tx_count * ratio + 0.5)
+
+
+def compile_artifact_contract(expected_artifacts: list[str], nodes: list[V5CompiledNodeConfig]) -> list[dict[str, object]]:
+    """Compile the formal v2 contract from the producer-facing file list.
+
+    Node evidence is represented once as a scoped wildcard plus the topology's
+    actual node ids.  This avoids a basename contract while retaining the
+    exact list consumed by the runtime producer.
+    """
+    node_ids = [node.node_id for node in nodes]
+    grouped_node_artifacts = sorted({path.split("/", 2)[2] for path in expected_artifacts if path.startswith("nodes/") and path.count("/") >= 2})
+    entries: list[dict[str, object]] = []
+    for path in expected_artifacts:
+        if path.startswith("nodes/"):
+            continue
+        if path.startswith("client/"):
+            scope = "client"
+        elif path.startswith("aggregate/"):
+            scope = "aggregate"
+        else:
+            scope = "child_root"
+        entries.append({
+            "path_pattern": path,
+            "scope": scope,
+            "per_node": False,
+            "node_ids": [],
+            "min_count": 1,
+            "required_for_formal_eligibility": True,
+        })
+    entries.extend({
+        "path_pattern": f"nodes/*/{artifact}",
+        "scope": "node",
+        "per_node": True,
+        "node_ids": node_ids,
+        "min_count": 1,
+        "required_for_formal_eligibility": True,
+    } for artifact in grouped_node_artifacts)
+    return entries
 
 
 def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_id: str | None = None) -> V5CompiledRunPlan:
@@ -83,11 +156,26 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
         nodes.append(V5CompiledNodeConfig(node_id=node_id, shard_id=f"s{shard_index}", role="leader" if node_id == validators[0] else "validator", leader=node_id == validators[0], listen_addr="127.0.0.1:0", data_dir=str(run_dir / "nodes" / node_id), validators=validators, plugin_profile=profile))
     snapshot = [STORE.get(item.plugin_id).model_dump() | {"selected_config": item.config} for item in compatibility.resolved_plugins]
     workload = _compile_workload_plan(spec, profile, run_dir)
-    expected_artifacts = EXPECTED_ARTIFACTS + (DATASET_ARTIFACTS if workload.get("source_type") == "dataset" else [])
+    node_expected_artifacts = [f"nodes/{node.node_id}/{artifact}" for node in nodes for artifact in NODE_EXPECTED_ARTIFACTS]
+    expected_artifacts = EXPECTED_ARTIFACTS + node_expected_artifacts + (DATASET_ARTIFACTS if workload.get("source_type") == "dataset" else [])
     if profile.get("routing", {}).get("plugin_id") == "metatrack_coaccess_routing":
-        expected_artifacts += METATRACK_ARTIFACTS
+        expected_artifacts += [
+            f"client/{artifact}"
+            for artifact in METATRACK_CLIENT_ARTIFACTS
+        ]
+        expected_artifacts += [
+            f"nodes/{node.node_id}/{artifact}"
+            for node in nodes
+            for artifact in METATRACK_NODE_ARTIFACTS
+        ]
+
     if profile.get("block_executor", {}).get("plugin_id") == "block_stm_block_executor":
-        expected_artifacts += BLOCK_STM_ARTIFACTS
+        expected_artifacts += [
+            f"nodes/{node.node_id}/{artifact}"
+            for node in nodes
+            for artifact in BLOCK_STM_NODE_ARTIFACTS
+        ]
+    artifact_contract = compile_artifact_contract(expected_artifacts, nodes)
     return V5CompiledRunPlan(
         plan_id=f"v5plan_{digest[:16]}", plan_digest=digest,
         execution_backend=spec.execution_backend, duration_ms=spec.duration_ms,
@@ -96,7 +184,10 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
         method_config_id=spec.method_config_id,
         experiment_spec=normalized, plugin_snapshot=snapshot, node_configs=nodes,
         workload_plan=workload, fault_plan=spec.fault_policy,
-        expected_artifacts=expected_artifacts, resource_estimate=compatibility.resource_estimate,
+        expected_artifacts=expected_artifacts,
+        artifact_contract_version=2,
+        artifact_contract=artifact_contract,
+        resource_estimate=compatibility.resource_estimate,
     )
 
 

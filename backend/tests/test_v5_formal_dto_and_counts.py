@@ -13,6 +13,27 @@ def test_child_summary_preserves_identity_and_finality_but_not_process_secrets()
     assert "output_dir" not in body["result"] and "stdout" not in body["result"]
 
 
+def test_child_summary_returns_separate_execution_and_artifact_semantics():
+    child = _child() | {
+        "execution_status": "completed",
+        "artifact_status": "incomplete",
+        "formal_eligibility": False,
+        "execution_gate": {"passed": True, "blockers": []},
+        "artifact_gate": {"passed": False, "blockers": ["missing"]},
+        "completion_gate": {"passed": False, "blockers": ["missing"]},
+        "artifact_contract_version": 2,
+        "missing_artifacts": ["nodes/n1/block_stm_summary.json"],
+        "unexpected_artifacts": [],
+    }
+    body = child_summary(child)
+    assert body["status"] == "completed"
+    assert body["execution_status"] == "completed"
+    assert body["artifact_status"] == "incomplete"
+    assert body["formal_eligibility"] is False
+    assert body["artifact_contract_version"] == 2
+    assert body["missing_artifacts"] == ["nodes/n1/block_stm_summary.json"]
+
+
 def test_child_detail_keeps_only_safe_artifact_fields():
     artifact = child_detail(_child())["result"]["artifacts"][0]
     assert artifact == {"name": "finality.json", "size_bytes": 1, "truth_category": "runtime", "download_url": "/safe"}

@@ -26,7 +26,7 @@ def main() -> int:
         group_id=args.verify_group; current=read_group(group_id); items=children(group_id); directory=group_dir(group_id)
         return _validate(group_id,current,items,directory)
     methods = [V5FormalMethod(method_id="metatrack", display_name="MetaTrack", plugin_overrides={"routing": "metatrack_coaccess_routing", "execution": "dual_track_execution", "scheduler": "fast_first_scheduler", "commit": "commutative_hot_update_aggregation"}), V5FormalMethod(method_id="hash", display_name="Hash", plugin_overrides={"routing": "hash_routing_baseline", "execution": "serial_execution_baseline", "scheduler": "fifo_serial_scheduler", "commit": "normal_commit"})]
-    plan = V5FormalExperimentPlan(name="v5_2_run_group_acceptance", base_spec=V5ExperimentSpec(name="v5_2_run_group", execution_backend="real_cluster", plugin_selections=selections({}), topology=V5Topology(nodes=8, shards=2, validators_per_shard=4), tx_count=100, seed=61, duration_ms=9000), suites=["comparison_experiment"], methods=methods, seeds=[61, 62], repeats=2)
+    plan = V5FormalExperimentPlan(name="v5_2_run_group_acceptance", base_spec=V5ExperimentSpec(name="v5_2_run_group", execution_backend="real_cluster", plugin_selections=selections({}), topology=V5Topology(nodes=8, shards=2, validators_per_shard=4), tx_count=1000, seed=61, duration_ms=9000), suites=["comparison_experiment"], methods=methods, seeds=[61, 62], repeats=2)
     matrix = expand(plan, "real_cluster")
     group = create_group({"execution_backend":"real_cluster", "runtime_truth":"v5_real_cluster_candidate", "plan":plan.model_dump(), "matrix":matrix, "total_child_runs":len(matrix), "completed_child_runs":0, "cancel_requested":False, "max_concurrent_real_clusters":1})
     start(group["run_group_id"])
@@ -43,7 +43,23 @@ def _validate(group_id: str, current: dict, items: list[dict], directory: Path) 
     required=["raw_summary.csv","aggregate_summary.csv","confidence_interval.csv","formal_matrix.csv","fairness_matrix.csv","artifacts.zip"]
     blockers=[]
     if current.get("status")!="completed": blockers.append(f"group status {current.get('status')}")
-    if len(items)!=8 or not all(item.get("status")=="completed" for item in items): blockers.append("children incomplete")
+    expected_child_count = current.get("total_child_runs")
+    if not isinstance(expected_child_count, int) or expected_child_count <= 0:
+        matrix = current.get("matrix")
+        if isinstance(matrix, list) and matrix:
+            expected_child_count = len(matrix)
+        else:
+            expected_child_count = len(items)
+
+    if expected_child_count <= 0:
+        blockers.append("group has no children")
+    elif len(items) != expected_child_count or not all(
+        item.get("status") == "completed" for item in items
+    ):
+        blockers.append(
+            f"children incomplete: expected={expected_child_count} "
+            f"actual={len(items)}"
+        )
     if any(not (directory/name).is_file() or (directory/name).stat().st_size==0 for name in required): blockers.append("artifacts incomplete")
     for item in items:
         summary = item.get("result", {}).get("summary", {})

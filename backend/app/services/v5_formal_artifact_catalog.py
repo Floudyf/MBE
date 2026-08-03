@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+from urllib.parse import quote
+
+from backend.app.services.v5_artifact_contract import catalog_entry
 
 
 def read_catalog(group_dir: Path, run_group_id: str) -> dict:
@@ -27,12 +30,12 @@ def read_catalog(group_dir: Path, run_group_id: str) -> dict:
     for item in manifest.get("files", []) if isinstance(manifest, dict) and isinstance(manifest.get("files"), list) else []:
         if not isinstance(item, dict):
             continue
-        name = _safe_name(item.get("name"))
+        name = safe_artifact_name(item.get("name"))
         size = item.get("size_bytes")
         if name is None or type(size) is not int or size < 0 or name in seen:
             continue
         seen.add(name)
-        files.append({"name": name, "size_bytes": size})
+        files.append(_catalog_entry(group_dir, run_group_id, name, size, item))
     return {
         "run_group_id": run_group_id,
         "status": "ready",
@@ -43,7 +46,7 @@ def read_catalog(group_dir: Path, run_group_id: str) -> dict:
     }
 
 
-def _safe_name(value: object) -> str | None:
+def safe_artifact_name(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     name = value.replace("\\", "/")
@@ -53,3 +56,8 @@ def _safe_name(value: object) -> str | None:
     if any(part in {"", ".", ".."} for part in parts):
         return None
     return name
+
+
+def _catalog_entry(group_dir: Path, run_group_id: str, name: str, size: int, item: dict) -> dict:
+    sha256 = item.get("sha256") if isinstance(item.get("sha256"), str) else None
+    return catalog_entry(group_dir, name, size, download_url=f"/api/v5/formal/run-groups/{quote(run_group_id, safe='')}/artifacts/{quote(name, safe='/')}", sha256=sha256)

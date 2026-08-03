@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 
 from backend.app.services.v5_metric_extractor import extract
-from backend.app.services.v5_real_cluster_runner import _completion_gate
+from backend.app.services.v5_formal_scheduler import _is_paper_candidate_result
+from backend.app.services.v5_real_cluster_runner import _completion_gate, _run_status_from_completion, _status_fields
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -41,7 +42,7 @@ def _finality(**overrides: object) -> dict:
 
 
 def test_metric_extractor_preserves_logical_tps_and_uses_end_to_end_throughput(tmp_path: Path) -> None:
-    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True})
+    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True, "state_root_consistent": True, "receipt_root_consistent": True, "plan_digest_consistent": True})
     _write_json(tmp_path / "finality_summary.json", _finality())
     _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
     _write_required_files(tmp_path)
@@ -57,7 +58,7 @@ def test_metric_extractor_preserves_logical_tps_and_uses_end_to_end_throughput(t
 
 
 def test_metric_extractor_blocks_missing_drain_completion_fields(tmp_path: Path) -> None:
-    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True})
+    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True, "state_root_consistent": True, "receipt_root_consistent": True, "plan_digest_consistent": True})
     finality = _finality()
     finality.pop("completion_duration_ms")
     _write_json(tmp_path / "finality_summary.json", finality)
@@ -82,6 +83,29 @@ def test_completion_gate_rejects_pending_system_delta_after_logical_finality(tmp
     assert "node_runtime_status:node_0:pending_state_delta_count_not_zero" in gate["blockers"]
 
 
+def test_completion_gate_reads_formal_nodes_directory_status(tmp_path: Path) -> None:
+    _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
+    node_dir = tmp_path / "nodes" / "n0"
+    node_dir.mkdir(parents=True)
+    _write_json(
+        node_dir / "node_runtime_status.json",
+        {
+            "node_id": "n0",
+            "pending_state_delta_count": 0,
+            "pending_state_delta_key_count": 0,
+            "ready_state_delta_count": 1,
+            "pending_commit_count": 0,
+            "proposal_in_flight": False,
+        },
+    )
+    _write_json(tmp_path / "finality_summary.json", _finality())
+
+    gate = _completion_gate(tmp_path, {"finality_evidence": {"incomplete_unique_tx_count": 0}})
+
+    assert gate["passed"] is False
+    assert "node_runtime_status:n0:ready_state_delta_count_not_zero" in gate["blockers"]
+
+
 def test_completion_gate_passes_after_drain_quiescence_and_zero_pending(tmp_path: Path) -> None:
     _write_json(tmp_path / "finality_summary.json", _finality())
     _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
@@ -94,8 +118,24 @@ def test_completion_gate_passes_after_drain_quiescence_and_zero_pending(tmp_path
     assert gate == {"passed": True, "blockers": []}
 
 
+def test_run_status_depends_on_process_and_completion_gate_not_paper_candidate_readiness() -> None:
+    assert _run_status_from_completion(0, {"passed": True, "blockers": []}) == "completed"
+    assert _run_status_from_completion(1, {"passed": True, "blockers": []}) == "failed"
+    assert _run_status_from_completion(0, {"passed": False, "blockers": ["pending"]}) == "failed"
+
+
+def test_execution_success_with_incomplete_artifacts_remains_completed_but_not_formally_eligible() -> None:
+    status = _status_fields(0, {"passed": True, "blockers": []}, {"passed": False, "blockers": ["missing"]})
+    assert status == {"execution_status": "completed", "artifact_status": "incomplete", "formal_eligibility": False}
+
+
+def test_execution_failure_remains_failed_even_when_artifacts_are_complete() -> None:
+    status = _status_fields(1, {"passed": True, "blockers": []}, {"passed": True, "blockers": []})
+    assert status == {"execution_status": "failed", "artifact_status": "complete", "formal_eligibility": False}
+
+
 def test_paper_candidate_inputs_block_old_throughput_window(tmp_path: Path) -> None:
-    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True})
+    _write_json(tmp_path / "real_cluster_summary.json", {"ready_to_commit": True, "no_fallback": True, "state_root_consistent": True, "receipt_root_consistent": True, "plan_digest_consistent": True})
     _write_json(tmp_path / "finality_summary.json", _finality(throughput_tps=15.0))
     _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
     _write_required_files(tmp_path)
@@ -103,3 +143,11 @@ def test_paper_candidate_inputs_block_old_throughput_window(tmp_path: Path) -> N
     metrics = extract(tmp_path)
 
     assert "finality_summary.json:throughput_tps_must_equal_end_to_end_tps" in metrics["missing"]
+
+
+def test_paper_candidate_requires_complete_metric_completeness() -> None:
+    result = {"status": "completed", "summary": {"ready_to_commit": True, "no_fallback": True}}
+
+    assert _is_paper_candidate_result(result, {"metric_completeness": "incomplete", "missing": []}) is False
+    assert _is_paper_candidate_result(result, {"metric_completeness": "complete", "missing": ["metric:worker_count"]}) is False
+    assert _is_paper_candidate_result(result, {"metric_completeness": "complete", "missing": []}) is True

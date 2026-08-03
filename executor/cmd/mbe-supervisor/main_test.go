@@ -102,6 +102,159 @@ func TestRuntimePlanForNodesExtendsShortExperimentDuration(t *testing.T) {
 	}
 }
 
+func TestRemoteStateAggregateDeduplicatesByStableOperationKeys(t *testing.T) {
+	root := t.TempDir()
+	nodeA := filepath.Join(root, "nodes", "n0")
+	nodeB := filepath.Join(root, "nodes", "n1")
+	if err := os.MkdirAll(nodeA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(nodeB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	header := []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error", "delta_id", "source_height", "source_block_hash", "update_semantics"}
+	rows := [][]string{
+		{"1", "n0", "s1", "7", "fetch-block", "tx1", "balance:a", "s0::balance:a", "s0", "s1", "read", "3", "w1", "r", "true", "", "", "", "", ""},
+		{"2", "n0", "s1", "7", "fetch-block", "tx1", "balance:a", "s0::balance:a", "s0", "s1", "read_write", "4", "w2", "r", "true", "", "", "", "", ""},
+		{"3", "n0", "s1", "8", "apply-block", "tx2", "balance:b", "s0::balance:b", "s0", "s1", "write_apply:commutative_delta", "5", "w3", "r", "true", "", "delta-1", "8", "source-block", "commutative_delta"},
+		{"4", "n0", "s1", "8", "apply-block", "tx3", "balance:c", "s0::balance:c", "s0", "s1", "future_kind", "6", "w4", "r", "true", "", "", "", "", ""},
+		{"5", "n0", "s1", "9", "failed-block", "tx4", "balance:d", "s0::balance:d", "s0", "s1", "read", "7", "w5", "r", "false", "timeout", "", "", "", ""},
+	}
+	writeRows(filepath.Join(nodeA, "remote_state_access.csv"), header, rows)
+	writeRows(filepath.Join(nodeB, "remote_state_access.csv"), header, rows)
+
+	summary, err := writeRemoteStateAggregate(root, []v5.NodePlan{{NodeID: "n0", DataDir: nodeA}, {NodeID: "n1", DataDir: nodeB}}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if summary["physical_remote_operation_count"] != 8 || summary["physical_remote_fetch_count"] != 4 || summary["physical_remote_writeback_count"] != 2 || summary["remote_operation_unknown_kind_count"] != 2 || summary["physical_remote_failed_count"] != 2 {
+		t.Fatalf("unexpected physical summary: %#v", summary)
+	}
+	if summary["replica_deduplicated_remote_operation_count"] != 3 || summary["replica_deduplicated_remote_fetch_count"] != 1 || summary["replica_deduplicated_remote_writeback_count"] != 1 {
+		t.Fatalf("unexpected deduplicated summary: %#v", summary)
+	}
+	if summary["replica_amplification_factor"] != float64(8)/float64(3) || summary["remote_fetches_per_logical_tx"] != 0.5 || summary["remote_writebacks_per_logical_tx"] != 0.5 {
+		t.Fatalf("unexpected normalized summary: %#v", summary)
+	}
+	if _, err := os.Stat(filepath.Join(root, "aggregate", "remote_state_metrics_summary.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "physical_remote_state_operations.csv")); err != nil {
+		t.Fatal(err)
+	}
+	if summary["physical_remote_operation_artifact"] != "physical_remote_state_operations.csv" {
+		t.Fatalf("missing physical artifact pointer: %#v", summary)
+	}
+	if _, err := os.Stat(filepath.Join(root, "aggregate", "replica_deduplicated_remote_operations.csv")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMechanismAggregatesWriteRootSummaries(t *testing.T) {
+	root := t.TempDir()
+	nodeA := filepath.Join(root, "nodes", "n0")
+	nodeB := filepath.Join(root, "nodes", "n1")
+	if err := os.MkdirAll(nodeA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(nodeB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(nodeA, "block_stm_summary.json"), map[string]any{
+		"serial_equivalent": true,
+		"block_stm_metrics": map[string]any{
+			"worker_count":             4,
+			"maximum_parallel_width":   3,
+			"abort_count":              2,
+			"reexecution_count":        1,
+			"validation_failure_count": 1,
+			"dependency_wait_count":    5,
+			"estimate_publish_count":   7,
+		},
+	})
+	writeJSON(t, filepath.Join(nodeB, "block_stm_summary.json"), map[string]any{
+		"serial_equivalent": true,
+		"block_stm_metrics": map[string]any{
+			"worker_count":             4,
+			"maximum_parallel_width":   2,
+			"abort_count":              3,
+			"reexecution_count":        4,
+			"validation_failure_count": 0,
+			"dependency_wait_count":    6,
+			"estimate_publish_count":   8,
+		},
+	})
+	remoteState := map[string]any{
+		"physical_remote_fetch_count":                 12,
+		"physical_remote_writeback_count":             8,
+		"replica_deduplicated_remote_fetch_count":     3,
+		"replica_deduplicated_remote_writeback_count": 2,
+	}
+
+	summary, err := writeMechanismAggregates(root, []v5NodeSummary{
+		{NodeID: "n0", FastTrackCount: 6, ConservativeTrackCount: 4, AggregationGroupCount: 2, SchedulerEventCount: 10, SchedulerBlockedCount: 1, SchedulerWakeupCount: 1, PreAggregationPhysicalOps: 9, PostAggregationPhysicalOps: 7, AggregatedKeyCount: 1, AggregatedLogicalDeltaCount: 3, PhysicalOpsSavedCount: 2, RemoteStateAccessCount: 5},
+		{NodeID: "n1", FastTrackCount: 6, ConservativeTrackCount: 4, AggregationGroupCount: 2, SchedulerEventCount: 10, SchedulerBlockedCount: 1, SchedulerWakeupCount: 1, PreAggregationPhysicalOps: 9, PostAggregationPhysicalOps: 7, AggregatedKeyCount: 1, AggregatedLogicalDeltaCount: 3, PhysicalOpsSavedCount: 2, RemoteStateAccessCount: 5},
+	}, []v5.NodePlan{{NodeID: "n0", DataDir: nodeA}, {NodeID: "n1", DataDir: nodeB}}, remoteState)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	metatrack := summary["metatrack"].(map[string]any)
+	if metatrack["status"] != "available" || metatrack["fast_track_logical_tx_count"] != 12 || metatrack["conservative_track_logical_tx_count"] != 8 || metatrack["physical_ops_saved_count"] != 4 {
+		t.Fatalf("unexpected metatrack aggregate: %#v", metatrack)
+	}
+	blockSTM := summary["block_stm"].(map[string]any)
+	if blockSTM["status"] != "available" || blockSTM["worker_count"] != 4 || blockSTM["worker_count_replica_consistent"] != true || blockSTM["maximum_parallel_width"] != 3 || blockSTM["abort_count"] != 5 || blockSTM["reexecution_count"] != 5 {
+		t.Fatalf("unexpected block-stm aggregate: %#v", blockSTM)
+	}
+	for _, name := range []string{"metatrack_aggregate_summary.json", "block_stm_aggregate_summary.json", "mechanism_metrics_summary.json"} {
+		if _, err := os.Stat(filepath.Join(root, "aggregate", name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestBlockProductionAggregateUsesCommittedChainEvidence(t *testing.T) {
+	root := t.TempDir()
+	nodeA := filepath.Join(root, "nodes", "n0")
+	nodeB := filepath.Join(root, "nodes", "n1")
+	if err := os.MkdirAll(nodeA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(nodeB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	header := []string{"node_id", "shard_id", "height", "view", "block_hash", "parent_hash", "tx_count", "tx_digest", "state_root_before", "state_root_after", "receipt_root", "commit_started_at", "commit_finished_at"}
+	rows := [][]string{
+		{"n0", "s0", "1", "0", "block-a", "genesis", "100", "txs-a", "r0", "r1", "rc1", "900", "1000"},
+		{"n0", "s0", "2", "0", "block-b", "block-a", "25", "txs-b", "r1", "r2", "rc2", "1050", "1080"},
+	}
+	writeRows(filepath.Join(nodeA, "committed_chain.csv"), header, rows)
+	writeRows(filepath.Join(nodeB, "committed_chain.csv"), header, rows)
+
+	summary, err := writeBlockProductionAggregate(root, []v5.NodePlan{
+		{NodeID: "n0", DataDir: nodeA, PluginProfile: map[string]v5.PluginConfig{"block_producer": blockProducerConfig(100, 75)}},
+		{NodeID: "n1", DataDir: nodeB, PluginProfile: map[string]v5.PluginConfig{"block_producer": blockProducerConfig(100, 75)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if summary["configured_block_size"] != 100 || summary["configured_block_interval_ms"] != 75 {
+		t.Fatalf("configured block producer values were not propagated: %#v", summary)
+	}
+	if summary["actual_committed_block_count"] != 2 || summary["actual_average_tx_per_block"] != 62.5 || summary["actual_min_tx_per_block"] != 25 || summary["actual_max_tx_per_block"] != 100 {
+		t.Fatalf("unexpected block size evidence: %#v", summary)
+	}
+	if intFromAny(summary["actual_block_interval_mean_ms"]) != 80 || intFromAny(summary["actual_block_interval_p95_ms"]) != 80 {
+		t.Fatalf("unexpected block interval evidence: %#v", summary)
+	}
+	if _, err := os.Stat(filepath.Join(root, "aggregate", "block_production_summary.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func drainBudgetTestPlan(txCount, blockSize, intervalMS int) v5.Plan {
 	return v5.Plan{
 		DurationMS: 0,
@@ -113,6 +266,17 @@ func drainBudgetTestPlan(txCount, blockSize, intervalMS int) v5.Plan {
 				"block_producer": blockProducerConfig(blockSize, intervalMS),
 			},
 		}},
+	}
+}
+
+func writeJSON(t *testing.T, path string, value any) {
+	t.Helper()
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

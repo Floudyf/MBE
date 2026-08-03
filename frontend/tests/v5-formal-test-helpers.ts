@@ -30,17 +30,38 @@ export async function createRunnableMethod(request: APIRequestContext, name: str
 
 export async function deleteMethod(request: APIRequestContext, configId: string) { if (configId) await request.delete(`/api/v3/saved-configs/${configId}`); }
 
+export async function selectOnlyMethod(page: Page, methodId: string) {
+  await expect(page.getByTestId("v5-run-method-hash_serial")).toBeVisible();
+  await expect(page.getByTestId("v5-formal-preview-button")).toBeEnabled();
+  await expect(methodCheckbox(page, "hash_serial")).toBeChecked();
+  for (const method of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
+    const checkbox = methodCheckbox(page, method);
+    if (await checkbox.isChecked()) await checkbox.uncheck();
+  }
+  await methodCheckbox(page, methodId).check();
+  for (const method of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
+    const checkbox = methodCheckbox(page, method);
+    if (method === methodId) await expect(checkbox).toBeChecked();
+    else await expect(checkbox).not.toBeChecked();
+  }
+}
+
 export async function openRunWithMethods(page: Page, methodId: string) {
   await page.goto("/");
   await page.getByTestId("primary-navigation").getByRole("button", { name: "② 运行实验" }).click();
   await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
-  await page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox").check();
-  await page.getByTestId(`v5-run-method-${methodId}`).getByRole("checkbox").check();
+  await selectOnlyMethod(page, methodId);
+}
+
+function methodCheckbox(page: Page, methodId: string) {
+  return page.getByTestId(`v5-run-method-${methodId}`).locator("input[type='checkbox']");
 }
 
 export async function selectOnlySuite(page: Page, suite: string) {
-  const main = page.getByTestId("v5-suite-main_experiment").getByRole("checkbox");
-  if (await main.isChecked()) await main.uncheck();
+  for (const current of ["main_experiment", "comparison_experiment", "ablation_experiment", "workload_sensitivity", "topology_scaling", "fault_recovery_experiment"]) {
+    const checkbox = page.getByTestId(`v5-suite-${current}`).getByRole("checkbox");
+    if (await checkbox.isChecked()) await checkbox.uncheck();
+  }
   const control = page.getByTestId(`v5-suite-${suite}`).getByRole("checkbox");
   if (!(await control.isChecked())) await control.check();
 }

@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from statistics import mean
 
+from backend.app.services.v5_metric_truth import normalize_remote_operation_kind
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MISSING = "missing"
@@ -532,8 +534,9 @@ def collect_metatrack_summary(run_dir: Path, summary: dict) -> dict[str, object]
             if tx_id:
                 conservative_logical.add(tx_id)
     dispatch_events = sum((row.get("decision_reason") or "").startswith("actual_dispatch") for row in scheduler_rows)
-    remote_reads = sum((row.get("access_kind") or "") == "read" for row in remote_rows)
-    remote_writes = sum((row.get("access_kind") or "") == "write_apply" for row in remote_rows)
+    remote_reads = sum(normalize_remote_operation_kind(row.get("access_kind")) == "fetch" for row in remote_rows)
+    remote_writes = sum(normalize_remote_operation_kind(row.get("access_kind")) == "writeback" for row in remote_rows)
+    remote_unknown = sum(normalize_remote_operation_kind(row.get("access_kind")) == "unknown" for row in remote_rows)
     for row in business_rows:
         if (row.get("final_completion") or "").lower() != "true":
             continue
@@ -554,6 +557,7 @@ def collect_metatrack_summary(run_dir: Path, summary: dict) -> dict[str, object]
         "scheduler_dispatch_event_count": dispatch_events if scheduler_rows else MISSING,
         "remote_read_rpc_count": remote_reads if remote_rows else MISSING,
         "remote_write_rpc_count": remote_writes if remote_rows else MISSING,
+        "remote_operation_unknown_kind_count": remote_unknown if remote_rows else MISSING,
         "classification_reason_counts": json.dumps(reason_counts, sort_keys=True) if execution_rows else MISSING,
         "unique_final_logical_completion_count": len(final_logical_tx) if business_rows else MISSING,
         "duplicate_final_completion_count": duplicate_final if business_rows else MISSING,

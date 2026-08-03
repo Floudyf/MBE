@@ -1,5 +1,4 @@
 export const WORKLOAD_TX_OPTIONS = [
-  100,
   1_000,
   10_000,
   50_000,

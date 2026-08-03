@@ -89,6 +89,12 @@ func TestMetaTrackRuntimeFetchesRemoteHomeStateBeforeExecution(t *testing.T) {
 	if !transportSaw(exec.transport.Log.Entries(), "receive", stateFetchResponseMessage) {
 		t.Fatal("execution shard did not receive state fetch response over p2p")
 	}
+	if !transportSaw(exec.transport.Log.Entries(), "state_access_send", stateFetchRequestMessage) {
+		t.Fatal("state fetch request did not use the dedicated state-access lane")
+	}
+	if !transportSaw(home.transport.Log.Entries(), "state_access_send", stateFetchResponseMessage) {
+		t.Fatal("state fetch response did not use the dedicated state-access lane")
+	}
 }
 
 func TestMetaTrackRemoteStateFetchFreezesWholeBlockSnapshot(t *testing.T) {
@@ -697,6 +703,81 @@ func TestMetaTrackRuntimeRecordsRemoteStateDeltaEvidenceWithoutBypassingConsensu
 	if !transportSaw(exec.transport.Log.Entries(), "receive", stateDeltaApplyAckMessage) {
 		t.Fatal("execution shard did not receive state delta apply ack over p2p")
 	}
+	if !transportSaw(exec.transport.Log.Entries(), "state_access_send", stateDeltaApplyMessage) {
+		t.Fatal("state delta apply did not use the dedicated state-access lane")
+	}
+	if !transportSaw(home.transport.Log.Entries(), "state_access_send", stateDeltaApplyAckMessage) {
+		t.Fatal("state delta apply ack did not use the dedicated state-access lane")
+	}
+}
+
+func TestSummarizeRemoteStateRowsClassifiesWriteApplyPrefixes(t *testing.T) {
+	row := func(kind, success, latency string) []string {
+		return []string{"1", "n0", "s1", "1", "b1", "tx", "k", "s0::k", "s0", "s1", kind, latency, "w", "root", success, ""}
+	}
+	summary := summarizeRemoteStateRows([][]string{
+		row("read", "true", "1"),
+		row("read_write", "true", "2"),
+		row("commutative_delta", "true", "3"),
+		row("write_apply", "true", "4"),
+		row("write_apply:commutative_delta", "true", "5"),
+		row("future_kind", "true", "6"),
+		row("read", "false", "7"),
+	})
+
+	if summary.total != 6 || summary.reads != 3 || summary.writes != 2 || summary.unknown != 1 || summary.failed != 1 {
+		t.Fatalf("unexpected remote state summary: %#v", summary)
+	}
+	if summary.avgLatency != 3.5 {
+		t.Fatalf("unexpected average latency: %v", summary.avgLatency)
+	}
+}
+
+func TestSummarizeMethodRowsUsesUnifiedAggregationMetrics(t *testing.T) {
+	executionRows := [][]string{
+		{"1", "n0", "s0", "tx-a", "1", "dual_track_execution", "fast", "independent"},
+		{"2", "n0", "s0", "tx-b", "1", "dual_track_execution", "conservative", "conflict"},
+		{"3", "n0", "s0", "tx-b", "1", "dual_track_execution", "conservative", "validator_replay"},
+	}
+	commitRows := [][]string{
+		{"1", "n0", "s0", "1", "normal_commit", "", "2", "5", "false", "5", "5", "0", "0"},
+		{"2", "n0", "s0", "2", "commutative_hot_update_aggregation", "s0:2", "4", "2", "true", "4", "2", "1", "3"},
+	}
+
+	summary := summarizeMethodRows(executionRows, commitRows)
+
+	if summary.fastTrackCount != 1 || summary.conservativeTrackCount != 2 {
+		t.Fatalf("unexpected track counts: %#v", summary)
+	}
+	if summary.executedLogicalTransactionCount != 2 || summary.executedTransactionInstanceCount != 3 {
+		t.Fatalf("unexpected execution counts: %#v", summary)
+	}
+	if summary.preAggregationPhysicalOps != 9 || summary.postAggregationPhysicalOps != 7 {
+		t.Fatalf("pre/post aggregation metrics must use state-op units: %#v", summary)
+	}
+	if summary.aggregatedKeyCount != 1 || summary.aggregatedLogicalDeltaCount != 3 {
+		t.Fatalf("aggregation evidence was not summarized: %#v", summary)
+	}
+	if summary.physicalOpsSavedCount() != 2 || summary.aggregationReductionRatio() != float64(2)/float64(9) {
+		t.Fatalf("unexpected reduction metrics: saved=%d ratio=%f", summary.physicalOpsSavedCount(), summary.aggregationReductionRatio())
+	}
+}
+
+func TestSummarizeBlockProductionRowsUsesCommittedChainEvidence(t *testing.T) {
+	rows := [][]string{
+		{"n0", "s0", "1", "0", "b1", "genesis", "100", "txroot", "before", "after", "receipt", "1000", "1010"},
+		{"n0", "s0", "2", "0", "b2", "b1", "80", "txroot", "before", "after", "receipt", "1070", "1085"},
+		{"n0", "s0", "3", "0", "b3", "b2", "20", "txroot", "before", "after", "receipt", "1170", "1210"},
+	}
+
+	summary := summarizeBlockProductionRows(rows)
+
+	if summary.count != 3 || summary.averageTxPerBlock != float64(200)/3 || summary.minTxPerBlock != 20 || summary.maxTxPerBlock != 100 {
+		t.Fatalf("unexpected block tx statistics: %#v", summary)
+	}
+	if summary.intervalMeanMS != 100 || summary.intervalP95MS != 75 {
+		t.Fatalf("unexpected block interval statistics: %#v", summary)
+	}
 }
 
 func TestMetaTrackRemoteStateDeltaSideEffectsAreLeaderOnly(t *testing.T) {
@@ -1137,7 +1218,7 @@ func testMetaTrackProfile() map[string]PluginConfig {
 		"txpool":                {PluginID: "fifo_per_node_mempool", Config: map[string]any{"capacity": 100}},
 		"sharding":              {PluginID: "deterministic_state_key_sharding", Config: map[string]any{}},
 		"routing":               {PluginID: "metatrack_coaccess_routing", Config: map[string]any{}},
-		"block_producer":        {PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 10, "interval_ms": 150}},
+		"block_producer":        {PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 100, "interval_ms": 75}},
 		"consensus":             {PluginID: "pbft_style_consensus", Config: map[string]any{}},
 		"network":               {PluginID: "localhost_tcp_typed_network", Config: map[string]any{}},
 		"execution":             {PluginID: "dual_track_execution", Config: map[string]any{}},
@@ -1292,4 +1373,44 @@ func schedulerRowsCarryQueueDepths(rows [][]string) bool {
 		}
 	}
 	return false
+}
+func TestRemoteStateDeltaDrainStateKeepsPendingWorkLiveBeforeReady(t *testing.T) {
+	request := StateDeltaApplyRequest{
+		RequestID:      "request-1",
+		TxID:           "tx-1",
+		BlockHash:      "source-block-100",
+		Key:            "balance:alice",
+		Value:          "10",
+		HomeShard:      "s1",
+		ExecutionShard: "s0",
+		SourceHeight:   100,
+	}
+
+	runtime := &NodeRuntime{
+		pendingStateDeltas: []StateDeltaApplyRequest{request},
+	}
+
+	ready, pending := runtime.remoteStateDeltaDrainState(1)
+	if !pending {
+		t.Fatal("pending remote state delta must keep system drain work active")
+	}
+	if len(ready) != 0 {
+		t.Fatalf("delta became ready before source-height boundary: %d", len(ready))
+	}
+
+	readyHeight := request.SourceHeight + remoteStateDeltaApplyLagBlocks
+	ready, pending = runtime.remoteStateDeltaDrainState(readyHeight)
+	if !pending {
+		t.Fatal("delta remains pending until its consensus block commits")
+	}
+	if len(ready) != 1 {
+		t.Fatalf("expected one ready remote state delta, got %d", len(ready))
+	}
+	if ready[0].SourceHeight != request.SourceHeight {
+		t.Fatalf(
+			"source height mismatch: got %d want %d",
+			ready[0].SourceHeight,
+			request.SourceHeight,
+		)
+	}
 }

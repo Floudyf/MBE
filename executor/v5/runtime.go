@@ -25,6 +25,7 @@ import (
 )
 
 const finalizeMessage = "V5_XSHARD_FINALIZE"
+const finalizeAckMessage = "V5_XSHARD_FINALIZE_ACK"
 const catchupRequestMessage = "V5_CATCHUP_REQUEST"
 const catchupBlockMessage = "V5_CATCHUP_BLOCK"
 const stateFetchRequestMessage = "V5_STATE_FETCH_REQUEST"
@@ -32,6 +33,14 @@ const stateFetchResponseMessage = "V5_STATE_FETCH_RESPONSE"
 const stateDeltaApplyMessage = "V5_STATE_DELTA_APPLY"
 const stateDeltaApplyAckMessage = "V5_STATE_DELTA_APPLY_ACK"
 const remoteStateDeltaApplyLagBlocks uint64 = 1
+const crossShardRetryInterval = 500 * time.Millisecond
+const crossShardSuccessfulSendRetryInterval = 30 * time.Second
+const commitMailboxCapacity = 64
+const stateFetchMailboxCapacity = 256
+const stateFetchWorkerCount = 4
+const stateFetchResponseMailboxCapacity = 4096
+const stateFetchResponseWorkerCount = 16
+const stateFetchDiagnosticHistoryLimit = 16
 
 type Proposal struct {
 	Block realblock.Block `json:"block"`
@@ -83,6 +92,26 @@ type StateFetchResponse struct {
 	StateRoot      string `json:"state_root"`
 	WitnessDigest  string `json:"witness_digest"`
 	Success        bool   `json:"success"`
+	Error          string `json:"error,omitempty"`
+}
+
+// StateFetchDiagnostic is bounded runtime evidence for one real MetaTrack RPC.
+// It is not part of the protocol or execution result and cannot influence
+// routing, snapshots, consensus, or state application.
+type StateFetchDiagnostic struct {
+	RequestID      string `json:"request_id"`
+	TxID           string `json:"tx_id"`
+	BlockHash      string `json:"block_hash"`
+	BlockHeight    uint64 `json:"block_height"`
+	Key            string `json:"key"`
+	HomeShard      string `json:"home_shard"`
+	ExecutionShard string `json:"execution_shard"`
+	Requester      string `json:"requester,omitempty"`
+	Stage          string `json:"stage"`
+	StartedAtMS    int64  `json:"started_at_ms"`
+	SentAtMS       int64  `json:"sent_at_ms,omitempty"`
+	FinishedAtMS   int64  `json:"finished_at_ms,omitempty"`
+	LatencyMS      int64  `json:"latency_ms,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 type StateDeltaApplyRequest struct {
@@ -151,6 +180,17 @@ type CommitResult struct {
 	Block       realblock.Block
 }
 
+// CommitFailure captures the most recent rejected commit for bounded runtime
+// diagnostics. It is deliberately observational: commit and rollback behavior
+// remains owned by commitOnce.
+type CommitFailure struct {
+	Phase     string `json:"phase"`
+	Height    uint64 `json:"height"`
+	BlockHash string `json:"block_hash"`
+	Error     string `json:"error"`
+	Timestamp int64  `json:"timestamp_ms"`
+}
+
 type CommitOrigin string
 
 const (
@@ -159,17 +199,56 @@ const (
 	CommitOriginRecoveryReplay CommitOrigin = "recovery_replay"
 )
 
+type commitTaskKind string
+
+const (
+	commitTaskFinalize  commitTaskKind = "finalize"
+	commitTaskConsensus commitTaskKind = "consensus"
+	commitTaskCatchUp   commitTaskKind = "catch_up"
+)
+
+type commitTask struct {
+	key    string
+	kind   commitTaskKind
+	block  realblock.Block
+	origin CommitOrigin
+}
+
+// stateFetchTask moves potentially blocking snapshot and response work off the
+// per-connection reader. Responses remain correlated directly by request ID.
+type stateFetchTask struct {
+	requester string
+	request   StateFetchRequest
+}
+
+type stateFetchResponseTask struct {
+	requester string
+	response  StateFetchResponse
+}
+
 type NodeRuntime struct {
 	plan                    Plan
 	node                    NodePlan
 	peers                   []p2p.Peer
 	transport               *p2p.Transport
+	sendToNodeHook          func(context.Context, string, p2p.MessageEnvelope) error
 	pool                    *mempool.Mempool
 	proposer                *realblock.Proposer
 	db                      *state.DB
 	store                   *storage.BlockStore
 	mu                      sync.Mutex
 	commitMu                sync.Mutex
+	commitTasks             chan commitTask
+	commitWorkerCancel      context.CancelFunc
+	commitWorkerContext     context.Context
+	commitWorkerWG          sync.WaitGroup
+	queuedCommitTasks       map[string]bool
+	stateFetchTasks         chan stateFetchTask
+	stateFetchWorkerCancel  context.CancelFunc
+	stateFetchWorkerContext context.Context
+	stateFetchWorkerWG      sync.WaitGroup
+	stateFetchResponseTasks chan stateFetchResponseTask
+	stateFetchResponseWG    sync.WaitGroup
 	proposals               map[string]realblock.Block
 	votes                   map[string]map[string]bool
 	committed               map[string]bool
@@ -186,9 +265,17 @@ type NodeRuntime struct {
 	proposalInFlightHash    string
 	proposalStartedAt       time.Time
 	lastProposalError       string
+	lastCommitFailure       CommitFailure
 	fatalPersistenceError   string
 	lastCatchupRequest      time.Time
+	lastCrossShardRetry     time.Time
 	relaySource             map[string]Relay
+	pendingOutboundRelays   map[string]Relay
+	pendingFinalizeMessages map[string]Finalize
+	outboundRelayRetryAfter map[string]time.Time
+	finalizeRetryAfter      map[string]time.Time
+	outboundRelaySendErrors map[string]string
+	finalizeSendErrors      map[string]string
 	crossEventSeen          map[string]bool
 	relayAdmissionFailures  map[string]string
 	events                  []Event
@@ -210,6 +297,11 @@ type NodeRuntime struct {
 	runtimeEventRows        [][]string
 	runtimeMetricCounts     map[string]int64
 	stateFetchWaiters       map[string]chan StateFetchResponse
+	pendingStateFetches     map[string]StateFetchDiagnostic
+	lastStateFetch          StateFetchDiagnostic
+	stateFetchFailures      []StateFetchDiagnostic
+	lastStateFetchService   StateFetchDiagnostic
+	stateFetchServiceErrors []StateFetchDiagnostic
 	stateFetchWitnesses     map[string]StateFetchResponse
 	stateFetchSnapshots     map[string]map[string]string
 	stateApplyWaiters       map[string]chan StateDeltaApplyAck
@@ -254,6 +346,7 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 			return r.WriteArtifacts()
 		case <-ticker.C:
 			r.retryPendingRelays()
+			r.retryPendingCrossShardMessages(ctx)
 			if selected.Leader {
 				r.expireStaleProposal(r.proposalTimeout())
 				r.propose(ctx)
@@ -343,6 +436,446 @@ func (r *NodeRuntime) retryPendingRelays() {
 	}
 }
 
+func relayLogicalID(relay Relay) string {
+	if relay.LogicalTxID != "" {
+		return relay.LogicalTxID
+	}
+	return relay.Tx.TxID
+}
+
+func finalizeLogicalID(finish Finalize) string {
+	if finish.LogicalTxID != "" {
+		return finish.LogicalTxID
+	}
+	return finish.TxID
+}
+
+func (r *NodeRuntime) retryPendingCrossShardMessages(
+	ctx context.Context,
+) {
+	now := time.Now()
+
+	r.mu.Lock()
+
+	if !r.lastCrossShardRetry.IsZero() &&
+		now.Sub(r.lastCrossShardRetry) <
+			crossShardRetryInterval {
+		r.mu.Unlock()
+		return
+	}
+
+	r.lastCrossShardRetry = now
+
+	relayIDs := make(
+		[]string,
+		0,
+		len(r.pendingOutboundRelays),
+	)
+
+	for logicalID := range r.pendingOutboundRelays {
+		retryAfter := r.outboundRelayRetryAfter[logicalID]
+
+		if !retryAfter.IsZero() && now.Before(retryAfter) {
+			continue
+		}
+
+		relayIDs = append(relayIDs, logicalID)
+	}
+
+	sort.Strings(relayIDs)
+
+	relays := make([]Relay, 0, len(relayIDs))
+
+	for _, logicalID := range relayIDs {
+		relays = append(
+			relays,
+			r.pendingOutboundRelays[logicalID],
+		)
+	}
+
+	finalizeIDs := make(
+		[]string,
+		0,
+		len(r.pendingFinalizeMessages),
+	)
+
+	for logicalID := range r.pendingFinalizeMessages {
+		retryAfter := r.finalizeRetryAfter[logicalID]
+
+		if !retryAfter.IsZero() && now.Before(retryAfter) {
+			continue
+		}
+
+		finalizeIDs = append(finalizeIDs, logicalID)
+	}
+
+	sort.Strings(finalizeIDs)
+
+	finalizes := make([]Finalize, 0, len(finalizeIDs))
+
+	for _, logicalID := range finalizeIDs {
+		finalizes = append(
+			finalizes,
+			r.pendingFinalizeMessages[logicalID],
+		)
+	}
+
+	r.mu.Unlock()
+
+	for _, relay := range relays {
+		if r.sendPendingOutboundRelay(ctx, relay) {
+			r.deferOutboundRelayRetry(relay)
+		}
+	}
+
+	for _, finish := range finalizes {
+		if r.sendPendingFinalize(ctx, finish) {
+			r.deferFinalizeRetry(finish)
+		}
+	}
+}
+
+func (r *NodeRuntime) deferOutboundRelayRetry(
+	relay Relay,
+) {
+	logicalID := relayLogicalID(relay)
+
+	if logicalID == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.pendingOutboundRelays[logicalID]; !exists {
+		delete(r.outboundRelayRetryAfter, logicalID)
+		return
+	}
+
+	if r.outboundRelayRetryAfter == nil {
+		r.outboundRelayRetryAfter =
+			map[string]time.Time{}
+	}
+
+	r.outboundRelayRetryAfter[logicalID] =
+		time.Now().Add(
+			crossShardSuccessfulSendRetryInterval,
+		)
+}
+
+func (r *NodeRuntime) deferFinalizeRetry(
+	finish Finalize,
+) {
+	logicalID := finalizeLogicalID(finish)
+
+	if logicalID == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, exists := r.pendingFinalizeMessages[logicalID]; !exists {
+		delete(r.finalizeRetryAfter, logicalID)
+		return
+	}
+
+	if r.finalizeRetryAfter == nil {
+		r.finalizeRetryAfter =
+			map[string]time.Time{}
+	}
+
+	r.finalizeRetryAfter[logicalID] =
+		time.Now().Add(
+			crossShardSuccessfulSendRetryInterval,
+		)
+}
+
+func (r *NodeRuntime) queueOutboundRelay(
+	ctx context.Context,
+	relay Relay,
+) {
+	logicalID := relayLogicalID(relay)
+
+	if logicalID == "" {
+		return
+	}
+
+	r.mu.Lock()
+
+	if r.pendingOutboundRelays == nil {
+		r.pendingOutboundRelays = map[string]Relay{}
+	}
+
+	r.pendingOutboundRelays[logicalID] = relay
+	delete(r.outboundRelayRetryAfter, logicalID)
+	r.lastProgressAt = time.Now().UnixMilli()
+
+	r.mu.Unlock()
+
+	if r.sendPendingOutboundRelay(ctx, relay) {
+		r.deferOutboundRelayRetry(relay)
+	}
+}
+
+func (r *NodeRuntime) sendPendingOutboundRelay(
+	ctx context.Context,
+	relay Relay,
+) bool {
+	logicalID := relayLogicalID(relay)
+
+	if logicalID == "" {
+		return false
+	}
+
+	r.mu.Lock()
+
+	pendingRelay, exists :=
+		r.pendingOutboundRelays[logicalID]
+
+	r.mu.Unlock()
+
+	if !exists {
+		return true
+	}
+
+	relay = pendingRelay
+
+	targetLeader := r.leaderID(relay.TargetShard)
+
+	if targetLeader == "" {
+		r.recordOutboundRelaySendFailure(
+			relay,
+			"target_leader_not_found",
+		)
+		return false
+	}
+
+	envelope, err := p2p.NewEnvelope(
+		p2p.MessageXShardRelay,
+		r.node.NodeID,
+		targetLeader,
+		r.node.ShardID,
+		0,
+		0,
+		0,
+		relay,
+	)
+
+	if err != nil {
+		r.recordOutboundRelaySendFailure(
+			relay,
+			"build_envelope: "+err.Error(),
+		)
+		return false
+	}
+
+	if err := r.sendToNode(
+		ctx,
+		targetLeader,
+		envelope,
+	); err != nil {
+		r.recordOutboundRelaySendFailure(
+			relay,
+			"send: "+err.Error(),
+		)
+		return false
+	}
+
+	r.mu.Lock()
+	delete(r.outboundRelaySendErrors, logicalID)
+	r.lastProgressAt = time.Now().UnixMilli()
+	r.mu.Unlock()
+
+	return true
+}
+
+func (r *NodeRuntime) recordOutboundRelaySendFailure(
+	relay Relay,
+	reason string,
+) {
+	logicalID := relayLogicalID(relay)
+
+	if logicalID == "" {
+		return
+	}
+
+	r.mu.Lock()
+
+	if r.outboundRelaySendErrors == nil {
+		r.outboundRelaySendErrors =
+			map[string]string{}
+	}
+
+	previous := r.outboundRelaySendErrors[logicalID]
+	r.outboundRelaySendErrors[logicalID] = reason
+
+	r.mu.Unlock()
+
+	if previous != reason {
+		r.recordEvent(
+			logicalID,
+			relay.SourceShard,
+			relay.TargetShard,
+			"RelaySendFailed",
+			false,
+			reason,
+		)
+	}
+}
+
+func (r *NodeRuntime) queueFinalize(
+	ctx context.Context,
+	relay Relay,
+) {
+	logicalID := relayLogicalID(relay)
+
+	if logicalID == "" {
+		return
+	}
+
+	finish := r.crossShardPlugin().BuildFinalize(
+		CrossShardFinalizeInput{
+			TxID:        relay.Tx.TxID,
+			LogicalTxID: logicalID,
+			SourceShard: relay.SourceShard,
+			TargetShard: relay.TargetShard,
+		},
+	)
+
+	r.mu.Lock()
+
+	if r.pendingFinalizeMessages == nil {
+		r.pendingFinalizeMessages =
+			map[string]Finalize{}
+	}
+
+	r.pendingFinalizeMessages[logicalID] = finish
+	delete(r.finalizeRetryAfter, logicalID)
+
+	delete(r.relaySource, logicalID)
+	delete(r.relayAdmissionFailures, logicalID)
+	delete(
+		r.relayAdmissionFailures,
+		relay.Tx.TxID,
+	)
+
+	r.lastProgressAt = time.Now().UnixMilli()
+
+	r.mu.Unlock()
+
+	if r.sendPendingFinalize(ctx, finish) {
+		r.deferFinalizeRetry(finish)
+	}
+}
+
+func (r *NodeRuntime) sendPendingFinalize(
+	ctx context.Context,
+	finish Finalize,
+) bool {
+	logicalID := finalizeLogicalID(finish)
+
+	if logicalID == "" {
+		return false
+	}
+
+	r.mu.Lock()
+
+	pendingFinish, exists :=
+		r.pendingFinalizeMessages[logicalID]
+
+	r.mu.Unlock()
+
+	if !exists {
+		return true
+	}
+
+	finish = pendingFinish
+
+	sourceLeader := r.leaderID(finish.SourceShard)
+
+	if sourceLeader == "" {
+		r.recordFinalizeSendFailure(
+			finish,
+			"source_leader_not_found",
+		)
+		return false
+	}
+
+	envelope, err := p2p.NewEnvelope(
+		finalizeMessage,
+		r.node.NodeID,
+		sourceLeader,
+		r.node.ShardID,
+		0,
+		0,
+		0,
+		finish,
+	)
+
+	if err != nil {
+		r.recordFinalizeSendFailure(
+			finish,
+			"build_envelope: "+err.Error(),
+		)
+		return false
+	}
+
+	if err := r.sendToNode(
+		ctx,
+		sourceLeader,
+		envelope,
+	); err != nil {
+		r.recordFinalizeSendFailure(
+			finish,
+			"send: "+err.Error(),
+		)
+		return false
+	}
+
+	r.mu.Lock()
+	delete(r.finalizeSendErrors, logicalID)
+	r.lastProgressAt = time.Now().UnixMilli()
+	r.mu.Unlock()
+
+	// TCP write success only proves local delivery to the socket.
+	// Keep Finalize pending until the source leader returns FinalizeAck.
+	return true
+}
+
+func (r *NodeRuntime) recordFinalizeSendFailure(
+	finish Finalize,
+	reason string,
+) {
+	logicalID := finalizeLogicalID(finish)
+
+	if logicalID == "" {
+		return
+	}
+
+	r.mu.Lock()
+
+	if r.finalizeSendErrors == nil {
+		r.finalizeSendErrors = map[string]string{}
+	}
+
+	previous := r.finalizeSendErrors[logicalID]
+	r.finalizeSendErrors[logicalID] = reason
+
+	r.mu.Unlock()
+
+	if previous != reason {
+		r.recordEvent(
+			logicalID,
+			finish.SourceShard,
+			finish.TargetShard,
+			"FinalizeSendFailed",
+			false,
+			reason,
+		)
+	}
+}
+
 func (r *NodeRuntime) recordRelayAdmissionFailure(relay Relay, reason string) {
 	r.mu.Lock()
 	r.relayAdmissionFailures[relay.Tx.TxID] = reason
@@ -364,11 +897,13 @@ func (r *NodeRuntime) reconcileRelayIfCommitted(ctx context.Context, relay Relay
 }
 
 func (r *NodeRuntime) reconcileCommittedRelay(ctx context.Context, relay Relay) {
-	if !r.node.Leader {
-		return
-	}
 	committed, err := r.store.HasTransaction(relay.Tx.TxID)
 	if err != nil || !committed {
+		return
+	}
+
+	if !r.node.Leader {
+		r.clearCommittedRelayReplica(relay)
 		return
 	}
 	logicalID := relay.LogicalTxID
@@ -379,16 +914,7 @@ func (r *NodeRuntime) reconcileCommittedRelay(ctx context.Context, relay Relay) 
 	targetEvent := crossShard.TargetCommit(CrossShardFinalizeInput{TxID: relay.Tx.TxID, LogicalTxID: logicalID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard})
 	targetEvent.Error = "tx_index_reconciliation"
 	r.recordCrossShardEvent(targetEvent)
-	finish := crossShard.BuildFinalize(CrossShardFinalizeInput{TxID: relay.Tx.TxID, LogicalTxID: logicalID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard})
-	envelope, err := p2p.NewEnvelope(finalizeMessage, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, finish)
-	if err != nil || r.sendToNode(ctx, r.leaderID(relay.SourceShard), envelope) != nil {
-		return
-	}
-	r.mu.Lock()
-	delete(r.relaySource, logicalID)
-	delete(r.relayAdmissionFailures, logicalID)
-	delete(r.relayAdmissionFailures, relay.Tx.TxID)
-	r.mu.Unlock()
+	r.queueFinalize(ctx, relay)
 }
 
 func (r *NodeRuntime) requestCatchup(ctx context.Context) {
@@ -439,7 +965,7 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 	policy := mempool.DefaultPolicy()
 	policy.Capacity = plugins.TxPool.Capacity()
 	pool := plugins.TxPool.CreatePool(TxPoolInput{NodeID: node.NodeID, ShardID: node.ShardID, Policy: policy})
-	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
+	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, proposals: map[string]realblock.Block{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, queuedCommitTasks: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, pendingOutboundRelays: map[string]Relay{}, pendingFinalizeMessages: map[string]Finalize{}, outboundRelaySendErrors: map[string]string{}, finalizeSendErrors: map[string]string{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, pendingStateFetches: map[string]StateFetchDiagnostic{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
 	r.transport = plugins.Network.CreateTransport(NetworkInput{NodeID: node.NodeID, ListenAddr: node.ListenAddr, Peers: peers, Handler: r.handle})
 	r.transport.SetFaultPolicy(plugins.Fault.Policy(plan.FaultPlan))
 	return r, nil
@@ -477,8 +1003,21 @@ func floatValue(value any) float64 {
 	}
 }
 
-func (r *NodeRuntime) Start(ctx context.Context) error { return r.transport.Start(ctx) }
-func (r *NodeRuntime) Stop() error                     { return r.transport.Stop() }
+func (r *NodeRuntime) Start(ctx context.Context) error {
+	r.startStateFetchWorkers(ctx)
+	if err := r.transport.Start(ctx); err != nil {
+		r.stopStateFetchWorkers()
+		return err
+	}
+	r.startCommitWorker(ctx)
+	return nil
+}
+
+func (r *NodeRuntime) Stop() error {
+	r.stopCommitWorker()
+	r.stopStateFetchWorkers()
+	return r.transport.Stop()
+}
 
 func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error {
 	switch msg.MessageType {
@@ -536,7 +1075,7 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 			return err
 		}
 		r.logConsensus(msg.MessageType, msg.FromNode, proposal.Block.BlockHash, proposal.Block.Height)
-		return r.commit(ctx, proposal.Block)
+		return r.enqueueCommitTask(commitTaskConsensus, proposal.Block, CommitOriginConsensus)
 	case p2p.MessageXShardRelay:
 		relay, err := p2p.DecodePayload[Relay](msg)
 		if err != nil {
@@ -598,22 +1137,118 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		if err != nil {
 			return err
 		}
-		logicalID := finish.LogicalTxID
+
+		logicalID := finalizeLogicalID(finish)
 		if logicalID == "" {
-			logicalID = finish.TxID
+			return fmt.Errorf(
+				"finalize has empty logical transaction id",
+			)
 		}
+
 		if !r.node.Leader {
 			return nil
 		}
-		r.recordCrossShardEvent(r.crossShardPlugin().HandleFinalize(CrossShardFinalizeInput{TxID: finish.TxID, LogicalTxID: logicalID, SourceShard: finish.SourceShard, TargetShard: finish.TargetShard}))
-		// Finalization is the source-side durable acknowledgement for a relay.
-		// Remove the source reservation only after this message arrives; leaving
-		// it in relaySource makes drain report a permanently pending cross-shard
-		// operation even though TargetCommit already completed.
+
+		if finish.SourceShard != "" &&
+			finish.SourceShard != r.node.ShardID {
+			return fmt.Errorf(
+				"finalize source shard %s does not match node shard %s",
+				finish.SourceShard,
+				r.node.ShardID,
+			)
+		}
+
+		r.recordCrossShardEvent(
+			r.crossShardPlugin().HandleFinalize(
+				CrossShardFinalizeInput{
+					TxID:        finish.TxID,
+					LogicalTxID: logicalID,
+					SourceShard: finish.SourceShard,
+					TargetShard: finish.TargetShard,
+				},
+			),
+		)
+
+		// SourceFinalize is durable source-side completion.
+		// Duplicate Finalize messages remain idempotent and still receive ACK.
 		r.mu.Lock()
+		delete(r.pendingOutboundRelays, logicalID)
+		delete(r.outboundRelayRetryAfter, logicalID)
+		delete(r.outboundRelaySendErrors, logicalID)
 		delete(r.relaySource, logicalID)
 		delete(r.relayAdmissionFailures, logicalID)
+		r.lastProgressAt = time.Now().UnixMilli()
 		r.mu.Unlock()
+
+		targetLeader := r.leaderID(finish.TargetShard)
+		if targetLeader == "" {
+			return fmt.Errorf(
+				"finalize ack target leader not found for shard %s",
+				finish.TargetShard,
+			)
+		}
+
+		ackEnvelope, err := p2p.NewEnvelope(
+			finalizeAckMessage,
+			r.node.NodeID,
+			targetLeader,
+			r.node.ShardID,
+			0,
+			0,
+			0,
+			finish,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"build finalize ack: %w",
+				err,
+			)
+		}
+
+		if err := r.sendToNode(
+			ctx,
+			targetLeader,
+			ackEnvelope,
+		); err != nil {
+			return fmt.Errorf(
+				"send finalize ack: %w",
+				err,
+			)
+		}
+
+	case finalizeAckMessage:
+		finish, err := p2p.DecodePayload[Finalize](msg)
+		if err != nil {
+			return err
+		}
+
+		logicalID := finalizeLogicalID(finish)
+		if logicalID == "" {
+			return fmt.Errorf(
+				"finalize ack has empty logical transaction id",
+			)
+		}
+
+		if !r.node.Leader {
+			return nil
+		}
+
+		if finish.TargetShard != "" &&
+			finish.TargetShard != r.node.ShardID {
+			return fmt.Errorf(
+				"finalize ack target shard %s does not match node shard %s",
+				finish.TargetShard,
+				r.node.ShardID,
+			)
+		}
+
+		r.mu.Lock()
+		delete(r.pendingFinalizeMessages, logicalID)
+		delete(r.finalizeRetryAfter, logicalID)
+		delete(r.finalizeSendErrors, logicalID)
+		r.lastProgressAt = time.Now().UnixMilli()
+		r.mu.Unlock()
+
 	case catchupRequestMessage:
 		request, err := p2p.DecodePayload[CatchupRequest](msg)
 		if err != nil {
@@ -643,16 +1278,18 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		if err != nil {
 			return err
 		}
-		if _, err := r.commitWithOrigin(ctx, item.Block, CommitOriginCatchUp); err != nil {
-			return err
-		}
-		r.logConsensus("CATCHUP_APPLIED", item.SourceNode, item.Block.BlockHash, item.Block.Height)
+		return r.enqueueCommitTask(commitTaskCatchUp, item.Block, CommitOriginCatchUp)
 	case stateFetchRequestMessage:
 		request, err := p2p.DecodePayload[StateFetchRequest](msg)
 		if err != nil {
 			return err
 		}
-		return r.handleStateFetchRequest(ctx, msg.FromNode, request)
+		if err := r.enqueueStateFetchTask(msg.FromNode, request); err != nil {
+			r.recordStateFetchServiceDiagnostic(msg.FromNode, request, "request_enqueue_error", err)
+			return err
+		}
+		r.recordStateFetchServiceDiagnostic(msg.FromNode, request, "request_enqueued", nil)
+		return nil
 	case stateFetchResponseMessage:
 		response, err := p2p.DecodePayload[StateFetchResponse](msg)
 		if err != nil {
@@ -707,13 +1344,25 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	}
 	r.mu.Unlock()
 	nextHeight := r.proposer.NextHeight
-	readySystemDeltas := r.readyRemoteStateDeltasForConsensus(nextHeight)
-	input := BlockProductionInput{Pool: r.pool, Proposer: r.proposer, Limit: r.blockSize(), Now: time.Now(), SystemDeltaReady: len(readySystemDeltas) > 0}
+	readySystemDeltas, systemDrainPending := r.remoteStateDeltaDrainState(nextHeight)
+
+	// SystemDeltaReady also acts as the block-producer wake-up signal.
+	// Pending deltas that are not ready yet still require deterministic
+	// PBFT height-advance blocks, otherwise the home shard can stop below
+	// the source-height readiness boundary forever.
+	input := BlockProductionInput{
+		Pool:             r.pool,
+		Proposer:         r.proposer,
+		Limit:            r.blockSize(),
+		Now:              time.Now(),
+		SystemDeltaReady: systemDrainPending,
+	}
 	if !r.plugins.BlockProducer.ShouldProduce(input) {
 		return
 	}
+
 	block, err := r.plugins.BlockProducer.BuildCandidate(input)
-	if err != nil && err.Error() == "empty_mempool" && len(readySystemDeltas) > 0 {
+	if err != nil && err.Error() == "empty_mempool" && systemDrainPending {
 		block = r.buildSystemDeltaDrainBlock(input.Now, readySystemDeltas)
 		err = nil
 	}
@@ -752,7 +1401,9 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		r.mu.Unlock()
 	}
 	if len(r.node.Validators) == 1 {
-		_ = r.finalize(ctx, block)
+		if err := r.enqueueCommitTask(commitTaskFinalize, block, CommitOriginConsensus); err != nil {
+			r.recordCommitWorkerError(err)
+		}
 	}
 }
 
@@ -1067,8 +1718,315 @@ func (r *NodeRuntime) acceptVote(ctx context.Context, vote Vote) {
 	r.mu.Unlock()
 	if reached && block.BlockHash != "" {
 		r.logConsensus("PBFT_QUORUM_REACHED", r.node.NodeID, block.BlockHash, block.Height)
-		_ = r.finalize(ctx, block)
+		if err := r.enqueueCommitTask(commitTaskFinalize, block, CommitOriginConsensus); err != nil {
+			r.recordCommitWorkerError(err)
+		}
 	}
+}
+
+func (r *NodeRuntime) startStateFetchWorkers(parent context.Context) {
+	r.mu.Lock()
+	if r.stateFetchWorkerCancel != nil {
+		r.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(parent)
+	tasks := make(chan stateFetchTask, stateFetchMailboxCapacity)
+	r.stateFetchWorkerContext = ctx
+	r.stateFetchWorkerCancel = cancel
+	r.stateFetchTasks = tasks
+	r.stateFetchResponseTasks = make(chan stateFetchResponseTask, stateFetchResponseMailboxCapacity)
+	r.stateFetchWorkerWG.Add(stateFetchWorkerCount)
+	r.stateFetchResponseWG.Add(stateFetchResponseWorkerCount)
+	r.mu.Unlock()
+	for range stateFetchWorkerCount {
+		go r.runStateFetchWorker(ctx, tasks)
+	}
+	for range stateFetchResponseWorkerCount {
+		go r.runStateFetchResponseWorker(ctx, r.stateFetchResponseTasks)
+	}
+}
+
+func (r *NodeRuntime) stopStateFetchWorkers() {
+	r.mu.Lock()
+	cancel := r.stateFetchWorkerCancel
+	r.stateFetchWorkerCancel = nil
+	r.stateFetchWorkerContext = nil
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	r.stateFetchWorkerWG.Wait()
+	r.stateFetchResponseWG.Wait()
+	r.mu.Lock()
+	r.stateFetchTasks = nil
+	r.stateFetchResponseTasks = nil
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) enqueueStateFetchResponse(ctx context.Context, requester string, response StateFetchResponse) error {
+	r.mu.Lock()
+	tasks := r.stateFetchResponseTasks
+	r.mu.Unlock()
+	if tasks == nil {
+		return fmt.Errorf("state fetch response service is not running")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case tasks <- stateFetchResponseTask{requester: requester, response: response}:
+		return nil
+	default:
+		return fmt.Errorf("state fetch response mailbox full")
+	}
+}
+
+func (r *NodeRuntime) enqueueStateFetchTask(requester string, request StateFetchRequest) error {
+	if strings.TrimSpace(request.RequestID) == "" {
+		return fmt.Errorf("state fetch request has empty request id")
+	}
+	r.mu.Lock()
+	ctx := r.stateFetchWorkerContext
+	tasks := r.stateFetchTasks
+	r.mu.Unlock()
+	if ctx == nil || tasks == nil {
+		return fmt.Errorf("state fetch service is not running")
+	}
+	task := stateFetchTask{requester: requester, request: request}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case tasks <- task:
+		return nil
+	default:
+		return fmt.Errorf("state fetch mailbox is full")
+	}
+}
+
+func (r *NodeRuntime) runStateFetchWorker(ctx context.Context, tasks <-chan stateFetchTask) {
+	defer r.stateFetchWorkerWG.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case task := <-tasks:
+			if ctx.Err() != nil {
+				return
+			}
+			if err := r.handleStateFetchRequest(ctx, task.requester, task.request); err != nil && ctx.Err() == nil {
+				r.recordStateFetchWorkerError(err)
+			}
+		}
+	}
+}
+
+func (r *NodeRuntime) runStateFetchResponseWorker(ctx context.Context, tasks <-chan stateFetchResponseTask) {
+	defer r.stateFetchResponseWG.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case task := <-tasks:
+			if ctx.Err() != nil {
+				return
+			}
+			envelope, err := p2p.NewEnvelope(stateFetchResponseMessage, r.node.NodeID, task.requester, r.node.ShardID, 0, 0, 0, task.response)
+			if err == nil {
+				err = r.sendStateAccessToNode(ctx, task.requester, envelope)
+			}
+			if err != nil && ctx.Err() == nil {
+				r.recordStateFetchWorkerError(err)
+				r.recordStateFetchServiceDiagnostic(task.requester, StateFetchRequest{RequestID: task.response.RequestID, TxID: task.response.TxID, BlockHash: task.response.BlockHash, Key: task.response.Key, HomeShard: task.response.HomeShard, ExecutionShard: task.response.ExecutionShard}, "response_send_error", err)
+			} else if err == nil {
+				r.recordStateFetchServiceDiagnostic(task.requester, StateFetchRequest{RequestID: task.response.RequestID, TxID: task.response.TxID, BlockHash: task.response.BlockHash, Key: task.response.Key, HomeShard: task.response.HomeShard, ExecutionShard: task.response.ExecutionShard}, "response_sent", nil)
+			}
+		}
+	}
+}
+
+func (r *NodeRuntime) recordStateFetchWorkerError(err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	r.runtimeMetricCounts["state_fetch_service_error_count"]++
+	r.mu.Unlock()
+}
+
+func appendStateFetchDiagnostic(history []StateFetchDiagnostic, item StateFetchDiagnostic) []StateFetchDiagnostic {
+	history = append(history, item)
+	if len(history) > stateFetchDiagnosticHistoryLimit {
+		history = append([]StateFetchDiagnostic(nil), history[len(history)-stateFetchDiagnosticHistoryLimit:]...)
+	}
+	return history
+}
+
+func (r *NodeRuntime) recordStateFetchServiceDiagnostic(requester string, request StateFetchRequest, stage string, err error) {
+	item := StateFetchDiagnostic{RequestID: request.RequestID, TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, Requester: requester, Stage: stage, FinishedAtMS: time.Now().UnixMilli()}
+	if err != nil {
+		item.Error = err.Error()
+	}
+	r.mu.Lock()
+	r.lastStateFetchService = item
+	if err != nil {
+		r.stateFetchServiceErrors = appendStateFetchDiagnostic(r.stateFetchServiceErrors, item)
+	}
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) beginStateFetch(block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, homeShard, requestID string) {
+	diagnostic := StateFetchDiagnostic{RequestID: requestID, TxID: item.TxID, BlockHash: block.BlockHash, BlockHeight: block.Height, Key: access.Key, HomeShard: homeShard, ExecutionShard: r.node.ShardID, Stage: "created", StartedAtMS: time.Now().UnixMilli()}
+	r.mu.Lock()
+	if r.pendingStateFetches == nil {
+		r.pendingStateFetches = map[string]StateFetchDiagnostic{}
+	}
+	r.pendingStateFetches[requestID] = diagnostic
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) markStateFetchSent(requestID string) {
+	r.mu.Lock()
+	diagnostic, ok := r.pendingStateFetches[requestID]
+	if ok {
+		diagnostic.Stage = "sent"
+		diagnostic.SentAtMS = time.Now().UnixMilli()
+		r.pendingStateFetches[requestID] = diagnostic
+	}
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) finishStateFetch(requestID, stage string, started time.Time, err error) {
+	r.mu.Lock()
+	diagnostic := r.pendingStateFetches[requestID]
+	delete(r.pendingStateFetches, requestID)
+	diagnostic.Stage = stage
+	diagnostic.FinishedAtMS = time.Now().UnixMilli()
+	diagnostic.LatencyMS = time.Since(started).Milliseconds()
+	if err != nil {
+		diagnostic.Error = err.Error()
+		r.stateFetchFailures = appendStateFetchDiagnostic(r.stateFetchFailures, diagnostic)
+	}
+	r.lastStateFetch = diagnostic
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) startCommitWorker(parent context.Context) {
+	r.mu.Lock()
+	if r.commitWorkerCancel != nil {
+		r.mu.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(parent)
+	r.commitWorkerContext = ctx
+	r.commitWorkerCancel = cancel
+	r.commitTasks = make(chan commitTask, commitMailboxCapacity)
+	if r.queuedCommitTasks == nil {
+		r.queuedCommitTasks = map[string]bool{}
+	}
+	r.commitWorkerWG.Add(1)
+	r.mu.Unlock()
+	go r.runCommitWorker(ctx)
+}
+
+func (r *NodeRuntime) stopCommitWorker() {
+	r.mu.Lock()
+	cancel := r.commitWorkerCancel
+	r.commitWorkerCancel = nil
+	r.commitWorkerContext = nil
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	r.commitWorkerWG.Wait()
+	r.mu.Lock()
+	r.commitTasks = nil
+	r.queuedCommitTasks = map[string]bool{}
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) enqueueCommitTask(kind commitTaskKind, block realblock.Block, origin CommitOrigin) error {
+	if block.BlockHash == "" {
+		return fmt.Errorf("commit task has empty block hash")
+	}
+	key := string(kind) + "|" + string(origin) + "|" + block.BlockHash
+	r.mu.Lock()
+	ctx := r.commitWorkerContext
+	tasks := r.commitTasks
+	if ctx == nil || tasks == nil {
+		r.mu.Unlock()
+		return fmt.Errorf("commit worker is not running")
+	}
+	if r.queuedCommitTasks[key] {
+		r.mu.Unlock()
+		return nil
+	}
+	r.queuedCommitTasks[key] = true
+	r.mu.Unlock()
+	task := commitTask{key: key, kind: kind, block: block, origin: origin}
+	select {
+	case <-ctx.Done():
+		r.mu.Lock()
+		delete(r.queuedCommitTasks, key)
+		r.mu.Unlock()
+		return ctx.Err()
+	case tasks <- task:
+		return nil
+	default:
+		r.mu.Lock()
+		delete(r.queuedCommitTasks, key)
+		r.mu.Unlock()
+		return fmt.Errorf("commit mailbox is full")
+	}
+}
+
+func (r *NodeRuntime) runCommitWorker(ctx context.Context) {
+	defer r.commitWorkerWG.Done()
+	r.mu.Lock()
+	tasks := r.commitTasks
+	r.mu.Unlock()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case task := <-tasks:
+			if ctx.Err() != nil {
+				return
+			}
+			err := r.executeCommitTask(ctx, task)
+			if err != nil && ctx.Err() == nil {
+				r.recordCommitWorkerError(err)
+			}
+			r.mu.Lock()
+			delete(r.queuedCommitTasks, task.key)
+			r.mu.Unlock()
+		}
+	}
+}
+
+func (r *NodeRuntime) executeCommitTask(ctx context.Context, task commitTask) error {
+	switch task.kind {
+	case commitTaskFinalize:
+		return r.finalize(ctx, task.block)
+	case commitTaskConsensus:
+		return r.commit(ctx, task.block)
+	case commitTaskCatchUp:
+		if _, err := r.commitWithOrigin(ctx, task.block, task.origin); err != nil {
+			return err
+		}
+		r.logConsensus("CATCHUP_APPLIED", task.block.ProposerID, task.block.BlockHash, task.block.Height)
+		return nil
+	default:
+		return fmt.Errorf("unknown commit task kind %q", task.kind)
+	}
+}
+
+func (r *NodeRuntime) recordCommitWorkerError(err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	r.lastProposalError = err.Error()
+	r.mu.Unlock()
 }
 
 func (r *NodeRuntime) setCommitPhase(phase string, block realblock.Block) {
@@ -1077,6 +2035,22 @@ func (r *NodeRuntime) setCommitPhase(phase string, block realblock.Block) {
 	r.commitPhase = phase
 	r.commitPhaseHeight = block.Height
 	r.commitPhaseHash = block.BlockHash
+}
+
+func (r *NodeRuntime) recordCommitFailure(block realblock.Block, err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	r.lastProposalError = err.Error()
+	r.lastCommitFailure = CommitFailure{
+		Phase:     r.commitPhase,
+		Height:    block.Height,
+		BlockHash: block.BlockHash,
+		Error:     err.Error(),
+		Timestamp: time.Now().UnixMilli(),
+	}
+	r.mu.Unlock()
 }
 
 func (r *NodeRuntime) finalize(ctx context.Context, block realblock.Block) error {
@@ -1148,6 +2122,7 @@ func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Bloc
 	r.mu.Unlock()
 	result, err := r.commitOnce(ctx, block, origin)
 	if err != nil {
+		r.recordCommitFailure(block, err)
 		return result, err
 	}
 	if result.Disposition == CommitApplied && result.Block.BlockHash != "" {
@@ -1256,7 +2231,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	executionSnapshot, err = r.prepareMetaTrackStateSnapshot(ctx, block, executionSnapshot)
 	if err != nil {
 		r.setCommitPhase("state_access_error", block)
-		return CommitResult{Disposition: CommitRejected, Block: block}, err
+		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
 	r.setCommitPhase("validate_execution_plan", block)
 	if err := r.validateMetaTrackPlanDrivesExecution(block); err != nil {
@@ -1416,11 +2391,6 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 				}
 				r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "failed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: false, Error: executionError})
 			}
-		}
-		if relayItems[item.TxID].Tx.TxID != "" {
-			r.mu.Lock()
-			delete(r.relaySource, item.TxID)
-			r.mu.Unlock()
 		}
 	}
 	r.setCommitPhase("idle", realblock.Block{})
@@ -1584,12 +2554,18 @@ func (r *NodeRuntime) validateMetaTrackPlanDrivesExecution(block realblock.Block
 	return nil
 }
 
-func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, homeShard string) (StateFetchResponse, time.Duration, error) {
+func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, homeShard string) (response StateFetchResponse, latency time.Duration, fetchErr error) {
 	targetNode := r.leaderID(homeShard)
 	if targetNode == "" {
 		return StateFetchResponse{}, 0, fmt.Errorf("metatrack remote state home leader missing for %s", homeShard)
 	}
 	requestID := stableTextDigest(strings.Join([]string{r.node.NodeID, item.TxID, block.BlockHash, access.Key, homeShard, r.node.ShardID}, "|"))
+	start := time.Now()
+	r.beginStateFetch(block, item, access, homeShard, requestID)
+	outcome := "response_received"
+	defer func() {
+		r.finishStateFetch(requestID, outcome, start, fetchErr)
+	}()
 	waiter := make(chan StateFetchResponse, 1)
 	r.mu.Lock()
 	if r.stateFetchWaiters == nil {
@@ -1605,23 +2581,28 @@ func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Bloc
 	request := r.plugins.StateAccess.BuildFetchRequest(StateFetchInput{RequestID: requestID, TxID: item.TxID, BlockHash: block.BlockHash, Key: access.Key, HomeShard: homeShard, ExecutionShard: r.node.ShardID, AccessKind: string(access.Mode)})
 	envelope, err := p2p.NewEnvelope(stateFetchRequestMessage, r.node.NodeID, targetNode, r.node.ShardID, block.Height, 0, block.Height, request)
 	if err != nil {
+		outcome = "request_encode_error"
 		return StateFetchResponse{}, 0, err
 	}
-	start := time.Now()
-	if err := r.sendToNode(ctx, targetNode, envelope); err != nil {
+	if err := r.sendStateAccessToNode(ctx, targetNode, envelope); err != nil {
+		outcome = "send_error"
 		return StateFetchResponse{}, time.Since(start), err
 	}
+	r.markStateFetchSent(requestID)
 	timer := time.NewTimer(2 * time.Second)
 	defer timer.Stop()
 	select {
 	case response := <-waiter:
 		if !response.Success {
+			outcome = "response_error"
 			return response, time.Since(start), fmt.Errorf("metatrack remote state fetch failed: %s", response.Error)
 		}
 		return response, time.Since(start), nil
 	case <-timer.C:
+		outcome = "timeout"
 		return StateFetchResponse{}, time.Since(start), fmt.Errorf("metatrack remote state fetch timed out for %s from %s", access.Key, homeShard)
 	case <-ctx.Done():
+		outcome = "context_cancelled"
 		return StateFetchResponse{}, time.Since(start), ctx.Err()
 	}
 }
@@ -1647,11 +2628,7 @@ func (r *NodeRuntime) handleStateFetchRequest(ctx context.Context, requester str
 	response.RequestID = request.RequestID
 	response.TxID = request.TxID
 	response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
-	envelope, err := p2p.NewEnvelope(stateFetchResponseMessage, r.node.NodeID, requester, r.node.ShardID, 0, 0, 0, response)
-	if err != nil {
-		return err
-	}
-	return r.sendToNode(ctx, requester, envelope)
+	return r.enqueueStateFetchResponse(ctx, requester, response)
 }
 
 func stateFetchWitnessKey(request StateFetchRequest) string {
@@ -2011,7 +2988,7 @@ func (r *NodeRuntime) applyRemoteStateDelta(ctx context.Context, block realblock
 			r.mu.Unlock()
 			return nil, time.Since(start), err
 		}
-		if err := r.sendToNode(ctx, targetNode, envelope); err != nil {
+		if err := r.sendStateAccessToNode(ctx, targetNode, envelope); err != nil {
 			r.mu.Lock()
 			delete(r.stateApplyWaiters, requestID)
 			r.mu.Unlock()
@@ -2050,7 +3027,7 @@ func (r *NodeRuntime) handleStateDeltaApply(ctx context.Context, requester strin
 	if err != nil {
 		return err
 	}
-	return r.sendToNode(ctx, requester, envelope)
+	return r.sendStateAccessToNode(ctx, requester, envelope)
 }
 
 func (r *NodeRuntime) handleStateDeltaApplyRequest(request StateDeltaApplyRequest) StateDeltaApplyAck {
@@ -2090,23 +3067,39 @@ func (r *NodeRuntime) flushQueuedStateDeltas() {
 	// Pending deltas stay pending until a home-shard block commits them.
 }
 
-func (r *NodeRuntime) readyRemoteStateDeltasForConsensus(homeBlockHeight uint64) []realblock.SystemStateDelta {
+func (r *NodeRuntime) remoteStateDeltaDrainState(
+	homeBlockHeight uint64,
+) ([]realblock.SystemStateDelta, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	pending := len(r.pendingStateDeltas) > 0
 	ready := make([]StateDeltaApplyRequest, 0, len(r.pendingStateDeltas))
+
 	for _, request := range r.pendingStateDeltas {
 		if remoteStateDeltaReadyForHomeBlock(request, homeBlockHeight) {
 			ready = append(ready, request)
 		}
 	}
+
 	sort.SliceStable(ready, func(i, j int) bool {
-		return remoteDeltaConsensusOrder(ready[i]) < remoteDeltaConsensusOrder(ready[j])
+		return remoteDeltaConsensusOrder(ready[i]) <
+			remoteDeltaConsensusOrder(ready[j])
 	})
+
 	out := make([]realblock.SystemStateDelta, 0, len(ready))
 	for _, request := range ready {
 		out = append(out, systemStateDeltaFromRequest(request))
 	}
-	return out
+
+	return out, pending
+}
+
+func (r *NodeRuntime) readyRemoteStateDeltasForConsensus(
+	homeBlockHeight uint64,
+) []realblock.SystemStateDelta {
+	ready, _ := r.remoteStateDeltaDrainState(homeBlockHeight)
+	return ready
 }
 
 func (r *NodeRuntime) markRemoteStateDeltasApplied(applied []realblock.SystemStateDelta) {
@@ -2275,7 +3268,11 @@ func (r *NodeRuntime) recordRemoteStateApply(block realblock.Block, item state.S
 	if ack.UpdateSemantics != "" {
 		accessKind += ":" + ack.UpdateSemantics
 	}
-	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, ack.TxID, unqualifiedKey, ack.QualifiedKey, ack.HomeShard, ack.ExecutionShard, accessKind, fmt.Sprint(latency.Milliseconds()), ack.WitnessDigest, ack.StateRoot, fmt.Sprint(ack.Success), ack.Error}
+	deltaID := item.DeltaID
+	if deltaID == "" {
+		deltaID = stateDeltaApplyKey(StateDeltaApplyRequest{TxID: ack.TxID, TxIDs: append([]string(nil), ack.TxIDs...), BlockHash: block.BlockHash, Key: unqualifiedKey, UpdateSemantics: ack.UpdateSemantics, Delta: ack.Delta, BaseValueDigest: ack.BaseValueDigest, ApplyOrigin: ack.ApplyOrigin, DeltaKind: ack.DeltaKind, HasInitialValue: ack.HasInitialValue, InitialValue: ack.InitialValue, HomeShard: ack.HomeShard, ExecutionShard: ack.ExecutionShard, SourceKey: item.Key, SourceHeight: block.Height})
+	}
+	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, ack.TxID, unqualifiedKey, ack.QualifiedKey, ack.HomeShard, ack.ExecutionShard, accessKind, fmt.Sprint(latency.Milliseconds()), ack.WitnessDigest, ack.StateRoot, fmt.Sprint(ack.Success), ack.Error, deltaID, fmt.Sprint(block.Height), block.BlockHash, ack.UpdateSemantics}
 	r.mu.Lock()
 	r.remoteStateRows = append(r.remoteStateRows, row)
 	r.mu.Unlock()
@@ -2283,7 +3280,7 @@ func (r *NodeRuntime) recordRemoteStateApply(block realblock.Block, item state.S
 }
 
 func (r *NodeRuntime) recordRemoteStateAccess(block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, response StateFetchResponse, latency time.Duration) {
-	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, item.TxID, access.Key, response.QualifiedKey, response.HomeShard, response.ExecutionShard, string(access.Mode), fmt.Sprint(latency.Milliseconds()), response.WitnessDigest, response.StateRoot, fmt.Sprint(response.Success), response.Error}
+	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, item.TxID, access.Key, response.QualifiedKey, response.HomeShard, response.ExecutionShard, string(access.Mode), fmt.Sprint(latency.Milliseconds()), response.WitnessDigest, response.StateRoot, fmt.Sprint(response.Success), response.Error, "", "", "", ""}
 	r.mu.Lock()
 	r.remoteStateRows = append(r.remoteStateRows, row)
 	r.mu.Unlock()
@@ -2312,6 +3309,31 @@ func unqualifiedLocalKey(key, shardID string) (string, bool) {
 	next := strings.TrimPrefix(key, prefix)
 	return next, next != ""
 }
+func (r *NodeRuntime) clearCommittedRelayReplica(
+	relay Relay,
+) {
+	logicalID := relayLogicalID(relay)
+
+	if logicalID == "" {
+		return
+	}
+
+	r.mu.Lock()
+
+	delete(r.relaySource, logicalID)
+	delete(r.relaySource, relay.Tx.TxID)
+
+	delete(r.relayAdmissionFailures, logicalID)
+	delete(
+		r.relayAdmissionFailures,
+		relay.Tx.TxID,
+	)
+
+	r.lastProgressAt = time.Now().UnixMilli()
+
+	r.mu.Unlock()
+}
+
 func (r *NodeRuntime) onCommittedTx(ctx context.Context, item tx.SignedTransaction, relay Relay) {
 	r.onCommittedTxWithOrigin(ctx, item, relay, CommitOriginConsensus)
 }
@@ -2322,6 +3344,7 @@ func (r *NodeRuntime) onCommittedTxWithOrigin(ctx context.Context, item tx.Signe
 	}
 	if relay.Tx.TxID != "" {
 		if !r.node.Leader {
+			r.clearCommittedRelayReplica(relay)
 			return
 		}
 		logicalID := relay.LogicalTxID
@@ -2330,11 +3353,7 @@ func (r *NodeRuntime) onCommittedTxWithOrigin(ctx context.Context, item tx.Signe
 		}
 		crossShard := r.crossShardPlugin()
 		r.recordCrossShardEvent(crossShard.TargetCommit(CrossShardFinalizeInput{TxID: item.TxID, LogicalTxID: logicalID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard}))
-		finish := crossShard.BuildFinalize(CrossShardFinalizeInput{TxID: item.TxID, LogicalTxID: logicalID, SourceShard: relay.SourceShard, TargetShard: relay.TargetShard})
-		envelope, err := p2p.NewEnvelope(finalizeMessage, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, finish)
-		if err == nil {
-			_ = r.sendToNode(ctx, r.leaderID(relay.SourceShard), envelope)
-		}
+		r.queueFinalize(ctx, relay)
 		return
 	}
 	if !r.node.Leader {
@@ -2357,10 +3376,7 @@ func (r *NodeRuntime) onCommittedTxWithOrigin(ctx context.Context, item tx.Signe
 		relayInput := CrossShardRelayInput{Tx: item, LogicalTxID: item.TxID, SourceShard: r.node.ShardID, TargetShard: target}
 		r.recordCrossShardEvent(crossShard.SourceLock(relayInput))
 		relay := crossShard.BuildRelay(relayInput)
-		envelope, err := p2p.NewEnvelope(p2p.MessageXShardRelay, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, relay)
-		if err == nil {
-			_ = r.sendToNode(ctx, r.leaderID(target), envelope)
-		}
+		r.queueOutboundRelay(ctx, relay)
 	}
 }
 
@@ -2392,7 +3408,23 @@ func (r *NodeRuntime) nodeIDsForShard(shard string) []string {
 }
 
 func (r *NodeRuntime) sendToNode(ctx context.Context, nodeID string, envelope p2p.MessageEnvelope) error {
+	if r.sendToNodeHook != nil {
+		return r.sendToNodeHook(ctx, nodeID, envelope)
+	}
+	if r.transport == nil {
+		return fmt.Errorf("transport is not configured")
+	}
 	return r.transport.Send(ctx, nodeID, envelope)
+}
+
+func (r *NodeRuntime) sendStateAccessToNode(ctx context.Context, nodeID string, envelope p2p.MessageEnvelope) error {
+	if r.sendToNodeHook != nil {
+		return r.sendToNodeHook(ctx, nodeID, envelope)
+	}
+	if r.transport == nil {
+		return fmt.Errorf("transport is not configured")
+	}
+	return r.transport.SendStateAccess(ctx, nodeID, envelope)
 }
 func (r *NodeRuntime) blockSize() int {
 	return r.plugins.BlockProducer.BlockSize()
@@ -2568,6 +3600,16 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	commitPhaseHeight := r.commitPhaseHeight
 	commitPhaseHash := r.commitPhaseHash
 	lastProposalError := r.lastProposalError
+	lastCommitFailure := r.lastCommitFailure
+	lastStateFetch := r.lastStateFetch
+	lastStateFetchService := r.lastStateFetchService
+	stateFetchFailures := append([]StateFetchDiagnostic(nil), r.stateFetchFailures...)
+	stateFetchServiceErrors := append([]StateFetchDiagnostic(nil), r.stateFetchServiceErrors...)
+	pendingStateFetches := make([]StateFetchDiagnostic, 0, len(r.pendingStateFetches))
+	for _, diagnostic := range r.pendingStateFetches {
+		pendingStateFetches = append(pendingStateFetches, diagnostic)
+	}
+	sort.Slice(pendingStateFetches, func(i, j int) bool { return pendingStateFetches[i].RequestID < pendingStateFetches[j].RequestID })
 	fatalPersistenceError := r.fatalPersistenceError
 	pendingCommitCount := len(r.pendingCommits)
 	pendingCommitHeights := mapKeys(r.pendingCommits)
@@ -2575,7 +3617,15 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	for key, value := range r.pendingCommitErrors {
 		pendingCommitErrors[key] = value
 	}
-	pendingRelayCount := len(r.relaySource)
+	outboundRelaySendErrors := map[string]string{}
+	for key, value := range r.outboundRelaySendErrors {
+		outboundRelaySendErrors[key] = value
+	}
+
+	finalizeSendErrors := map[string]string{}
+	for key, value := range r.finalizeSendErrors {
+		finalizeSendErrors[key] = value
+	}
 	relayAdmissionFailures := map[string]string{}
 	for key, value := range r.relayAdmissionFailures {
 		relayAdmissionFailures[key] = value
@@ -2630,10 +3680,62 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	sourceFinalizedIDs := mapIDs(sourceFinalized)
 	refundedIDs := mapIDs(refunded)
 	failedIDs := mapIDs(failed)
-	pendingRelayIDs := make([]string, 0, len(r.relaySource))
-	for txID := range r.relaySource {
-		pendingRelayIDs = append(pendingRelayIDs, txID)
+	pendingCrossShardSet := map[string]bool{}
+
+	pendingRelaySourceIDs := make(
+		[]string,
+		0,
+		len(r.relaySource),
+	)
+	for logicalID := range r.relaySource {
+		pendingRelaySourceIDs = append(
+			pendingRelaySourceIDs,
+			logicalID,
+		)
+		pendingCrossShardSet[logicalID] = true
 	}
+	sort.Strings(pendingRelaySourceIDs)
+
+	pendingOutboundRelayIDs := make(
+		[]string,
+		0,
+		len(r.pendingOutboundRelays),
+	)
+	for logicalID := range r.pendingOutboundRelays {
+		pendingOutboundRelayIDs = append(
+			pendingOutboundRelayIDs,
+			logicalID,
+		)
+		pendingCrossShardSet[logicalID] = true
+	}
+	sort.Strings(pendingOutboundRelayIDs)
+
+	pendingFinalizeMessageIDs := make(
+		[]string,
+		0,
+		len(r.pendingFinalizeMessages),
+	)
+	for logicalID := range r.pendingFinalizeMessages {
+		pendingFinalizeMessageIDs = append(
+			pendingFinalizeMessageIDs,
+			logicalID,
+		)
+		pendingCrossShardSet[logicalID] = true
+	}
+	sort.Strings(pendingFinalizeMessageIDs)
+
+	pendingCrossShardIDs := mapIDs(
+		pendingCrossShardSet,
+	)
+
+	pendingRelaySourceCount :=
+		len(pendingRelaySourceIDs)
+	pendingOutboundRelayCount :=
+		len(pendingOutboundRelayIDs)
+	pendingFinalizeMessageCount :=
+		len(pendingFinalizeMessageIDs)
+	pendingCrossShardCount :=
+		len(pendingCrossShardIDs)
 	pendingStateDeltaCount := len(r.pendingStateDeltas)
 	pendingStateDeltaKeyCount := len(r.pendingStateDeltaKeys)
 	readyStateDeltaCount := 0
@@ -2642,10 +3744,12 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 			readyStateDeltaCount++
 		}
 	}
+	stateFetchRequestQueueDepth := len(r.stateFetchTasks)
+	stateFetchResponseQueueDepth := len(r.stateFetchResponseTasks)
 	r.mu.Unlock()
 	mempoolIDs := r.pool.IDs()
 	sort.Strings(mempoolIDs)
-	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_timeout_ms": proposalTimeoutMS, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "fatal_persistence_error": fatalPersistenceError, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": pendingRelayCount, "pending_cross_shard_ids": pendingRelayIDs, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_timeout_ms": proposalTimeoutMS, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "last_commit_failure": lastCommitFailure, "last_state_fetch": lastStateFetch, "pending_state_fetch_count": len(pendingStateFetches), "pending_state_fetches": pendingStateFetches, "state_fetch_failures": stateFetchFailures, "last_state_fetch_service": lastStateFetchService, "state_fetch_service_errors": stateFetchServiceErrors, "fatal_persistence_error": fatalPersistenceError, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": 0, "pending_cross_shard_count": pendingCrossShardCount, "pending_cross_shard_ids": pendingCrossShardIDs, "pending_relay_source_count": pendingRelaySourceCount, "pending_relay_source_ids": pendingRelaySourceIDs, "pending_outbound_relay_count": pendingOutboundRelayCount, "pending_outbound_relay_ids": pendingOutboundRelayIDs, "pending_finalize_message_count": pendingFinalizeMessageCount, "pending_finalize_message_ids": pendingFinalizeMessageIDs, "outbound_relay_send_errors": outboundRelaySendErrors, "finalize_send_errors": finalizeSendErrors, "state_fetch_request_queue_depth": stateFetchRequestQueueDepth, "state_fetch_request_queue_capacity": stateFetchMailboxCapacity, "state_fetch_response_queue_depth": stateFetchResponseQueueDepth, "state_fetch_response_queue_capacity": stateFetchResponseMailboxCapacity, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
 }
 func mapIDs(items map[string]bool) []string {
@@ -2768,10 +3872,11 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	if err := SaveJSON(filepath.Join(r.node.DataDir, "plugin_load_log.json"), map[string]any{"node_id": r.node.NodeID, "initialization_success": true, "plugins": evidence}); err != nil {
 		return err
 	}
-	fast, conservative, groups, logical, physical := summarizeMethodRows(executionRows, commitRows)
+	methodSummary := summarizeMethodRows(executionRows, commitRows)
 	remoteSummary := summarizeRemoteStateRows(r.remoteStateRows)
 	schedulerSummary := summarizeSchedulerRows(r.schedulerRows)
-	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": fast, "conservative_track_count": conservative, "aggregation_group_count": groups, "logical_update_count": logical, "physical_update_count": physical, "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": len(runtimeEventRows), "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+	blockProduction := summarizeBlockProductionRows(chainRows)
+	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": len(runtimeEventRows), "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
 }
 
 func (r *NodeRuntime) writeMetaTrackNodeArtifacts(executionRows, commitRows, logicalPhysicalRows [][]string) error {
@@ -2788,7 +3893,7 @@ func (r *NodeRuntime) writeMetaTrackNodeArtifacts(executionRows, commitRows, log
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "aggregation_plan.csv"), commitLogHeaders(), commitRows); err != nil {
 		return err
 	}
-	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "remote_state_access.csv"), []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error"}, remoteRows); err != nil {
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "remote_state_access.csv"), []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error", "delta_id", "source_height", "source_block_hash", "update_semantics"}, remoteRows); err != nil {
 		return err
 	}
 	return metrics.WriteCSV(filepath.Join(r.node.DataDir, "logical_physical_update_mapping.csv"), []string{"timestamp", "node_id", "shard_id", "height", "commit_plugin", "aggregation_group_id", "state_key", "value_digest", "logical_tx_ids", "logical_update_count", "physical_update_count", "reduced_physical_write_count", "aggregation_applied", "pre_aggregation_physical_op_count", "post_aggregation_physical_op_count", "aggregated_key_count", "aggregated_logical_delta_count"}, logicalPhysicalRows)
@@ -3130,29 +4235,151 @@ func reorderedTransactionCount(result execution.Result) int {
 	return 0
 }
 
-func summarizeMethodRows(executionRows, commitRows [][]string) (int, int, int, int, int) {
-	fast, conservative, groups, logical, physical := 0, 0, 0, 0, 0
-	for _, row := range executionRows {
-		if len(row) > 6 && row[6] == "fast" {
-			fast++
+type methodMetricSummary struct {
+	fastTrackCount                   int
+	conservativeTrackCount           int
+	aggregationGroupCount            int
+	logicalUpdateCount               int
+	physicalUpdateCount              int
+	executedLogicalTransactionCount  int
+	executedTransactionInstanceCount int
+	preAggregationPhysicalOps        int
+	postAggregationPhysicalOps       int
+	aggregatedKeyCount               int
+	aggregatedLogicalDeltaCount      int
+}
+
+type blockProductionSummary struct {
+	count             int
+	averageTxPerBlock float64
+	minTxPerBlock     int
+	maxTxPerBlock     int
+	intervalMeanMS    float64
+	intervalP95MS     int64
+}
+
+func summarizeBlockProductionRows(chainRows [][]string) blockProductionSummary {
+	if len(chainRows) == 0 {
+		return blockProductionSummary{}
+	}
+	txCounts := []int{}
+	finishedAt := []int64{}
+	for _, row := range chainRows {
+		if len(row) < 13 {
+			continue
 		}
-		if len(row) > 6 && row[6] == "conservative" {
-			conservative++
+		txCount := 0
+		_, _ = fmt.Sscan(row[6], &txCount)
+		txCounts = append(txCounts, txCount)
+		var finished int64
+		_, _ = fmt.Sscan(row[12], &finished)
+		if finished > 0 {
+			finishedAt = append(finishedAt, finished)
 		}
 	}
+	if len(txCounts) == 0 {
+		return blockProductionSummary{}
+	}
+	out := blockProductionSummary{count: len(txCounts), minTxPerBlock: txCounts[0], maxTxPerBlock: txCounts[0]}
+	sumTx := 0
+	for _, value := range txCounts {
+		sumTx += value
+		if value < out.minTxPerBlock {
+			out.minTxPerBlock = value
+		}
+		if value > out.maxTxPerBlock {
+			out.maxTxPerBlock = value
+		}
+	}
+	out.averageTxPerBlock = float64(sumTx) / float64(len(txCounts))
+	sort.Slice(finishedAt, func(i, j int) bool { return finishedAt[i] < finishedAt[j] })
+	intervals := []int64{}
+	for index := 1; index < len(finishedAt); index++ {
+		if delta := finishedAt[index] - finishedAt[index-1]; delta >= 0 {
+			intervals = append(intervals, delta)
+		}
+	}
+	if len(intervals) > 0 {
+		var sum int64
+		for _, value := range intervals {
+			sum += value
+		}
+		out.intervalMeanMS = float64(sum) / float64(len(intervals))
+		out.intervalP95MS = int64Percentile(intervals, 0.95)
+	}
+	return out
+}
+
+func int64Percentile(values []int64, p float64) int64 {
+	if len(values) == 0 {
+		return 0
+	}
+	copyValues := append([]int64(nil), values...)
+	sort.Slice(copyValues, func(i, j int) bool { return copyValues[i] < copyValues[j] })
+	index := int(float64(len(copyValues)-1) * p)
+	if index < 0 {
+		index = 0
+	}
+	if index >= len(copyValues) {
+		index = len(copyValues) - 1
+	}
+	return copyValues[index]
+}
+
+func (s methodMetricSummary) physicalOpsSavedCount() int {
+	if s.preAggregationPhysicalOps <= s.postAggregationPhysicalOps {
+		return 0
+	}
+	return s.preAggregationPhysicalOps - s.postAggregationPhysicalOps
+}
+
+func (s methodMetricSummary) aggregationReductionRatio() float64 {
+	if s.preAggregationPhysicalOps <= 0 {
+		return 0
+	}
+	return float64(s.physicalOpsSavedCount()) / float64(s.preAggregationPhysicalOps)
+}
+
+func summarizeMethodRows(executionRows, commitRows [][]string) methodMetricSummary {
+	summary := methodMetricSummary{}
+	logicalTxIDs := map[string]bool{}
+	for _, row := range executionRows {
+		if len(row) > 6 && row[6] == "fast" {
+			summary.fastTrackCount++
+		}
+		if len(row) > 6 && row[6] == "conservative" {
+			summary.conservativeTrackCount++
+		}
+		if len(row) > 3 && strings.TrimSpace(row[3]) != "" {
+			logicalTxIDs[strings.TrimSpace(row[3])] = true
+		}
+	}
+	summary.executedTransactionInstanceCount = len(executionRows)
+	summary.executedLogicalTransactionCount = len(logicalTxIDs)
 	for _, row := range commitRows {
 		if len(row) > 8 && row[8] == "true" {
-			groups++
+			summary.aggregationGroupCount++
 		}
 		if len(row) > 7 {
 			var a, b int
 			_, _ = fmt.Sscan(row[6], &a)
 			_, _ = fmt.Sscan(row[7], &b)
-			logical += a
-			physical += b
+			summary.logicalUpdateCount += a
+			summary.physicalUpdateCount += b
+		}
+		if len(row) > 12 {
+			var pre, post, keys, logicalDeltas int
+			_, _ = fmt.Sscan(row[9], &pre)
+			_, _ = fmt.Sscan(row[10], &post)
+			_, _ = fmt.Sscan(row[11], &keys)
+			_, _ = fmt.Sscan(row[12], &logicalDeltas)
+			summary.preAggregationPhysicalOps += pre
+			summary.postAggregationPhysicalOps += post
+			summary.aggregatedKeyCount += keys
+			summary.aggregatedLogicalDeltaCount += logicalDeltas
 		}
 	}
-	return fast, conservative, groups, logical, physical
+	return summary
 }
 
 type remoteStateSummary struct {
@@ -3160,7 +4387,25 @@ type remoteStateSummary struct {
 	reads      int
 	writes     int
 	failed     int
+	unknown    int
 	avgLatency float64
+}
+
+func IsRemoteWritebackKind(kind string) bool {
+	return strings.HasPrefix(strings.TrimSpace(kind), "write_apply")
+}
+
+func NormalizeRemoteOperationKind(kind string) string {
+	trimmed := strings.TrimSpace(kind)
+	if IsRemoteWritebackKind(trimmed) {
+		return "writeback"
+	}
+	switch trimmed {
+	case "read", "read_write", "commutative_delta":
+		return "fetch"
+	default:
+		return "unknown"
+	}
 }
 
 func summarizeRemoteStateRows(rows [][]string) remoteStateSummary {
@@ -3177,10 +4422,13 @@ func summarizeRemoteStateRows(rows [][]string) remoteStateSummary {
 		}
 		successful++
 		summary.total++
-		if row[10] == "write_apply" {
+		switch NormalizeRemoteOperationKind(row[10]) {
+		case "writeback":
 			summary.writes++
-		} else {
+		case "fetch":
 			summary.reads++
+		default:
+			summary.unknown++
 		}
 		latencySum += intFromAny(row[11])
 	}

@@ -243,7 +243,11 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if err := metrics.WriteCSV(filepath.Join(outDir, "dependency_graph.csv"), []string{"batch_index", "from_logical_id", "to_logical_id", "state_key", "dependency_type"}, dependencyRows); err != nil {
 			return err
 		}
-		if err := metrics.WriteCSV(filepath.Join(outDir, "remote_state_access.csv"), []string{"batch_index", "logical_id", "tx_index", "state_key", "home_shard", "execution_shard", "access_kind", "witness_digest"}, remoteStateRows); err != nil {
+		remoteStateHeader := []string{"batch_index", "logical_id", "tx_index", "state_key", "home_shard", "execution_shard", "access_kind", "witness_digest"}
+		if err := metrics.WriteCSV(filepath.Join(outDir, "predicted_remote_access.csv"), remoteStateHeader, remoteStateRows); err != nil {
+			return err
+		}
+		if err := metrics.WriteCSV(filepath.Join(outDir, "remote_state_access.csv"), remoteStateHeader, remoteStateRows); err != nil {
 			return err
 		}
 	}

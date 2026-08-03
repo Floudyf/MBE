@@ -3410,6 +3410,32 @@ details summary {
   padding: 0.55rem 0.8rem;
 }
 
+.analysis-paper-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.analysis-paper-grid .analysis-chart {
+  background: #fff;
+  border: 1px solid #eaecf0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.analysis-chart svg {
+  display: block;
+  height: auto;
+  max-width: 560px;
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  .analysis-paper-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .composer-workbench {
   align-items: start;
   display: grid;

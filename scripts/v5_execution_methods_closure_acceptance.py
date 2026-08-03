@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ from backend.app.services.v5_experiment_compiler import compile_plan
 from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS, validate_request
 from backend.app.services.v5_formal_scheduler import _spec_for
 from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
+from backend.app.services.v5_workload_data_plane import supported_workload_counts
 
 
 METHOD_ORDER = ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]
@@ -219,6 +221,63 @@ def build_supervisor(output: Path) -> tuple[Path, str]:
     return binary, sha256_file(binary)
 
 
+def effective_supervisor_timeout_seconds(requested_timeout_seconds: int, duration_ms: int) -> int:
+    configured = os.environ.get("MBE_V5_REAL_CLUSTER_TIMEOUT_SECONDS", "").strip()
+    try:
+        configured_timeout_seconds = int(configured) if configured else 0
+    except ValueError:
+        configured_timeout_seconds = 0
+    return max(requested_timeout_seconds, configured_timeout_seconds, (duration_ms // 1000) + 90)
+
+
+def _terminate_supervisor_process_tree(process: subprocess.Popen[str]) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        return
+    os.killpg(process.pid, signal.SIGTERM)
+
+
+def run_supervisor(command: list[str], *, cwd: Path, output: Path, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creationflags,
+        start_new_session=os.name != "nt",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        # Request normal node shutdown first. If the supervisor cannot complete
+        # it, kill only its dedicated process tree to avoid orphaned nodes.
+        (output / "stop.request").touch()
+        try:
+            stdout, stderr = process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            _terminate_supervisor_process_tree(process)
+            stdout, stderr = process.communicate()
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        (output / "supervisor_stdout.log").write_text(stdout or "", encoding="utf-8")
+        (output / "supervisor_stderr.log").write_text(
+            (stderr or "") + f"\nreal cluster supervisor timed out after {timeout_seconds} seconds; process tree terminated\n",
+            encoding="utf-8",
+        )
+        raise subprocess.TimeoutExpired(command, timeout_seconds, output=stdout, stderr=stderr) from exc
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def run_method(row: dict, plan: V5FormalExperimentPlan, output: Path, *, timeout_seconds: int, binary: Path, identity: dict, reuse_existing: bool = False) -> dict:
     if (output / "real_cluster_summary.json").is_file() and reuse_existing:
         return load_evidence(row["method_config_id"], output)
@@ -238,12 +297,11 @@ def run_method(row: dict, plan: V5FormalExperimentPlan, output: Path, *, timeout
         }
     )
     (output / "run_identity.json").write_text(json.dumps(run_identity, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    process = subprocess.run(
+    process = run_supervisor(
         [str(binary), "--mode", "v5-real-cluster", "--plan", str(plan_path), "--data-dir", str(output)],
         cwd=ROOT / "executor",
-        text=True,
-        capture_output=True,
-        timeout=timeout_seconds,
+        output=output,
+        timeout_seconds=effective_supervisor_timeout_seconds(timeout_seconds, spec.duration_ms),
     )
     if process.returncode:
         (output / "supervisor_stdout.log").write_text(process.stdout, encoding="utf-8")
@@ -403,7 +461,7 @@ def validate(results: dict[str, dict], *, tx_count: int, workload_source: str) -
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run V5 execution-methods closure acceptance for Hash/MetaTrack x Serial/Block-STM.")
     parser.add_argument("--output-root", default=str(ROOT / ".cache" / "v5_execution_methods_closure"))
-    parser.add_argument("--tx-count", type=int, default=100)
+    parser.add_argument("--tx-count", type=int, default=1000)
     parser.add_argument("--workload-source", choices=["synthetic", "dataset-original", "dataset-derived"], default="synthetic")
     parser.add_argument("--timeout-seconds", type=int, default=240)
     parser.add_argument("--rerun-method", action="append", default=[])
@@ -413,9 +471,8 @@ def main() -> int:
     args = parser.parse_args()
     if not args.reuse_existing:
         args.fresh_run_all = True
-    if args.workload_source.startswith("dataset") and args.tx_count not in {10_000, 50_000, 100_000, 250_000}:
-        existing = {item for item in os.environ.get("MBE_V5_LOCAL_SMOKE_COUNTS", "").split(",") if item}
-        os.environ["MBE_V5_LOCAL_SMOKE_COUNTS"] = ",".join(sorted(existing | {str(args.tx_count)}))
+    if args.workload_source.startswith("dataset") and args.tx_count not in supported_workload_counts():
+        raise SystemExit(f"dataset tx-count must be one of {list(supported_workload_counts())}; local smoke env overrides are not part of V5.2 formal validation")
     output = Path(args.output_root).resolve()
     if args.fresh_run_all and output.exists() and any(output.iterdir()):
         raise SystemExit(f"fresh acceptance requires a new empty output root: {logical_path(output)}; use --reuse-existing only for explicit audit")

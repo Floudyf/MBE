@@ -5,6 +5,7 @@ import json
 import os
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 from backend.app.core.paths import ROOT
@@ -18,6 +19,7 @@ from backend.app.services.v5_compatibility_engine import _cross_shard_fault_unsu
 from backend.app.services.v5_plugin_manifest_store import STORE
 from backend.app.services.v5_paper_exporter import export as export_paper
 from backend.app.services.v5_reproducibility_bundle import build as build_bundle
+from backend.app.services.v5_workload_data_plane import supported_workload_counts
 
 SUPPORTED_SYNTHETIC_WORKLOAD_POINT_FIELDS = {"tx_count", "cross_shard_ratio", "timeout_every"}
 SUPPORTED_DATASET_WORKLOAD_POINT_FIELDS = {"tx_count", "target_alpha"}
@@ -31,6 +33,8 @@ def _workload_blockers(point: dict, topology: dict, source_type: str = "syntheti
         blockers.append(f"unsupported workload point fields: {unknown}")
     if "tx_count" in point and (not isinstance(point["tx_count"], int) or isinstance(point["tx_count"], bool) or point["tx_count"] < 1):
         blockers.append("workload tx_count must be a positive integer")
+    elif source_type == "dataset" and "tx_count" in point and point["tx_count"] not in supported_workload_counts():
+        blockers.append(f"dataset tx_count must be one of {list(supported_workload_counts())}")
     if source_type == "dataset" and "target_alpha" in point and point["target_alpha"] not in {0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4}:
         blockers.append("dataset target_alpha must be one of the supported key Zipf alpha values")
     if "cross_shard_ratio" in point and (not isinstance(point["cross_shard_ratio"], (int, float)) or not 0 <= point["cross_shard_ratio"] <= 1):
@@ -66,7 +70,10 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
                     snapshot = {selection.category: STORE.get(item.get("plugin_overrides", {}).get(selection.category, selection.plugin_id)).plugin_id for selection in plan.base_spec.plugin_selections}
                     method_config_snapshot = dict(item.get("plugin_config_overrides", {}))
                     workload_identity = {**base_workload_identity, "point": variant["workload_point"]}
-                    fairness_snapshot = {"workload": variant["workload_point"], "workload_identity": workload_identity, "topology": variant["topology_point"], "fault": variant["fault_point"]}
+                    block_settings = _block_producer_settings(plan, item)
+                    estimated_transactions = variant["workload_point"].get("tx_count", plan.base_spec.tx_count)
+                    estimated_block_count = (int(estimated_transactions) + block_settings["block_size"] - 1) // block_settings["block_size"]
+                    fairness_snapshot = {"workload": variant["workload_point"], "workload_identity": workload_identity, "topology": variant["topology_point"], "fault": variant["fault_point"], "block_production": block_settings}
                     source_type = plan.base_spec.workload_source.source_type if plan.base_spec.workload_source else "synthetic"
                     blockers = _workload_blockers(variant["workload_point"], variant["topology_point"], source_type)
                     base_workload = next((selection.config for selection in plan.base_spec.plugin_selections if selection.category == "workload"), {})
@@ -86,7 +93,7 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
                         "fairness_key": hashlib.sha256(json.dumps({"suite": suite, "seed": seed, "repeat": repeat, "snapshot": fairness_snapshot}, sort_keys=True, default=str).encode()).hexdigest(),
                         "comparison_group_id": f"{suite}:{seed}:{repeat}:{variant['group']}:{variant['scan_value']}", "execution_backend": backend,
                         "estimated_processes": variant["topology_point"].get("nodes", plan.base_spec.topology.nodes) if backend == "real_cluster" else 0,
-                        "estimated_transactions": variant["workload_point"].get("tx_count", plan.base_spec.tx_count), "runnable": backend != "simulation" and not blockers, "blockers": blockers + (["V3 simulation adapter pending"] if backend == "simulation" else []), "warnings": [],
+                        "estimated_transactions": estimated_transactions, "block_size": block_settings["block_size"], "block_interval_ms": block_settings["block_interval_ms"], "estimated_block_count": estimated_block_count, "runnable": backend != "simulation" and not blockers, "blockers": blockers + (["V3 simulation adapter pending"] if backend == "simulation" else []), "warnings": [],
                     })
     return validate_fairness(rows)[0]
 
@@ -135,6 +142,18 @@ def _scan_variable(point: dict, default: str) -> str:
 
 def _scan_value(point: dict) -> str:
     return json.dumps(point, sort_keys=True, default=str)
+
+
+def _block_producer_settings(plan: V5FormalExperimentPlan, method: dict) -> dict[str, int]:
+    base = next((selection for selection in plan.base_spec.plugin_selections if selection.category == "block_producer"), None)
+    plugin_id = method.get("plugin_overrides", {}).get("block_producer", base.plugin_id if base else "time_or_count_block_producer")
+    config = dict(STORE.get(plugin_id).default_config)
+    if base and plugin_id == base.plugin_id:
+        config |= dict(base.config)
+    config |= dict(method.get("plugin_config_overrides", {}).get("block_producer", {}))
+    block_size = int(config.get("block_size") or 100)
+    interval_ms = int(config.get("interval_ms") or config.get("block_interval_ms") or 75)
+    return {"block_size": block_size, "block_interval_ms": interval_ms}
 
 
 def _changed_categories(plan: V5FormalExperimentPlan, method: dict) -> list[str]:
@@ -219,11 +238,26 @@ def _run_worker(group_id: str) -> None:
                 child.update({"status": "completed", "result": result, "paper_candidate": False})
             elif backend == "real_cluster":
                 result = v5_real_cluster_runner.run(spec)
-                result_dir = __import__("pathlib").Path(result["output_dir"])
-                if not result_dir.is_absolute():
-                    result_dir = ROOT / result_dir
-                metrics = extract_metrics(result_dir)
-                child.update({"status": result["status"], "result": result, "metrics": metrics, "paper_candidate": result["status"] == "completed" and result["summary"].get("no_fallback") is True and not metrics.get("missing")})
+                result_dir = _physical_result_dir(result)
+                metrics = extract_metrics(result_dir, method_id=row.get("method_config_id"))
+                child.update(
+                    {
+                        "status": result["status"],
+                        "execution_status": result.get("summary", {}).get("execution_status", result["status"]),
+                        "artifact_status": result.get("summary", {}).get("artifact_status", "pending"),
+                        "formal_eligibility": bool(result.get("summary", {}).get("formal_eligibility", False)),
+                        "execution_gate": result.get("summary", {}).get("execution_gate"),
+                        "artifact_gate": result.get("summary", {}).get("artifact_gate"),
+                        "completion_gate": result.get("summary", {}).get("completion_gate"),
+                        "artifact_contract_version": result.get("summary", {}).get("artifact_contract_version"),
+                        "missing_artifacts": result.get("summary", {}).get("missing_artifacts", []),
+                        "unexpected_artifacts": result.get("summary", {}).get("unexpected_artifacts", []),
+                        "artifact_contract": result.get("summary", {}).get("artifact_contract"),
+                        "result": result,
+                        "metrics": metrics,
+                        "paper_candidate": _is_paper_candidate_result(result, metrics),
+                    }
+                )
             else:
                 child.update({"status": "blocked", "error": "simulation dispatch is not yet bound to the V3 logical runtime adapter", "paper_candidate": False})
         except Exception as exc:  # preserve failure evidence for result center and retry policy
@@ -260,6 +294,35 @@ def finalize(group_id: str) -> dict:
     build_bundle(directory, group)
 
     return group
+
+
+def _physical_result_dir(result: dict) -> Path:
+    """Resolve the real local run directory without exposing it through the API.
+
+    ``v5_real_cluster_runner`` intentionally returns a logical output path when
+    runs live outside the repository.  Metric extraction must use the physical
+    run root, so the authoritative run id is resolved through the runner.
+    Absolute paths remain supported for test doubles and legacy records.
+    """
+    run_id = str(result.get("run_id") or "")
+    if run_id:
+        return v5_real_cluster_runner.run_dir(run_id)
+
+    output_dir = Path(str(result.get("output_dir") or ""))
+    if output_dir.is_absolute():
+        return output_dir
+    return ROOT / output_dir
+
+
+def _is_paper_candidate_result(result: dict, metrics: dict) -> bool:
+    summary = result.get("summary") or {}
+    return (
+        result.get("status") == "completed"
+        and summary.get("ready_to_commit") is True
+        and summary.get("no_fallback") is True
+        and metrics.get("metric_completeness") == "complete"
+        and not metrics.get("missing")
+    )
 
 
 def _refresh_child_counts(group: dict, items: list[dict]) -> None:

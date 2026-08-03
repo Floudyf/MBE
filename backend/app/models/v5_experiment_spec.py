@@ -70,7 +70,7 @@ class V5ExperimentSpec(BaseModel):
     execution_backend: V5Backend = "preview"
     plugin_selections: list[V5PluginSelection]
     topology: V5Topology
-    tx_count: int = Field(default=100, ge=1, le=271868)
+    tx_count: int = Field(default=1000, ge=1, le=271868)
     seed: int = 1
     workload_source: V5WorkloadSourceSpec | None = None
     duration_ms: int = Field(default=5000, ge=1000, le=3600000)

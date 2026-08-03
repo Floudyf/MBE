@@ -1,11 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { stat } from "node:fs/promises";
+import { selectOnlyMethod, selectOnlySuite } from "./v5-formal-test-helpers";
 
 test("shows persisted V5 results, runtime evidence, and real artifacts", async ({ page, request }) => {
   test.setTimeout(180_000);
   await page.goto("/?e2e=1");
   await page.locator(".final-sidebar nav").first().getByRole("button").nth(1).click();
-  await page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox").check();
+  await selectOnlyMethod(page, "hash_serial");
+  await selectOnlySuite(page, "main_experiment");
   await page.getByLabel("nodes").fill("8");
   await page.getByLabel("shards").fill("2");
   await page.getByLabel("validators per shard").fill("4");
@@ -30,8 +32,9 @@ test("shows persisted V5 results, runtime evidence, and real artifacts", async (
 
   const row = page.getByTestId("v5-child-table").locator("tbody tr").first().locator("td");
   await expect(row.nth(7)).toHaveText("已完成completed");
-  await expect(row.nth(10)).toHaveText("40");
-  await expect(row.nth(11)).toHaveText("0");
+  await expect(row.nth(10)).toHaveText("true");
+  await expect(row.nth(14)).toHaveText("40");
+  await expect(row.nth(15)).toHaveText("0");
   await row.nth(0).getByRole("button").click();
   await expect(page.getByTestId("v5-metric-submitted").locator("dd")).toHaveText("40");
   await expect(page.getByTestId("v5-metric-terminal").locator("dd")).toHaveText("40");

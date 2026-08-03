@@ -23,7 +23,10 @@ from backend.app.core.paths import ROOT, WORKLOAD_CACHE_ROOT
 from backend.app.services.workload_adapters.base import SourceValidationSummary
 from backend.app.services.workload_adapters.registry import get_adapter
 
-SUPPORTED_COUNTS = frozenset({10_000, 50_000, 100_000, 250_000})
+# 100 is the bounded four-method smoke tier retained by the V5 data-plane
+# acceptance evidence.  It exercises the real dataset-derived path without
+# silently falling back to synthetic workload generation.
+SUPPORTED_COUNTS = frozenset({100, 1_000, 10_000, 50_000, 100_000, 250_000})
 SUPPORTED_ALPHAS = frozenset({0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4})
 GENERATOR_VERSION = "v5_workload_data_plane_v3_semantic_access_template"
 SELECTOR_VERSION = "contiguous_window_v1"
@@ -33,6 +36,18 @@ MANIFEST_ROOT = ROOT / "data" / "workloads" / "manifests"
 
 class WorkloadDataError(ValueError):
     pass
+
+
+class _HashingSink:
+    def __init__(self) -> None:
+        self.digest = hashlib.sha256()
+
+    def write(self, data: bytes) -> int:
+        self.digest.update(data)
+        return len(data)
+
+    def flush(self) -> None:
+        return None
 
 
 class DatasetSummaryDTO(BaseModel):
@@ -97,6 +112,8 @@ class WorkloadPreviewDTO(BaseModel):
     plugin_id: str
     dataset_id: str | None = None
     tx_count: int
+    dataset_summary: dict[str, Any] | None = None
+    selected_window_preview: dict[str, Any] = Field(default_factory=dict)
     selected_time_range: dict[str, int | None]
     operation_counts: dict[str, int]
     category_counts: dict[str, int] = Field(default_factory=dict)
@@ -249,6 +266,11 @@ def preview_workload(request: WorkloadPreviewRequest, *, shards: int = 4) -> Wor
             source_type="synthetic",
             plugin_id="deterministic_signed_synthetic",
             tx_count=request.requested_tx_count,
+            selected_window_preview={
+                "requested_tx_count": request.requested_tx_count,
+                "actual_selected_count": request.requested_tx_count,
+                "selection_digest": None,
+            },
             selected_time_range={"start_ms": None, "end_ms": None},
             operation_counts={"synthetic": request.requested_tx_count},
             category_counts={"synthetic": request.requested_tx_count},
@@ -287,6 +309,25 @@ def preview_workload(request: WorkloadPreviewRequest, *, shards: int = 4) -> Wor
     if manifest and tx_count > int(manifest.get("row_count") or 0):
         blockers.append("requested_tx_count exceeds dataset row_count")
     operation_counts = dict(manifest.get("operation_counts") or manifest.get("category_counts") or {})
+    selected_window_preview: dict[str, Any] = {}
+    if manifest and not blockers:
+        try:
+            csv_path = raw_source_path(manifest)
+            variant_mode = request.variant_mode or "original_window"
+            skew_axis = request.skew_axis or (manifest.get("default_skew_axis") if _is_derived_variant(variant_mode) else None)
+            selected_window_preview = _selection_preview_from_source(
+                csv_path,
+                manifest,
+                requested_tx_count=tx_count,
+                seed=request.seed,
+                variant_mode=variant_mode,
+                target_alpha=request.target_alpha,
+                skew_axis=skew_axis,
+                shards=shards,
+            )
+            operation_counts = dict(selected_window_preview.get("operation_counts") or operation_counts)
+        except WorkloadDataError as exc:
+            blockers.append(str(exc))
     shard_distribution = {f"s{i}": 0 for i in range(max(1, shards))}
     for index in range(tx_count):
         shard_distribution[f"s{index % max(1, shards)}"] += 1
@@ -295,7 +336,9 @@ def preview_workload(request: WorkloadPreviewRequest, *, shards: int = 4) -> Wor
         plugin_id=request.plugin_id,
         dataset_id=request.dataset_id,
         tx_count=tx_count,
-        selected_time_range={"start_ms": manifest.get("time_start_ms"), "end_ms": manifest.get("time_end_ms")},
+        dataset_summary=detail.model_dump() if detail else None,
+        selected_window_preview=selected_window_preview,
+        selected_time_range=selected_window_preview.get("selected_time_range") or {"start_ms": manifest.get("time_start_ms"), "end_ms": manifest.get("time_end_ms")},
         operation_counts=operation_counts,
         category_counts=operation_counts,
         natural_skew=dict(manifest.get("natural_skew_metrics") or {}),
@@ -552,28 +595,19 @@ def _skew_statistics(skew_keys: Counter[str], senders: set[str], receivers: set[
     }
 
 
+def supported_workload_counts() -> tuple[int, ...]:
+    return tuple(sorted(SUPPORTED_COUNTS))
+
+
 def _supported_counts() -> frozenset[int]:
-    counts = set(SUPPORTED_COUNTS)
-    extra = os.environ.get("MBE_V5_LOCAL_SMOKE_COUNTS", "")
-    for item in extra.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            value = int(item)
-        except ValueError:
-            continue
-        if value > 0:
-            counts.add(value)
-    return frozenset(counts)
+    return SUPPORTED_COUNTS
 
 
 def _is_derived_variant(variant_mode: str) -> bool:
     return variant_mode in {"contract_zipf", "key_zipf"}
 
 
-def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, source_sha256: str, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None) -> dict[str, Any]:
-    total = _canonical_count(canonical_path)
+def _selection_spec(*, dataset_id: str, source_sha256: str, canonical_sha256: str, requested_tx_count: int, seed: int, total: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None) -> tuple[dict[str, Any], int, str, str | None]:
     count = total if requested_tx_count == total else requested_tx_count
     if count <= 0 or count > total or (count != total and count not in _supported_counts()):
         raise WorkloadDataError("requested tx count is not supported by this dataset")
@@ -588,8 +622,184 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
             raise WorkloadDataError("derived workload requires skew_axis")
     elif target_alpha is not None:
         raise WorkloadDataError("original_window does not allow target_alpha")
+    spec = {
+        "dataset_id": dataset_id,
+        "source_sha256": source_sha256,
+        "canonical_sha256": canonical_sha256,
+        "requested_tx_count": count,
+        "seed": seed,
+        "selection_mode": "contiguous_window",
+        "selector_version": SELECTOR_VERSION,
+        "generator_version": GENERATOR_VERSION,
+        "variant_mode": variant_mode,
+        "target_alpha": target_alpha,
+        "skew_axis": skew_axis,
+    }
+    return spec, count, variant_mode, skew_axis
+
+
+def _selection_digest(spec: dict[str, Any], *, start: int, count: int, base_window_sha256: str) -> str:
+    payload = {**spec, "start_offset": start, "end_offset": start + count - 1, "base_window_sha256": base_window_sha256}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _operation_percentages(operation_counts: dict[str, int], count: int) -> dict[str, float]:
+    if count <= 0:
+        return {key: 0.0 for key in sorted(operation_counts)}
+    return {key: value / count for key, value in sorted(operation_counts.items())}
+
+
+def _stable_shard(value: object, shards: int) -> int:
+    shard_count = max(1, shards)
+    digest = hashlib.sha256(str(value or "").encode()).digest()
+    return int.from_bytes(digest[:8], "big") % shard_count
+
+
+def _canonical_sha256_from_source(csv_path: Path, manifest: dict[str, Any]) -> str:
+    adapter = adapter_for_manifest(manifest)
+    sink = _HashingSink()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=sink, compresslevel=9, mtime=0) as compressed:
+        previous_key: tuple[int, int] | None = None
+        for index, item in enumerate(adapter.iter_canonical_records(csv_path, manifest)):
+            record = _validate_canonical_record(item, dataset_id=manifest["dataset_id"], row_number=index)
+            key = (record["timestamp_ms"], int(record["source_row_index"]))
+            if previous_key is not None and key < previous_key:
+                raise WorkloadDataError("source order violates the canonical (timestamp_ms, source_row_index) contract")
+            previous_key = key
+            compressed.write(_canonical_bytes(record))
+    return sink.digest.hexdigest()
+
+
+def _selection_preview(canonical_path: Path, *, dataset_id: str, source_sha256: str, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4) -> dict[str, Any]:
+    total = _canonical_count(canonical_path)
+    spec, count, variant_mode, skew_axis = _selection_spec(
+        dataset_id=dataset_id,
+        source_sha256=source_sha256,
+        canonical_sha256=sha256_file(canonical_path),
+        requested_tx_count=requested_tx_count,
+        seed=seed,
+        total=total,
+        variant_mode=variant_mode,
+        target_alpha=target_alpha,
+        skew_axis=skew_axis,
+    )
+    start = _selection_start(spec, total, count)
+    base_hash_builder = hashlib.sha256()
+    base_records: list[dict[str, Any]] = []
+    selected_start_ms: int | None = None
+    selected_end_ms: int | None = None
+    for record in _window(canonical_path, start, count):
+        base_hash_builder.update(_canonical_bytes(record))
+        selected_start_ms = record["timestamp_ms"] if selected_start_ms is None else selected_start_ms
+        selected_end_ms = record["timestamp_ms"]
+        base_records.append(record)
+    base_hash = base_hash_builder.hexdigest()
+    selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{dataset_id}|{source_sha256}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}") if _is_derived_variant(variant_mode) else base_records
+    return _selected_window_preview(spec, selected, start=start, count=count, selected_start_ms=selected_start_ms, selected_end_ms=selected_end_ms, base_window_sha256=base_hash, shards=shards)
+
+
+def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4) -> dict[str, Any]:
+    adapter = adapter_for_manifest(manifest)
+    summary = _csv_summary(adapter.validate_source(csv_path, manifest, expected_sha256=manifest.get("source_sha256") or None))
+    canonical_sha256 = _canonical_sha256_from_source(csv_path, manifest)
+    spec, count, variant_mode, skew_axis = _selection_spec(
+        dataset_id=manifest["dataset_id"],
+        source_sha256=summary.source_sha256,
+        canonical_sha256=canonical_sha256,
+        requested_tx_count=requested_tx_count,
+        seed=seed,
+        total=summary.row_count,
+        variant_mode=variant_mode,
+        target_alpha=target_alpha,
+        skew_axis=skew_axis,
+    )
+    start = _selection_start(spec, summary.row_count, count)
+    base_hash_builder = hashlib.sha256()
+    base_records: list[dict[str, Any]] = []
+    selected_start_ms: int | None = None
+    selected_end_ms: int | None = None
+    previous_key: tuple[int, int] | None = None
+    end = start + count
+    for index, item in enumerate(adapter.iter_canonical_records(csv_path, manifest)):
+        record = _validate_canonical_record(item, dataset_id=manifest["dataset_id"], row_number=index)
+        key = (record["timestamp_ms"], int(record["source_row_index"]))
+        if previous_key is not None and key < previous_key:
+            raise WorkloadDataError("source order violates the canonical (timestamp_ms, source_row_index) contract")
+        previous_key = key
+        if index >= end:
+            break
+        if index < start:
+            continue
+        base_hash_builder.update(_canonical_bytes(record))
+        selected_start_ms = record["timestamp_ms"] if selected_start_ms is None else selected_start_ms
+        selected_end_ms = record["timestamp_ms"]
+        base_records.append(record)
+    base_hash = base_hash_builder.hexdigest()
+    selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{manifest['dataset_id']}|{summary.source_sha256}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}") if _is_derived_variant(variant_mode) else base_records
+    return _selected_window_preview(spec, selected, start=start, count=count, selected_start_ms=selected_start_ms, selected_end_ms=selected_end_ms, base_window_sha256=base_hash, shards=shards)
+
+
+def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]], *, start: int, count: int, selected_start_ms: int | None, selected_end_ms: int | None, base_window_sha256: str, shards: int) -> dict[str, Any]:
+    operation_counts: Counter[str] = Counter()
+    shard_distribution: Counter[str] = Counter({f"s{i}": 0 for i in range(max(1, shards))})
+    cross_shard_count = 0
+    skew_keys: Counter[str] = Counter()
+    senders: set[str] = set()
+    receivers: set[str] = set()
+    occurrences: Counter[int] = Counter()
+    skew_axis = spec.get("skew_axis")
+    for index, record in enumerate(selected):
+        operation_counts[str(record.get("operation_type") or "unknown")] += 1
+        source_shard = _stable_shard(record.get("routing_source_key") or record.get("sender_id"), shards)
+        target_shard = _stable_shard(record.get("routing_target_key") or record.get("receiver_id") or record.get("routing_source_key"), shards)
+        shard_distribution[f"s{source_shard}"] += 1
+        if source_shard != target_shard:
+            cross_shard_count += 1
+        if skew_axis and record.get("skew_keys", {}).get(str(skew_axis)):
+            skew_keys[record["skew_keys"][str(skew_axis)]] += 1
+        elif record.get("routing_target_key"):
+            skew_keys[str(record["routing_target_key"])] += 1
+        senders.add(str(record.get("sender_id") or ""))
+        if record.get("receiver_id"):
+            receivers.add(str(record["receiver_id"]))
+        occurrences[int(record.get("source_row_index", index))] += 1
+    operation_data = dict(operation_counts)
+    selection_digest = _selection_digest(spec, start=start, count=count, base_window_sha256=base_window_sha256)
+    return {
+        "requested_tx_count": spec["requested_tx_count"],
+        "actual_selected_count": len(selected),
+        "selected_time_range": {"start_ms": selected_start_ms, "end_ms": selected_end_ms},
+        "category_counts": operation_data,
+        "operation_counts": operation_data,
+        "category_percentages": _operation_percentages(operation_data, len(selected)),
+        "operation_percentages": _operation_percentages(operation_data, len(selected)),
+        "realized_skew": _skew_statistics(skew_keys, senders, receivers, max(1, len(selected)), occurrences, str(skew_axis) if skew_axis else None),
+        "cross_shard_count": cross_shard_count,
+        "cross_shard_ratio": cross_shard_count / len(selected) if selected else 0,
+        "shard_distribution": dict(sorted(shard_distribution.items())),
+        "selection_digest": selection_digest,
+        "selection_mode": spec["selection_mode"],
+        "selector_version": spec["selector_version"],
+        "start_offset": start,
+        "end_offset": start + count - 1,
+        "base_window_sha256": base_window_sha256,
+    }
+
+
+def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, source_sha256: str, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None) -> dict[str, Any]:
+    total = _canonical_count(canonical_path)
     canonical_hash = sha256_file(canonical_path)
-    spec = {"dataset_id": dataset_id, "source_sha256": source_sha256, "canonical_sha256": canonical_hash, "requested_tx_count": count, "seed": seed, "selection_mode": "contiguous_window", "selector_version": SELECTOR_VERSION, "generator_version": GENERATOR_VERSION, "variant_mode": variant_mode, "target_alpha": target_alpha, "skew_axis": skew_axis}
+    spec, count, variant_mode, skew_axis = _selection_spec(
+        dataset_id=dataset_id,
+        source_sha256=source_sha256,
+        canonical_sha256=canonical_hash,
+        requested_tx_count=requested_tx_count,
+        seed=seed,
+        total=total,
+        variant_mode=variant_mode,
+        target_alpha=target_alpha,
+        skew_axis=skew_axis,
+    )
     materialized_id = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     target = cache_root / "materialized" / materialized_id
     output = target / "workload.jsonl.gz"
@@ -598,6 +808,19 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
         if summary.get("materialized_sha256") == sha256_file(output):
             summary = dict(summary)
             summary["cache_hit"] = True
+            if not summary.get("selection_digest"):
+                selected_preview = _selection_preview(
+                    canonical_path,
+                    dataset_id=dataset_id,
+                    source_sha256=source_sha256,
+                    requested_tx_count=requested_tx_count,
+                    seed=seed,
+                    variant_mode=variant_mode,
+                    target_alpha=target_alpha,
+                    skew_axis=skew_axis,
+                )
+                summary["selection_digest"] = selected_preview["selection_digest"]
+                summary["selected_window_preview"] = selected_preview
             return summary
         raise WorkloadDataError("materialization cache hash mismatch")
     start = _selection_start(spec, total, count)
@@ -617,6 +840,16 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
         selected = _window(canonical_path, start, count)
     else:
         selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{dataset_id}|{source_sha256}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}")
+    selected_preview = _selection_preview(
+        canonical_path,
+        dataset_id=dataset_id,
+        source_sha256=source_sha256,
+        requested_tx_count=requested_tx_count,
+        seed=seed,
+        variant_mode=variant_mode,
+        target_alpha=target_alpha,
+        skew_axis=skew_axis,
+    )
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{materialized_id}.", dir=target.parent))
     try:
@@ -643,7 +876,7 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
                     compressed.write(_canonical_bytes(_materialized_record(record, variant_mode, index, occurrence)))
         skew = _skew_statistics(skew_keys, senders, receivers, total_count, occurrences, skew_axis)
         summary = dict(spec)
-        summary.update({"materialized_id": materialized_id, "actual_tx_count": total_count, "start_offset": start, "end_offset": start + total_count - 1, "selected_time_start_ms": selected_start_ms, "selected_time_end_ms": selected_end_ms, "base_window_sha256": base_hash, "materialized_sha256": sha256_file(temporary / "workload.jsonl.gz"), "materialized_relative_path": f"materialized/{materialized_id}/workload.jsonl.gz", "operation_counts": dict(operation_counts), "category_counts": dict(operation_counts), "cache_hit": False, **skew})
+        summary.update({"materialized_id": materialized_id, "actual_tx_count": total_count, "start_offset": start, "end_offset": start + total_count - 1, "selected_time_start_ms": selected_start_ms, "selected_time_end_ms": selected_end_ms, "base_window_sha256": base_hash, "selection_digest": selected_preview["selection_digest"], "selected_window_preview": selected_preview, "materialized_sha256": sha256_file(temporary / "workload.jsonl.gz"), "materialized_relative_path": f"materialized/{materialized_id}/workload.jsonl.gz", "operation_counts": dict(operation_counts), "category_counts": dict(operation_counts), "cache_hit": False, **skew})
         (temporary / "materialization_summary.json").write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         (temporary / ".ready").write_text("ready\n", encoding="utf-8")
         os.replace(temporary, target)

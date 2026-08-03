@@ -33,5 +33,10 @@ class V5CompiledRunPlan(BaseModel):
     workload_plan: dict[str, Any]
     fault_plan: dict[str, Any]
     expected_artifacts: list[str]
+    # ``expected_artifacts`` remains the exact producer-facing list for the Go
+    # supervisor.  Formal eligibility is evaluated exclusively against this
+    # versioned, child-root scoped contract.
+    artifact_contract_version: int = 2
+    artifact_contract: list[dict[str, Any]] = Field(default_factory=list)
     resource_estimate: dict[str, Any]
     no_fallback: bool = True

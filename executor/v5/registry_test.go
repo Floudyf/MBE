@@ -83,6 +83,10 @@ func TestBuiltinRuntimePluginsCreateRuntimeObjects(t *testing.T) {
 	if producer.Interval() != 25*time.Millisecond || producer.BlockSize() != 2 || producer.ShouldProduce(BlockProductionInput{Pool: pool}) {
 		t.Fatalf("block producer plugin did not expose runtime thresholds")
 	}
+	defaultProducer := builtinBlockProducer{makeBasic("block_producer", "time_or_count_block_producer", nil)}
+	if defaultProducer.Interval() != 75*time.Millisecond || defaultProducer.BlockSize() != 100 {
+		t.Fatalf("block producer fallback defaults drifted: size=%d interval=%s", defaultProducer.BlockSize(), defaultProducer.Interval())
+	}
 	if _, err := producer.BuildCandidate(BlockProductionInput{Pool: pool}); err == nil {
 		t.Fatal("block producer should delegate candidate construction and reject missing proposer")
 	}

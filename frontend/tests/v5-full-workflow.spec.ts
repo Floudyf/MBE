@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { selectOnlyMethod, selectOnlySuite } from "./v5-formal-test-helpers";
 
 test("saves a V5 method profile and executes the complete Formal workflow", async ({ page, request }) => {
   test.setTimeout(180_000);
@@ -33,21 +34,26 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
     configId = String((await (await saveResponse).json()).config_id ?? "");
     expect(configId).toMatch(/^v3cfg_/);
     await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
-    await expect(page.getByTestId("v5-run-preferred-method")).toContainText(configId);
-    await expect(page.getByTestId("v5-run-preferred-method")).toContainText(methodName);
-    await expect(page.getByTestId(`v5-run-method-${configId}`).getByRole("checkbox")).toBeChecked();
-    await expect(page.getByTestId("v5-run-method-v5_catalog_default").getByRole("checkbox")).not.toBeChecked();
+    await expect(page.getByTestId("v5-run-preferred-method")).not.toContainText(configId);
+    await expect(page.getByTestId("v5-run-preferred-method")).not.toContainText(methodName);
+    await expect(page.getByTestId(`v5-run-method-${configId}`)).toHaveCount(0);
+    await expect(page.getByTestId("v5-run-method-v5_catalog_default")).toHaveCount(0);
+    await selectOnlyMethod(page, "hash_serial");
+    await selectOnlySuite(page, "main_experiment");
 
     await page.getByLabel("nodes").fill("8"); await page.getByLabel("shards").fill("2"); await page.getByLabel("validators per shard").fill("4");
     await page.getByLabel("tx_count").fill("40"); await page.getByLabel("cross_shard_ratio").fill("0.25"); await page.getByLabel("seeds").fill("47"); await page.getByLabel("repeats").fill("1");
     await page.getByTestId("v5-formal-preview-button").click();
     await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("矩阵行数：1");
-    const previewRow = page.locator(`[data-method-config-id="${configId}"]`);
+    const previewRow = page.locator(`[data-method-config-id="hash_serial"]`);
     await expect(previewRow).toHaveCount(1);
-    await expect(previewRow.locator("td").nth(1)).toHaveText(methodName);
+    await expect(previewRow.locator("td").nth(1)).toHaveText("Baseline");
     await expect(previewRow.locator("td").nth(2)).toHaveText("synthetic");
     await expect(previewRow.locator("td").nth(5)).toHaveText("40");
-    await expect(previewRow.locator("td").nth(11)).toContainText("可运行");
+    await expect(previewRow.locator("td").nth(9)).toHaveText("100");
+    await expect(previewRow.locator("td").nth(10)).toHaveText("75");
+    await expect(previewRow.locator("td").nth(11)).toHaveText("1");
+    await expect(previewRow.locator("td").nth(14)).toContainText("可运行");
     await expect(page.getByTestId("v5-start-run-group-button")).toBeEnabled();
     await page.getByTestId("v5-start-run-group-button").click();
     await expect.poll(async () => page.getByTestId("v5-formal-group-summary").innerText(), { timeout: 180_000 }).toContain("已完成");
@@ -58,9 +64,9 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
     await expect(page.getByTestId("v5-group-backend").locator("dd")).toHaveText("real_cluster");
     await expect(page.getByTestId("v5-group-children").locator("dd")).toHaveText("1/1");
     const child = page.getByTestId("v5-child-table").locator("tbody tr").first().locator("td");
-    await expect(child.nth(2)).toHaveText(methodName); await expect(child.nth(7)).toHaveText("已完成completed");
+    await expect(child.nth(2)).toHaveText("Baseline"); await expect(child.nth(7)).toHaveText("已完成completed");
     await child.nth(0).getByRole("button").click();
-    await expect(page.getByTestId("v5-metric-method-config-id").locator("dd")).toHaveText(configId);
+    await expect(page.getByTestId("v5-metric-method-config-id").locator("dd")).toHaveText("hash_serial");
     await expect(page.getByTestId("v5-metric-terminal").locator("dd")).toHaveText("40"); await expect(page.getByTestId("v5-metric-incomplete").locator("dd")).toHaveText("0");
     await expect(page.getByTestId("v5-metric-cross-requested").locator("dd")).toHaveText("10"); await expect(page.getByTestId("v5-metric-cross-finalized").locator("dd")).toHaveText("10");
     await expect(page.getByTestId("v5-metric-orphan-processes").locator("dd")).toHaveText("0"); await expect(page.getByTestId("v5-metric-no-fallback").locator("dd")).toHaveText("true"); await expect(page.getByTestId("v5-metric-state-root-consistent").locator("dd")).toHaveText("true");

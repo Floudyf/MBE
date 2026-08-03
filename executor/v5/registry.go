@@ -1005,14 +1005,14 @@ func (p builtinBlockProducer) BlockSize() int {
 	case float64:
 		return int(value)
 	}
-	return 10
+	return 100
 }
 
 func (p builtinBlockProducer) Interval() time.Duration {
 	if value := intValue(p.config["interval_ms"]); value > 0 {
 		return time.Duration(value) * time.Millisecond
 	}
-	return 200 * time.Millisecond
+	return 75 * time.Millisecond
 }
 
 func (p builtinBlockProducer) ShouldProduce(input BlockProductionInput) bool {
