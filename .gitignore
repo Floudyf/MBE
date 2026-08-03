@@ -66,3 +66,6 @@ frontend/playwright-report/
 /v5_*/
 /v5grp_*.zip
 /v5grp_*/
+
+# Broken virtual environments preserved by smart launcher
+.venv.broken-*/
