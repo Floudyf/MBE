@@ -244,6 +244,16 @@ def _run_worker(group_id: str) -> None:
                 child.update(
                     {
                         "status": result["status"],
+                        "execution_status": result.get("summary", {}).get("execution_status", result["status"]),
+                        "artifact_status": result.get("summary", {}).get("artifact_status", "pending"),
+                        "formal_eligibility": bool(result.get("summary", {}).get("formal_eligibility", False)),
+                        "execution_gate": result.get("summary", {}).get("execution_gate"),
+                        "artifact_gate": result.get("summary", {}).get("artifact_gate"),
+                        "completion_gate": result.get("summary", {}).get("completion_gate"),
+                        "artifact_contract_version": result.get("summary", {}).get("artifact_contract_version"),
+                        "missing_artifacts": result.get("summary", {}).get("missing_artifacts", []),
+                        "unexpected_artifacts": result.get("summary", {}).get("unexpected_artifacts", []),
+                        "artifact_contract": result.get("summary", {}).get("artifact_contract"),
                         "result": result,
                         "metrics": metrics,
                         "paper_candidate": _is_paper_candidate_result(result, metrics),

@@ -165,6 +165,39 @@ def test_artifact_contract_reports_missing_expected_artifacts(tmp_path: Path) ->
     assert "extra.log" in contract["unexpected_artifacts"]
 
 
+def test_artifact_contract_v2_normalizes_scoped_windows_paths_and_requires_each_node(tmp_path: Path) -> None:
+    for name in ("client/access_matrix_summary.csv", "nodes/n0/block_stm_summary.json", "nodes/n1/block_stm_summary.json"):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("ok", encoding="utf-8")
+    contract = evaluate_expected_artifacts(tmp_path, [
+        {"path_pattern": "client\\access_matrix_summary.csv", "scope": "client"},
+        {"path_pattern": "nodes/*/block_stm_summary.json", "scope": "node", "per_node": True, "node_ids": ["n0", "n1"]},
+    ])
+    assert contract["artifact_contract_version"] == 2
+    assert contract["artifact_contract_status"] == "complete"
+    assert not contract["unexpected_artifacts"]
+    (tmp_path / "nodes/n1/block_stm_summary.json").unlink()
+    missing = evaluate_expected_artifacts(tmp_path, [{"path_pattern": "nodes/*/block_stm_summary.json", "scope": "node", "per_node": True, "node_ids": ["n0", "n1"]}])
+    assert missing["artifact_contract_status"] == "incomplete"
+
+
+def test_compiler_persists_a_scoped_v2_contract_without_basename_requirements(tmp_path: Path) -> None:
+    spec = _spec()
+    spec.plugin_selections = [
+        item.model_copy(update={"plugin_id": "metatrack_coaccess_routing"} if item.category == "routing" else {"plugin_id": "block_stm_block_executor"} if item.category == "block_executor" else {})
+        for item in spec.plugin_selections
+    ]
+    plan = compile_plan(spec, tmp_path)
+    assert plan.artifact_contract_version == 2
+    assert plan.artifact_contract
+    assert all("path_pattern" in item and "scope" in item for item in plan.artifact_contract)
+    node_summary = next(item for item in plan.artifact_contract if item["path_pattern"] == "nodes/*/block_stm_summary.json")
+    assert node_summary["per_node"] is True
+    assert node_summary["node_ids"] == [node.node_id for node in plan.node_configs]
+    assert not any(item["path_pattern"] == "block_stm_summary.json" for item in plan.artifact_contract)
+
+
 def test_run_artifact_catalog_records_role_truth_and_hash(tmp_path: Path) -> None:
     (tmp_path / "aggregate").mkdir()
     (tmp_path / "aggregate" / "remote_state_metrics_summary.json").write_text("{}", encoding="utf-8")

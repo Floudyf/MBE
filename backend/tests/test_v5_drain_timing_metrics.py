@@ -3,7 +3,7 @@ from pathlib import Path
 
 from backend.app.services.v5_metric_extractor import extract
 from backend.app.services.v5_formal_scheduler import _is_paper_candidate_result
-from backend.app.services.v5_real_cluster_runner import _completion_gate, _run_status_from_completion
+from backend.app.services.v5_real_cluster_runner import _completion_gate, _run_status_from_completion, _status_fields
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -122,6 +122,16 @@ def test_run_status_depends_on_process_and_completion_gate_not_paper_candidate_r
     assert _run_status_from_completion(0, {"passed": True, "blockers": []}) == "completed"
     assert _run_status_from_completion(1, {"passed": True, "blockers": []}) == "failed"
     assert _run_status_from_completion(0, {"passed": False, "blockers": ["pending"]}) == "failed"
+
+
+def test_execution_success_with_incomplete_artifacts_remains_completed_but_not_formally_eligible() -> None:
+    status = _status_fields(0, {"passed": True, "blockers": []}, {"passed": False, "blockers": ["missing"]})
+    assert status == {"execution_status": "completed", "artifact_status": "incomplete", "formal_eligibility": False}
+
+
+def test_execution_failure_remains_failed_even_when_artifacts_are_complete() -> None:
+    status = _status_fields(1, {"passed": True, "blockers": []}, {"passed": True, "blockers": []})
+    assert status == {"execution_status": "failed", "artifact_status": "complete", "formal_eligibility": False}
 
 
 def test_paper_candidate_inputs_block_old_throughput_window(tmp_path: Path) -> None:

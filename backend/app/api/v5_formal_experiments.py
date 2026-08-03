@@ -11,7 +11,7 @@ from backend.app.models.v5_formal_experiment import V5FormalRunRequest
 from backend.app.services.v5_formal_run_store import children, create_group, read_child, read_group, write_group
 from backend.app.services.v5_formal_scheduler import start
 from backend.app.services.v5_formal_artifact_catalog import read_catalog, safe_artifact_name
-from backend.app.services.v5_formal_dto import child_detail as child_detail_dto, child_summary, group_detail, group_summary
+from backend.app.services.v5_formal_dto import V5FormalChildResponse, V5FormalRunGroupDetailResponse, child_detail as child_detail_dto, child_summary, group_detail, group_summary
 from backend.app.services.v5_formal_plan_validator import FormalPlanValidationError, validate_request
 from backend.app.services import v5_cleanup_service
 
@@ -77,7 +77,7 @@ def list_run_group_summaries(
     return {"items": page, "total": len(filtered), "next_cursor": str(next_offset) if next_offset is not None else None}
 
 
-@router.get("/run-groups/{group_id}")
+@router.get("/run-groups/{group_id}", response_model=V5FormalRunGroupDetailResponse)
 def get_run_group(group_id: str) -> dict:
     try:
         return group_detail(read_group(group_id), children(group_id))
@@ -161,13 +161,13 @@ def cleanup_legacy_saved_configs(dry_run: bool = Query(True)) -> dict:
     )
 
 
-@router.get("/run-groups/{group_id}/children")
+@router.get("/run-groups/{group_id}/children", response_model=list[V5FormalChildResponse])
 def list_children(group_id: str) -> list[dict]:
     try: return [child_summary(item) for item in children(group_id)]
     except (FileNotFoundError, ValueError) as exc: raise HTTPException(404, "unknown formal run group") from exc
 
 
-@router.get("/run-groups/{group_id}/children/{child_id}")
+@router.get("/run-groups/{group_id}/children/{child_id}", response_model=V5FormalChildResponse)
 def child_detail(group_id: str, child_id: str) -> dict:
     try: return child_detail_dto(read_child(group_id, child_id))
     except (FileNotFoundError, ValueError) as exc: raise HTTPException(404, "unknown child run") from exc

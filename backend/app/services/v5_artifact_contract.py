@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import fnmatch
 from pathlib import Path
 from typing import Iterable
 
@@ -30,20 +31,52 @@ def build_run_artifact_catalog(run_dir: Path, *, run_id: str) -> dict:
 
 
 def evaluate_expected_artifacts(run_dir: Path, expected_artifacts: Iterable[object]) -> dict:
-    expected = sorted({item for item in (_safe_relative_path(value) for value in expected_artifacts) if item})
-    actual = sorted(path.relative_to(run_dir).as_posix() for path in run_dir.rglob("*") if path.is_file())
+    """Evaluate a version-2, child-root scoped artifact contract.
+
+    Entries may be legacy strings or mappings with ``path_pattern``.  A node
+    wildcard is deliberately expanded against the actual node ids so one node
+    cannot satisfy evidence required from every node.
+    """
+    specs = [_contract_spec(value) for value in expected_artifacts]
+    specs = [item for item in specs if item]
+    actual = sorted(path.relative_to(run_dir).as_posix().replace("\\", "/") for path in run_dir.rglob("*") if path.is_file())
     actual_set = set(actual)
-    expected_set = set(expected)
-    missing = sorted(name for name in expected if name not in actual_set)
+    node_ids = sorted({name.split("/")[1] for name in actual if name.startswith("nodes/") and len(name.split("/")) > 2})
+    expected_set: set[str] = set()
+    missing: list[str] = []
+    for spec in specs:
+        pattern = spec["path_pattern"]
+        patterns = [pattern]
+        if spec.get("per_node") and "nodes/*/" in pattern:
+            required_nodes = spec.get("node_ids") or node_ids
+            patterns = [pattern.replace("nodes/*/", f"nodes/{node_id}/") for node_id in required_nodes]
+        for current in patterns:
+            matches = [name for name in actual if fnmatch.fnmatchcase(name, current)]
+            expected_set.update(matches)
+            if len(matches) < int(spec.get("min_count", 1)):
+                missing.append(current)
     unexpected = sorted(name for name in actual if name not in expected_set)
     return {
-        "schema_version": "mbe_v5_artifact_contract_v1",
+        "schema_version": "mbe_v5_artifact_contract_v2",
+        "artifact_contract_version": 2,
         "artifact_contract_status": "complete" if not missing else "incomplete",
-        "expected_artifact_count": len(expected),
+        "expected_artifact_count": len(specs),
         "actual_artifact_count": len(actual),
         "missing_expected_artifacts": missing,
         "unexpected_artifacts": unexpected,
     }
+
+
+def _contract_spec(value: object) -> dict | None:
+    if isinstance(value, str):
+        path = _safe_relative_path(value)
+        return {"path_pattern": path, "scope": path.split("/", 1)[0] if path else "child_root", "per_node": path.startswith("nodes/*/") if path else False, "required_for_formal_eligibility": True, "min_count": 1} if path else None
+    if not isinstance(value, dict):
+        return None
+    path = _safe_relative_path(value.get("path_pattern"))
+    if not path:
+        return None
+    return {"path_pattern": path, "scope": value.get("scope", "child_root"), "per_node": bool(value.get("per_node", False)), "node_ids": list(value.get("node_ids", [])), "required_for_formal_eligibility": bool(value.get("required_for_formal_eligibility", True)), "min_count": int(value.get("min_count", 1))}
 
 
 def catalog_entry(run_dir: Path, name: str, size_bytes: int, *, download_url: str, sha256: str | None = None) -> dict:

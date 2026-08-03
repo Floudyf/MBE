@@ -97,6 +97,44 @@ def requested_cross_shard_count(tx_count: int, ratio: float) -> int:
     return int(tx_count * ratio + 0.5)
 
 
+def compile_artifact_contract(expected_artifacts: list[str], nodes: list[V5CompiledNodeConfig]) -> list[dict[str, object]]:
+    """Compile the formal v2 contract from the producer-facing file list.
+
+    Node evidence is represented once as a scoped wildcard plus the topology's
+    actual node ids.  This avoids a basename contract while retaining the
+    exact list consumed by the runtime producer.
+    """
+    node_ids = [node.node_id for node in nodes]
+    grouped_node_artifacts = sorted({path.split("/", 2)[2] for path in expected_artifacts if path.startswith("nodes/") and path.count("/") >= 2})
+    entries: list[dict[str, object]] = []
+    for path in expected_artifacts:
+        if path.startswith("nodes/"):
+            continue
+        if path.startswith("client/"):
+            scope = "client"
+        elif path.startswith("aggregate/"):
+            scope = "aggregate"
+        else:
+            scope = "child_root"
+        entries.append({
+            "path_pattern": path,
+            "scope": scope,
+            "per_node": False,
+            "node_ids": [],
+            "min_count": 1,
+            "required_for_formal_eligibility": True,
+        })
+    entries.extend({
+        "path_pattern": f"nodes/*/{artifact}",
+        "scope": "node",
+        "per_node": True,
+        "node_ids": node_ids,
+        "min_count": 1,
+        "required_for_formal_eligibility": True,
+    } for artifact in grouped_node_artifacts)
+    return entries
+
+
 def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_id: str | None = None) -> V5CompiledRunPlan:
     compatibility = validate(spec)
     if not compatibility.valid:
@@ -137,6 +175,7 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
             for node in nodes
             for artifact in BLOCK_STM_NODE_ARTIFACTS
         ]
+    artifact_contract = compile_artifact_contract(expected_artifacts, nodes)
     return V5CompiledRunPlan(
         plan_id=f"v5plan_{digest[:16]}", plan_digest=digest,
         execution_backend=spec.execution_backend, duration_ms=spec.duration_ms,
@@ -145,7 +184,10 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
         method_config_id=spec.method_config_id,
         experiment_spec=normalized, plugin_snapshot=snapshot, node_configs=nodes,
         workload_plan=workload, fault_plan=spec.fault_policy,
-        expected_artifacts=expected_artifacts, resource_estimate=compatibility.resource_estimate,
+        expected_artifacts=expected_artifacts,
+        artifact_contract_version=2,
+        artifact_contract=artifact_contract,
+        resource_estimate=compatibility.resource_estimate,
     )
 
 

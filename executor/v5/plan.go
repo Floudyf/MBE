@@ -53,6 +53,19 @@ type WorkloadPlan struct {
 	ExpectedCrossShardCount  int      `json:"expected_cross_shard_count"`
 	ExpectedCrossShardRatio  float64  `json:"expected_cross_shard_ratio"`
 }
+
+// ArtifactContractEntry is evidence metadata owned by the Python compiler.
+// The supervisor does not interpret it, but it must survive plan load/save so
+// the persisted child plan remains the authoritative v2 formal contract.
+type ArtifactContractEntry struct {
+	PathPattern                  string   `json:"path_pattern"`
+	Scope                        string   `json:"scope"`
+	PerNode                      bool     `json:"per_node"`
+	NodeIDs                      []string `json:"node_ids"`
+	MinCount                     int      `json:"min_count"`
+	RequiredForFormalEligibility bool     `json:"required_for_formal_eligibility"`
+}
+
 type Plan struct {
 	PlanID           string         `json:"plan_id"`
 	PlanDigest       string         `json:"plan_digest"`
@@ -64,6 +77,8 @@ type Plan struct {
 	WorkloadPlan     WorkloadPlan   `json:"workload_plan"`
 	FaultPlan        map[string]any `json:"fault_plan"`
 	NoFallback       bool           `json:"no_fallback"`
+	ArtifactContractVersion int                     `json:"artifact_contract_version"`
+	ArtifactContract        []ArtifactContractEntry `json:"artifact_contract"`
 }
 
 func LoadPlan(path string) (Plan, error) {

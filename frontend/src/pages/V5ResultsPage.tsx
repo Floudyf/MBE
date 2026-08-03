@@ -368,7 +368,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     {detail && <article className="final-card wide">
       <h2>子实验</h2>
       <div className="table-wrap"><table data-testid="v5-child-table">
-        <thead><tr><th>子实验</th><th>实验类型</th><th>方法</th><th>种子</th><th>重复</th><th>拓扑</th><th>交易</th><th>状态</th><th>TPS</th><th>P99</th><th>终态</th><th>未完成</th><th>论文候选</th></tr></thead>
+        <thead><tr><th>子实验</th><th>实验类型</th><th>方法</th><th>种子</th><th>重复</th><th>拓扑</th><th>交易</th><th>执行状态</th><th>产物状态</th><th>正式结果</th><th>无回退</th><th>阻断原因</th><th>TPS</th><th>P99</th><th>终态</th><th>未完成</th><th>论文候选</th></tr></thead>
         <tbody>{detail.children.map((child) => <ChildRow key={child.child_run_id} child={child} selected={child.child_run_id === selectedChildId} onSelect={() => void loadChild(detail.group.run_group_id, child.child_run_id)} />)}</tbody>
       </table></div>
     </article>}
@@ -451,12 +451,18 @@ function CleanupEvidence({ report, scan, legacyScan }: { report: V5CleanupReport
 
 function ChildRow({ child, selected, onSelect }: { child: V5FormalChildRun; selected: boolean; onSelect: () => void }) {
   const finality = child.result?.summary?.finality_evidence;
+  const execution = child.execution_status ?? child.result?.summary?.execution_status ?? child.status;
+  const artifact = child.artifact_status ?? child.result?.summary?.artifact_status;
+  const eligible = child.formal_eligibility ?? child.result?.summary?.formal_eligibility;
+  const blockers = [...(child.execution_gate?.blockers ?? child.result?.summary?.execution_gate?.blockers ?? []), ...(child.artifact_gate?.blockers ?? child.result?.summary?.artifact_gate?.blockers ?? [])];
+  const executionLabel = execution === "completed" ? "已完成" : execution === "failed" ? "失败" : String(execution ?? "未提供");
+  const artifactLabel = artifact === "complete" ? "完整" : artifact === "incomplete" ? "不完整" : String(artifact ?? "未提供");
   return <tr className={selected ? "selected-row" : ""}>
     <td><button type="button" onClick={onSelect}>{child.child_run_id}</button></td>
     <td><span>{suiteLabel(child.suite_type)}</span><small>{child.suite_type}</small></td>
     <td>{child.method.display_name}</td><td>{child.seed}</td><td>{child.repeat_index + 1}</td>
     <td>{child.topology_point.nodes}/{child.topology_point.shards}/{child.topology_point.validators_per_shard}</td><td>{child.estimated_transactions}</td>
-    <td><span>{statusLabel(child.status)}</span><small>{child.status}</small>{child.error ? <small>{child.error}</small> : null}</td>
+    <td><span>{executionLabel}</span><small>{execution}</small></td><td>{artifactLabel}</td><td>{eligible === true ? "可用" : eligible === false ? "不可用" : "未提供"}</td><td>{child.result?.summary?.no_fallback === undefined ? "未提供" : String(child.result.summary.no_fallback)}</td><td>{blockers.length ? blockers.join("; ") : (child.error ?? "无")}</td>
     <td>{metric(child.metrics?.end_to_end_tps ?? finality?.end_to_end_tps ?? child.metrics?.throughput_tps)}</td><td>{metric(child.metrics?.p99_finality_ms ?? finality?.p99_finality_ms ?? child.metrics?.p99_latency_ms)}</td><td>{metric(finality?.terminal_unique_tx_count)}</td><td>{metric(finality?.incomplete_unique_tx_count)}</td><td>{booleanLabel(child.paper_candidate)}</td>
   </tr>;
 }

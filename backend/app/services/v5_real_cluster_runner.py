@@ -93,13 +93,23 @@ def run(spec: V5ExperimentSpec) -> dict:
     (run_dir / "supervisor_stderr.log").write_text(result.stderr, encoding="utf-8")
     write_run_artifact_catalog(run_dir, run_id=run_id)
     summary = v5_real_cluster_artifacts.read_summary(run_dir)
-    artifact_contract = evaluate_expected_artifacts(run_dir, plan.expected_artifacts)
+    artifact_contract = evaluate_expected_artifacts(
+        run_dir,
+        plan.artifact_contract or plan.expected_artifacts,
+    )
     summary["artifact_contract"] = artifact_contract
+    summary["artifact_contract_version"] = artifact_contract["artifact_contract_version"]
     summary["artifact_contract_status"] = artifact_contract["artifact_contract_status"]
     summary["missing_expected_artifacts"] = artifact_contract["missing_expected_artifacts"]
+    summary["missing_artifacts"] = artifact_contract["missing_expected_artifacts"]
     summary["unexpected_artifacts"] = artifact_contract["unexpected_artifacts"]
-    completion_gate = _completion_gate(run_dir, summary)
+    execution_gate = _completion_gate(run_dir, {**summary, "missing_expected_artifacts": []})
+    artifact_gate = {"passed": artifact_contract["artifact_contract_status"] == "complete", "blockers": [f"artifact_contract:missing:{item}" for item in artifact_contract["missing_expected_artifacts"]]}
+    completion_gate = {"passed": execution_gate["passed"] and artifact_gate["passed"], "blockers": execution_gate["blockers"] + artifact_gate["blockers"]}
+    summary["execution_gate"] = execution_gate
+    summary["artifact_gate"] = artifact_gate
     summary["completion_gate"] = completion_gate
+    summary.update(_status_fields(result.returncode, execution_gate, artifact_gate))
 
     (run_dir / "real_cluster_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
@@ -112,7 +122,7 @@ def run(spec: V5ExperimentSpec) -> dict:
 
     status_value = _run_status_from_completion(
         result.returncode,
-        completion_gate,
+        execution_gate,
     )
     return {
         "run_id": run_id,
@@ -142,8 +152,19 @@ def _logical_output_dir(path: Path) -> str:
             return "$MBE_RUNTIME_ROOT"
 
 
-def _run_status_from_completion(returncode: int, completion_gate: dict) -> str:
-    return "completed" if returncode == 0 and completion_gate.get("passed") is True else "failed"
+def _run_status_from_completion(returncode: int, execution_gate: dict) -> str:
+    return "completed" if returncode == 0 and execution_gate.get("passed") is True else "failed"
+
+
+def _status_fields(returncode: int, execution_gate: dict, artifact_gate: dict) -> dict:
+    """Separate execution truth from artifact completeness."""
+    execution_status = _run_status_from_completion(returncode, execution_gate)
+    artifact_status = "complete" if artifact_gate.get("passed") else "incomplete"
+    return {
+        "execution_status": execution_status,
+        "artifact_status": artifact_status,
+        "formal_eligibility": bool(execution_status == "completed" and artifact_gate.get("passed")),
+    }
 
 
 def _completion_gate(run_dir: Path, summary: dict) -> dict:

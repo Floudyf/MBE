@@ -23,7 +23,10 @@ from backend.app.core.paths import ROOT, WORKLOAD_CACHE_ROOT
 from backend.app.services.workload_adapters.base import SourceValidationSummary
 from backend.app.services.workload_adapters.registry import get_adapter
 
-SUPPORTED_COUNTS = frozenset({1_000, 10_000, 50_000, 100_000, 250_000})
+# 100 is the bounded four-method smoke tier retained by the V5 data-plane
+# acceptance evidence.  It exercises the real dataset-derived path without
+# silently falling back to synthetic workload generation.
+SUPPORTED_COUNTS = frozenset({100, 1_000, 10_000, 50_000, 100_000, 250_000})
 SUPPORTED_ALPHAS = frozenset({0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4})
 GENERATOR_VERSION = "v5_workload_data_plane_v3_semantic_access_template"
 SELECTOR_VERSION = "contiguous_window_v1"

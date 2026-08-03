@@ -1349,7 +1349,8 @@ export type V5FormalMatrixRow = {
 export type V5FormalPreviewResponse = { execution_backend: string; rows: V5FormalMatrixRow[]; paper_candidate: boolean };
 export type V5FormalAggregate = { count?: number | null; mean?: number | null; median?: number | null; std?: number | null; min?: number | null; max?: number | null; ci95_low?: number | null; ci95_high?: number | null; completed_count?: number | null; failed_count?: number | null; missing_count?: number | null };
 export type V5FinalityEvidence = { [key: string]: unknown; logical_transaction_count?: number; submitted_unique_tx_count?: number; terminal_unique_tx_count?: number; incomplete_unique_tx_count?: number; finalized_unique_logical_tx_count?: number; intra_shard_committed_unique_count?: number; intra_shard_terminal_unique_count?: number; cross_shard_requested_unique_count?: number; cross_shard_target_committed_unique_count?: number; cross_shard_finalized_unique_count?: number; cross_shard_refunded_unique_count?: number; cross_shard_failed_unique_count?: number; throughput_tps?: number; end_to_end_tps?: number; logical_finality_tps?: number; completion_duration_ms?: number; logical_finality_duration_ms?: number; tail_completion_overhead_ms?: number; p50_finality_ms?: number; p95_finality_ms?: number; p99_finality_ms?: number; metric_truth?: string; tcp_send_latency_excluded?: boolean };
-export type V5RealClusterSummary = Record<string, unknown> & { runtime_stage?: string; runtime_truth?: string; ready_to_commit?: boolean; one_node_one_os_process?: boolean; independent_tcp_ports?: boolean; all_shards_active?: boolean; per_shard_multiple_blocks?: boolean; real_client_submission?: boolean; real_cross_shard_network?: boolean; real_pbft_style_messages?: boolean; real_signed_tx?: boolean; persistent_state?: boolean; plugin_driven_runtime?: boolean; block_executor_id?: string; block_executor_consistent?: boolean; plan_digest_consistent?: boolean; state_root_consistent?: boolean; no_fallback?: boolean; orphan_process_count?: number; distinct_process_count?: number; expected_process_count?: number; shard_count?: number; shard_blocks?: Record<string, number>; finality_evidence?: V5FinalityEvidence };
+export type V5Gate = { passed?: boolean; blockers?: string[] };
+export type V5RealClusterSummary = Record<string, unknown> & { runtime_stage?: string; runtime_truth?: string; ready_to_commit?: boolean; one_node_one_os_process?: boolean; independent_tcp_ports?: boolean; all_shards_active?: boolean; per_shard_multiple_blocks?: boolean; real_client_submission?: boolean; real_cross_shard_network?: boolean; real_pbft_style_messages?: boolean; real_signed_tx?: boolean; persistent_state?: boolean; plugin_driven_runtime?: boolean; block_executor_id?: string; block_executor_consistent?: boolean; plan_digest_consistent?: boolean; state_root_consistent?: boolean; no_fallback?: boolean; orphan_process_count?: number; distinct_process_count?: number; expected_process_count?: number; shard_count?: number; shard_blocks?: Record<string, number>; finality_evidence?: V5FinalityEvidence; execution_status?: "completed" | "failed" | "running" | "cancelled" | "timed_out"; artifact_status?: "complete" | "incomplete" | "pending" | "unavailable"; formal_eligibility?: boolean; execution_gate?: V5Gate; artifact_gate?: V5Gate; completion_gate?: V5Gate; artifact_contract_version?: number; missing_artifacts?: string[]; unexpected_artifacts?: string[] };
 export type V5RuntimeArtifact = {
   name: string;
   size_bytes: number;
@@ -1365,6 +1366,15 @@ export type V5FormalChildResult = { run_id?: string; status?: string; summary?: 
 export type V5FormalChildRun = V5FormalMatrixRow & {
   run_group_id: string;
   status: string;
+  execution_status?: V5RealClusterSummary["execution_status"];
+  artifact_status?: V5RealClusterSummary["artifact_status"];
+  formal_eligibility?: boolean;
+  execution_gate?: V5Gate;
+  artifact_gate?: V5Gate;
+  completion_gate?: V5Gate;
+  artifact_contract_version?: number;
+  missing_artifacts?: string[];
+  unexpected_artifacts?: string[];
   attempt?: number;
   paper_candidate?: boolean;
   error?: string;

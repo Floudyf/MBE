@@ -1,10 +1,37 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict
 
 
 _SUMMARY_KEYS = ("run_group_id", "status", "execution_backend", "runtime_truth", "created_at", "updated_at", "finished_at", "total_child_runs", "completed_child_runs", "failed_child_runs")
-_CHILD_KEYS = ("child_run_id", "run_group_id", "suite_type", "method", "method_id", "method_name", "method_config_id", "formal_plan_config_id", "method_role", "changed_plugin_categories", "topology_point", "workload_point", "fault_point", "seed", "repeat_index", "attempt", "comparison_group_id", "scan_variable", "scan_value", "estimated_processes", "estimated_transactions", "execution_backend", "status", "error", "paper_candidate", "metrics")
+_CHILD_KEYS = ("child_run_id", "run_group_id", "suite_type", "method", "method_id", "method_name", "method_config_id", "formal_plan_config_id", "method_role", "changed_plugin_categories", "topology_point", "workload_point", "fault_point", "seed", "repeat_index", "attempt", "comparison_group_id", "scan_variable", "scan_value", "estimated_processes", "estimated_transactions", "execution_backend", "status", "execution_status", "artifact_status", "formal_eligibility", "execution_gate", "artifact_gate", "completion_gate", "artifact_contract_version", "missing_artifacts", "unexpected_artifacts", "error", "paper_candidate", "metrics")
+
+
+class V5FormalChildResponse(BaseModel):
+    """Public child result shape; extra historical fields remain compatible."""
+
+    model_config = ConfigDict(extra="allow")
+    child_run_id: str
+    run_group_id: str
+    status: str
+    execution_status: str | None = None
+    artifact_status: str | None = None
+    formal_eligibility: bool | None = None
+    execution_gate: dict[str, Any] | None = None
+    artifact_gate: dict[str, Any] | None = None
+    completion_gate: dict[str, Any] | None = None
+    artifact_contract_version: int | None = None
+    missing_artifacts: list[str] | None = None
+    unexpected_artifacts: list[str] | None = None
+
+
+class V5FormalRunGroupDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    group: dict[str, Any]
+    children: list[V5FormalChildResponse]
 
 
 def group_summary(group: dict, *, children: list[dict] | None = None) -> dict:

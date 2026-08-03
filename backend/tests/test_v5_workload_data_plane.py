@@ -177,6 +177,7 @@ def test_original_materialization_is_reproducible_and_cache_is_atomic(tmp_path: 
 
 def test_1k_is_formally_supported_without_local_smoke_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MBE_V5_LOCAL_SMOKE_COUNTS", "123")
+    assert 100 in plane.supported_workload_counts()
     assert 1_000 in plane.supported_workload_counts()
     assert 123 not in plane.supported_workload_counts()
 

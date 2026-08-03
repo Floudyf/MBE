@@ -56,6 +56,8 @@ test("previews and runs a V5 real-cluster Formal RunGroup", async ({ page }) => 
   const child = page.getByTestId("v5-formal-child-table").locator("tbody tr").first().locator("td");
   await expect(child.nth(3)).toHaveText("11");
   await expect(child.nth(4)).toHaveText("20");
-  await expect(child.nth(5)).toHaveText("completed");
-  await expect(child.nth(6)).toHaveText("true");
+  await expect(child.nth(5)).toHaveText("已完成");
+  await expect(child.nth(6)).toHaveText("完整");
+  await expect(child.nth(7)).toHaveText("可用");
+  await expect(child.nth(8)).toHaveText("true");
 });

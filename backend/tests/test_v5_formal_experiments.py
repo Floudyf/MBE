@@ -310,3 +310,6 @@ def test_cleanup_legacy_saved_configs_scan_and_cleanup_are_separate(monkeypatch)
             Path("v5_formal_runs") / "cleanup_reports" / "cleanup_legacy_saved_configs" / "report_a",
         )
     ]
+def test_formal_child_openapi_declares_execution_and_artifact_status_fields() -> None:
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["V5FormalChildResponse"]["properties"]
+    assert {"execution_status", "artifact_status", "formal_eligibility", "execution_gate", "artifact_gate", "completion_gate", "artifact_contract_version", "missing_artifacts", "unexpected_artifacts"} <= set(schema)
