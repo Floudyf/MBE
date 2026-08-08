@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from numbers import Real
 
 from backend.app.models.v5_formal_experiment import V5FormalExperimentPlan, V5FormalMethod, V5FormalRunRequest
@@ -14,10 +15,49 @@ CATALOG_DEFAULT_METHOD_ID = "v5_catalog_default"
 METHOD_EXCLUDED_CATEGORIES = {"workload", "fault_injection"}
 MAX_CHILD_RUNS = 100
 
+
+def _batch_si_method(
+    method_id: str,
+    display_name: str,
+    *,
+    role: str,
+    partition_mode: str = "wrbp",
+    ordering_mode: str = "ofas",
+    priority_mode: str = "paper",
+    execution_mode: str = "snapshot_parallel",
+    worker_count: int = 4,
+) -> V5FormalMethod:
+    shared = {
+        "partition_mode": partition_mode,
+        "ordering_mode": ordering_mode,
+        "priority_mode": priority_mode,
+    }
+    return V5FormalMethod(
+        method_id=method_id,
+        display_name=display_name,
+        role=role,
+        plugin_overrides={
+            "routing": "hash_routing_baseline",
+            "execution": "batch_si_execution",
+            "scheduler": "batch_si_scheduler",
+            "block_executor": "batch_si_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={
+            "scheduler": dict(shared),
+            "block_executor": {
+                **shared,
+                "worker_count": worker_count,
+                "execution_mode": execution_mode,
+            },
+        },
+    )
+
+
 BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     "hash_serial": V5FormalMethod(
         method_id="hash_serial",
-        display_name="Baseline",
+        display_name="Stateful Hash + Serial Reference",
         role="baseline",
         plugin_overrides={
             "routing": "hash_routing_baseline",
@@ -30,7 +70,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
     "hash_block_stm": V5FormalMethod(
         method_id="hash_block_stm",
-        display_name="Block-STM",
+        display_name="Stateful Hash + Block-STM Reference",
         role="main",
         plugin_overrides={
             "routing": "hash_routing_baseline",
@@ -39,8 +79,59 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "block_stm_block_executor",
             "commit": "normal_commit",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 16, "incarnation_limit_action": "fail"}},
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail"}},
     ),
+    "hash_aria": V5FormalMethod(
+        method_id="hash_aria",
+        display_name="Aria",
+        role="baseline",
+        plugin_overrides={
+            "routing": "hash_routing_baseline",
+            "block_producer": "aria_block_producer",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "aria_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={
+            "block_producer": {
+                "candidate_scan_multiplier": 4,
+                "reordering": True,
+                "read_only_optimization": True,
+                "retry_nonce_gaps": True,
+            },
+            "block_executor": {
+                "worker_count": 4,
+                "reordering": True,
+                "read_only_optimization": True,
+                "retry_nonce_gaps": True,
+            },
+        },
+    ),
+    "hash_groundhog": V5FormalMethod(
+        method_id="hash_groundhog",
+        display_name="Groundhog",
+        role="baseline",
+        plugin_overrides={
+            "routing": "hash_routing_baseline",
+            "block_producer": "groundhog_block_producer",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "groundhog_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={
+            "block_producer": {
+                "candidate_scan_multiplier": 4,
+                "ordered_set_limit": 64,
+            },
+            "block_executor": {
+                "worker_count": 4,
+                "ordered_set_limit": 64,
+            },
+        },
+    ),
+    # MBE_META_TRACK_RAPID_FIX_V3
     "metatrack_serial": V5FormalMethod(
         method_id="metatrack_serial",
         display_name="MetaTrack",
@@ -52,7 +143,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "metatrack_block_executor",
             "commit": "commutative_hot_update_aggregation",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 1}},
+        plugin_config_overrides={"execution": {"access_size_threshold": 4}, "block_executor": {"worker_count": 4}},
     ),
     "metatrack_block_stm": V5FormalMethod(
         method_id="metatrack_block_stm",
@@ -65,9 +156,60 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "block_stm_block_executor",
             "commit": "commutative_hot_update_aggregation",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 16, "incarnation_limit_action": "fail"}},
+        plugin_config_overrides={"execution": {"access_size_threshold": 4}, "block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail"}},
     ),
 }
+
+BATCH_SI_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+    "hash_batch_si": _batch_si_method(
+        "hash_batch_si", "Batch-SI", role="main"
+    ),
+    "hash_batch_si_no_wrbp": _batch_si_method(
+        "hash_batch_si_no_wrbp", "Batch-SI w/o WRBP", role="ablation", partition_mode="sequential"
+    ),
+    "hash_batch_si_no_ofas": _batch_si_method(
+        "hash_batch_si_no_ofas", "Batch-SI w/o OFAS", role="ablation", ordering_mode="dependency_graph"
+    ),
+    "hash_batch_si_serial_batch": _batch_si_method(
+        "hash_batch_si_serial_batch", "Batch-SI w/o Snapshot Parallelism", role="ablation", execution_mode="snapshot_serial"
+    ),
+    "hash_batch_si_txid_priority": _batch_si_method(
+        "hash_batch_si_txid_priority", "Batch-SI w/o OFAS Priority", role="ablation", priority_mode="txid"
+    ),
+}
+
+
+STATELESS_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+    "stateless_hash_serial": V5FormalMethod(
+        method_id="stateless_hash_serial",
+        display_name="Stateless Hash + Serial",
+        role="baseline",
+        plugin_overrides={
+            "routing": "stateless_hash_routing",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "serial_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 1}},
+    ),
+    "stateless_hash_block_stm": V5FormalMethod(
+        method_id="stateless_hash_block_stm",
+        display_name="Stateless Hash + Block-STM",
+        role="compatibility",
+        plugin_overrides={
+            "routing": "stateless_hash_routing",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "block_stm_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail"}},
+    ),
+}
+
+ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS}
+
 
 
 class FormalPlanValidationError(ValueError):
@@ -119,11 +261,13 @@ def _verified_method(method: V5FormalMethod) -> V5FormalMethod:
         if method.plugin_overrides:
             raise FormalPlanValidationError("v5_catalog_default must not contain plugin overrides")
         return V5FormalMethod(method_id=CATALOG_DEFAULT_METHOD_ID, display_name="V5 Catalog Default", plugin_overrides={}, role="baseline")
-    if method.method_id in BUILTIN_METHODS:
-        expected = BUILTIN_METHODS[method.method_id]
-        if method.display_name != expected.display_name or method.plugin_overrides != expected.plugin_overrides or method.plugin_config_overrides != expected.plugin_config_overrides:
+    if method.method_id in ALL_BUILTIN_METHODS:
+        expected = ALL_BUILTIN_METHODS[method.method_id]
+        if not _builtin_method_payload_matches(method, expected):
             raise FormalPlanValidationError(f"builtin method payload does not match registry: {method.method_id}")
-        return expected
+        verified = expected.model_copy(deep=True)
+        verified.plugin_config_overrides = {category: dict(config) for category, config in method.plugin_config_overrides.items()}
+        return verified
     try:
         saved = get_saved_config(method.method_id)
     except SavedConfigNotFound as exc:
@@ -158,6 +302,14 @@ def _verified_method(method: V5FormalMethod) -> V5FormalMethod:
     roles = {"main", "baseline", "ablation", "compatibility", "custom"}
     role = draft.get("role") if draft.get("role") in roles else next((tag for tag in saved.get("tags", []) if tag in roles), "custom")
     return V5FormalMethod(method_id=method.method_id, display_name=saved["name"], plugin_overrides=expected, plugin_config_overrides=expected_config_overrides, role=role)
+
+
+def _builtin_method_payload_matches(method: V5FormalMethod, expected: V5FormalMethod) -> bool:
+    return (
+        method.display_name == expected.display_name
+        and method.plugin_overrides == expected.plugin_overrides
+        and method.plugin_config_overrides == expected.plugin_config_overrides
+    )
 
 
 def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:
@@ -197,7 +349,23 @@ def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:
 
 
 def _effective_snapshot(plan: V5FormalExperimentPlan, method: V5FormalMethod) -> dict[str, str]:
-    return {selection.category: STORE.get(method.plugin_overrides.get(selection.category, selection.plugin_id)).plugin_id for selection in plan.base_spec.plugin_selections if selection.category not in METHOD_EXCLUDED_CATEGORIES}
+    snapshot: dict[str, str] = {}
+    for selection in plan.base_spec.plugin_selections:
+        if selection.category in METHOD_EXCLUDED_CATEGORIES:
+            continue
+        plugin_id = method.plugin_overrides.get(selection.category, selection.plugin_id)
+        manifest = STORE.get(plugin_id)
+        config = dict(manifest.default_config)
+        if plugin_id == selection.plugin_id:
+            config |= dict(selection.config)
+        config |= dict(method.plugin_config_overrides.get(selection.category, {}))
+        snapshot[selection.category] = json.dumps(
+            {"plugin_id": manifest.plugin_id, "config": config},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    return snapshot
 
 
 def _changed_categories(left: dict[str, str], right: dict[str, str]) -> list[str]:

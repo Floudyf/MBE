@@ -77,3 +77,20 @@ func TestSystemStateDeltaJSONIncludesZeroInitialValue(t *testing.T) {
 		t.Fatalf("system delta json should make zero initial value explicit: %s", data)
 	}
 }
+
+func TestProposalEvidenceDigestIsBoundIntoBlockHash(t *testing.T) {
+	base := Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n0", Timestamp: 1, TxIDs: []string{"tx-1"}}
+	AssignHash(&base)
+	withoutEvidence := base.BlockHash
+	base.ProposalEvidence = &ProposalEvidenceEnvelope{AlgorithmID: "aria_candidate_selection_v1", PayloadDigest: "digest-a", Payload: []byte(`{"selected_tx_ids":["tx-1"]}`)}
+	AssignHash(&base)
+	withEvidence := base.BlockHash
+	if withEvidence == withoutEvidence {
+		t.Fatal("proposal evidence digest must change block hash")
+	}
+	base.ProposalEvidence.PayloadDigest = "digest-b"
+	AssignHash(&base)
+	if base.BlockHash == withEvidence {
+		t.Fatal("changing proposal evidence digest must change block hash")
+	}
+}

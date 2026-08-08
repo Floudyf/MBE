@@ -313,3 +313,126 @@ def test_cleanup_legacy_saved_configs_scan_and_cleanup_are_separate(monkeypatch)
 def test_formal_child_openapi_declares_execution_and_artifact_status_fields() -> None:
     schema = client.get("/openapi.json").json()["components"]["schemas"]["V5FormalChildResponse"]["properties"]
     assert {"execution_status", "artifact_status", "formal_eligibility", "execution_gate", "artifact_gate", "completion_gate", "artifact_contract_version", "missing_artifacts", "unexpected_artifacts"} <= set(schema)
+
+
+def test_v5_formal_cancel_marks_running_group_cancelling_until_worker_reaps_processes(monkeypatch):
+    group_id = "v5grp_cancel_running"
+    stored = {
+        "run_group_id": group_id,
+        "status": "running",
+        "cancel_requested": False,
+        "total_child_runs": 1,
+        "completed_child_runs": 0,
+        "failed_child_runs": 0,
+        "plan": {"name": "cancel test"},
+        "execution_backend": "real_cluster",
+    }
+    writes = []
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.read_group", lambda value: dict(stored))
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.write_group", lambda value: writes.append(dict(value)))
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.ensure_persisted_child_counts", lambda value: value)
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.worker_active", lambda _group_id: True)
+
+    response = client.post(f"/api/v5/formal/run-groups/{group_id}/cancel")
+
+    assert response.status_code == 200
+    assert writes[-1]["cancel_requested"] is True
+    assert writes[-1]["status"] == "cancelling"
+    assert writes[-1]["cancel_requested_at"]
+
+
+def test_v5_formal_cancel_is_idempotent_for_terminal_group(monkeypatch):
+    group_id = "v5grp_cancel_terminal"
+    stored = {
+        "run_group_id": group_id,
+        "status": "cancelled",
+        "cancel_requested": True,
+        "total_child_runs": 1,
+        "completed_child_runs": 0,
+        "failed_child_runs": 0,
+        "plan": {"name": "cancel test"},
+        "execution_backend": "real_cluster",
+    }
+    writes = []
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.read_group", lambda value: dict(stored))
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.write_group", lambda value: writes.append(dict(value)))
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.ensure_persisted_child_counts", lambda value: value)
+
+    response = client.post(f"/api/v5/formal/run-groups/{group_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert writes == []
+
+def test_v5_formal_cancel_recovers_stale_running_metadata_when_worker_is_gone(monkeypatch):
+    group_id = "v5grp_cancel_stale"
+    stored = {
+        "run_group_id": group_id,
+        "status": "running",
+        "cancel_requested": False,
+        "total_child_runs": 1,
+        "completed_child_runs": 0,
+        "failed_child_runs": 0,
+        "plan": {"name": "cancel stale test"},
+        "execution_backend": "real_cluster",
+    }
+    writes = []
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.read_group", lambda value: dict(stored))
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.write_group", lambda value: writes.append(dict(value)))
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.ensure_persisted_child_counts", lambda value: value)
+    monkeypatch.setattr("backend.app.api.v5_formal_experiments.worker_active", lambda _group_id: False)
+    monkeypatch.setattr(
+        "backend.app.api.v5_formal_experiments.finalize_cancelled",
+        lambda _group_id: {
+            **stored,
+            "status": "cancelled",
+            "cancel_requested": True,
+            "cancel_cleanup_mode": "stale_worker_metadata_recovery",
+        },
+    )
+
+    response = client.post(f"/api/v5/formal/run-groups/{group_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "cancelled"
+    assert writes[-1]["cancel_cleanup_mode"] == "stale_worker_metadata_recovery"
+
+
+
+def test_finalize_cancelled_closes_stale_running_child_metadata(monkeypatch):
+    group_id = "v5grp_finalize_cancelled_child"
+    stored_group = {
+        "run_group_id": group_id,
+        "status": "cancelling",
+        "cancel_requested": True,
+        "total_child_runs": 3,
+        "completed_child_runs": 2,
+        "failed_child_runs": 0,
+    }
+    stored_children = [
+        {"child_run_id": "done-1", "status": "completed", "paper_candidate": True},
+        {"child_run_id": "done-2", "status": "completed", "paper_candidate": True},
+        {"child_run_id": "stale-running", "status": "running", "paper_candidate": True},
+    ]
+    child_writes = []
+    group_writes = []
+    monkeypatch.setattr("backend.app.services.v5_formal_scheduler.group_dir", lambda _group_id: Path("."))
+    monkeypatch.setattr("backend.app.services.v5_formal_scheduler.read_group", lambda _group_id: dict(stored_group))
+    monkeypatch.setattr("backend.app.services.v5_formal_scheduler.children", lambda _group_id: [dict(item) for item in stored_children])
+    monkeypatch.setattr("backend.app.services.v5_formal_scheduler.write_child", lambda _group_id, item: child_writes.append(dict(item)))
+    monkeypatch.setattr("backend.app.services.v5_formal_scheduler.write_group", lambda item: group_writes.append(dict(item)))
+    monkeypatch.setattr("backend.app.services.v5_formal_scheduler.build_bundle", lambda _directory, _group: None)
+
+    from backend.app.services.v5_formal_scheduler import finalize_cancelled
+    result = finalize_cancelled(group_id)
+
+    assert result["status"] == "cancelled"
+    assert result["completed_child_runs"] == 2
+    assert result["failed_child_runs"] == 0
+    assert result["cancelled_child_runs"] == 1
+    assert result.get("blocked_child_runs", 0) == 0
+    assert len(child_writes) == 1
+    assert child_writes[0]["child_run_id"] == "stale-running"
+    assert child_writes[0]["status"] == "cancelled"
+    assert child_writes[0]["execution_status"] == "cancelled"
+    assert child_writes[0]["paper_candidate"] is False

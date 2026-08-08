@@ -17,6 +17,124 @@ import (
 	"metaverse-chainlab/executor/realism/tx"
 )
 
+func TestMetaTrackExactLocalStateReadyWaitsForPublicationOrContext(t *testing.T) {
+	runtime := &NodeRuntime{
+		stateVersionInitial: map[string]string{},
+		stateVersionValues:  map[string]map[uint64]string{},
+	}
+	const key = "metatrack/exact-local"
+
+	t.Run("publication_wakes_waiter", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		done := make(chan struct {
+			value string
+			err   error
+		}, 1)
+		go func() {
+			value, err := runtime.waitForLocalStateVersion(ctx, key, 17)
+			done <- struct {
+				value string
+				err   error
+			}{value: value, err: err}
+		}()
+		time.Sleep(50 * time.Millisecond)
+		runtime.mu.Lock()
+		runtime.publishStateVersionLocked(key, 17, "v17")
+		runtime.mu.Unlock()
+		select {
+		case got := <-done:
+			if got.err != nil || got.value != "v17" {
+				t.Fatalf("exact local StateReady did not resume after publication: value=%q err=%v", got.value, got.err)
+			}
+		case <-ctx.Done():
+			t.Fatalf("exact local StateReady remained blocked after publication: %v", ctx.Err())
+		}
+	})
+
+	t.Run("context_cancels_waiter", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+		defer cancel()
+		started := time.Now()
+		_, err := runtime.waitForLocalStateVersion(ctx, key, 99)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("missing exact version must end only through enclosing context, got %v", err)
+		}
+		if time.Since(started) > 500*time.Millisecond {
+			t.Fatalf("context cancellation was not observed promptly: %s", time.Since(started))
+		}
+	})
+}
+
+func TestMetaTrackVersionedRemoteFetchTreatsNotReadyAsSuspension(t *testing.T) {
+	profile := testMetaTrackProfile()
+	root := t.TempDir()
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{
+		{NodeID: "n0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: filepath.Join(root, "n0"), Validators: []string{"n0"}, PluginProfile: profile},
+		{NodeID: "n1", ShardID: "s1", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: filepath.Join(root, "n1"), Validators: []string{"n1"}, PluginProfile: profile},
+	}}
+	runtime, err := newNodeRuntime(plan, plan.NodeConfigs[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteKey := keyWithHomeShard(t, "s0", []string{"s0", "s1"})
+	item := tx.SignedTransaction{
+		TxID:             "versioned-not-ready-then-ready",
+		Sender:           "alice",
+		Receiver:         "bob",
+		StateKeys:        []string{remoteKey},
+		AccessListSchema: "mbe_workload_record_v3",
+		AccessListSource: "test_exact_version_state_ready",
+		AccessList:       []tx.AccessItem{{Key: remoteKey, Mode: tx.AccessRead, UpdateSemantics: "validate"}},
+		ExecutionRouting: &tx.ExecutionRoutingMetadata{
+			RoutingOrdinal: 18,
+			ExecutionShard: "s1",
+			StateVersions:  []tx.StateVersionDependency{{Key: remoteKey, RequiredVersion: 17}},
+		},
+	}
+	block := realblock.Block{ShardID: "s1", Height: 2, PreviousHash: "b1", ProposerID: "n1", Timestamp: nowForTest().UnixMilli(), TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}}
+	realblock.AssignHash(&block)
+	attempts := 0
+	runtime.sendToNodeHook = func(_ context.Context, _ string, message p2p.MessageEnvelope) error {
+		if message.MessageType != stateFetchRequestMessage {
+			return fmt.Errorf("unexpected message type %s", message.MessageType)
+		}
+		request, err := p2p.DecodePayload[StateFetchRequest](message)
+		if err != nil {
+			return err
+		}
+		attempts++
+		response := StateFetchResponse{
+			RequestID:      request.RequestID,
+			TxID:           request.TxID,
+			BlockHash:      request.BlockHash,
+			Key:            request.Key,
+			QualifiedKey:   request.HomeShard + "::" + request.Key,
+			HomeShard:      request.HomeShard,
+			ExecutionShard: request.ExecutionShard,
+			StateVersion:   request.RequiredVersion,
+			Versioned:      request.Versioned,
+			Success:        attempts >= 4,
+		}
+		if response.Success {
+			response.Value = "v17"
+		} else {
+			response.Error = "state_version_not_ready"
+		}
+		runtime.handleStateFetchResponse(response)
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, _, err := runtime.fetchRemoteState(ctx, block, item, item.AccessList[0], "s0")
+	if err != nil {
+		t.Fatalf("temporary state_version_not_ready must suspend and retry, got %v", err)
+	}
+	if response.Value != "v17" || response.StateVersion != 17 || attempts < 4 {
+		t.Fatalf("versioned StateReady did not retry until exact version became ready: response=%+v attempts=%d", response, attempts)
+	}
+}
+
 func TestMetaTrackCommitEnvelopeDoesNotBlockStateFetchService(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -61,6 +179,7 @@ func TestMetaTrackCommitEnvelopeDoesNotBlockStateFetchService(t *testing.T) {
 		ReceiptRoot:     "pending_not_executed",
 	}
 	realblock.AssignHash(&block)
+	runtime.rememberProposal(block)
 	responseSent := make(chan struct{}, 1)
 	runtime.sendToNodeHook = func(_ context.Context, _ string, message p2p.MessageEnvelope) error {
 		// The commit worker's response is deliberately withheld. A separate
@@ -70,7 +189,7 @@ func TestMetaTrackCommitEnvelopeDoesNotBlockStateFetchService(t *testing.T) {
 		}
 		return nil
 	}
-	envelope, err := p2p.NewEnvelope(p2p.MessagePBFTCommit, "n0", "n1", "s1", block.Height, 0, block.Height, Proposal{Block: block})
+	envelope, err := p2p.NewEnvelope(p2p.MessagePBFTCommit, "n1", "n1", "s1", block.Height, 0, block.Height, Proposal{Block: block})
 	if err != nil {
 		t.Fatal(err)
 	}

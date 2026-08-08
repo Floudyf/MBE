@@ -12,7 +12,7 @@ from backend.app.services.v5_statistics_service import summarize
 GROUP_FIELDS = [
     "suite_type", "method_config_id", "method_name", "method_role", "scan_variable", "scan_value",
     "topology_nodes", "topology_shards", "validators_per_shard", "tx_count", "cross_shard_ratio",
-    "timeout_every", "fault_mode", "block_size", "block_interval_ms", "sample_count", "completed_count", "failed_count", "missing_count",
+    "timeout_every", "fault_mode", "block_size", "block_interval_ms", "sample_count", "completed_count", "observed_completed_count", "completed_invalid_count", "blocked_count", "failed_count", "missing_count",
     "mean_tps", "median_tps", "std_tps", "min_tps", "max_tps", "ci95_low_tps", "ci95_high_tps",
     "mean_p50_ms", "mean_p95_ms", "mean_p99_ms", "submitted", "terminal", "incomplete",
     "cross_requested", "cross_finalized", "cross_refunded", "cross_failed", "changed_plugin_categories",
@@ -21,7 +21,8 @@ GROUP_FIELDS = [
 PAPER_TABLE_FIELDS = ["suite_type", "method_id", "method_name", "method_role", "scan_variable", "scan_value", "nodes", "shards", "validators_per_shard", "tx_count", "cross_shard_ratio", "timeout_every", "fault_mode", "block_size", "block_interval_ms", "sample_count", "success_sample_count", "failed_sample_count", "tps_mean", "tps_std", "tps_min", "tps_max", "latency_p50_mean", "latency_p95_mean", "latency_p99_mean", "terminal_mean", "incomplete_mean", "orphan_mean", "cross_shard_requested_mean", "cross_shard_finalized_mean", "no_fallback_all", "state_root_consistent_all"]
 
 PAPER_ANALYSIS_FIELDS = [
-    "metric", "metric_unit", "method_id", "method_name", "valid_sample_count", "excluded_sample_count",
+    "view", "metric", "metric_unit", "method_id", "method_name", "sample_status",
+    "observed_sample_count", "valid_sample_count", "excluded_sample_count", "sample_status_counts",
     "mean", "median", "std", "min", "max", "ci95_low", "ci95_high", "statistical_note", "source_child_ids",
 ]
 
@@ -29,8 +30,11 @@ PAPER_ANALYSIS_FIELDS = [
 def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     raw_rows = [_raw_row(child) for child in children]
     grouped = _group_rows(group, children)
-    overall = _overall(children)
     paper = paper_result_analysis(group, children)
+    overall = _overall(
+        children,
+        cross_method_statistics_valid=paper.get("performance_comparison_valid") is True,
+    )
     _write(group_dir / "raw_summary.csv", raw_rows, list(raw_rows[0]) if raw_rows else ["child_run_id", "status"])
     _write(group_dir / "aggregate_summary.csv", [_overall_row(overall)], list(_overall_row(overall)))
     _write(group_dir / "confidence_interval.csv", grouped, GROUP_FIELDS)
@@ -42,8 +46,19 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     _write(group_dir / "paper_figure_data.csv", _figure_rows(grouped), ["suite_type", "x_variable", "x_value", "series", "metric", "value", "ci95_low", "ci95_high"])
     table_rows = _paper_table_rows(grouped)
     _write(group_dir / "paper_table_data.csv", table_rows, list(table_rows[0]) if table_rows else PAPER_TABLE_FIELDS)
-    failures = [item for item in children if item.get("status") != "completed"]
+    classified = [(item, _sample_status_for_child(item)) for item in children]
+    failures = [item for item, status in classified if status == "execution_failed"]
+    invalid = [item for item, status in classified if status == "completed_invalid"]
+    blocked = [item for item, status in classified if status == "blocked_incompatible"]
+    paper_valid = [item for item, status in classified if status == "paper_eligible"]
     _write(group_dir / "failed_children.csv", [{key: item.get(key, "") for key in ("child_run_id", "status", "error")} for item in failures], ["child_run_id", "status", "error"])
+    _write(group_dir / "invalid_children.csv", [_classification_row(item, "completed_invalid") for item in invalid], ["child_run_id", "method_config_id", "method_name", "sample_status", "status", "reasons", "observed_tps", "error"])
+    _write(group_dir / "blocked_children.csv", [_classification_row(item, "blocked_incompatible") for item in blocked], ["child_run_id", "method_config_id", "method_name", "sample_status", "status", "reasons", "observed_tps", "error"])
+    comparison_excluded = [item for item, status in classified if status == "comparison_excluded"]
+    _write(group_dir / "comparison_excluded_children.csv", [_classification_row(item, "comparison_excluded") for item in comparison_excluded], ["child_run_id", "method_config_id", "method_name", "sample_status", "status", "reasons", "observed_tps", "error"])
+    _write(group_dir / "observed_results.csv", [_raw_row(item) for item in children], list(raw_rows[0]) if raw_rows else ["child_run_id", "status"])
+    valid_rows = [_raw_row(item) for item in paper_valid]
+    _write(group_dir / "paper_valid_results.csv", valid_rows, list(valid_rows[0]) if valid_rows else (list(raw_rows[0]) if raw_rows else ["child_run_id", "status"]))
     effective = [(item, _effective_metrics(item)) for item in children]
     (group_dir / "missing_metrics.csv").write_text(
         "child_run_id,missing\n"
@@ -58,7 +73,17 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     aggregate_dir.mkdir(parents=True, exist_ok=True)
     (aggregate_dir / "paper_result_analysis.json").write_text(json.dumps(paper, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _write(aggregate_dir / "paper_result_analysis.csv", _paper_analysis_csv_rows(paper), PAPER_ANALYSIS_FIELDS)
-    (group_dir / "run_group_report.md").write_text(f"# {group['run_group_id']}\n\nCompleted: {overall['completed_count']}\nFailed: {overall['failed_count']}\n", encoding="utf-8")
+    (group_dir / "run_group_report.md").write_text(
+        f"# {group['run_group_id']}\n\n"
+        f"Individually valid completed: {overall.get('individually_valid_completed_count', 0)}\n"
+        f"Within-semantic paper candidates: {overall.get('paper_valid_count', overall['completed_count'])}\n"
+        f"Direct cross-semantic performance comparison valid: {str(overall.get('direct_cross_semantic_performance_comparison_valid', False)).lower()}\n"
+        f"Observed completed: {overall.get('observed_completed_count', 0)}\n"
+        f"Completed invalid: {overall.get('completed_invalid_count', 0)}\n"
+        f"Blocked: {overall.get('blocked_count', 0)}\n"
+        f"Failed: {overall['failed_count']}\n",
+        encoding="utf-8",
+    )
     return overall
 
 
@@ -71,33 +96,94 @@ def paper_result_analysis(group: dict, children: list[dict]) -> dict:
     fairness = _fairness_status(group)
     accepted: list[dict] = []
     excluded: list[dict] = []
+    sample_statuses: list[dict] = []
+    status_by_child: dict[str, str] = {}
+
     for child in children:
-        reasons = _paper_exclusion_reasons(child)
-        if reasons:
+        child_id = str(child.get("child_run_id") or "")
+        individual_reasons = _individual_result_reasons(child)
+        paper_reasons = _paper_exclusion_reasons(child, individual_reasons)
+        status = _sample_status(child, individual_reasons, paper_reasons)
+        status_by_child[child_id] = status
+        finality = _finality(child)
+        metrics = _effective_metrics(child)
+        sample_statuses.append({
+            "child_run_id": child.get("child_run_id"),
+            "method_id": child.get("method_config_id"),
+            "method_name": (child.get("method") or {}).get("display_name"),
+            "suite_type": child.get("suite_type"),
+            "status": status,
+            "reasons": paper_reasons,
+            "submitted_unique_tx_count": _first_number(metrics, finality, name="submitted_unique_tx_count"),
+            "terminal_unique_tx_count": _first_number(metrics, finality, name="terminal_unique_tx_count"),
+            "finalized_unique_logical_tx_count": _first_number(metrics, finality, name="finalized_unique_logical_tx_count"),
+            "cross_shard_failed_unique_count": _first_number(metrics, finality, name="cross_shard_failed_unique_count"),
+        })
+        if paper_reasons:
             excluded.append({
                 "child_run_id": child.get("child_run_id"),
                 "method_id": child.get("method_config_id"),
                 "method_name": (child.get("method") or {}).get("display_name"),
                 "suite_type": child.get("suite_type"),
-                "reasons": reasons,
+                "status": status,
+                "reasons": paper_reasons,
             })
         else:
             accepted.append(child)
 
     metrics = {
-        "end_to_end_tps": _metric_rows(accepted, excluded, "end_to_end_tps", "tps"),
-        "p95_finality_ms": _metric_rows(accepted, excluded, "p95_finality_ms", "ms"),
-        "p99_finality_ms": _metric_rows(accepted, excluded, "p99_finality_ms", "ms"),
+        "end_to_end_tps": _metric_rows(accepted, "end_to_end_tps", "tps"),
+        "p95_finality_ms": _metric_rows(accepted, "p95_finality_ms", "ms"),
+        "p99_finality_ms": _metric_rows(accepted, "p99_finality_ms", "ms"),
     }
+    observed_metrics = {
+        "end_to_end_tps": _observed_metric_rows(children, status_by_child, "end_to_end_tps", "tps"),
+        "p95_finality_ms": _observed_metric_rows(children, status_by_child, "p95_finality_ms", "ms"),
+        "p99_finality_ms": _observed_metric_rows(children, status_by_child, "p99_finality_ms", "ms"),
+    }
+    status_counts = {
+        name: sum(1 for item in sample_statuses if item["status"] == name)
+        for name in ("execution_failed", "blocked_incompatible", "completed_invalid", "comparison_excluded", "paper_eligible")
+    }
+    performance_valid = _performance_comparison_valid(group, children)
+    status = "complete" if fairness == "passed" and performance_valid and any(metrics.values()) and not excluded else "incomplete"
+    if fairness == "passed" and not performance_valid:
+        status = "incomparable"
     return {
-        "schema_version": "mbe_paper_result_analysis_v1",
+        "schema_version": "mbe_paper_result_analysis_v2",
         "run_group_id": group.get("run_group_id"),
-        "analysis_status": "complete" if fairness == "passed" and any(metrics.values()) and not excluded else "incomplete",
+        "analysis_status": status,
         "fairness_status": fairness,
+        "performance_comparison_valid": performance_valid,
+        "comparison_note": "" if performance_valid else "execution semantics, fairness, or cross-method logical-state equivalence differs; direct performance uplift is prohibited",
         "metrics": metrics,
+        "observed_metrics": observed_metrics,
+        "sample_statuses": sample_statuses,
+        "status_counts": status_counts,
         "excluded_samples": excluded,
     }
 
+
+
+def _performance_comparison_valid(group: dict, children: list[dict]) -> bool:
+    if "performance_comparison_valid" in group:
+        return group.get("performance_comparison_valid") is True
+    equivalence = group.get("state_equivalence_validation") or {}
+    if isinstance(equivalence, dict) and "performance_comparison_valid" in equivalence:
+        if equivalence.get("performance_comparison_valid") is not True:
+            return False
+    fairness = group.get("fairness_validation") or group.get("fairness") or {}
+    if isinstance(fairness, dict) and "performance_comparison_valid" in fairness:
+        return fairness.get("performance_comparison_valid") is True
+    values = {
+        child.get("performance_comparison_valid")
+        for child in children
+        if child.get("suite_type") == "comparison_experiment"
+        and child.get("performance_comparison_valid") is not None
+    }
+    if not values:
+        return True
+    return values == {True}
 
 def _fairness_status(group: dict) -> str:
     fairness = group.get("fairness") or group.get("fairness_validation") or {}
@@ -110,24 +196,34 @@ def _fairness_status(group: dict) -> str:
     return "passed"
 
 
-def _paper_exclusion_reasons(child: dict) -> list[str]:
+def _individual_result_reasons(child: dict) -> list[str]:
     reasons: list[str] = []
     metrics = _effective_metrics(child)
     finality = _finality(child)
     summary = ((child.get("result") or {}).get("summary") or {})
     if child.get("execution_status", child.get("status")) != "completed":
         reasons.append("execution_status_not_completed")
+        return reasons
     if child.get("artifact_status") == "incomplete":
         reasons.append("artifact_status_incomplete")
-    if child.get("formal_eligibility") is False:
-        reasons.append("formal_eligibility_false")
+
     submitted = _first_number(metrics, finality, name="submitted_unique_tx_count")
     terminal = _first_number(metrics, finality, name="terminal_unique_tx_count")
+    finalized = _first_number(metrics, finality, name="finalized_unique_logical_tx_count")
     incomplete = _first_number(metrics, finality, name="incomplete_unique_tx_count")
+    cross_failed = _first_number(metrics, finality, name="cross_shard_failed_unique_count")
+    lifecycle_complete = _first_bool(metrics, summary, finality, name="lifecycle_complete")
+
     if submitted is None or terminal is None or submitted != terminal:
         reasons.append("terminal_not_equal_submitted")
+    if submitted is None or finalized is None or submitted != finalized:
+        reasons.append("finalized_not_equal_submitted")
     if incomplete is None or incomplete != 0:
         reasons.append("incomplete_not_zero")
+    if cross_failed is None or cross_failed != 0:
+        reasons.append("cross_shard_failed_not_zero")
+    if lifecycle_complete is not True:
+        reasons.append("lifecycle_complete_not_true")
     for name in ("no_fallback", "state_root_consistent", "receipt_root_consistent", "plan_digest_consistent"):
         if _first_bool(metrics, summary, name=name) is not True:
             reasons.append(f"{name}_not_true")
@@ -144,66 +240,151 @@ def _paper_exclusion_reasons(child: dict) -> list[str]:
     return reasons
 
 
-def _metric_rows(accepted: list[dict], excluded: list[dict], metric: str, unit: str) -> list[dict]:
+def _paper_exclusion_reasons(child: dict, individual_reasons: list[str] | None = None) -> list[str]:
+    reasons = list(individual_reasons if individual_reasons is not None else _individual_result_reasons(child))
+    if child.get("formal_eligibility") is False:
+        reasons.append("formal_eligibility_false")
+    if child.get("pairwise_logical_state_equivalent") is False:
+        reasons.append("pairwise_logical_state_equivalent_false")
+    # The scheduler owns final paper-candidate eligibility after fairness and
+    # within-semantic-cohort state-equivalence validation. A completed sample
+    # may be individually correct while still being intentionally excluded from
+    # direct paper-comparison aggregates (for example, a one-member semantic
+    # cohort such as Groundhog or Batch-SI).
+    if child.get("paper_candidate") is False:
+        status = str(child.get("comparison_eligibility_status") or "false").strip() or "false"
+        reasons.append(f"paper_candidate_false:{status}")
+    return list(dict.fromkeys(reasons))
+
+
+def _sample_status(child: dict, individual_reasons: list[str], paper_reasons: list[str]) -> str:
+    if child.get("status") == "blocked" or child.get("execution_status") == "blocked_incompatible_workload":
+        return "blocked_incompatible"
+    if child.get("execution_status", child.get("status")) != "completed":
+        return "execution_failed"
+    if individual_reasons:
+        return "completed_invalid"
+    if paper_reasons:
+        return "comparison_excluded"
+    return "paper_eligible"
+
+
+
+def _sample_status_for_child(child: dict) -> str:
+    individual = _individual_result_reasons(child)
+    paper = _paper_exclusion_reasons(child, individual)
+    return _sample_status(child, individual, paper)
+
+
+def _classification_row(child: dict, fallback_status: str) -> dict:
+    status = _sample_status_for_child(child)
+    reasons = _paper_exclusion_reasons(child, _individual_result_reasons(child))
+    return {
+        "child_run_id": child.get("child_run_id"),
+        "method_config_id": child.get("method_config_id"),
+        "method_name": (child.get("method") or {}).get("display_name"),
+        "sample_status": status or fallback_status,
+        "status": child.get("status"),
+        "reasons": "|".join(reasons),
+        "observed_tps": _metric_value(child, "end_to_end_tps"),
+        "error": child.get("error") or "",
+    }
+
+
+def _metric_rows(accepted: list[dict], metric: str, unit: str) -> list[dict]:
     buckets: dict[tuple[str, str], list[tuple[dict, float]]] = defaultdict(list)
-    excluded_by_method: dict[tuple[str, str], int] = defaultdict(int)
     for child in accepted:
         value = _metric_value(child, metric)
         if value is None:
             continue
         key = (str(child.get("method_config_id") or ""), str((child.get("method") or {}).get("display_name") or child.get("method_config_id") or ""))
         buckets[key].append((child, value))
-    for sample in excluded:
-        key = (str(sample.get("method_id") or ""), str(sample.get("method_name") or sample.get("method_id") or ""))
-        excluded_by_method[key] += 1
     rows = []
-    for key in sorted(set(buckets) | set(excluded_by_method), key=lambda item: item[0]):
+    for key in sorted(buckets, key=lambda item: item[0]):
+        entries = buckets[key]
+        values = [value for _, value in entries]
+        stats = summarize(values, completed_count=len(values), failed_count=0, missing_count=0)
+        rows.append(_metric_row_payload(key, metric, unit, entries, stats, "paper_eligible", {"paper_eligible": len(entries)}))
+    return rows
+
+
+def _observed_metric_rows(children: list[dict], status_by_child: dict[str, str], metric: str, unit: str) -> list[dict]:
+    buckets: dict[tuple[str, str], list[tuple[dict, float]]] = defaultdict(list)
+    all_methods: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for child in children:
+        key = (str(child.get("method_config_id") or ""), str((child.get("method") or {}).get("display_name") or child.get("method_config_id") or ""))
+        all_methods[key].append(child)
+        value = _metric_value(child, metric)
+        if child.get("execution_status", child.get("status")) == "completed" and value is not None:
+            buckets[key].append((child, value))
+
+    severity = {"paper_eligible": 0, "comparison_excluded": 1, "completed_invalid": 2, "blocked_incompatible": 3, "execution_failed": 4}
+    rows = []
+    for key in sorted(all_methods, key=lambda item: item[0]):
         entries = buckets.get(key, [])
         values = [value for _, value in entries]
-        stats = summarize(values, completed_count=len(values), failed_count=0, missing_count=excluded_by_method.get(key, 0))
-        rows.append({
-            "method_id": key[0],
-            "method_name": key[1],
-            "metric": metric,
-            "metric_unit": unit,
-            "valid_sample_count": stats["count"],
-            "excluded_sample_count": excluded_by_method.get(key, 0),
-            "raw_values": values,
-            "mean": stats["mean"],
-            "median": stats["median"],
-            "std": stats["std"],
-            "min": stats["min"],
-            "max": stats["max"],
-            "ci95_low": stats["ci95_low"],
-            "ci95_high": stats["ci95_high"],
-            "statistical_note": "single_sample_no_variance_or_ci" if stats["count"] == 1 else ("no_valid_samples" if stats["count"] == 0 else "multi_sample_ci95"),
-            "source_child_ids": [str(child.get("child_run_id")) for child, _ in entries],
-        })
+        statuses = [status_by_child.get(str(child.get("child_run_id") or ""), "execution_failed") for child in all_methods[key]]
+        counts = {name: statuses.count(name) for name in severity}
+        row_status = max(statuses, key=lambda name: severity.get(name, 3)) if statuses else "execution_failed"
+        stats = summarize(values, completed_count=len(values), failed_count=counts["execution_failed"], missing_count=max(0, len(all_methods[key]) - len(values)))
+        rows.append(_metric_row_payload(key, metric, unit, entries, stats, row_status, counts))
     return rows
+
+
+def _metric_row_payload(key: tuple[str, str], metric: str, unit: str, entries: list[tuple[dict, float]], stats: dict, sample_status: str, status_counts: dict[str, int]) -> dict:
+    values = [value for _, value in entries]
+    return {
+        "method_id": key[0],
+        "method_name": key[1],
+        "metric": metric,
+        "metric_unit": unit,
+        "valid_sample_count": status_counts.get("paper_eligible", 0),
+        "observed_sample_count": len(values),
+        "excluded_sample_count": sum(value for name, value in status_counts.items() if name != "paper_eligible"),
+        "sample_status": sample_status,
+        "sample_status_counts": status_counts,
+        "raw_values": values,
+        "mean": stats["mean"],
+        "median": stats["median"],
+        "std": stats["std"],
+        "min": stats["min"],
+        "max": stats["max"],
+        "ci95_low": stats["ci95_low"],
+        "ci95_high": stats["ci95_high"],
+        "statistical_note": "single_sample_no_variance_or_ci" if stats["count"] == 1 else ("no_observed_samples" if stats["count"] == 0 else "multi_sample_ci95"),
+        "source_child_ids": [str(child.get("child_run_id")) for child, _ in entries],
+    }
+
 
 
 def _paper_analysis_csv_rows(paper: dict) -> list[dict]:
     rows: list[dict] = []
-    for metric, items in (paper.get("metrics") or {}).items():
-        for item in items:
-            rows.append({
-                "metric": metric,
-                "metric_unit": item.get("metric_unit"),
-                "method_id": item.get("method_id"),
-                "method_name": item.get("method_name"),
-                "valid_sample_count": item.get("valid_sample_count"),
-                "excluded_sample_count": item.get("excluded_sample_count"),
-                "mean": item.get("mean"),
-                "median": item.get("median"),
-                "std": item.get("std"),
-                "min": item.get("min"),
-                "max": item.get("max"),
-                "ci95_low": item.get("ci95_low"),
-                "ci95_high": item.get("ci95_high"),
-                "statistical_note": item.get("statistical_note"),
-                "source_child_ids": json.dumps(item.get("source_child_ids") or []),
-            })
+    for view, collection in (("paper_eligible", paper.get("metrics") or {}), ("observed", paper.get("observed_metrics") or {})):
+        for metric, items in collection.items():
+            for item in items:
+                rows.append({
+                    "view": view,
+                    "metric": metric,
+                    "metric_unit": item.get("metric_unit"),
+                    "method_id": item.get("method_id"),
+                    "method_name": item.get("method_name"),
+                    "sample_status": item.get("sample_status", "paper_eligible"),
+                    "observed_sample_count": item.get("observed_sample_count", len(item.get("raw_values") or [])),
+                    "valid_sample_count": item.get("valid_sample_count"),
+                    "excluded_sample_count": item.get("excluded_sample_count"),
+                    "sample_status_counts": json.dumps(item.get("sample_status_counts") or {}, sort_keys=True),
+                    "mean": item.get("mean"),
+                    "median": item.get("median"),
+                    "std": item.get("std"),
+                    "min": item.get("min"),
+                    "max": item.get("max"),
+                    "ci95_low": item.get("ci95_low"),
+                    "ci95_high": item.get("ci95_high"),
+                    "statistical_note": item.get("statistical_note"),
+                    "source_child_ids": json.dumps(item.get("source_child_ids") or []),
+                })
     return rows
+
 
 
 def _finality(child: dict) -> dict:
@@ -272,6 +453,16 @@ _METATRACK_REQUIRED_METRICS = (
     "aggregation_group_count",
     "pre_aggregation_physical_op_count",
     "post_aggregation_physical_op_count",
+)
+_BATCH_SI_REQUIRED_METRICS = (
+    "configured_worker_count",
+    "maximum_parallel_width",
+    "batch_count",
+    "maximum_batch_width",
+    "write_opportunity_reuse_count",
+    "dependency_edge_count",
+    "deferred_transaction_count",
+    "batch_snapshot_create_ms",
 )
 _STALE_PATH_ONLY_MISSING = {"real_cluster_summary.json", "finality_summary.json"}
 
@@ -397,6 +588,8 @@ def _effective_metrics(child: dict) -> dict[str, Any]:
         required.extend(_BLOCK_STM_REQUIRED_METRICS)
     if _requires_metatrack(child):
         required.extend(_METATRACK_REQUIRED_METRICS)
+    if _requires_batch_si(child):
+        required.extend(_BATCH_SI_REQUIRED_METRICS)
     metric_missing = [f"metric:{name}" for name in required if metrics.get(name) is None]
     missing = list(dict.fromkeys(stale + metric_missing))
     metrics["missing"] = missing
@@ -410,6 +603,14 @@ def _requires_metatrack(child: dict) -> bool:
     overrides = method.get("plugin_overrides") if isinstance(method, dict) else {}
     routing = overrides.get("routing") if isinstance(overrides, dict) else ""
     return "metatrack" in method_id or routing == "metatrack_coaccess_routing"
+
+def _requires_batch_si(child: dict) -> bool:
+    method_id = str(child.get("method_config_id") or "")
+    method = child.get("method") or {}
+    overrides = method.get("plugin_overrides") if isinstance(method, dict) else {}
+    executor = overrides.get("block_executor") if isinstance(overrides, dict) else ""
+    return method_id.startswith("hash_batch_si") or executor == "batch_si_block_executor"
+
 
 def _requires_block_stm(child: dict) -> bool:
     method_id = str(child.get("method_config_id") or "")
@@ -445,29 +646,33 @@ def _group_key(child: dict, base_workload: dict) -> tuple:
     return (
         child.get("suite_type", ""), child.get("method_config_id", ""), method.get("display_name", ""),
         child.get("method_role", method.get("role", "custom")), child.get("scan_variable", ""), child.get("scan_value", ""),
-        topology.get("nodes"), topology.get("shards"), topology.get("validators_per_shard"),
+        topology.get("nodes"), topology.get("shards"), topology.get("validators_per_shard"), topology.get("worker_count", metrics.get("configured_worker_count", metrics.get("worker_count"))),
         workload.get("tx_count", child.get("estimated_transactions")), cross_shard_ratio, workload.get("timeout_every"),
         fault.get("mode", "disabled"), block_size, block_interval_ms, tuple(child.get("changed_plugin_categories") or []),
     )
 
 
 def _aggregate(key: tuple, entries: list[dict]) -> dict:
-    suite, method_id, method_name, role, scan_variable, scan_value, nodes, shards, validators, tx_count, ratio, timeout, fault, block_size, block_interval_ms, changed = key
-    completed = [entry for entry in entries if entry.get("status") == "completed"]
+    suite, method_id, method_name, role, scan_variable, scan_value, nodes, shards, validators, worker_count, tx_count, ratio, timeout, fault, block_size, block_interval_ms, changed = key
+    observed_completed = [entry for entry in entries if entry.get("status") == "completed"]
+    completed = [entry for entry in entries if _sample_status_for_child(entry) == "paper_eligible"]
+    completed_invalid = [entry for entry in observed_completed if _sample_status_for_child(entry) == "completed_invalid"]
+    blocked = [entry for entry in entries if entry.get("status") == "blocked" or entry.get("execution_status") == "blocked_incompatible_workload"]
+    failed = [entry for entry in entries if _sample_status_for_child(entry) == "execution_failed" and entry not in blocked]
     metrics = [_effective_metrics(entry) for entry in completed]
     finalities = [_finality(entry) for entry in completed]
     stats = summarize(
         [float(item["end_to_end_tps"]) for item in metrics if item.get("end_to_end_tps") is not None],
         completed_count=len(completed),
-        failed_count=len(entries) - len(completed),
+        failed_count=len(failed),
         missing_count=sum(bool(item.get("missing")) for item in metrics),
     )
     mean = lambda name: _mean([item.get(name) for item in metrics])
     return {
         "suite_type": suite, "method_config_id": method_id, "method_name": method_name, "method_role": role,
         "scan_variable": scan_variable, "scan_value": scan_value, "topology_nodes": nodes, "topology_shards": shards,
-        "validators_per_shard": validators, "tx_count": tx_count, "cross_shard_ratio": ratio, "timeout_every": timeout,
-        "fault_mode": fault, "block_size": block_size, "block_interval_ms": block_interval_ms, "sample_count": stats["count"], "completed_count": stats["completed_count"], "failed_count": stats["failed_count"], "missing_count": stats["missing_count"],
+        "validators_per_shard": validators, "worker_count": worker_count, "tx_count": tx_count, "cross_shard_ratio": ratio, "timeout_every": timeout,
+        "fault_mode": fault, "block_size": block_size, "block_interval_ms": block_interval_ms, "sample_count": stats["count"], "completed_count": stats["completed_count"], "observed_completed_count": len(observed_completed), "completed_invalid_count": len(completed_invalid), "blocked_count": len(blocked), "failed_count": stats["failed_count"], "missing_count": stats["missing_count"],
         "mean_tps": stats["mean"], "median_tps": stats["median"], "std_tps": stats["std"], "min_tps": stats["min"], "max_tps": stats["max"], "ci95_low_tps": stats["ci95_low"], "ci95_high_tps": stats["ci95_high"],
         "mean_p50_ms": mean("p50_finality_ms") or mean("p50_latency_ms"),
         "mean_p95_ms": mean("p95_finality_ms") or mean("p95_latency_ms"),
@@ -481,15 +686,37 @@ def _aggregate(key: tuple, entries: list[dict]) -> dict:
     }
 
 
-def _overall(children: list[dict]) -> dict:
-    completed = [item for item in children if item.get("status") == "completed"]
+def _overall(children: list[dict], *, cross_method_statistics_valid: bool = True) -> dict:
+    observed_completed = [item for item in children if item.get("status") == "completed"]
+    individually_valid_completed = [item for item in observed_completed if not _individual_result_reasons(item)]
+    completed = [item for item in children if _sample_status_for_child(item) == "paper_eligible"]
+    completed_invalid = [item for item in observed_completed if _sample_status_for_child(item) == "completed_invalid"]
+    blocked = [item for item in children if item.get("status") == "blocked" or item.get("execution_status") == "blocked_incompatible_workload"]
+    failed = [item for item in children if _sample_status_for_child(item) == "execution_failed" and item not in blocked]
     metrics = [_effective_metrics(item) for item in completed]
-    return summarize(
+    summary = summarize(
         [float(item["end_to_end_tps"]) for item in metrics if item.get("end_to_end_tps") is not None],
         completed_count=len(completed),
-        failed_count=len(children) - len(completed),
+        failed_count=len(failed),
         missing_count=sum(bool(item.get("missing")) for item in metrics),
     )
+    if not cross_method_statistics_valid:
+        # A mean/CI over heterogeneous semantic cohorts has no paper meaning.
+        # Keep per-method paper_result_analysis rows, counts, and raw observations,
+        # but suppress misleading run-group cross-method aggregate statistics.
+        for key in ("mean", "median", "std", "min", "max", "ci95_low", "ci95_high"):
+            summary[key] = None
+    summary.update({
+        "direct_cross_semantic_performance_comparison_valid": cross_method_statistics_valid,
+        "observed_completed_count": len(observed_completed),
+        "individually_valid_completed_count": len(individually_valid_completed),
+        "paper_valid_count": len(completed),
+        "completed_invalid_count": len(completed_invalid),
+        "blocked_count": len(blocked),
+        "execution_failed_count": len(failed),
+        "excluded_from_paper_count": len(children) - len(completed),
+    })
+    return summary
 
 
 def _overall_row(overall: dict) -> dict:
@@ -498,7 +725,26 @@ def _overall_row(overall: dict) -> dict:
 
 def _raw_row(child: dict) -> dict:
     metrics = _effective_metrics(child)
-    return {"child_run_id": child.get("child_run_id"), "suite_type": child.get("suite_type"), "method_config_id": child.get("method_config_id"), "method_name": (child.get("method") or {}).get("display_name"), "method_role": child.get("method_role"), "seed": child.get("seed"), "repeat_index": child.get("repeat_index"), "scan_variable": child.get("scan_variable"), "scan_value": child.get("scan_value"), "status": child.get("status"), "paper_candidate": child.get("paper_candidate"), **metrics}
+    individual_result_valid = child.get("status") == "completed" and not _individual_result_reasons(child)
+    paper_candidate = child.get("paper_candidate")
+    return {
+        "child_run_id": child.get("child_run_id"),
+        "suite_type": child.get("suite_type"),
+        "method_config_id": child.get("method_config_id"),
+        "method_name": (child.get("method") or {}).get("display_name"),
+        "method_role": child.get("method_role"),
+        "seed": child.get("seed"),
+        "repeat_index": child.get("repeat_index"),
+        "scan_variable": child.get("scan_variable"),
+        "scan_value": child.get("scan_value"),
+        "status": child.get("status"),
+        "sample_status": _sample_status_for_child(child),
+        "individual_result_valid": individual_result_valid,
+        "paper_candidate": paper_candidate,
+        "comparison_eligibility_status": child.get("comparison_eligibility_status"),
+        "direct_cross_semantic_performance_comparable": child.get("performance_comparison_valid") is True,
+        **metrics,
+    }
 
 
 def _figure_rows(groups: list[dict]) -> list[dict]:

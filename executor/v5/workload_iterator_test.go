@@ -57,6 +57,38 @@ func canonicalRecord(index int, sender, targetKey string) map[string]any {
 	return map[string]any{"schema_version": "mbe_workload_record_v2", "dataset_id": "generic_fixture_dataset", "source_row_index": index, "source_event_id": "sale", "timestamp_ms": int64(1700000000000 + index), "sender_id": sender, "receiver_id": receiver, "operation_type": "asset_sale", "category": category, "contract": strings.TrimPrefix(targetKey, "market:"), "runtime_value": 1, "access_list_schema": "dcl_sale_access_template_v1", "access_list_source": "semantics_derived", "access_template": dclSaleAccessTemplate(), "state_keys": []string{targetKey, "category:" + category}, "routing_source_key": "sender_identity:" + sender, "routing_target_key": targetKey, "skew_keys": map[string]any{"contract": targetKey}, "provenance": map[string]any{"adapter_id": "test_generic"}, "metadata": map[string]any{}, "materialized_index": index, "logical_event_id": "logical"}
 }
 
+func canonicalDirectRecord(index int, digestOverride string) map[string]any {
+	accessList := []tx.AccessItem{
+		{Key: "alien:read", Mode: tx.AccessRead, UpdateSemantics: "observed_read"},
+		{Key: "alien:rmw", Mode: tx.AccessReadWrite, UpdateSemantics: "observed_rmw"},
+		{Key: "alien:write", Mode: tx.AccessWrite, UpdateSemantics: "observed_write"},
+	}
+	digest := CanonicalAccessListDigest(accessList)
+	if digestOverride != "" {
+		digest = digestOverride
+	}
+	return map[string]any{
+		"schema_version":     "mbe_workload_record_v3",
+		"dataset_id":         "generic_fixture_dataset",
+		"source_row_index":   index,
+		"source_event_id":    fmt.Sprintf("alien-%d", index),
+		"timestamp_ms":       int64(1700000000000 + index),
+		"sender_id":          "alien-sender",
+		"receiver_id":        "alien-receiver",
+		"operation_type":     "alien_worlds_mine",
+		"runtime_value":      1,
+		"state_keys":         []string{"alien:read", "alien:rmw", "alien:write"},
+		"routing_source_key": "alien:rmw",
+		"routing_target_key": "alien:write",
+		"access_list_schema": "alien_worlds_static_rmw_v1",
+		"access_list_source": "real_template_controlled_rw",
+		"access_list":        accessList,
+		"access_list_digest": digest,
+		"materialized_index": index,
+		"logical_event_id":   fmt.Sprintf("logical-alien-%d", index),
+	}
+}
+
 func dclSaleAccessTemplate() []map[string]any {
 	return []map[string]any{
 		{"role": "sender_balance", "mode": "read_write", "semantics": "buyer_balance"},
@@ -78,6 +110,70 @@ func crossShardPair(shards int) (string, string) {
 		}
 	}
 	return sender, "market:0x0000000000000000000000000000000000000002"
+}
+
+func TestCanonicalTraceIteratorPreservesDirectAccessListV3(t *testing.T) {
+	dataDir := t.TempDir()
+	root := filepath.Join(dataDir, ".cache", "workloads")
+	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalDirectRecord(0, "")})
+	plan := canonicalPlan(relative, hash, 1)
+	plan.SourceFileSHA256 = "physical-file-hash"
+	plan.SelectionMode = "validated_prefix"
+	plan.VariantParameters = map[string]any{"access_profile": "balanced", "target_theta": 0.8}
+	iter, err := NewCanonicalTraceIterator(plan, 2, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iter.Close()
+	record, err := iter.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAccessItem(t, record.AccessList, "alien:read", tx.AccessRead, "observed_read")
+	assertAccessItem(t, record.AccessList, "alien:rmw", tx.AccessReadWrite, "observed_rmw")
+	assertAccessItem(t, record.AccessList, "alien:write", tx.AccessWrite, "observed_write")
+	if record.AccessListSchema != "alien_worlds_static_rmw_v1" || record.AccessListSource != "real_template_controlled_rw" {
+		t.Fatalf("direct access provenance was not preserved: %#v", record)
+	}
+	expectedSourceShard := fmt.Sprintf("s%d", stableShard([]string{"alien:rmw"}, 2))
+	expectedTargetShard := fmt.Sprintf("s%d", stableShard([]string{"alien:write"}, 2))
+	if record.SourceShard != expectedSourceShard {
+		t.Fatalf("direct access source shard must follow routing_source_key: got %s want %s", record.SourceShard, expectedSourceShard)
+	}
+	if expectedSourceShard != expectedTargetShard && record.TargetShard != expectedTargetShard {
+		t.Fatalf("direct access target shard must follow routing_target_key: got %s want %s", record.TargetShard, expectedTargetShard)
+	}
+	item, err := iter.SignedTransaction(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Verify(item); err != nil {
+		t.Fatalf("direct access transaction signature failed: %v", err)
+	}
+	if item.AccessListDigest != CanonicalAccessListDigest(item.AccessList) {
+		t.Fatalf("signed direct access digest changed: %#v", item)
+	}
+	if item.LogicalTxID != record.LogicalID || tx.SemanticID(item) != record.LogicalID {
+		t.Fatalf("signed transaction lost stable logical identity: tx=%#v record=%#v", item, record)
+	}
+	summary := iter.Summary()
+	if summary.SourceFileSHA256 != "physical-file-hash" || summary.SelectionMode != "validated_prefix" || fmt.Sprint(summary.VariantParameters["access_profile"]) != "balanced" {
+		t.Fatalf("universal dataset identity was not preserved in replay summary: %#v", summary)
+	}
+}
+
+func TestCanonicalTraceIteratorRejectsDirectAccessDigestMismatch(t *testing.T) {
+	dataDir := t.TempDir()
+	root := filepath.Join(dataDir, ".cache", "workloads")
+	relative, hash := writeCanonicalFixture(t, root, []map[string]any{canonicalDirectRecord(0, strings.Repeat("0", 64))})
+	iter, err := NewCanonicalTraceIterator(canonicalPlan(relative, hash, 1), 2, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iter.Close()
+	if _, err := iter.Next(context.Background()); err == nil || !strings.Contains(err.Error(), "direct access list digest mismatch") {
+		t.Fatalf("expected direct digest rejection, got %v", err)
+	}
 }
 
 func TestCanonicalTraceIteratorSignsStableIdentityAndContinuousNonce(t *testing.T) {
@@ -265,11 +361,11 @@ func TestCanonicalTraceIteratorUsesWorkloadCacheRootEnv(t *testing.T) {
 func TestWorkloadIngressShardPreservesCrossShardSourceProtocol(t *testing.T) {
 	record := WorkloadRecord{CrossShard: true, SourceShard: "s1", TargetShard: "s0", Payload: "v5_cross:s0:dataset_event:wearable"}
 	route := RoutingDecision{ShardID: "s0", Reason: "metatrack_batch_affinity"}
-	if got := workloadIngressShard(record, route); got != "s1" {
+	if got := workloadIngressShard(record, route, false); got != "s1" {
 		t.Fatalf("cross-shard source transaction must enter source shard before relay, got %s", got)
 	}
 	local := WorkloadRecord{SourceShard: "s1", Payload: "dataset_event:wearable"}
-	if got := workloadIngressShard(local, route); got != "s0" {
+	if got := workloadIngressShard(local, route, false); got != "s0" {
 		t.Fatalf("non-cross-shard transaction should use routing decision, got %s", got)
 	}
 }

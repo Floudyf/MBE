@@ -108,59 +108,73 @@ type v5NodeProcess struct {
 	LogPath    string `json:"log_path"`
 }
 type v5NodeSummary struct {
-	NodeID                        string  `json:"node_id"`
-	ShardID                       string  `json:"shard_id"`
-	PID                           int     `json:"pid"`
-	ListenAddr                    string  `json:"listen_addr"`
-	CommittedBlockCount           int     `json:"committed_block_count"`
-	StateRoot                     string  `json:"state_root"`
-	RealPBFT                      bool    `json:"real_pbft_style_messages"`
-	BlockExecutorID               string  `json:"block_executor_id"`
-	BlockExecutorVersion          string  `json:"block_executor_version"`
-	WorkerCount                   int     `json:"worker_count"`
-	PlanDigestConsistent          bool    `json:"plan_digest_consistent"`
-	FastTrackCount                int     `json:"fast_track_count"`
-	ConservativeTrackCount        int     `json:"conservative_track_count"`
-	AggregationGroupCount         int     `json:"aggregation_group_count"`
-	SchedulerEventCount           int     `json:"scheduler_event_count"`
-	SchedulerBlockedCount         int     `json:"scheduler_blocked_count"`
-	SchedulerWakeupCount          int     `json:"scheduler_wakeup_count"`
-	SchedulerStolenWorkCount      int     `json:"scheduler_stolen_work_count"`
-	SchedulerLocalExecutionCount  int     `json:"scheduler_local_execution_count"`
-	SchedulerReadyQueueMaxDepth   int     `json:"scheduler_ready_queue_max_depth"`
-	SchedulerFastQueueMaxDepth    int     `json:"scheduler_fast_queue_max_depth"`
-	SchedulerConsQueueMaxDepth    int     `json:"scheduler_conservative_queue_max_depth"`
-	SchedulerDependencyWaitMS     int     `json:"scheduler_dependency_wait_ms"`
-	SchedulerIdleMS               int     `json:"scheduler_idle_ms"`
-	SchedulerIdleRatio            float64 `json:"scheduler_idle_ratio"`
-	RemoteStateAccessCount        int     `json:"remote_state_access_count"`
-	RemoteStateReadCount          int     `json:"remote_state_read_count"`
-	RemoteStateWriteApplyCount    int     `json:"remote_state_write_apply_count"`
-	RemoteOperationUnknownCount   int     `json:"remote_operation_unknown_kind_count"`
-	PhysicalRemoteOperationCount  int     `json:"physical_remote_operation_count"`
-	PhysicalRemoteFetchCount      int     `json:"physical_remote_fetch_count"`
-	PhysicalRemoteWritebackCount  int     `json:"physical_remote_writeback_count"`
-	PhysicalRemoteFailedCount     int     `json:"physical_remote_failed_count"`
-	RemoteStateAccessFailedCount  int     `json:"remote_state_access_failed_count"`
-	RemoteStateAccessAvgLatencyMS float64 `json:"remote_state_access_avg_latency_ms"`
-	LogicalUpdateCount            int     `json:"logical_update_count"`
-	PhysicalUpdateCount           int     `json:"physical_update_count"`
-	ExecutedLogicalTxCount        int     `json:"executed_logical_transaction_count"`
-	ExecutedTxInstanceCount       int     `json:"executed_transaction_instance_count"`
-	PreAggregationPhysicalOps     int     `json:"pre_aggregation_physical_op_count"`
-	PostAggregationPhysicalOps    int     `json:"post_aggregation_physical_op_count"`
-	AggregatedKeyCount            int     `json:"aggregated_key_count"`
-	AggregatedLogicalDeltaCount   int     `json:"aggregated_logical_delta_count"`
-	PhysicalOpsSavedCount         int     `json:"physical_ops_saved_count"`
-	AggregationReductionRatio     float64 `json:"aggregation_reduction_ratio"`
-	ConfiguredBlockSize           int     `json:"configured_block_size"`
-	ConfiguredBlockIntervalMS     int     `json:"configured_block_interval_ms"`
-	ActualCommittedBlockCount     int     `json:"actual_committed_block_count"`
-	ActualAverageTxPerBlock       float64 `json:"actual_average_tx_per_block"`
-	ActualMinTxPerBlock           int     `json:"actual_min_tx_per_block"`
-	ActualMaxTxPerBlock           int     `json:"actual_max_tx_per_block"`
-	ActualBlockIntervalMeanMS     float64 `json:"actual_block_interval_mean_ms"`
-	ActualBlockIntervalP95MS      int64   `json:"actual_block_interval_p95_ms"`
+	NodeID                           string  `json:"node_id"`
+	ShardID                          string  `json:"shard_id"`
+	PID                              int     `json:"pid"`
+	ListenAddr                       string  `json:"listen_addr"`
+	CommittedBlockCount              int     `json:"committed_block_count"`
+	StateRoot                        string  `json:"state_root"`
+	BusinessStateDigest              string  `json:"business_state_digest"`
+	StateReadyWaitCount              int64   `json:"state_ready_wait_count"`
+	StateReadyResumeCount            int64   `json:"state_ready_resume_count"`
+	StatePrefetchWaitMS              int64   `json:"state_prefetch_wait_ms"`
+	RemoteStateFetchCount            int64   `json:"remote_state_fetch_count"`
+	RemoteStateFetchCompletedCount   int64   `json:"remote_state_fetch_completed_count"`
+	StateReadySchedulerMode          string  `json:"state_ready_scheduler_mode"`
+	VersionedStateReadyWaveCount     int64   `json:"versioned_state_ready_wave_count"`
+	VersionedStateReadyWaitCount     int64   `json:"versioned_state_ready_wait_observation_count"`
+	VersionedStateReadyResolvedCount int64   `json:"versioned_state_ready_resolved_token_count"`
+	VersionedStateProbeCount         int64   `json:"versioned_state_probe_count"`
+	VersionedStateProbeLatencyMS     int64   `json:"versioned_state_probe_latency_ms"`
+	VersionedStateReadyMaxWaveWidth  int64   `json:"versioned_state_ready_max_wave_width"`
+	VersionedStateReadySchedulerMode string  `json:"versioned_state_ready_scheduler_mode"`
+	RealPBFT                         bool    `json:"real_pbft_style_messages"`
+	BlockExecutorID                  string  `json:"block_executor_id"`
+	BlockExecutorVersion             string  `json:"block_executor_version"`
+	WorkerCount                      int     `json:"worker_count"`
+	PlanDigestConsistent             bool    `json:"plan_digest_consistent"`
+	FastTrackCount                   int     `json:"fast_track_count"`
+	ConservativeTrackCount           int     `json:"conservative_track_count"`
+	AggregationGroupCount            int     `json:"aggregation_group_count"`
+	SchedulerEventCount              int     `json:"scheduler_event_count"`
+	SchedulerBlockedCount            int     `json:"scheduler_blocked_count"`
+	SchedulerWakeupCount             int     `json:"scheduler_wakeup_count"`
+	SchedulerStolenWorkCount         int     `json:"scheduler_stolen_work_count"`
+	SchedulerLocalExecutionCount     int     `json:"scheduler_local_execution_count"`
+	SchedulerReadyQueueMaxDepth      int     `json:"scheduler_ready_queue_max_depth"`
+	SchedulerFastQueueMaxDepth       int     `json:"scheduler_fast_queue_max_depth"`
+	SchedulerConsQueueMaxDepth       int     `json:"scheduler_conservative_queue_max_depth"`
+	SchedulerDependencyWaitMS        int     `json:"scheduler_dependency_wait_ms"`
+	SchedulerIdleMS                  int     `json:"scheduler_idle_ms"`
+	SchedulerIdleRatio               float64 `json:"scheduler_idle_ratio"`
+	RemoteStateAccessCount           int     `json:"remote_state_access_count"`
+	RemoteStateReadCount             int     `json:"remote_state_read_count"`
+	RemoteStateWriteApplyCount       int     `json:"remote_state_write_apply_count"`
+	RemoteOperationUnknownCount      int     `json:"remote_operation_unknown_kind_count"`
+	PhysicalRemoteOperationCount     int     `json:"physical_remote_operation_count"`
+	PhysicalRemoteFetchCount         int     `json:"physical_remote_fetch_count"`
+	PhysicalRemoteWritebackCount     int     `json:"physical_remote_writeback_count"`
+	PhysicalRemoteFailedCount        int     `json:"physical_remote_failed_count"`
+	RemoteStateAccessFailedCount     int     `json:"remote_state_access_failed_count"`
+	RemoteStateAccessAvgLatencyMS    float64 `json:"remote_state_access_avg_latency_ms"`
+	LogicalUpdateCount               int     `json:"logical_update_count"`
+	PhysicalUpdateCount              int     `json:"physical_update_count"`
+	ExecutedLogicalTxCount           int     `json:"executed_logical_transaction_count"`
+	ExecutedTxInstanceCount          int     `json:"executed_transaction_instance_count"`
+	PreAggregationPhysicalOps        int     `json:"pre_aggregation_physical_op_count"`
+	PostAggregationPhysicalOps       int     `json:"post_aggregation_physical_op_count"`
+	AggregatedKeyCount               int     `json:"aggregated_key_count"`
+	AggregatedLogicalDeltaCount      int     `json:"aggregated_logical_delta_count"`
+	PhysicalOpsSavedCount            int     `json:"physical_ops_saved_count"`
+	AggregationReductionRatio        float64 `json:"aggregation_reduction_ratio"`
+	ConfiguredBlockSize              int     `json:"configured_block_size"`
+	ConfiguredBlockIntervalMS        int     `json:"configured_block_interval_ms"`
+	ActualCommittedBlockCount        int     `json:"actual_committed_block_count"`
+	ActualAverageTxPerBlock          float64 `json:"actual_average_tx_per_block"`
+	ActualMinTxPerBlock              int     `json:"actual_min_tx_per_block"`
+	ActualMaxTxPerBlock              int     `json:"actual_max_tx_per_block"`
+	ActualBlockIntervalMeanMS        float64 `json:"actual_block_interval_mean_ms"`
+	ActualBlockIntervalP95MS         int64   `json:"actual_block_interval_p95_ms"`
 }
 
 func runV5(planPath, dataDir string) error {
@@ -174,6 +188,15 @@ func runV5(planPath, dataDir string) error {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return err
 	}
+	preflight, preflightErr := v5.PreflightWorkloadCapabilities(context.Background(), plan, dataDir)
+	if err := v5.SaveJSON(filepath.Join(dataDir, "workload_capability_preflight.json"), preflight); err != nil {
+		return err
+	}
+	if preflightErr != nil {
+		return preflightErr
+	}
+	plan.WorkloadPlan.ExpectedCrossShardCount = preflight.ActualCrossShardCount
+	plan.WorkloadPlan.ExpectedCrossShardRatio = preflight.ActualCrossShardRatio
 	allocated := map[string]bool{}
 	for index := range plan.NodeConfigs {
 		address := ""
@@ -279,11 +302,18 @@ func runV5(planPath, dataDir string) error {
 	if err != nil {
 		return err
 	}
-	finality, err := deriveFinalityArtifacts(dataDir, plan.NodeConfigs)
+	finality, err := deriveFinalityArtifacts(dataDir, plan.NodeConfigs, planUsesStatelessDirectExecution(plan))
 	if err != nil {
 		return err
 	}
 	summary["finality_evidence"] = finality
+	if planUsesStatelessDirectExecution(plan) {
+		summary["cross_shard_execution_mode"] = "stateless_direct_execution"
+		summary["legacy_cross_shard_protocol"] = false
+	} else {
+		summary["cross_shard_execution_mode"] = "legacy_lock_relay_finalize"
+		summary["legacy_cross_shard_protocol"] = true
+	}
 	if value, ok := finality["cross_shard_finalized_unique_count"].(int); ok {
 		summary["cross_shard_success_count"] = value
 		summary["real_cross_shard_network"] = value > 0
@@ -300,8 +330,25 @@ func runV5(planPath, dataDir string) error {
 	return v5.SaveJSON(filepath.Join(dataDir, "artifact_catalog.json"), map[string]any{"source": "real_v5_runtime", "artifacts": "see process manifest and node directories"})
 }
 
+func planUsesStatelessDirectExecution(plan v5.Plan) bool {
+	if len(plan.NodeConfigs) == 0 {
+		return false
+	}
+	routing, ok := plan.NodeConfigs[0].PluginProfile["routing"]
+	if !ok {
+		return false
+	}
+	switch routing.PluginID {
+	case "metatrack_coaccess_routing", "stateless_hash_routing":
+		return true
+	default:
+		return false
+	}
+}
+
 func drainV5(plan v5.Plan, dataDir string) error {
 	started := time.Now()
+	statelessDirect := planUsesStatelessDirectExecution(plan)
 	submitted := plan.WorkloadPlan.TxCount
 	classification, err := loadSubmissionClassification(dataDir, submitted)
 	if err != nil {
@@ -327,6 +374,7 @@ func drainV5(plan v5.Plan, dataDir string) error {
 		terminal := map[string]bool{}
 		allEmpty := true
 		fatalPersistence := ""
+		fatalExecution := ""
 		heights := map[string]map[string]bool{}
 		for _, node := range plan.NodeConfigs {
 			raw, err := os.ReadFile(filepath.Join(node.DataDir, "node_runtime_status.json"))
@@ -343,13 +391,13 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			if value := fmt.Sprint(status["fatal_persistence_error"]); value != "" && value != "<nil>" {
 				fatalPersistence = value
 			}
+			if value := fmt.Sprint(status["fatal_execution_error"]); value != "" && value != "<nil>" {
+				fatalExecution = value
+			}
 			for _, key := range []string{"reserved_tx_count", "pending_commit_count", "pending_future_block_count", "pending_cross_shard_count", "pending_state_delta_count", "pending_state_delta_key_count", "ready_state_delta_count"} {
 				if number(status[key]) != 0 {
 					allEmpty = false
 				}
-			}
-			if boolValue(status["proposal_in_flight"]) {
-				allEmpty = false
 			}
 			shard := fmt.Sprint(status["shard_id"])
 			if heights[shard] == nil {
@@ -357,13 +405,16 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			}
 			heights[shard][fmt.Sprint(status["committed_height"])] = true
 		}
-		liveTerminal, _, err := deriveLiveTerminal(classification, statuses)
+		liveTerminal, _, err := deriveLiveTerminal(classification, statuses, statelessDirect)
 		if err != nil {
 			_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": []string{"terminal_accounting_missing"}, "phase": "FAILED", "reason": err.Error(), "submitted": submitted})
 			return err
 		}
 		terminal = liveTerminal
 		if hasNonTerminalMempool(statuses, terminal) {
+			allEmpty = false
+		}
+		if hasPendingProposalWork(statuses, terminal) {
 			allEmpty = false
 		}
 		aligned := true
@@ -395,13 +446,24 @@ func drainV5(plan v5.Plan, dataDir string) error {
 		lastHeights = heights
 		if fatalPersistence != "" {
 			phase = "FAILED"
+			reason := "failed_persistence_inconsistency: " + fatalPersistence
 			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "failed_persistence_inconsistency", "fatal_persistence_error": fatalPersistence, "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli()})
-			return fmt.Errorf("failed_persistence_inconsistency: %s", fatalPersistence)
+			writeStalledRuntimeReport(dataDir, []string{"fatal_persistence_error"}, reason, submitted, len(terminal), current, statuses, heights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
+			return fmt.Errorf("%s", reason)
+		}
+		if fatalExecution != "" {
+			phase = "FAILED"
+			reason := "failed_deterministic_execution: " + fatalExecution
+			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "failed_deterministic_execution", "fatal_execution_error": fatalExecution, "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli()})
+			writeStalledRuntimeReport(dataDir, []string{"fatal_execution_error"}, reason, submitted, len(terminal), current, statuses, heights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
+			return fmt.Errorf("%s", reason)
 		}
 		if initialized && now.Sub(lastProgress) > budget.NoProgressTimeout {
 			phase = "FAILED"
+			reason := "drain no-progress timeout"
 			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "no_progress_timeout", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
-			return fmt.Errorf("drain no-progress timeout")
+			writeStalledRuntimeReport(dataDir, []string{"no_progress_timeout"}, reason, submitted, len(terminal), current, statuses, heights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
+			return fmt.Errorf("%s", reason)
 		}
 		phase = "DRAINING"
 		if !aligned {
@@ -410,7 +472,8 @@ func drainV5(plan v5.Plan, dataDir string) error {
 		writeDrainProgress(progressPath, phase, submitted, len(terminal), current, lastTerminalProgress, lastMempoolProgress)
 		if len(terminal) >= submitted && allEmpty && aligned {
 			phase = "QUIESCENT"
-			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "drain_quiescent", "drain_started_at": started.UnixMilli(), "drain_finished_at": now.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
+			finishedAt := quiescentCompletionTime(started, now, statuses)
+			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "drain_quiescent", "drain_started_at": started.UnixMilli(), "drain_finished_at": finishedAt.UnixMilli(), "drain_observed_quiescent_at": now.UnixMilli(), "drain_finish_source": "max_node_last_progress_at_bounded", "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
 			return nil
 		}
 		_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "in_progress", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "node_count": len(statuses), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
@@ -426,18 +489,44 @@ func drainV5(plan v5.Plan, dataDir string) error {
 	if len(classifiers) == 0 {
 		classifiers = append(classifiers, "unknown")
 	}
-	_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": classifiers, "submitted": submitted, "terminal": previous.Terminal, "incomplete": submitted - previous.Terminal, "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "last_snapshot": previous, "last_statuses": lastStatuses, "last_heights": lastHeights})
+	writeStalledRuntimeReport(dataDir, classifiers, "drain hard timeout", submitted, previous.Terminal, previous, lastStatuses, lastHeights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
 	return fmt.Errorf("drain hard timeout")
 }
 
+func writeStalledRuntimeReport(dataDir string, classifiers []string, reason string, submitted, terminal int, snapshot progressSnapshot, statuses []map[string]any, heights map[string]map[string]bool, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress time.Time) {
+	_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{
+		"classifiers":               classifiers,
+		"phase":                     "FAILED",
+		"reason":                    reason,
+		"submitted":                 submitted,
+		"terminal":                  terminal,
+		"incomplete":                submitted - terminal,
+		"last_progress_at":          lastProgress.UnixMilli(),
+		"last_terminal_progress_at": lastTerminalProgress.UnixMilli(),
+		"last_height_progress_at":   lastHeightProgress.UnixMilli(),
+		"last_mempool_progress_at":  lastMempoolProgress.UnixMilli(),
+		"last_pending_progress_at":  lastPendingProgress.UnixMilli(),
+		"last_snapshot":             snapshot,
+		"last_statuses":             statuses,
+		"last_heights":              heights,
+	})
+}
+
 type progressSnapshot struct {
-	Terminal         int  `json:"terminal"`
-	MinHeight        int  `json:"min_height"`
-	MaxHeight        int  `json:"max_height"`
-	Mempool          int  `json:"mempool"`
-	Reserved         int  `json:"reserved"`
-	Pending          int  `json:"pending"`
-	ProposalInFlight bool `json:"proposal_in_flight"`
+	Terminal                       int   `json:"terminal"`
+	MinHeight                      int   `json:"min_height"`
+	MaxHeight                      int   `json:"max_height"`
+	Mempool                        int   `json:"mempool"`
+	Reserved                       int   `json:"reserved"`
+	Pending                        int   `json:"pending"`
+	ProposalInFlight               bool  `json:"proposal_in_flight"`
+	BlockExecutionHeight           int   `json:"block_execution_height"`
+	BlockExecutionProgressAtMS     int64 `json:"block_execution_progress_at_ms"`
+	BlockExecutionTaskCount        int   `json:"block_execution_task_count"`
+	BlockValidationTaskCount       int   `json:"block_validation_task_count"`
+	BlockExecutionValidatedCount   int   `json:"block_execution_validated_count"`
+	BlockExecutionAbortCount       int   `json:"block_execution_abort_count"`
+	BlockExecutionReexecutionCount int   `json:"block_execution_reexecution_count"`
 }
 
 type drainTimeoutBudget struct {
@@ -519,18 +608,40 @@ func makeProgressSnapshot(terminal int, statuses []map[string]any, heights map[s
 		result.Reserved += number(status["reserved_tx_count"])
 		result.Pending += number(status["pending_commit_count"]) + number(status["pending_future_block_count"]) + number(status["pending_cross_shard_count"]) + number(status["pending_state_delta_count"]) + number(status["pending_state_delta_key_count"]) + number(status["ready_state_delta_count"])
 		result.ProposalInFlight = result.ProposalInFlight || boolValue(status["proposal_in_flight"])
+		if value := number(status["block_execution_height"]); value > result.BlockExecutionHeight {
+			result.BlockExecutionHeight = value
+		}
+		if value := int64(number(status["block_execution_progress_at_ms"])); value > result.BlockExecutionProgressAtMS {
+			result.BlockExecutionProgressAtMS = value
+		}
+		result.BlockExecutionTaskCount += number(status["block_execution_task_count"])
+		result.BlockValidationTaskCount += number(status["block_validation_task_count"])
+		result.BlockExecutionValidatedCount += number(status["block_execution_validated_count"])
+		result.BlockExecutionAbortCount += number(status["block_execution_abort_count"])
+		result.BlockExecutionReexecutionCount += number(status["block_execution_reexecution_count"])
 	}
 	_ = heights
 	return result
 }
 
 func progressChanged(previous, current progressSnapshot) bool {
-	return current.Terminal > previous.Terminal || current.MaxHeight > previous.MaxHeight || current.MinHeight > previous.MinHeight || current.Mempool < previous.Mempool || current.Reserved < previous.Reserved || current.Pending < previous.Pending
+	return current.Terminal > previous.Terminal ||
+		current.MaxHeight > previous.MaxHeight ||
+		current.MinHeight > previous.MinHeight ||
+		current.Mempool < previous.Mempool ||
+		current.Reserved < previous.Reserved ||
+		current.Pending < previous.Pending ||
+		current.BlockExecutionHeight > previous.BlockExecutionHeight ||
+		(current.BlockExecutionHeight == previous.BlockExecutionHeight && current.BlockExecutionTaskCount > previous.BlockExecutionTaskCount) ||
+		(current.BlockExecutionHeight == previous.BlockExecutionHeight && current.BlockValidationTaskCount > previous.BlockValidationTaskCount) ||
+		(current.BlockExecutionHeight == previous.BlockExecutionHeight && current.BlockExecutionValidatedCount > previous.BlockExecutionValidatedCount) ||
+		(current.BlockExecutionHeight == previous.BlockExecutionHeight && current.BlockExecutionAbortCount > previous.BlockExecutionAbortCount) ||
+		(current.BlockExecutionHeight == previous.BlockExecutionHeight && current.BlockExecutionReexecutionCount > previous.BlockExecutionReexecutionCount)
 }
 
 func writeDrainProgress(path, phase string, submitted, terminal int, snapshot progressSnapshot, lastTerminalProgress, lastMempoolProgress time.Time) {
-	header := []string{"timestamp", "phase", "submitted", "terminal", "incomplete", "min_validator_height", "max_validator_height", "height_gap", "total_mempool_depth", "total_reserved_tx", "proposal_in_flight", "pending_total", "last_terminal_progress_at", "last_mempool_progress_at"}
-	row := []string{fmt.Sprint(time.Now().UnixMilli()), phase, fmt.Sprint(submitted), fmt.Sprint(terminal), fmt.Sprint(submitted - terminal), fmt.Sprint(snapshot.MinHeight), fmt.Sprint(snapshot.MaxHeight), fmt.Sprint(snapshot.MaxHeight - snapshot.MinHeight), fmt.Sprint(snapshot.Mempool), fmt.Sprint(snapshot.Reserved), fmt.Sprint(snapshot.ProposalInFlight), fmt.Sprint(snapshot.Pending), fmt.Sprint(lastTerminalProgress.UnixMilli()), fmt.Sprint(lastMempoolProgress.UnixMilli())}
+	header := []string{"timestamp", "phase", "submitted", "terminal", "incomplete", "min_validator_height", "max_validator_height", "height_gap", "total_mempool_depth", "total_reserved_tx", "proposal_in_flight", "pending_total", "block_execution_height", "block_execution_progress_at_ms", "block_execution_task_count", "block_validation_task_count", "block_execution_validated_count", "block_execution_abort_count", "block_execution_reexecution_count", "last_terminal_progress_at", "last_mempool_progress_at"}
+	row := []string{fmt.Sprint(time.Now().UnixMilli()), phase, fmt.Sprint(submitted), fmt.Sprint(terminal), fmt.Sprint(submitted - terminal), fmt.Sprint(snapshot.MinHeight), fmt.Sprint(snapshot.MaxHeight), fmt.Sprint(snapshot.MaxHeight - snapshot.MinHeight), fmt.Sprint(snapshot.Mempool), fmt.Sprint(snapshot.Reserved), fmt.Sprint(snapshot.ProposalInFlight), fmt.Sprint(snapshot.Pending), fmt.Sprint(snapshot.BlockExecutionHeight), fmt.Sprint(snapshot.BlockExecutionProgressAtMS), fmt.Sprint(snapshot.BlockExecutionTaskCount), fmt.Sprint(snapshot.BlockValidationTaskCount), fmt.Sprint(snapshot.BlockExecutionValidatedCount), fmt.Sprint(snapshot.BlockExecutionAbortCount), fmt.Sprint(snapshot.BlockExecutionReexecutionCount), fmt.Sprint(lastTerminalProgress.UnixMilli()), fmt.Sprint(lastMempoolProgress.UnixMilli())}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return
@@ -578,6 +689,66 @@ func hasNonTerminalMempool(statuses []map[string]any, terminal map[string]bool) 
 	return false
 }
 
+func hasPendingProposalWork(statuses []map[string]any, terminal map[string]bool) bool {
+	for _, status := range statuses {
+		if !boolValue(status["proposal_in_flight"]) {
+			continue
+		}
+		detailsAvailable, ok := status["proposal_work_details_available"].(bool)
+		if !ok || !detailsAvailable {
+			// Older or incomplete node status remains conservative: an opaque
+			// in-flight proposal may still contain transaction or system work.
+			return true
+		}
+		if number(status["proposal_system_state_delta_count"]) > 0 {
+			return true
+		}
+		for _, logicalID := range stringSlice(status["proposal_logical_tx_ids"]) {
+			if !terminal[logicalID] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func quiescentCompletionTime(started, observed time.Time, statuses []map[string]any) time.Time {
+	latestProgressMS := int64(0)
+	for _, status := range statuses {
+		if value := timestampValue(status["last_progress_at"]); value > latestProgressMS {
+			latestProgressMS = value
+		}
+	}
+	if latestProgressMS <= 0 {
+		return observed
+	}
+	finished := time.UnixMilli(latestProgressMS)
+	if finished.Before(started) {
+		finished = started
+	}
+	if finished.After(observed) {
+		finished = observed
+	}
+	return finished
+}
+
+func timestampValue(value any) int64 {
+	switch item := value.(type) {
+	case float64:
+		return int64(item)
+	case float32:
+		return int64(item)
+	case int64:
+		return item
+	case int:
+		return int64(item)
+	case json.Number:
+		parsed, _ := item.Int64()
+		return parsed
+	}
+	return 0
+}
+
 type lifecycleRecord struct {
 	timestamp                               int64
 	txID, logicalID, stage, nodeID, shardID string
@@ -596,6 +767,116 @@ func validateSubmissionClassification(classification map[string]bool, expected i
 	return nil
 }
 
+func csvHeaderIndex(header []string, name string) int {
+	for index, value := range header {
+		if strings.EqualFold(strings.TrimSpace(value), name) {
+			return index
+		}
+	}
+	return -1
+}
+
+func loadClientLogicalIDMapping(dataDir string) (map[string]string, error) {
+	path := filepath.Join(dataDir, "client", "client_lifecycle.csv")
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("read client lifecycle identity mapping: %w", err)
+	}
+	defer file.Close()
+	rows, err := csv.NewReader(file).ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("parse client lifecycle identity mapping: %w", err)
+	}
+	if len(rows) == 0 {
+		return map[string]string{}, nil
+	}
+	txIndex := csvHeaderIndex(rows[0], "tx_id")
+	logicalIndex := csvHeaderIndex(rows[0], "logical_tx_id")
+	if txIndex < 0 || logicalIndex < 0 {
+		return map[string]string{}, nil
+	}
+	mapping := map[string]string{}
+	for rowIndex, row := range rows[1:] {
+		if txIndex >= len(row) || logicalIndex >= len(row) {
+			return nil, fmt.Errorf("client lifecycle identity row %d has %d fields", rowIndex+2, len(row))
+		}
+		txID := strings.TrimSpace(row[txIndex])
+		logicalID := strings.TrimSpace(row[logicalIndex])
+		if txID == "" || logicalID == "" {
+			continue
+		}
+		if previous, exists := mapping[txID]; exists && previous != logicalID {
+			return nil, fmt.Errorf("client lifecycle maps physical tx %s to conflicting logical ids %s and %s", txID, previous, logicalID)
+		}
+		mapping[txID] = logicalID
+	}
+	return mapping, nil
+}
+
+func parseSubmissionClassification(dataDir string, rows [][]string, expected int) (map[string]bool, error) {
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("submitted transaction classification is empty")
+	}
+	txIndex := csvHeaderIndex(rows[0], "tx_id")
+	logicalIndex := csvHeaderIndex(rows[0], "logical_tx_id")
+	crossIndex := csvHeaderIndex(rows[0], "is_cross_shard")
+	if txIndex < 0 {
+		return nil, fmt.Errorf("submitted transaction classification is missing tx_id")
+	}
+	if crossIndex < 0 {
+		return nil, fmt.Errorf("submitted transaction classification is missing is_cross_shard")
+	}
+	logicalByPhysical := map[string]string{}
+	if logicalIndex < 0 {
+		mapping, err := loadClientLogicalIDMapping(dataDir)
+		if err != nil {
+			return nil, err
+		}
+		logicalByPhysical = mapping
+	}
+	classification := map[string]bool{}
+	for rowIndex, row := range rows[1:] {
+		if txIndex >= len(row) || crossIndex >= len(row) || (logicalIndex >= 0 && logicalIndex >= len(row)) {
+			return nil, fmt.Errorf("submitted transaction classification row %d has %d fields", rowIndex+2, len(row))
+		}
+		physicalID := strings.TrimSpace(row[txIndex])
+		if physicalID == "" {
+			return nil, fmt.Errorf("submitted transaction classification row %d has empty tx_id", rowIndex+2)
+		}
+		logicalID := ""
+		if logicalIndex >= 0 {
+			logicalID = strings.TrimSpace(row[logicalIndex])
+		}
+		if logicalID == "" {
+			logicalID = strings.TrimSpace(logicalByPhysical[physicalID])
+		}
+		if logicalID == "" {
+			// Legacy runs used the physical id as the logical id.
+			logicalID = physicalID
+		}
+		isCross, err := strconv.ParseBool(strings.TrimSpace(row[crossIndex]))
+		if err != nil {
+			return nil, fmt.Errorf("submitted transaction classification row %d logical tx %s: %w", rowIndex+2, logicalID, err)
+		}
+		if previous, exists := classification[logicalID]; exists && previous != isCross {
+			return nil, fmt.Errorf("submitted transaction classification has conflicting cross-shard values for %s", logicalID)
+		}
+		classification[logicalID] = isCross
+	}
+	// expected < 0 means the caller is reading a legacy artifact that did not
+	// persist an authoritative submitted count. The live drain path and current
+	// artifacts always pass a non-negative count and keep the strict check.
+	if expected >= 0 {
+		if err := validateSubmissionClassification(classification, expected); err != nil {
+			return nil, err
+		}
+	}
+	return classification, nil
+}
+
 func loadSubmissionClassification(dataDir string, expected int) (map[string]bool, error) {
 	path := filepath.Join(dataDir, "client", "client_submission_log.csv")
 	file, err := os.Open(path)
@@ -607,41 +888,17 @@ func loadSubmissionClassification(dataDir string, expected int) (map[string]bool
 	if err != nil {
 		return nil, fmt.Errorf("parse submitted transaction classification: %w", err)
 	}
-	classification := map[string]bool{}
-	for index, row := range rows {
-		if index == 0 {
-			continue
-		}
-		if len(row) < 9 {
-			return nil, fmt.Errorf("submitted transaction classification row %d has %d fields", index+1, len(row))
-		}
-		logicalID := strings.TrimSpace(row[1])
-		if logicalID == "" {
-			return nil, fmt.Errorf("submitted transaction classification row %d has empty tx_id", index+1)
-		}
-		isCross, err := strconv.ParseBool(row[6])
-		if err != nil {
-			return nil, fmt.Errorf("submitted transaction classification row %d tx %s: %w", index+1, logicalID, err)
-		}
-		if previous, exists := classification[logicalID]; exists && previous != isCross {
-			return nil, fmt.Errorf("submitted transaction classification has conflicting cross-shard values for %s", logicalID)
-		}
-		classification[logicalID] = isCross
-	}
-	if err := validateSubmissionClassification(classification, expected); err != nil {
-		return nil, err
-	}
-	return classification, nil
+	return parseSubmissionClassification(dataDir, rows, expected)
 }
 
-func deriveLiveTerminal(classification map[string]bool, statuses []map[string]any) (map[string]bool, map[string]int, error) {
+func deriveLiveTerminal(classification map[string]bool, statuses []map[string]any, statelessDirect bool) (map[string]bool, map[string]int, error) {
 	if err := validateSubmissionClassification(classification, len(classification)); err != nil {
 		return nil, nil, err
 	}
 	terminal := map[string]bool{}
 	for _, status := range statuses {
 		for _, logicalID := range stringSlice(status["durable_committed_logical_tx_ids"]) {
-			if isCross, submitted := classification[logicalID]; submitted && !isCross {
+			if isCross, submitted := classification[logicalID]; submitted && (!isCross || statelessDirect) {
 				terminal[logicalID] = true
 			}
 		}
@@ -663,30 +920,21 @@ func deriveLiveTerminal(classification map[string]bool, statuses []map[string]an
 	return terminal, counts, nil
 }
 
-func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]any, error) {
+func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirect bool) (map[string]any, error) {
 	drain, err := readDrainStatus(dataDir)
 	if err != nil {
 		return nil, err
 	}
-	classification := map[string]bool{}
-	submissionFile, err := os.Open(filepath.Join(dataDir, "client", "client_submission_log.csv"))
+	expectedSubmitted := drain.Submitted
+	if expectedSubmitted <= 0 {
+		// drain_status.json files produced before logical-identity accounting did
+		// not contain submitted. In that compatibility case the submission CSV
+		// remains authoritative; -1 disables only this redundant count check.
+		expectedSubmitted = -1
+	}
+	classification, err := loadSubmissionClassification(dataDir, expectedSubmitted)
 	if err != nil {
 		return nil, err
-	}
-	submissionRows, err := csv.NewReader(submissionFile).ReadAll()
-	_ = submissionFile.Close()
-	if err != nil {
-		return nil, err
-	}
-	for index, row := range submissionRows {
-		if index == 0 || len(row) < 10 {
-			continue
-		}
-		isCross, err := strconv.ParseBool(row[6])
-		if err != nil {
-			return nil, fmt.Errorf("decode submitted transaction classification %q: %w", row[1], err)
-		}
-		classification[row[1]] = isCross
 	}
 	paths := []string{filepath.Join(dataDir, "client", "client_lifecycle.csv")}
 	for _, node := range nodes {
@@ -773,7 +1021,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 		if !terminal {
 			continue
 		}
-		if stage == "durable_committed" && entry.cross {
+		if stage == "durable_committed" && entry.cross && !statelessDirect {
 			continue
 		}
 		if entry.terminal == 0 || event.timestamp < entry.terminal {
@@ -789,7 +1037,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 			if entry.targetCommit {
 				crossTarget++
 			}
-			if entry.crossFinal {
+			if entry.crossFinal || (statelessDirect && entry.durableCommitted) {
 				crossFinalized++
 			}
 			if entry.crossRefund {
@@ -862,11 +1110,12 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan) (map[string]an
 		return nil, err
 	}
 	terminalUnique := intraTerminal + crossFinalized + crossRefunded + crossFailed
-	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle_and_drain_completion", "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "intra_shard_terminal_unique_count": intraTerminal, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": timing.EndToEndTPS, "logical_window_start_ms": timing.LogicalWindowStartMS, "logical_window_end_ms": timing.LogicalWindowEndMS, "logical_finality_duration_ms": timing.LogicalFinalityDurationMS, "logical_finality_tps": timing.LogicalFinalityTPS, "drain_started_at_ms": timing.DrainStartedAtMS, "drain_finished_at_ms": timing.DrainFinishedAtMS, "drain_duration_ms": timing.DrainDurationMS, "system_delta_drain_block_count": timing.SystemDeltaDrainBlockCount, "completion_window_start_ms": timing.CompletionWindowStartMS, "completion_window_end_ms": timing.CompletionWindowEndMS, "completion_duration_ms": timing.CompletionDurationMS, "end_to_end_tps": timing.EndToEndTPS, "tail_completion_overhead_ms": timing.TailCompletionOverheadMS, "tcp_send_latency_excluded": true}
+	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle_and_drain_completion", "cross_shard_execution_mode": map[bool]string{true: "stateless_direct_execution", false: "legacy_lock_relay_finalize"}[statelessDirect], "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "intra_shard_terminal_unique_count": intraTerminal, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": timing.EndToEndTPS, "logical_window_start_ms": timing.LogicalWindowStartMS, "logical_window_end_ms": timing.LogicalWindowEndMS, "logical_finality_duration_ms": timing.LogicalFinalityDurationMS, "logical_finality_tps": timing.LogicalFinalityTPS, "drain_started_at_ms": timing.DrainStartedAtMS, "drain_finished_at_ms": timing.DrainFinishedAtMS, "drain_duration_ms": timing.DrainDurationMS, "system_delta_drain_block_count": timing.SystemDeltaDrainBlockCount, "completion_window_start_ms": timing.CompletionWindowStartMS, "completion_window_end_ms": timing.CompletionWindowEndMS, "completion_duration_ms": timing.CompletionDurationMS, "end_to_end_tps": timing.EndToEndTPS, "tail_completion_overhead_ms": timing.TailCompletionOverheadMS, "tcp_send_latency_excluded": true}
 	return summary, v5.SaveJSON(filepath.Join(dataDir, "finality_summary.json"), summary)
 }
 
 type drainStatusArtifact struct {
+	Submitted        int    `json:"submitted"`
 	CompletionReason string `json:"completion_reason"`
 	FinishedAt       int64  `json:"drain_finished_at"`
 }
@@ -1162,7 +1411,8 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	remoteStateLatencyWeightedSum := 0.0
 	logicalUpdateCount := 0
 	physicalUpdateCount := 0
-	executedLogicalTxCount := 0
+	physicalReplicaExecutedLogicalTxCount := 0
+	executedLogicalTxByShard := map[string]int{}
 	executedTxInstanceCount := 0
 	preAggregationPhysicalOps := 0
 	postAggregationPhysicalOps := 0
@@ -1180,6 +1430,19 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	schedulerDependencyWaitMS := 0
 	schedulerIdleMS := 0
 	schedulerIdleRatioWeightedSum := 0.0
+	stateReadyWaitByShard := map[string]int64{}
+	stateReadyResumeByShard := map[string]int64{}
+	stateReadyWaitMSByShard := map[string]int64{}
+	stateReadyFetchByShard := map[string]int64{}
+	stateReadyFetchCompletedByShard := map[string]int64{}
+	stateReadyModes := map[string]bool{}
+	versionedWaveByShard := map[string]int64{}
+	versionedWaitByShard := map[string]int64{}
+	versionedResolvedByShard := map[string]int64{}
+	versionedProbeByShard := map[string]int64{}
+	versionedProbeLatencyByShard := map[string]int64{}
+	versionedMaxWaveWidth := int64(0)
+	versionedModes := map[string]bool{}
 	for _, node := range plan.NodeConfigs {
 		raw, err := os.ReadFile(filepath.Join(node.DataDir, "node_summary.json"))
 		if err != nil {
@@ -1212,7 +1475,10 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		remoteStateLatencyWeightedSum += item.RemoteStateAccessAvgLatencyMS * float64(item.RemoteStateAccessCount)
 		logicalUpdateCount += item.LogicalUpdateCount
 		physicalUpdateCount += item.PhysicalUpdateCount
-		executedLogicalTxCount += item.ExecutedLogicalTxCount
+		physicalReplicaExecutedLogicalTxCount += item.ExecutedLogicalTxCount
+		if item.ExecutedLogicalTxCount > executedLogicalTxByShard[item.ShardID] {
+			executedLogicalTxByShard[item.ShardID] = item.ExecutedLogicalTxCount
+		}
 		executedTxInstanceCount += item.ExecutedTxInstanceCount
 		preAggregationPhysicalOps += item.PreAggregationPhysicalOps
 		postAggregationPhysicalOps += item.PostAggregationPhysicalOps
@@ -1236,6 +1502,45 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		schedulerDependencyWaitMS += item.SchedulerDependencyWaitMS
 		schedulerIdleMS += item.SchedulerIdleMS
 		schedulerIdleRatioWeightedSum += item.SchedulerIdleRatio * float64(item.SchedulerEventCount)
+		if item.StateReadyWaitCount > stateReadyWaitByShard[item.ShardID] {
+			stateReadyWaitByShard[item.ShardID] = item.StateReadyWaitCount
+		}
+		if item.StateReadyResumeCount > stateReadyResumeByShard[item.ShardID] {
+			stateReadyResumeByShard[item.ShardID] = item.StateReadyResumeCount
+		}
+		if item.StatePrefetchWaitMS > stateReadyWaitMSByShard[item.ShardID] {
+			stateReadyWaitMSByShard[item.ShardID] = item.StatePrefetchWaitMS
+		}
+		if item.RemoteStateFetchCount > stateReadyFetchByShard[item.ShardID] {
+			stateReadyFetchByShard[item.ShardID] = item.RemoteStateFetchCount
+		}
+		if item.RemoteStateFetchCompletedCount > stateReadyFetchCompletedByShard[item.ShardID] {
+			stateReadyFetchCompletedByShard[item.ShardID] = item.RemoteStateFetchCompletedCount
+		}
+		if item.StateReadySchedulerMode != "" {
+			stateReadyModes[item.StateReadySchedulerMode] = true
+		}
+		if item.VersionedStateReadyWaveCount > versionedWaveByShard[item.ShardID] {
+			versionedWaveByShard[item.ShardID] = item.VersionedStateReadyWaveCount
+		}
+		if item.VersionedStateReadyWaitCount > versionedWaitByShard[item.ShardID] {
+			versionedWaitByShard[item.ShardID] = item.VersionedStateReadyWaitCount
+		}
+		if item.VersionedStateReadyResolvedCount > versionedResolvedByShard[item.ShardID] {
+			versionedResolvedByShard[item.ShardID] = item.VersionedStateReadyResolvedCount
+		}
+		if item.VersionedStateProbeCount > versionedProbeByShard[item.ShardID] {
+			versionedProbeByShard[item.ShardID] = item.VersionedStateProbeCount
+		}
+		if item.VersionedStateProbeLatencyMS > versionedProbeLatencyByShard[item.ShardID] {
+			versionedProbeLatencyByShard[item.ShardID] = item.VersionedStateProbeLatencyMS
+		}
+		if item.VersionedStateReadyMaxWaveWidth > versionedMaxWaveWidth {
+			versionedMaxWaveWidth = item.VersionedStateReadyMaxWaveWidth
+		}
+		if item.VersionedStateReadySchedulerMode != "" {
+			versionedModes[item.VersionedStateReadySchedulerMode] = true
+		}
 		network, _ := os.ReadFile(filepath.Join(node.DataDir, "network_log.csv"))
 		faultEvidence = faultEvidence || strings.Contains(string(network), "fault_")
 	}
@@ -1296,90 +1601,118 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	if schedulerEventCount > 0 {
 		schedulerIdleRatio = schedulerIdleRatioWeightedSum / float64(schedulerEventCount)
 	}
+	replicaDeduplicatedExecutedLogicalTxCount := 0
+	for _, count := range executedLogicalTxByShard {
+		replicaDeduplicatedExecutedLogicalTxCount += count
+	}
+	sumInt64 := func(values map[string]int64) int64 {
+		total := int64(0)
+		for _, value := range values {
+			total += value
+		}
+		return total
+	}
+	stateReadyMode := singleMapKey(stateReadyModes)
+	versionedStateReadyMode := singleMapKey(versionedModes)
 	return map[string]any{
-		"runtime_stage":                                 "v5_1_real_plugin_driven_multi_process_multishard_runtime",
-		"runtime_truth":                                 "v5_real_cluster_candidate",
-		"one_node_one_os_process":                       true,
-		"distinct_process_count":                        len(pids),
-		"expected_process_count":                        len(plan.NodeConfigs),
-		"independent_tcp_ports":                         len(ports) == len(plan.NodeConfigs),
-		"real_client_submission":                        clientInfo != nil,
-		"real_signed_tx":                                true,
-		"plugin_driven_runtime":                         true,
-		"block_executor_id":                             singleMapKey(blockExecutors),
-		"block_executor_consistent":                     len(blockExecutors) == 1,
-		"plan_digest_consistent":                        planDigestConsistent,
-		"continuous_multi_shard":                        true,
-		"shard_count":                                   len(roots),
-		"all_shards_active":                             allActive,
-		"per_shard_multiple_blocks":                     allActive,
-		"real_pbft_style_messages":                      pbftCount == len(plan.NodeConfigs),
-		"persistent_state":                              true,
-		"state_root_consistent":                         consistent,
-		"receipt_root_consistent":                       matrixReceiptConsistent,
-		"real_cross_shard_network":                      crossSuccess > 0,
-		"cross_shard_success_count":                     crossSuccess,
-		"cross_shard_refund_count":                      crossRefund,
-		"configured_block_size":                         blockProductionAggregate["configured_block_size"],
-		"configured_block_interval_ms":                  blockProductionAggregate["configured_block_interval_ms"],
-		"actual_committed_block_count":                  blockProductionAggregate["actual_committed_block_count"],
-		"actual_average_tx_per_block":                   blockProductionAggregate["actual_average_tx_per_block"],
-		"actual_min_tx_per_block":                       blockProductionAggregate["actual_min_tx_per_block"],
-		"actual_max_tx_per_block":                       blockProductionAggregate["actual_max_tx_per_block"],
-		"actual_block_interval_mean_ms":                 blockProductionAggregate["actual_block_interval_mean_ms"],
-		"actual_block_interval_p95_ms":                  blockProductionAggregate["actual_block_interval_p95_ms"],
-		"block_production_summary":                      blockProductionAggregate,
-		"logical_update_count":                          logicalUpdateCount,
-		"physical_update_count":                         physicalUpdateCount,
-		"logical_update_count_deprecated":               true,
-		"physical_update_count_deprecated":              true,
-		"executed_logical_transaction_count":            executedLogicalTxCount,
-		"executed_transaction_instance_count":           executedTxInstanceCount,
-		"pre_aggregation_physical_op_count":             preAggregationPhysicalOps,
-		"post_aggregation_physical_op_count":            postAggregationPhysicalOps,
-		"aggregated_key_count":                          aggregatedKeyCount,
-		"aggregated_logical_delta_count":                aggregatedLogicalDeltaCount,
-		"physical_ops_saved_count":                      physicalOpsSavedCount,
-		"aggregation_reduction_ratio":                   ratio(physicalOpsSavedCount, preAggregationPhysicalOps),
-		"scheduler_event_count":                         schedulerEventCount,
-		"scheduler_blocked_count":                       schedulerBlockedCount,
-		"scheduler_wakeup_count":                        schedulerWakeupCount,
-		"scheduler_stolen_work_count":                   schedulerStolenWorkCount,
-		"scheduler_local_execution_count":               schedulerLocalExecutionCount,
-		"scheduler_ready_queue_max_depth":               schedulerReadyQueueMaxDepth,
-		"scheduler_fast_queue_max_depth":                schedulerFastQueueMaxDepth,
-		"scheduler_conservative_queue_max_depth":        schedulerConsQueueMaxDepth,
-		"scheduler_dependency_wait_ms":                  schedulerDependencyWaitMS,
-		"scheduler_idle_ms":                             schedulerIdleMS,
-		"scheduler_idle_ratio":                          schedulerIdleRatio,
-		"remote_state_access_count":                     remoteStateAccessCount,
-		"remote_state_read_count":                       remoteStateReadCount,
-		"remote_state_write_apply_count":                remoteStateWriteApplyCount,
-		"remote_operation_unknown_kind_count":           remoteOperationUnknownCount,
-		"physical_remote_operation_count":               physicalRemoteOperationCount,
-		"physical_remote_fetch_count":                   physicalRemoteFetchCount,
-		"physical_remote_writeback_count":               physicalRemoteWritebackCount,
-		"physical_remote_failed_count":                  physicalRemoteFailedCount,
-		"replica_deduplicated_remote_operation_count":   remoteStateAggregate["replica_deduplicated_remote_operation_count"],
-		"replica_deduplicated_remote_fetch_count":       remoteStateAggregate["replica_deduplicated_remote_fetch_count"],
-		"replica_deduplicated_remote_writeback_count":   remoteStateAggregate["replica_deduplicated_remote_writeback_count"],
-		"remote_fetches_per_logical_tx":                 remoteStateAggregate["remote_fetches_per_logical_tx"],
-		"remote_writebacks_per_logical_tx":              remoteStateAggregate["remote_writebacks_per_logical_tx"],
-		"remote_operations_per_logical_tx":              remoteStateAggregate["remote_operations_per_logical_tx"],
-		"replica_amplification_factor":                  remoteStateAggregate["replica_amplification_factor"],
-		"remote_fetch_replica_amplification_factor":     remoteStateAggregate["remote_fetch_replica_amplification_factor"],
-		"remote_writeback_replica_amplification_factor": remoteStateAggregate["remote_writeback_replica_amplification_factor"],
-		"mechanism_metrics":                             mechanismMetrics,
-		"remote_state_access_failed_count":              remoteStateFailedCount,
-		"remote_state_access_avg_latency_ms":            remoteStateAvgLatency,
-		"fault_injection_real":                          faultEvidence,
-		"fault_injection_requested":                     faultRequested,
-		"orphan_process_count":                          0,
-		"no_fallback":                                   true,
-		"node_summaries":                                summaries,
-		"processes":                                     redactV5Processes(processes, dataDir),
-		"shard_blocks":                                  shardBlocks,
-		"ready_to_commit":                               ready,
+		"runtime_stage":                                       "v5_1_real_plugin_driven_multi_process_multishard_runtime",
+		"runtime_truth":                                       "v5_real_cluster_candidate",
+		"one_node_one_os_process":                             true,
+		"distinct_process_count":                              len(pids),
+		"expected_process_count":                              len(plan.NodeConfigs),
+		"independent_tcp_ports":                               len(ports) == len(plan.NodeConfigs),
+		"real_client_submission":                              clientInfo != nil,
+		"real_signed_tx":                                      true,
+		"plugin_driven_runtime":                               true,
+		"block_executor_id":                                   singleMapKey(blockExecutors),
+		"block_executor_consistent":                           len(blockExecutors) == 1,
+		"plan_digest_consistent":                              planDigestConsistent,
+		"continuous_multi_shard":                              true,
+		"shard_count":                                         len(roots),
+		"all_shards_active":                                   allActive,
+		"per_shard_multiple_blocks":                           allActive,
+		"real_pbft_style_messages":                            pbftCount == len(plan.NodeConfigs),
+		"persistent_state":                                    true,
+		"state_root_consistent":                               consistent,
+		"receipt_root_consistent":                             matrixReceiptConsistent,
+		"real_cross_shard_network":                            crossSuccess > 0,
+		"cross_shard_success_count":                           crossSuccess,
+		"cross_shard_refund_count":                            crossRefund,
+		"configured_block_size":                               blockProductionAggregate["configured_block_size"],
+		"configured_block_interval_ms":                        blockProductionAggregate["configured_block_interval_ms"],
+		"actual_committed_block_count":                        blockProductionAggregate["actual_committed_block_count"],
+		"actual_average_tx_per_block":                         blockProductionAggregate["actual_average_tx_per_block"],
+		"actual_min_tx_per_block":                             blockProductionAggregate["actual_min_tx_per_block"],
+		"actual_max_tx_per_block":                             blockProductionAggregate["actual_max_tx_per_block"],
+		"actual_block_interval_mean_ms":                       blockProductionAggregate["actual_block_interval_mean_ms"],
+		"actual_block_interval_p95_ms":                        blockProductionAggregate["actual_block_interval_p95_ms"],
+		"block_production_summary":                            blockProductionAggregate,
+		"logical_update_count":                                logicalUpdateCount,
+		"physical_update_count":                               physicalUpdateCount,
+		"logical_update_count_deprecated":                     true,
+		"physical_update_count_deprecated":                    true,
+		"executed_logical_transaction_count":                  replicaDeduplicatedExecutedLogicalTxCount,
+		"physical_replica_executed_logical_transaction_count": physicalReplicaExecutedLogicalTxCount,
+		"executed_logical_transaction_count_truth_scope":      "replica_deduplicated_by_shard",
+		"executed_transaction_instance_count":                 executedTxInstanceCount,
+		"pre_aggregation_physical_op_count":                   preAggregationPhysicalOps,
+		"post_aggregation_physical_op_count":                  postAggregationPhysicalOps,
+		"aggregated_key_count":                                aggregatedKeyCount,
+		"aggregated_logical_delta_count":                      aggregatedLogicalDeltaCount,
+		"physical_ops_saved_count":                            physicalOpsSavedCount,
+		"aggregation_reduction_ratio":                         ratio(physicalOpsSavedCount, preAggregationPhysicalOps),
+		"scheduler_event_count":                               schedulerEventCount,
+		"scheduler_blocked_count":                             schedulerBlockedCount,
+		"scheduler_wakeup_count":                              schedulerWakeupCount,
+		"scheduler_stolen_work_count":                         schedulerStolenWorkCount,
+		"scheduler_local_execution_count":                     schedulerLocalExecutionCount,
+		"scheduler_ready_queue_max_depth":                     schedulerReadyQueueMaxDepth,
+		"scheduler_fast_queue_max_depth":                      schedulerFastQueueMaxDepth,
+		"scheduler_conservative_queue_max_depth":              schedulerConsQueueMaxDepth,
+		"scheduler_dependency_wait_ms":                        schedulerDependencyWaitMS,
+		"scheduler_idle_ms":                                   schedulerIdleMS,
+		"scheduler_idle_ratio":                                schedulerIdleRatio,
+		"state_ready_wait_count":                              sumInt64(stateReadyWaitByShard),
+		"state_ready_resume_count":                            sumInt64(stateReadyResumeByShard),
+		"state_prefetch_wait_ms":                              sumInt64(stateReadyWaitMSByShard),
+		"remote_state_fetch_count":                            sumInt64(stateReadyFetchByShard),
+		"remote_state_fetch_completed_count":                  sumInt64(stateReadyFetchCompletedByShard),
+		"state_ready_scheduler_mode":                          stateReadyMode,
+		"versioned_state_ready_wave_count":                    sumInt64(versionedWaveByShard),
+		"versioned_state_ready_wait_observation_count":        sumInt64(versionedWaitByShard),
+		"versioned_state_ready_resolved_token_count":          sumInt64(versionedResolvedByShard),
+		"versioned_state_probe_count":                         sumInt64(versionedProbeByShard),
+		"versioned_state_probe_latency_ms":                    sumInt64(versionedProbeLatencyByShard),
+		"versioned_state_ready_max_wave_width":                versionedMaxWaveWidth,
+		"versioned_state_ready_scheduler_mode":                versionedStateReadyMode,
+		"remote_state_access_count":                           remoteStateAccessCount,
+		"remote_state_read_count":                             remoteStateReadCount,
+		"remote_state_write_apply_count":                      remoteStateWriteApplyCount,
+		"remote_operation_unknown_kind_count":                 remoteOperationUnknownCount,
+		"physical_remote_operation_count":                     physicalRemoteOperationCount,
+		"physical_remote_fetch_count":                         physicalRemoteFetchCount,
+		"physical_remote_writeback_count":                     physicalRemoteWritebackCount,
+		"physical_remote_failed_count":                        physicalRemoteFailedCount,
+		"replica_deduplicated_remote_operation_count":         remoteStateAggregate["replica_deduplicated_remote_operation_count"],
+		"replica_deduplicated_remote_fetch_count":             remoteStateAggregate["replica_deduplicated_remote_fetch_count"],
+		"replica_deduplicated_remote_writeback_count":         remoteStateAggregate["replica_deduplicated_remote_writeback_count"],
+		"remote_fetches_per_logical_tx":                       remoteStateAggregate["remote_fetches_per_logical_tx"],
+		"remote_writebacks_per_logical_tx":                    remoteStateAggregate["remote_writebacks_per_logical_tx"],
+		"remote_operations_per_logical_tx":                    remoteStateAggregate["remote_operations_per_logical_tx"],
+		"replica_amplification_factor":                        remoteStateAggregate["replica_amplification_factor"],
+		"remote_fetch_replica_amplification_factor":           remoteStateAggregate["remote_fetch_replica_amplification_factor"],
+		"remote_writeback_replica_amplification_factor":       remoteStateAggregate["remote_writeback_replica_amplification_factor"],
+		"mechanism_metrics":                                   mechanismMetrics,
+		"remote_state_access_failed_count":                    remoteStateFailedCount,
+		"remote_state_access_avg_latency_ms":                  remoteStateAvgLatency,
+		"fault_injection_real":                                faultEvidence,
+		"fault_injection_requested":                           faultRequested,
+		"orphan_process_count":                                0,
+		"no_fallback":                                         true,
+		"node_summaries":                                      summaries,
+		"processes":                                           redactV5Processes(processes, dataDir),
+		"shard_blocks":                                        shardBlocks,
+		"ready_to_commit":                                     ready,
 	}, nil
 }
 
@@ -1693,8 +2026,10 @@ func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes [
 		"schema_version": "mbe_metatrack_aggregate_summary_v1",
 		"status":         "not_applicable",
 	}
-	fast := 0
-	conservative := 0
+	physicalFast := 0
+	physicalConservative := 0
+	fastByShard := map[string]int{}
+	conservativeByShard := map[string]int{}
 	aggregationGroups := 0
 	schedulerEvents := 0
 	blocked := 0
@@ -1707,8 +2042,14 @@ func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes [
 		if item.FastTrackCount > 0 || item.ConservativeTrackCount > 0 || item.AggregationGroupCount > 0 || item.RemoteStateAccessCount > 0 {
 			metatrackApplicable = true
 		}
-		fast += item.FastTrackCount
-		conservative += item.ConservativeTrackCount
+		physicalFast += item.FastTrackCount
+		physicalConservative += item.ConservativeTrackCount
+		if item.FastTrackCount > fastByShard[item.ShardID] {
+			fastByShard[item.ShardID] = item.FastTrackCount
+		}
+		if item.ConservativeTrackCount > conservativeByShard[item.ShardID] {
+			conservativeByShard[item.ShardID] = item.ConservativeTrackCount
+		}
 		aggregationGroups += item.AggregationGroupCount
 		schedulerEvents += item.SchedulerEventCount
 		blocked += item.SchedulerBlockedCount
@@ -1719,28 +2060,43 @@ func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes [
 		aggregatedLogicalDeltas += item.AggregatedLogicalDeltaCount
 	}
 	if metatrackApplicable {
+		fast := 0
+		conservative := 0
+		for _, count := range fastByShard {
+			fast += count
+		}
+		for _, count := range conservativeByShard {
+			conservative += count
+		}
 		totalTracks := fast + conservative
 		metatrack = map[string]any{
-			"schema_version":                              "mbe_metatrack_aggregate_summary_v1",
-			"status":                                      "available",
-			"fast_track_logical_tx_count":                 fast,
-			"conservative_track_logical_tx_count":         conservative,
-			"fast_track_ratio":                            ratio(fast, totalTracks),
-			"conservative_track_ratio":                    ratio(conservative, totalTracks),
-			"runtime_scheduler_event_count":               schedulerEvents,
-			"blocked_logical_tx_count":                    blocked,
-			"wakeup_logical_tx_count":                     wakeup,
-			"aggregation_group_count":                     aggregationGroups,
-			"aggregated_key_count":                        aggregatedKeys,
-			"aggregated_logical_delta_count":              aggregatedLogicalDeltas,
-			"pre_aggregation_physical_op_count":           preOps,
-			"post_aggregation_physical_op_count":          postOps,
-			"physical_ops_saved_count":                    maxInt(preOps-postOps, 0),
-			"aggregation_reduction_ratio":                 ratio(maxInt(preOps-postOps, 0), preOps),
-			"physical_remote_fetch_count":                 remoteState["physical_remote_fetch_count"],
-			"physical_remote_writeback_count":             remoteState["physical_remote_writeback_count"],
-			"replica_deduplicated_remote_fetch_count":     remoteState["replica_deduplicated_remote_fetch_count"],
-			"replica_deduplicated_remote_writeback_count": remoteState["replica_deduplicated_remote_writeback_count"],
+			"schema_version":                                     "mbe_metatrack_aggregate_summary_v1",
+			"status":                                             "available",
+			"fast_track_logical_tx_count":                        fast,
+			"conservative_track_logical_tx_count":                conservative,
+			"logical_track_count_truth_scope":                    "replica_deduplicated_by_shard",
+			"physical_replica_fast_track_instance_count":         physicalFast,
+			"physical_replica_conservative_track_instance_count": physicalConservative,
+			"fast_track_ratio":                                   ratio(fast, totalTracks),
+			"conservative_track_ratio":                           ratio(conservative, totalTracks),
+			"runtime_scheduler_event_count":                      schedulerEvents,
+			"blocked_scheduler_event_count":                      blocked,
+			"wakeup_scheduler_event_count":                       wakeup,
+			"blocked_logical_tx_count":                           blocked,
+			"blocked_logical_tx_count_deprecated":                true,
+			"wakeup_logical_tx_count":                            wakeup,
+			"wakeup_logical_tx_count_deprecated":                 true,
+			"aggregation_group_count":                            aggregationGroups,
+			"aggregated_key_count":                               aggregatedKeys,
+			"aggregated_logical_delta_count":                     aggregatedLogicalDeltas,
+			"pre_aggregation_physical_op_count":                  preOps,
+			"post_aggregation_physical_op_count":                 postOps,
+			"physical_ops_saved_count":                           maxInt(preOps-postOps, 0),
+			"aggregation_reduction_ratio":                        ratio(maxInt(preOps-postOps, 0), preOps),
+			"physical_remote_fetch_count":                        remoteState["physical_remote_fetch_count"],
+			"physical_remote_writeback_count":                    remoteState["physical_remote_writeback_count"],
+			"replica_deduplicated_remote_fetch_count":            remoteState["replica_deduplicated_remote_fetch_count"],
+			"replica_deduplicated_remote_writeback_count":        remoteState["replica_deduplicated_remote_writeback_count"],
 		}
 	}
 	blockSTM, err := aggregateBlockSTM(nodes)
@@ -1764,15 +2120,27 @@ func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes [
 
 func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 	type nodeMetrics struct {
-		nodeID               string
-		workerCount          int
-		maximumParallelWidth int
-		abortCount           int
-		reexecutionCount     int
-		validationFailure    int
-		dependencyWaitCount  int
-		estimatePublishCount int
-		serialEquivalent     bool
+		nodeID                    string
+		shardID                   string
+		workerCount               int
+		maximumParallelWidth      int
+		maximumConcurrentExec     int
+		maximumIncarnation        int
+		abortCount                int
+		dependencyAbortCount      int
+		validationAbortCount      int
+		reexecutionCount          int
+		validationFailure         int
+		validatedSpeculative      int
+		dependencyWaitCount       int
+		dependencyResumeCount     int
+		estimatePublishCount      int
+		estimateMarkCount         int
+		estimateReadCount         int
+		businessExecutionCount    int
+		committedTransactionCount int
+		serialFallbackCount       int
+		serialEquivalent          bool
 	}
 	values := []nodeMetrics{}
 	for _, node := range nodes {
@@ -1788,54 +2156,150 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 		if metricsMap == nil {
 			continue
 		}
+		estimatePublish := intFromAny(metricsMap["estimate_count"])
+		if estimatePublish == 0 {
+			estimatePublish = intFromAny(metricsMap["estimate_mark_count"])
+		}
 		values = append(values, nodeMetrics{
-			nodeID:               node.NodeID,
-			workerCount:          intFromAny(metricsMap["worker_count"]),
-			maximumParallelWidth: intFromAny(metricsMap["maximum_parallel_width"]),
-			abortCount:           intFromAny(metricsMap["abort_count"]),
-			reexecutionCount:     intFromAny(metricsMap["reexecution_count"]),
-			validationFailure:    intFromAny(metricsMap["validation_failure_count"]),
-			dependencyWaitCount:  intFromAny(metricsMap["dependency_wait_count"]),
-			estimatePublishCount: intFromAny(metricsMap["estimate_publish_count"]),
-			serialEquivalent:     boolFromAny(raw["serial_equivalent"]),
+			nodeID:                    node.NodeID,
+			shardID:                   node.ShardID,
+			workerCount:               intFromAny(metricsMap["worker_count"]),
+			maximumParallelWidth:      intFromAny(metricsMap["maximum_parallel_width"]),
+			maximumConcurrentExec:     intFromAny(metricsMap["maximum_concurrent_executions"]),
+			maximumIncarnation:        intFromAny(metricsMap["maximum_incarnation"]),
+			abortCount:                intFromAny(metricsMap["abort_count"]),
+			dependencyAbortCount:      intFromAny(metricsMap["dependency_abort_count"]),
+			validationAbortCount:      intFromAny(metricsMap["validation_abort_count"]),
+			reexecutionCount:          intFromAny(metricsMap["reexecution_count"]),
+			validationFailure:         intFromAny(metricsMap["validation_failure_count"]),
+			validatedSpeculative:      intFromAny(metricsMap["validated_speculative_result_count"]),
+			dependencyWaitCount:       intFromAny(metricsMap["dependency_wait_count"]),
+			dependencyResumeCount:     intFromAny(metricsMap["dependency_resume_count"]),
+			estimatePublishCount:      estimatePublish,
+			estimateMarkCount:         intFromAny(metricsMap["estimate_mark_count"]),
+			estimateReadCount:         intFromAny(metricsMap["estimate_read_count"]),
+			businessExecutionCount:    intFromAny(metricsMap["business_execution_invocation_count"]),
+			committedTransactionCount: intFromAny(metricsMap["committed_transaction_count"]),
+			serialFallbackCount:       intFromAny(metricsMap["serial_fallback_count"]),
+			serialEquivalent:          boolFromAny(raw["serial_equivalent"]),
 		})
 	}
 	if len(values) == 0 {
-		return map[string]any{"schema_version": "mbe_block_stm_aggregate_summary_v1", "status": "not_applicable"}, nil
+		return map[string]any{"schema_version": "mbe_block_stm_aggregate_summary_v2", "status": "not_applicable"}, nil
 	}
 	workerCounts := map[int]bool{}
 	serialEquivalent := true
 	abortSum := 0
+	dependencyAbortSum := 0
+	validationAbortSum := 0
 	reexecutionSum := 0
 	validationFailureSum := 0
+	validatedSpeculativeSum := 0
 	dependencyWaitSum := 0
+	dependencyResumeSum := 0
 	estimatePublishSum := 0
+	estimateMarkSum := 0
+	estimateReadSum := 0
+	businessExecutionSum := 0
+	committedPhysicalSum := 0
+	serialFallbackSum := 0
 	maxWidth := 0
+	maxConcurrent := 0
+	maxIncarnation := 0
+	maxAbort := 0
+	maxReexecution := 0
+	committedByShard := map[string]int{}
+	perValidator := make([]map[string]any, 0, len(values))
 	for _, item := range values {
 		workerCounts[item.workerCount] = true
 		serialEquivalent = serialEquivalent && item.serialEquivalent
 		abortSum += item.abortCount
+		dependencyAbortSum += item.dependencyAbortCount
+		validationAbortSum += item.validationAbortCount
 		reexecutionSum += item.reexecutionCount
 		validationFailureSum += item.validationFailure
+		validatedSpeculativeSum += item.validatedSpeculative
 		dependencyWaitSum += item.dependencyWaitCount
+		dependencyResumeSum += item.dependencyResumeCount
 		estimatePublishSum += item.estimatePublishCount
+		estimateMarkSum += item.estimateMarkCount
+		estimateReadSum += item.estimateReadCount
+		businessExecutionSum += item.businessExecutionCount
+		committedPhysicalSum += item.committedTransactionCount
+		serialFallbackSum += item.serialFallbackCount
 		maxWidth = maxInt(maxWidth, item.maximumParallelWidth)
+		maxConcurrent = maxInt(maxConcurrent, item.maximumConcurrentExec)
+		maxIncarnation = maxInt(maxIncarnation, item.maximumIncarnation)
+		maxAbort = maxInt(maxAbort, item.abortCount)
+		maxReexecution = maxInt(maxReexecution, item.reexecutionCount)
+		if item.committedTransactionCount > committedByShard[item.shardID] {
+			committedByShard[item.shardID] = item.committedTransactionCount
+		}
+		perValidator = append(perValidator, map[string]any{
+			"node_id":                             item.nodeID,
+			"shard_id":                            item.shardID,
+			"abort_count":                         item.abortCount,
+			"dependency_abort_count":              item.dependencyAbortCount,
+			"validation_abort_count":              item.validationAbortCount,
+			"reexecution_count":                   item.reexecutionCount,
+			"validation_failure_count":            item.validationFailure,
+			"dependency_wait_count":               item.dependencyWaitCount,
+			"dependency_resume_count":             item.dependencyResumeCount,
+			"estimate_publish_count":              item.estimatePublishCount,
+			"estimate_mark_count":                 item.estimateMarkCount,
+			"estimate_read_count":                 item.estimateReadCount,
+			"maximum_incarnation":                 item.maximumIncarnation,
+			"business_execution_invocation_count": item.businessExecutionCount,
+			"committed_transaction_count":         item.committedTransactionCount,
+			"serial_fallback_count":               item.serialFallbackCount,
+		})
+	}
+	replicaDeduplicatedCommitted := 0
+	for _, count := range committedByShard {
+		replicaDeduplicatedCommitted += count
 	}
 	return map[string]any{
-		"schema_version":                       "mbe_block_stm_aggregate_summary_v1",
-		"status":                               "available",
-		"worker_count":                         singleIntKey(workerCounts),
-		"worker_count_replica_consistent":      len(workerCounts) == 1,
-		"maximum_parallel_width":               maxWidth,
-		"abort_count":                          abortSum,
-		"reexecution_count":                    reexecutionSum,
-		"validation_failure_count":             validationFailureSum,
-		"dependency_wait_count":                dependencyWaitSum,
-		"estimate_publish_count":               estimatePublishSum,
-		"serial_equivalent":                    serialEquivalent,
-		"physical_replica_count":               len(values),
-		"abort_count_per_validator_mean":       ratio(abortSum, len(values)),
-		"reexecution_count_per_validator_mean": ratio(reexecutionSum, len(values)),
+		"schema_version":                                     "mbe_block_stm_aggregate_summary_v2",
+		"status":                                             "available",
+		"metric_truth_scope":                                 "physical_replica_totals_with_explicit_per_validator_and_replica_deduplicated_counts",
+		"worker_count":                                       singleIntKey(workerCounts),
+		"worker_count_replica_consistent":                    len(workerCounts) == 1,
+		"maximum_parallel_width":                             maxWidth,
+		"maximum_concurrent_executions":                      maxConcurrent,
+		"maximum_incarnation":                                maxIncarnation,
+		"abort_count":                                        abortSum,
+		"abort_count_truth_scope":                            "physical_replica_total",
+		"dependency_abort_count":                             dependencyAbortSum,
+		"validation_abort_count":                             validationAbortSum,
+		"abort_decomposition_consistent":                     abortSum == dependencyAbortSum+validationAbortSum,
+		"reexecution_count":                                  reexecutionSum,
+		"reexecution_count_truth_scope":                      "physical_replica_total",
+		"validation_failure_count":                           validationFailureSum,
+		"validated_speculative_result_count":                 validatedSpeculativeSum,
+		"dependency_wait_count":                              dependencyWaitSum,
+		"dependency_resume_count":                            dependencyResumeSum,
+		"estimate_publish_count":                             estimatePublishSum,
+		"estimate_publish_source_field":                      "estimate_count",
+		"estimate_mark_count":                                estimateMarkSum,
+		"estimate_read_count":                                estimateReadSum,
+		"business_execution_invocation_count":                businessExecutionSum,
+		"committed_transaction_count_physical_replica_total": committedPhysicalSum,
+		"replica_deduplicated_committed_transaction_count":   replicaDeduplicatedCommitted,
+		"serial_fallback_count":                              serialFallbackSum,
+		"serial_equivalent":                                  serialEquivalent,
+		"physical_replica_count":                             len(values),
+		"abort_count_per_validator_mean":                     ratio(abortSum, len(values)),
+		"abort_count_per_validator_max":                      maxAbort,
+		"dependency_abort_count_per_validator_mean":          ratio(dependencyAbortSum, len(values)),
+		"validation_abort_count_per_validator_mean":          ratio(validationAbortSum, len(values)),
+		"reexecution_count_per_validator_mean":               ratio(reexecutionSum, len(values)),
+		"reexecution_count_per_validator_max":                maxReexecution,
+		"validation_failure_count_per_validator_mean":        ratio(validationFailureSum, len(values)),
+		"dependency_wait_count_per_validator_mean":           ratio(dependencyWaitSum, len(values)),
+		"dependency_resume_count_per_validator_mean":         ratio(dependencyResumeSum, len(values)),
+		"estimate_publish_count_per_validator_mean":          ratio(estimatePublishSum, len(values)),
+		"business_execution_count_per_validator_mean":        ratio(businessExecutionSum, len(values)),
+		"per_validator":                                      perValidator,
 	}, nil
 }
 

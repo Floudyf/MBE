@@ -67,6 +67,8 @@ type canonicalWireRecord struct {
 	AccessListSchema  string                        `json:"access_list_schema"`
 	AccessListSource  string                        `json:"access_list_source"`
 	AccessTemplate    []canonicalWireAccessTemplate `json:"access_template"`
+	AccessList        []tx.AccessItem               `json:"access_list"`
+	AccessListDigest  string                        `json:"access_list_digest"`
 	Category          string                        `json:"category,omitempty"`
 	Contract          string                        `json:"contract,omitempty"`
 	MaterializedIndex int                           `json:"materialized_index"`
@@ -135,7 +137,7 @@ func NewCanonicalTraceIteratorWithSharding(plan WorkloadPlan, shards int, dataDi
 	return &CanonicalTraceIterator{
 		plan: plan, shards: shards, sharding: sharding, file: file, gzip: gz, scanner: scanner,
 		identities: map[string]string{}, nonces: map[string]uint64{}, hash: hash,
-		summary: WorkloadReplaySummary{DatasetID: plan.DatasetID, VariantID: plan.VariantID, TruthLabel: plan.TruthLabel, SourceSHA256: plan.SourceSHA256, MaterializedSHA256: plan.MaterializedSHA256, ExpectedCount: expected, ExpectedCrossShardCount: plan.ExpectedCrossShardCount, ExpectedCrossShardRatio: plan.ExpectedCrossShardRatio, ReplayMode: plan.ReplayMode, NoFallback: true, NonceContinuity: true, ShardLoadDistribution: map[string]int{}, IdentityMappingVersion: firstNonEmpty(plan.IdentityMappingVersion, "mbe_dataset_identity_v1")},
+		summary: WorkloadReplaySummary{DatasetID: plan.DatasetID, VariantID: plan.VariantID, TruthLabel: plan.TruthLabel, SourceSHA256: plan.SourceSHA256, SourceFileSHA256: plan.SourceFileSHA256, SelectionMode: plan.SelectionMode, VariantParameters: cloneAnyMap(plan.VariantParameters), MaterializedSHA256: plan.MaterializedSHA256, ExpectedCount: expected, ExpectedCrossShardCount: plan.ExpectedCrossShardCount, ExpectedCrossShardRatio: plan.ExpectedCrossShardRatio, ReplayMode: plan.ReplayMode, NoFallback: true, NonceContinuity: true, ShardLoadDistribution: map[string]int{}, IdentityMappingVersion: firstNonEmpty(plan.IdentityMappingVersion, "mbe_dataset_identity_v1")},
 	}, nil
 }
 
@@ -160,7 +162,14 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 		return WorkloadRecord{}, fmt.Errorf("canonical workload has excess records")
 	}
 	senderID := strings.ToLower(wire.SenderID)
+	accessList, accessSchema, accessSource, accessDigest, err := resolveCanonicalAccessList(it.plan, wire)
+	if err != nil {
+		return WorkloadRecord{}, err
+	}
 	sourceShard := canonicalRuntimeSourceShardWithSharding(it.plan, senderID, it.shards, it.sharding)
+	if wire.SchemaVersion == "mbe_workload_record_v3" && accessSchema != "dcl_sale_access_template_v1" {
+		sourceShard = shardIndexFor(it.sharding, []string{strings.ToLower(wire.RoutingSourceKey)}, it.shards)
+	}
 	targetShard := sourceShard
 	if wire.RoutingTargetKey != "" {
 		targetShard = shardIndexFor(it.sharding, []string{strings.ToLower(wire.RoutingTargetKey)}, it.shards)
@@ -172,10 +181,6 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 		target = fmt.Sprintf("s%d", targetShard)
 		payload = "v5_cross:" + target + ":" + payload
 		it.summary.ActualCrossShardCount++
-	}
-	accessList, accessSchema, accessSource, accessDigest, err := resolveCanonicalAccessList(it.plan, wire)
-	if err != nil {
-		return WorkloadRecord{}, err
 	}
 	it.summary.ShardLoadDistribution[fmt.Sprintf("s%d", sourceShard)]++
 	it.summary.ReadCount++
@@ -235,10 +240,19 @@ func (it *CanonicalTraceIterator) SignedTransaction(record WorkloadRecord) (tx.S
 	if digest := CanonicalAccessListDigest(record.AccessList); digest != record.AccessListDigest {
 		return tx.SignedTransaction{}, fmt.Errorf("access list digest mismatch for source_event_id=%s", record.SourceEventID)
 	}
-	if !accessListHasKey(record.AccessList, "balance:"+sender) || !accessListHasKey(record.AccessList, "nonce:"+sender) || !accessListHasKey(record.AccessList, "balance:"+receiver) || !accessListHasKey(record.AccessList, "nonce:"+receiver) {
+	if record.AccessListSchema == "dcl_sale_access_template_v1" && (!accessListHasKey(record.AccessList, "balance:"+sender) || !accessListHasKey(record.AccessList, "nonce:"+sender) || !accessListHasKey(record.AccessList, "balance:"+receiver) || !accessListHasKey(record.AccessList, "nonce:"+receiver)) {
 		return tx.SignedTransaction{}, fmt.Errorf("resolved access list does not match runtime sender/receiver for source_event_id=%s", record.SourceEventID)
 	}
-	item := tx.SignedTransaction{Sender: sender, Receiver: receiver, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, AccessList: append([]tx.AccessItem(nil), record.AccessList...), AccessListDigest: record.AccessListDigest, AccessListSchema: record.AccessListSchema, AccessListSource: record.AccessListSource, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
+	item := tx.SignedTransaction{LogicalTxID: firstNonEmpty(record.LogicalID, record.SourceEventID), Sender: sender, Receiver: receiver, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, AccessList: append([]tx.AccessItem(nil), record.AccessList...), AccessListDigest: record.AccessListDigest, AccessListSchema: record.AccessListSchema, AccessListSource: record.AccessListSource, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
+	if record.RoutePlanDigest != "" {
+		routing := tx.ExecutionRoutingMetadata{SenderID: sender, ReceiverID: receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: record.ExecutionShard, RoutingReason: record.RoutingReason, RoutePlanDigest: record.RoutePlanDigest, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...)}
+		digest, err := tx.ComputeExecutionRoutingDigest(item, routing)
+		if err != nil {
+			return item, err
+		}
+		routing.RouteEntryDigest = digest
+		item.ExecutionRouting = &routing
+	}
 	if err := tx.Sign(&item, privateKey); err != nil {
 		return item, err
 	}
@@ -286,6 +300,17 @@ func resolveCanonicalAccessList(plan WorkloadPlan, wire canonicalWireRecord) ([]
 		digest := CanonicalAccessListDigest(items)
 		return items, wire.AccessListSchema, wire.AccessListSource, digest, nil
 	}
+	if wire.SchemaVersion == "mbe_workload_record_v3" {
+		items, err := resolveDirectAccessList(wire)
+		if err != nil {
+			return nil, "", "", "", err
+		}
+		digest := CanonicalAccessListDigest(items)
+		if !strings.EqualFold(digest, wire.AccessListDigest) {
+			return nil, "", "", "", fmt.Errorf("direct access list digest mismatch source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+		}
+		return items, wire.AccessListSchema, wire.AccessListSource, digest, nil
+	}
 	if wire.SchemaVersion == "mbe_workload_record_v1" {
 		items, err := canonicalLegacyAccessList(wire)
 		if err != nil {
@@ -295,6 +320,45 @@ func resolveCanonicalAccessList(plan WorkloadPlan, wire canonicalWireRecord) ([]
 		return items, "legacy_access_inference_v1", "legacy_state_keys", digest, nil
 	}
 	return nil, "", "", "", fmt.Errorf("canonical workload schema error source_row_index=%d source_event_id=%s schema=%s", wire.SourceRowIndex, wire.SourceEventID, wire.SchemaVersion)
+}
+
+func resolveDirectAccessList(wire canonicalWireRecord) ([]tx.AccessItem, error) {
+	if strings.TrimSpace(wire.AccessListSchema) == "" || strings.TrimSpace(wire.AccessListSource) == "" || len(wire.AccessList) == 0 {
+		return nil, fmt.Errorf("canonical direct access list error source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+	}
+	byKey := map[string]tx.AccessItem{}
+	for _, item := range wire.AccessList {
+		item.Key = strings.TrimSpace(item.Key)
+		item.UpdateSemantics = strings.TrimSpace(item.UpdateSemantics)
+		if item.Key == "" || item.UpdateSemantics == "" {
+			return nil, fmt.Errorf("canonical direct access list item error source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+		}
+		if _, err := parseAccessMode(string(item.Mode)); err != nil {
+			return nil, fmt.Errorf("canonical direct access list item error source_row_index=%d source_event_id=%s: %w", wire.SourceRowIndex, wire.SourceEventID, err)
+		}
+		if _, exists := byKey[item.Key]; exists {
+			return nil, fmt.Errorf("duplicate direct access key source_row_index=%d source_event_id=%s key=%s", wire.SourceRowIndex, wire.SourceEventID, item.Key)
+		}
+		byKey[item.Key] = item
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	stateKeys := append([]string(nil), wire.StateKeys...)
+	sort.Strings(stateKeys)
+	if len(keys) != len(stateKeys) {
+		return nil, fmt.Errorf("direct access/state key count mismatch source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+	}
+	out := make([]tx.AccessItem, 0, len(keys))
+	for index, key := range keys {
+		if stateKeys[index] != key {
+			return nil, fmt.Errorf("direct access/state key mismatch source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+		}
+		out = append(out, byKey[key])
+	}
+	return out, nil
 }
 
 func resolveAccessTemplate(plan WorkloadPlan, wire canonicalWireRecord) ([]tx.AccessItem, error) {
@@ -533,6 +597,17 @@ func mappingDigest(items map[string]string) string {
 		hash.Write([]byte(key + "=" + items[key] + "\n"))
 	}
 	return base64.StdEncoding.EncodeToString(hash.Sum(nil))
+}
+
+func cloneAnyMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
 }
 
 func firstNonEmpty(values ...string) string {

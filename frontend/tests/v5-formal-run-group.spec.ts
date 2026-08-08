@@ -61,3 +61,60 @@ test("previews and runs a V5 real-cluster Formal RunGroup", async ({ page }) => 
   await expect(child.nth(7)).toHaveText("可用");
   await expect(child.nth(8)).toHaveText("true");
 });
+
+test("selecting Groundhog preserves the user-selected multi-shard topology and keeps the real-cluster start path available", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".final-sidebar").getByRole("button", { name: "② 运行实验", exact: true }).click();
+  await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
+
+  await page.getByLabel("nodes").fill("32");
+  await page.getByLabel("shards").fill("8");
+  await expect(page.getByLabel("validators per shard")).toHaveValue("4");
+
+  await page.getByLabel("nodes").fill("64");
+  await page.getByLabel("shards").fill("2");
+  await expect(page.getByLabel("validators per shard")).toHaveValue("32");
+
+  await page.getByLabel("nodes").fill("32");
+  await page.getByLabel("shards").fill("8");
+
+  for (const methodId of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
+    const checkbox = page.getByTestId(`v5-run-method-${methodId}`).getByRole("checkbox");
+    if (await checkbox.isChecked()) await checkbox.uncheck();
+  }
+  await page.getByTestId("v5-run-method-hash_groundhog").getByRole("checkbox").check();
+  await expect(page.getByTestId("v5-groundhog-topology-notice")).toContainText("不会自动改写拓扑");
+  await expect(page.getByLabel("nodes")).toHaveValue("32");
+  await expect(page.getByLabel("shards")).toHaveValue("8");
+  await expect(page.getByLabel("validators per shard")).toHaveValue("4");
+  await expect(page.getByLabel("cross_shard_ratio")).toHaveValue("0");
+
+  await page.getByTestId("v5-suite-comparison_experiment").getByRole("checkbox").uncheck();
+  await page.getByTestId("v5-suite-main_experiment").getByRole("checkbox").check();
+  await page.getByLabel("tx_count").fill("20");
+  await page.getByTestId("v5-formal-preview-button").click();
+
+  await expect(page.locator('[data-method-config-id="hash_groundhog"]')).toContainText("可运行");
+  await expect(page.getByTestId("v5-formal-preview-blockers")).toHaveCount(0);
+  await expect(page.getByTestId("v5-start-run-group-button")).toBeEnabled();
+});
+
+
+test("mixed Groundhog and non-Groundhog methods keep their own paired block producer and executor", async ({ page }) => {
+  await page.goto("/");
+  await page.locator(".final-sidebar").getByRole("button", { name: "② 运行实验", exact: true }).click();
+  await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
+
+  for (const methodId of ["hash_aria", "hash_groundhog", "stateless_hash_serial", "stateless_hash_block_stm"]) {
+    const checkbox = page.getByTestId(`v5-run-method-${methodId}`).getByRole("checkbox");
+    if (!(await checkbox.isChecked())) await checkbox.check();
+  }
+  await page.getByLabel("cross_shard_ratio").fill("0");
+  await page.getByLabel("tx_count").fill("20");
+  await page.getByTestId("v5-formal-preview-button").click();
+
+  await expect(page.getByTestId("v5-formal-preview-summary")).toContainText("矩阵行数：8");
+  await expect(page.getByTestId("v5-formal-preview-blockers")).toHaveCount(0);
+  await expect(page.getByText("groundhog_block_producer and groundhog_block_executor must be selected together", { exact: false })).toHaveCount(0);
+  await expect(page.getByTestId("v5-start-run-group-button")).toBeEnabled();
+});

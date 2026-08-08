@@ -2,7 +2,7 @@ import pytest
 
 from backend.app.models.v5_experiment_spec import V5ExperimentSpec, V5PluginSelection, V5Topology
 from backend.app.models.v5_formal_experiment import V5FormalExperimentPlan, V5FormalMethod, V5FormalRunRequest
-from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS, FormalPlanValidationError, _effective_snapshot, validate_request
+from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS, STATELESS_BUILTIN_METHODS, FormalPlanValidationError, _effective_snapshot, validate_request
 from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
 
 
@@ -31,24 +31,43 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     assert [method.method_id for method in checked.plan.methods] == [
         "hash_serial",
         "hash_block_stm",
+        "hash_aria",
+        "hash_groundhog",
         "metatrack_serial",
         "metatrack_block_stm",
     ]
     assert [method.display_name for method in checked.plan.methods] == [
-        "Baseline",
-        "Block-STM",
+        "Stateful Hash + Serial Reference",
+        "Stateful Hash + Block-STM Reference",
+        "Aria",
+        "Groundhog",
         "MetaTrack",
         "MetaTrack with Block-STM backend",
     ]
     assert checked.plan.methods[-1].role == "compatibility"
     assert checked.plan.methods[1].plugin_overrides["block_executor"] == "block_stm_block_executor"
     assert checked.plan.methods[1].plugin_config_overrides["block_executor"]["worker_count"] == 4
+    assert checked.plan.methods[1].plugin_config_overrides["block_executor"]["maximum_incarnations"] == 0
+    assert checked.plan.methods[2].plugin_overrides["block_executor"] == "aria_block_executor"
+    assert checked.plan.methods[2].plugin_config_overrides["block_executor"]["reordering"] is True
+    assert checked.plan.methods[3].plugin_overrides["block_producer"] == "groundhog_block_producer"
+    assert checked.plan.methods[3].plugin_overrides["block_executor"] == "groundhog_block_executor"
 
     forged = BUILTIN_METHODS["hash_block_stm"].model_copy(deep=True)
     forged.plugin_config_overrides["block_executor"]["worker_count"] = 1
     plan.methods = [forged]
     with pytest.raises(FormalPlanValidationError, match="builtin method payload does not match registry"):
         validate_request(V5FormalRunRequest(execution_backend="real_cluster", plan=plan))
+
+
+def test_optional_stateless_hash_methods_are_registry_locked():
+    plan = _plan()
+    plan.methods = list(STATELESS_BUILTIN_METHODS.values())
+    plan.suites = ["comparison_experiment"]
+    checked = validate_request(V5FormalRunRequest(execution_backend="real_cluster", plan=plan))
+    assert [method.method_id for method in checked.plan.methods] == ["stateless_hash_serial", "stateless_hash_block_stm"]
+    assert all(method.plugin_overrides["routing"] == "stateless_hash_routing" for method in checked.plan.methods)
+    assert checked.plan.methods[1].plugin_config_overrides["block_executor"]["maximum_incarnations"] == 0
 
 
 @pytest.mark.parametrize("point", [{"mode": "delay_only"}, {"mode": "delay_only", "delay_ms": True}, {"mode": "network_drop"}, {"mode": "network_drop", "drop_rate": 0}, {"mode": "network_drop", "drop_every": 3}, {"mode": "kill_node"}, {"mode": "restart_node"}])

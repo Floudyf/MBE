@@ -31,5 +31,8 @@ func DecodeReader(reader *bufio.Reader) (MessageEnvelope, int, error) {
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return MessageEnvelope{}, len(line), fmt.Errorf("decode p2p message: %w", err)
 	}
+	if err := ValidateEnvelope(msg); err != nil {
+		return MessageEnvelope{}, len(line), fmt.Errorf("validate p2p message: %w", err)
+	}
 	return msg, len(line), nil
 }

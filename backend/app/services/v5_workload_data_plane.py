@@ -28,8 +28,8 @@ from backend.app.services.workload_adapters.registry import get_adapter
 # silently falling back to synthetic workload generation.
 SUPPORTED_COUNTS = frozenset({100, 1_000, 10_000, 50_000, 100_000, 250_000})
 SUPPORTED_ALPHAS = frozenset({0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4})
-GENERATOR_VERSION = "v5_workload_data_plane_v3_semantic_access_template"
-SELECTOR_VERSION = "contiguous_window_v1"
+GENERATOR_VERSION = "v5_workload_data_plane_v4_universal_access_list"
+SELECTOR_VERSION = "universal_selector_v1"
 MAX_JSONL_RECORD_BYTES = 1024 * 1024
 MANIFEST_ROOT = ROOT / "data" / "workloads" / "manifests"
 
@@ -51,7 +51,7 @@ class _HashingSink:
 
 
 class DatasetSummaryDTO(BaseModel):
-    schema_version: Literal["mbe_dataset_registry_item_v1"] = "mbe_dataset_registry_item_v1"
+    schema_version: Literal["mbe_dataset_registry_item_v2"] = "mbe_dataset_registry_item_v2"
     dataset_id: str
     display_name: str
     description: str
@@ -62,6 +62,11 @@ class DatasetSummaryDTO(BaseModel):
     operation_counts: dict[str, int]
     category_counts: dict[str, int] = Field(default_factory=dict)
     source_sha256: str
+    source_layout: str = "single_file"
+    supported_variants: list[str] = Field(default_factory=list)
+    variant_definitions: list[dict[str, Any]] = Field(default_factory=list)
+    supported_tx_counts: list[int] = Field(default_factory=list)
+    allow_full_dataset: bool = True
     supported_skew_axes: list[str] = Field(default_factory=list)
     default_skew_axis: str | None = None
     available: bool
@@ -69,7 +74,6 @@ class DatasetSummaryDTO(BaseModel):
     validation_status: str
     blockers: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-
 
 class DatasetDetailDTO(DatasetSummaryDTO):
     source_platform: str
@@ -97,14 +101,15 @@ class WorkloadPreviewRequest(BaseModel):
     source_type: Literal["synthetic", "dataset"]
     plugin_id: Literal["deterministic_signed_synthetic", "canonical_trace_replay"]
     dataset_id: str | None = None
-    requested_tx_count: int = Field(ge=1)
+    requested_tx_count: int = Field(ge=1, le=1_000_000)
     seed: int
-    variant_mode: Literal["original_window", "contract_zipf", "key_zipf"] | None = None
+    variant_mode: str | None = None
+    selection_mode: Literal["contiguous_window", "validated_prefix"] = "contiguous_window"
     target_alpha: float | None = None
     skew_axis: str | None = None
+    variant_parameters: dict[str, str | int | float | bool] = Field(default_factory=dict)
     use_full_dataset: bool = False
     source_sha256: str | None = None
-
 
 class WorkloadPreviewDTO(BaseModel):
     schema_version: Literal["mbe_workload_preview_v1"] = "mbe_workload_preview_v1"
@@ -127,14 +132,18 @@ class WorkloadPreviewDTO(BaseModel):
 
 
 class WorkloadMaterializeDTO(BaseModel):
-    schema_version: Literal["mbe_workload_materialization_v1"] = "mbe_workload_materialization_v1"
+    schema_version: Literal["mbe_workload_materialization_v2"] = "mbe_workload_materialization_v2"
     dataset_id: str
     materialized_id: str
     variant_id: str
     variant_mode: str
+    selection_mode: str
+    variant_parameters: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    truth_label: str
     materialized_relative_path: str
     canonical_relative_path: str
     source_sha256: str
+    source_file_sha256: str | None = None
     canonical_sha256: str
     materialized_sha256: str
     requested_tx_count: int
@@ -144,7 +153,6 @@ class WorkloadMaterializeDTO(BaseModel):
     cache_hit: bool
     no_fallback: bool = True
     summary: dict[str, Any]
-
 
 @dataclass(frozen=True)
 class CsvValidationSummary:
@@ -176,12 +184,115 @@ def load_manifest(dataset_id: str) -> dict[str, Any]:
     raise WorkloadDataError("unknown dataset")
 
 
-def raw_source_path(manifest: dict[str, Any]) -> Path:
-    rel = str(manifest.get("local_raw_relative_path") or "")
-    if not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
-        raise WorkloadDataError("dataset manifest has unsafe raw source path")
-    return ROOT / rel
+def _safe_repo_path(relative_path: str, *, base: Path | None = None) -> Path:
+    rel = str(relative_path or "").replace("\\", "/").strip()
+    candidate = Path(rel)
+    if not rel or candidate.is_absolute() or ".." in candidate.parts:
+        raise WorkloadDataError("dataset manifest has unsafe local path")
+    return (base or ROOT) / candidate
 
+
+def _source_layout(manifest: dict[str, Any]) -> str:
+    return str(manifest.get("source_layout") or "single_file")
+
+
+def _variant_definitions(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    definitions = list(manifest.get("variant_definitions") or [])
+    if definitions:
+        return definitions
+    axes = list(manifest.get("supported_skew_axes") or [])
+    result: list[dict[str, Any]] = []
+    for mode in list(manifest.get("supported_variants") or ["original_window"]):
+        result.append({
+            "variant_mode": mode,
+            "display_name": mode,
+            "kind": "derived" if mode in {"contract_zipf", "key_zipf"} else "original",
+            "selection_mode": "contiguous_window",
+            "parameters": ([
+                {"name": "skew_axis", "label": "偏斜轴", "type": "enum", "options": axes, "default": manifest.get("default_skew_axis") or (axes[0] if axes else None)},
+                {"name": "target_alpha", "label": "偏斜度 alpha", "type": "number_enum", "options": sorted(SUPPORTED_ALPHAS), "default": 1.0},
+            ] if mode in {"contract_zipf", "key_zipf"} else []),
+        })
+    return result
+
+
+def _variant_definition(manifest: dict[str, Any], variant_mode: str) -> dict[str, Any]:
+    for definition in _variant_definitions(manifest):
+        if definition.get("variant_mode") == variant_mode:
+            return definition
+    raise WorkloadDataError("variant_mode is not supported by dataset")
+
+
+def _normalize_variant_parameters(request: WorkloadPreviewRequest, definition: dict[str, Any]) -> dict[str, str | int | float | bool]:
+    values: dict[str, str | int | float | bool] = dict(request.variant_parameters)
+    if request.skew_axis is not None:
+        values.setdefault("skew_axis", request.skew_axis)
+    if request.target_alpha is not None:
+        values.setdefault("target_alpha", request.target_alpha)
+    fields = list(definition.get("parameters") or [])
+    allowed_names = {str(field.get("name") or "") for field in fields if field.get("name")}
+    unknown = sorted(set(values) - allowed_names)
+    if unknown:
+        raise WorkloadDataError("unknown variant parameter(s): " + ", ".join(unknown))
+    for field in fields:
+        name = str(field.get("name") or "")
+        if not name:
+            continue
+        if name not in values and field.get("default") is not None:
+            values[name] = field["default"]
+        if field.get("required", True) and name not in values:
+            raise WorkloadDataError(f"variant parameter {name} is required")
+        if name not in values:
+            continue
+        options = field.get("options")
+        if options is not None and values[name] not in options:
+            # JSON may decode integral theta values as int while the request uses float.
+            if not any(str(item) == str(values[name]) for item in options):
+                raise WorkloadDataError(f"variant parameter {name} is not supported")
+    return values
+
+
+def _match_variant_value(left: Any, right: Any) -> bool:
+    if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+        try:
+            return abs(float(left) - float(right)) < 1e-12
+        except (TypeError, ValueError):
+            pass
+    return str(left) == str(right)
+
+
+def _resolve_family_entry(manifest: dict[str, Any], *, requested_tx_count: int, parameters: dict[str, Any]) -> dict[str, Any]:
+    for entry in manifest.get("prefix_variants") or []:
+        if int(entry.get("tx_count") or entry.get("prefix_record_count") or 0) != requested_tx_count:
+            continue
+        if all(_match_variant_value(entry.get(name), value) for name, value in parameters.items()):
+            return dict(entry)
+    raise WorkloadDataError("requested dataset variant/prefix is not present in the manifest")
+
+
+def resolve_dataset_source(manifest: dict[str, Any], request: WorkloadPreviewRequest) -> tuple[Path, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    variant_mode = request.variant_mode or "original_window"
+    definition = _variant_definition(manifest, variant_mode)
+    parameters = _normalize_variant_parameters(request, definition)
+    if _source_layout(manifest) == "single_file":
+        path = raw_source_path(manifest)
+        selected_manifest = dict(manifest)
+        return path, selected_manifest, definition, {"variant_parameters": parameters}
+    if _source_layout(manifest) != "variant_file_family":
+        raise WorkloadDataError("unsupported dataset source_layout")
+    root = _safe_repo_path(str(manifest.get("local_raw_relative_path") or ""))
+    entry = _resolve_family_entry(manifest, requested_tx_count=request.requested_tx_count, parameters=parameters)
+    relative = str(entry.get("master_file") or "")
+    path = _safe_repo_path(relative, base=root)
+    selected_manifest = dict(manifest)
+    selected_manifest["source_sha256"] = str(entry.get("master_file_sha256") or "")
+    selected_manifest["row_count"] = int(entry.get("master_record_count") or 10_000)
+    selected_manifest["selected_family_entry"] = entry
+    return path, selected_manifest, definition, {"variant_parameters": parameters, "prefix_audit": entry}
+
+
+def raw_source_path(manifest: dict[str, Any]) -> Path:
+    return _safe_repo_path(str(manifest.get("local_raw_relative_path") or ""))
 
 def adapter_for_manifest(manifest: dict[str, Any]):
     adapter_id = str(manifest.get("adapter_id") or "decentraland_sales_v1")
@@ -192,24 +303,54 @@ def adapter_for_manifest(manifest: dict[str, Any]):
 
 
 def dataset_status(manifest: dict[str, Any]) -> tuple[bool, str, list[str], CsvValidationSummary | None]:
-    path = raw_source_path(manifest)
     blockers: list[str] = []
-    if not path.is_file():
-        return False, "unavailable", ["full CSV source is not present in this checkout"], None
-    try:
-        summary = _csv_summary(adapter_for_manifest(manifest).validate_source(path, manifest, expected_sha256=manifest.get("source_sha256") or None))
-    except (WorkloadDataError, ValueError) as exc:
-        return False, "invalid", [str(exc)], None
-    if manifest.get("row_count") and int(manifest["row_count"]) != summary.row_count:
-        blockers.append("manifest row_count does not match source")
-    if manifest.get("unique_source_tx_hash_count") and int(manifest["unique_source_tx_hash_count"]) != summary.unique_source_tx_hash_count:
-        blockers.append("manifest unique_source_tx_hash_count does not match source")
-    return not blockers, "valid" if not blockers else "invalid", blockers, summary
-
+    layout = _source_layout(manifest)
+    if layout == "single_file":
+        path = raw_source_path(manifest)
+        if not path.is_file():
+            return False, "unavailable", ["full dataset source is not present in this checkout"], None
+        expected_size = int(manifest.get("source_size_bytes") or 0)
+        if expected_size and path.stat().st_size != expected_size:
+            return False, "invalid", ["source file size does not match manifest"], None
+        if manifest.get("catalog_validation") == "full":
+            try:
+                summary = _csv_summary(adapter_for_manifest(manifest).validate_source(path, manifest, expected_sha256=manifest.get("source_sha256") or None))
+            except (WorkloadDataError, ValueError) as exc:
+                return False, "invalid", [str(exc)], None
+            if manifest.get("row_count") and int(manifest["row_count"]) != summary.row_count:
+                blockers.append("manifest row_count does not match source")
+            return not blockers, "valid" if not blockers else "invalid", blockers, summary
+        return True, "present_unvalidated", [], None
+    if layout == "variant_file_family":
+        root = raw_source_path(manifest)
+        if not root.is_dir():
+            return False, "unavailable", ["dataset family directory is not present in this checkout"], None
+        missing: list[str] = []
+        seen: set[str] = set()
+        for entry in manifest.get("prefix_variants") or []:
+            relative = str(entry.get("master_file") or "")
+            if not relative or relative in seen:
+                continue
+            seen.add(relative)
+            if not _safe_repo_path(relative, base=root).is_file():
+                missing.append(relative)
+                if len(missing) >= 3:
+                    break
+        if missing:
+            return False, "unavailable", ["missing dataset family files: " + ", ".join(missing)], None
+        if not seen:
+            return False, "invalid", ["dataset family manifest contains no physical files"], None
+        return True, "present_unvalidated", [], None
+    return False, "invalid", ["unsupported dataset source_layout"], None
 
 def dataset_summary(manifest: dict[str, Any]) -> DatasetSummaryDTO:
     available, status, blockers, _ = dataset_status(manifest)
     operations = dict(manifest.get("operation_counts") or manifest.get("category_counts") or {})
+    definitions = _variant_definitions(manifest)
+    counts = sorted({int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()})
+    warnings = list(manifest.get("warnings") or [])
+    if status == "present_unvalidated":
+        warnings.append("catalog checks file presence/size; full hash and schema validation runs before materialization")
     return DatasetSummaryDTO(
         dataset_id=manifest["dataset_id"],
         display_name=manifest.get("display_name", manifest["dataset_id"]),
@@ -221,21 +362,24 @@ def dataset_summary(manifest: dict[str, Any]) -> DatasetSummaryDTO:
         operation_counts=operations,
         category_counts=operations,
         source_sha256=str(manifest.get("source_sha256") or ""),
+        source_layout=_source_layout(manifest),
+        supported_variants=[str(item.get("variant_mode")) for item in definitions],
+        variant_definitions=definitions,
+        supported_tx_counts=counts,
+        allow_full_dataset=bool(manifest.get("allow_full_dataset", True)),
         supported_skew_axes=list(manifest.get("supported_skew_axes") or []),
         default_skew_axis=manifest.get("default_skew_axis"),
         available=available,
-        selectable=available and status == "valid",
+        selectable=available and status in {"valid", "present_unvalidated"},
         validation_status=status,
         blockers=blockers,
-        warnings=["representative receipt verification only; not Polygon EVM replay"],
+        warnings=warnings,
     )
-
 
 def dataset_detail(dataset_id: str) -> DatasetDetailDTO:
     manifest = load_manifest(dataset_id)
     summary = dataset_summary(manifest)
-    variants = list(manifest.get("supported_variants") or ["original_window", "contract_zipf"])
-    skew_axes = list(manifest.get("supported_skew_axes") or [])
+    variants = _variant_definitions(manifest)
     return DatasetDetailDTO(
         **summary.model_dump(),
         dataset_type=manifest.get("dataset_type", ""),
@@ -249,107 +393,73 @@ def dataset_detail(dataset_id: str) -> DatasetDetailDTO:
         verification_results=manifest.get("verification_results", ""),
         usage_note=manifest.get("usage_note", ""),
         generator_version=manifest.get("generator_version", GENERATOR_VERSION),
-        variants=[
-            {"variant_mode": mode, "selection_mode": "contiguous_window", "target_alpha_values": sorted(SUPPORTED_ALPHAS) if mode in {"contract_zipf", "key_zipf"} else [], "skew_axes": skew_axes}
-            for mode in variants
-        ],
+        variants=variants,
         adapter_id=str(manifest.get("adapter_id") or "decentraland_sales_v1"),
-        supported_variants=variants,
     )
 
-
 def preview_workload(request: WorkloadPreviewRequest, *, shards: int = 4) -> WorkloadPreviewDTO:
-    blockers: list[str] = []
-    warnings: list[str] = []
     if request.source_type == "synthetic":
         return WorkloadPreviewDTO(
-            source_type="synthetic",
-            plugin_id="deterministic_signed_synthetic",
-            tx_count=request.requested_tx_count,
-            selected_window_preview={
-                "requested_tx_count": request.requested_tx_count,
-                "actual_selected_count": request.requested_tx_count,
-                "selection_digest": None,
-            },
-            selected_time_range={"start_ms": None, "end_ms": None},
-            operation_counts={"synthetic": request.requested_tx_count},
-            category_counts={"synthetic": request.requested_tx_count},
-            natural_skew={},
-            derived_skew={},
-            expected_cross_shard={"count": None, "ratio": None, "source": "synthetic_config"},
-            shard_distribution={f"s{i}": 0 for i in range(max(1, shards))},
-            materialization_cache_status={"required": False, "cache_hit": None},
-            blockers=[],
-            warnings=[],
+            source_type="synthetic", plugin_id="deterministic_signed_synthetic", tx_count=request.requested_tx_count,
+            selected_window_preview={"requested_tx_count": request.requested_tx_count, "actual_selected_count": request.requested_tx_count, "selection_digest": None},
+            selected_time_range={"start_ms": None, "end_ms": None}, operation_counts={"synthetic": request.requested_tx_count}, category_counts={"synthetic": request.requested_tx_count},
+            natural_skew={}, derived_skew={}, expected_cross_shard={"count": None, "ratio": None, "source": "synthetic_config"},
+            shard_distribution={f"s{i}": 0 for i in range(max(1, shards))}, materialization_cache_status={"required": False, "cache_hit": None}, blockers=[], warnings=[],
         )
+    blockers: list[str] = []
+    warnings: list[str] = []
+    manifest: dict[str, Any] = {}
+    detail: DatasetDetailDTO | None = None
+    selected_window_preview: dict[str, Any] = {}
+    operation_counts: dict[str, int] = {}
+    derived_skew: dict[str, Any] = {}
+    tx_count = request.requested_tx_count
     try:
         manifest = load_manifest(request.dataset_id or "")
         detail = dataset_detail(manifest["dataset_id"])
-    except WorkloadDataError as exc:
-        manifest = {}
-        detail = None
+        if request.plugin_id != "canonical_trace_replay":
+            raise WorkloadDataError("dataset workload requires canonical_trace_replay")
+        if request.source_sha256 and request.source_sha256.lower() != str(manifest.get("source_sha256") or "").lower():
+            raise WorkloadDataError("workload_source source_sha256 does not match manifest")
+        if not detail.selectable:
+            raise WorkloadDataError("; ".join(detail.blockers or ["dataset is not selectable"]))
+        definition = _variant_definition(manifest, request.variant_mode or "original_window")
+        if request.use_full_dataset:
+            if not manifest.get("allow_full_dataset", True):
+                raise WorkloadDataError("full dataset mode is not supported")
+            tx_count = int(manifest.get("row_count") or 0)
+        supported_counts = {int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()}
+        if not request.use_full_dataset and tx_count not in supported_counts:
+            raise WorkloadDataError("requested tx count is not supported by this dataset")
+        path, selected_manifest, definition, resolved = resolve_dataset_source(manifest, request.model_copy(update={"requested_tx_count": tx_count}))
+        parameters = dict(resolved.get("variant_parameters") or {})
+        selected_window_preview = _selection_preview_from_source(
+            path, selected_manifest, requested_tx_count=tx_count, seed=request.seed,
+            variant_mode=str(definition["variant_mode"]), target_alpha=float(parameters["target_alpha"]) if "target_alpha" in parameters else request.target_alpha,
+            skew_axis=str(parameters["skew_axis"]) if "skew_axis" in parameters else request.skew_axis,
+            shards=shards, selection_mode=str(definition.get("selection_mode") or request.selection_mode),
+            supported_counts=supported_counts, variant_parameters=parameters,
+        )
+        audit = resolved.get("prefix_audit")
+        if audit:
+            selected_window_preview["validated_prefix_audit"] = audit
+            selected_window_preview["measured_access_theta"] = audit.get("measured_access_theta")
+            selected_window_preview["measured_read_ratio"] = audit.get("measured_read_ratio")
+            selected_window_preview["read_modify_write_topology_preserved"] = audit.get("read_modify_write_topology_preserved")
+        operation_counts = dict(selected_window_preview.get("operation_counts") or manifest.get("operation_counts") or {})
+        derived_skew = {"variant_mode": definition["variant_mode"], "variant_parameters": parameters}
+    except (WorkloadDataError, ValueError) as exc:
         blockers.append(str(exc))
-    if request.plugin_id != "canonical_trace_replay":
-        blockers.append("dataset workload requires canonical_trace_replay")
-    if request.variant_mode == "original_window" and request.target_alpha is not None:
-        blockers.append("original_window does not allow target_alpha")
-    derived = request.variant_mode in {"contract_zipf", "key_zipf"}
-    if derived and request.target_alpha not in SUPPORTED_ALPHAS:
-        blockers.append("derived workload requires a supported target_alpha")
-    if derived:
-        supported_axes = set(manifest.get("supported_skew_axes") or [])
-        axis = request.skew_axis or manifest.get("default_skew_axis")
-        if not axis:
-            blockers.append("derived workload requires skew_axis")
-        elif supported_axes and axis not in supported_axes:
-            blockers.append("skew_axis is not supported by dataset")
-    if detail and not detail.selectable:
-        blockers.extend(detail.blockers)
-    tx_count = int(manifest.get("row_count") or request.requested_tx_count) if request.use_full_dataset else request.requested_tx_count
-    if manifest and tx_count > int(manifest.get("row_count") or 0):
-        blockers.append("requested_tx_count exceeds dataset row_count")
-    operation_counts = dict(manifest.get("operation_counts") or manifest.get("category_counts") or {})
-    selected_window_preview: dict[str, Any] = {}
-    if manifest and not blockers:
-        try:
-            csv_path = raw_source_path(manifest)
-            variant_mode = request.variant_mode or "original_window"
-            skew_axis = request.skew_axis or (manifest.get("default_skew_axis") if _is_derived_variant(variant_mode) else None)
-            selected_window_preview = _selection_preview_from_source(
-                csv_path,
-                manifest,
-                requested_tx_count=tx_count,
-                seed=request.seed,
-                variant_mode=variant_mode,
-                target_alpha=request.target_alpha,
-                skew_axis=skew_axis,
-                shards=shards,
-            )
-            operation_counts = dict(selected_window_preview.get("operation_counts") or operation_counts)
-        except WorkloadDataError as exc:
-            blockers.append(str(exc))
-    shard_distribution = {f"s{i}": 0 for i in range(max(1, shards))}
-    for index in range(tx_count):
-        shard_distribution[f"s{index % max(1, shards)}"] += 1
+    shard_distribution = dict(selected_window_preview.get("shard_distribution") or {f"s{i}": 0 for i in range(max(1, shards))})
     return WorkloadPreviewDTO(
-        source_type="dataset",
-        plugin_id=request.plugin_id,
-        dataset_id=request.dataset_id,
-        tx_count=tx_count,
-        dataset_summary=detail.model_dump() if detail else None,
-        selected_window_preview=selected_window_preview,
+        source_type="dataset", plugin_id=request.plugin_id, dataset_id=request.dataset_id, tx_count=tx_count,
+        dataset_summary=detail.model_dump() if detail else None, selected_window_preview=selected_window_preview,
         selected_time_range=selected_window_preview.get("selected_time_range") or {"start_ms": manifest.get("time_start_ms"), "end_ms": manifest.get("time_end_ms")},
-        operation_counts=operation_counts,
-        category_counts=operation_counts,
-        natural_skew=dict(manifest.get("natural_skew_metrics") or {}),
-        derived_skew={"target_alpha": request.target_alpha, "skew_axis": request.skew_axis or manifest.get("default_skew_axis")} if derived else {},
-        expected_cross_shard={"count": None, "ratio": None, "source": "compiled_from_state_keys"},
-        shard_distribution=shard_distribution,
-        materialization_cache_status={"required": True, "cache_hit": None, "cache_root": ".cache/workloads"},
-        blockers=blockers,
-        warnings=warnings + (detail.warnings if detail else []),
+        operation_counts=operation_counts, category_counts=operation_counts, natural_skew=dict(manifest.get("natural_skew_metrics") or {}),
+        derived_skew=derived_skew, expected_cross_shard={"count": selected_window_preview.get("cross_shard_count"), "ratio": selected_window_preview.get("cross_shard_ratio"), "source": "compiled_from_routing_keys"},
+        shard_distribution=shard_distribution, materialization_cache_status={"required": True, "cache_hit": None, "cache_root": ".cache/workloads"},
+        blockers=blockers, warnings=warnings + (detail.warnings if detail else []),
     )
-
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -382,7 +492,7 @@ def _csv_summary(summary: SourceValidationSummary) -> CsvValidationSummary:
 
 def _validate_canonical_record(record: dict[str, Any], *, dataset_id: str, row_number: int) -> dict[str, Any]:
     schema_version = record.get("schema_version")
-    if schema_version not in {"mbe_workload_record_v1", "mbe_workload_record_v2"}:
+    if schema_version not in {"mbe_workload_record_v1", "mbe_workload_record_v2", "mbe_workload_record_v3"}:
         raise WorkloadDataError(f"canonical row {row_number}: unexpected schema_version")
     if record.get("dataset_id") != dataset_id:
         raise WorkloadDataError(f"canonical row {row_number}: dataset_id mismatch")
@@ -391,10 +501,14 @@ def _validate_canonical_record(record: dict[str, Any], *, dataset_id: str, row_n
             raise WorkloadDataError(f"canonical row {row_number}: missing {key}")
     if not isinstance(record.get("state_keys"), list) or not record["state_keys"]:
         raise WorkloadDataError(f"canonical row {row_number}: state_keys must be a non-empty list")
+    if len(record["state_keys"]) != len(set(record["state_keys"])):
+        raise WorkloadDataError(f"canonical row {row_number}: duplicate state_keys")
     if not isinstance(record.get("skew_keys", {}), dict):
         raise WorkloadDataError(f"canonical row {row_number}: skew_keys must be an object")
     if schema_version == "mbe_workload_record_v2":
         _validate_access_template_record(record, row_number=row_number)
+    elif schema_version == "mbe_workload_record_v3":
+        _validate_direct_access_record(record, row_number=row_number)
     record.setdefault("source_tx_hash", None)
     record.setdefault("receiver_id", None)
     record.setdefault("routing_target_key", None)
@@ -402,7 +516,6 @@ def _validate_canonical_record(record: dict[str, Any], *, dataset_id: str, row_n
     record.setdefault("provenance", {})
     record.setdefault("metadata", {})
     return record
-
 
 def _validate_access_template_record(record: dict[str, Any], *, row_number: int) -> None:
     if record.get("access_list_schema") != "dcl_sale_access_template_v1":
@@ -436,6 +549,38 @@ def _validate_access_template_record(record: dict[str, Any], *, row_number: int)
         raise WorkloadDataError(f"canonical row {row_number}: invalid category_metadata template")
 
 
+
+def _validate_direct_access_record(record: dict[str, Any], *, row_number: int) -> None:
+    if not record.get("access_list_schema") or not record.get("access_list_source"):
+        raise WorkloadDataError(f"canonical row {row_number}: missing direct access-list provenance")
+    access_list = record.get("access_list")
+    if not isinstance(access_list, list) or not access_list:
+        raise WorkloadDataError(f"canonical row {row_number}: missing direct access_list")
+    allowed_modes = {"read", "write", "read_write", "commutative_delta"}
+    normalized: list[dict[str, Any]] = []
+    keys: set[str] = set()
+    for index, item in enumerate(access_list):
+        if not isinstance(item, dict):
+            raise WorkloadDataError(f"canonical row {row_number}: access_list[{index}] is not an object")
+        key = str(item.get("key") or "").strip()
+        mode = str(item.get("mode") or "")
+        semantics = str(item.get("update_semantics") or "").strip()
+        if not key or key in keys or mode not in allowed_modes or not semantics:
+            raise WorkloadDataError(f"canonical row {row_number}: invalid direct access_list item")
+        keys.add(key)
+        entry: dict[str, Any] = {"key": key, "mode": mode, "update_semantics": semantics}
+        if int(item.get("delta") or 0):
+            entry["delta"] = int(item["delta"])
+        normalized.append(entry)
+    normalized.sort(key=lambda item: (item["key"], item["mode"], item["update_semantics"], int(item.get("delta") or 0)))
+    if sorted(record["state_keys"]) != [item["key"] for item in normalized]:
+        raise WorkloadDataError(f"canonical row {row_number}: state_keys/direct access_list mismatch")
+    digest = hashlib.sha256(json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    if digest != str(record.get("access_list_digest") or "").lower():
+        raise WorkloadDataError(f"canonical row {row_number}: direct access_list_digest mismatch")
+    record["access_list"] = normalized
+
+
 def _canonical_bytes(record: dict[str, Any]) -> bytes:
     return (json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=False) + "\n").encode("utf-8")
 
@@ -444,18 +589,18 @@ def build_canonical(csv_path: Path, cache_root: Path, manifest: dict[str, Any]) 
     """Build a deterministic canonical JSONL.GZ file and atomically publish it."""
     try:
         adapter = adapter_for_manifest(manifest)
-        summary = _csv_summary(adapter.validate_source(csv_path, manifest, expected_sha256=manifest.get("source_sha256") or None))
+        expected_file_hash = manifest.get("source_sha256") or None
+        summary = _csv_summary(adapter.validate_source(csv_path, manifest, expected_sha256=expected_file_hash))
     except ValueError as exc:
         raise WorkloadDataError(str(exc)) from exc
-    content_id = hashlib.sha256(json.dumps({"dataset_id": manifest["dataset_id"], "adapter_id": manifest.get("adapter_id") or "decentraland_sales_v1", "source_sha256": summary.source_sha256, "generator_version": GENERATOR_VERSION}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    identity_source_sha256 = str(manifest.get("dataset_source_sha256") or manifest.get("source_sha256") or summary.source_sha256)
+    content_id = hashlib.sha256(json.dumps({"dataset_id": manifest["dataset_id"], "adapter_id": manifest.get("adapter_id") or "decentraland_sales_v1", "source_file_sha256": summary.source_sha256, "generator_version": GENERATOR_VERSION}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     target = cache_root / "canonical" / content_id
     output = target / "workload.jsonl.gz"
     if output.is_file() and (target / "canonical_summary.json").is_file():
         existing = json.loads((target / "canonical_summary.json").read_text(encoding="utf-8"))
         if existing.get("canonical_sha256") == sha256_file(output):
-            existing = dict(existing)
-            existing["cache_hit"] = True
-            return existing
+            existing = dict(existing); existing["cache_hit"] = True; return existing
         raise WorkloadDataError("canonical cache hash mismatch")
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{content_id}.", dir=target.parent))
@@ -472,10 +617,10 @@ def build_canonical(csv_path: Path, cache_root: Path, manifest: dict[str, Any]) 
                     previous_key = key
                     compressed.write(_canonical_bytes(record))
         result = {
-            "dataset_id": manifest["dataset_id"], "source_sha256": summary.source_sha256,
+            "dataset_id": manifest["dataset_id"], "source_sha256": identity_source_sha256, "source_file_sha256": summary.source_sha256,
             "canonical_sha256": sha256_file(canonical_path), "row_count": summary.row_count,
-            "canonical_relative_path": f"canonical/{content_id}/workload.jsonl.gz",
-            "generator_version": GENERATOR_VERSION, "operation_counts": summary.operation_counts, "category_counts": summary.operation_counts, "cache_hit": False,
+            "canonical_relative_path": f"canonical/{content_id}/workload.jsonl.gz", "generator_version": GENERATOR_VERSION,
+            "operation_counts": summary.operation_counts, "category_counts": summary.operation_counts, "cache_hit": False,
         }
         (temporary / "canonical_summary.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, target)
@@ -483,7 +628,6 @@ def build_canonical(csv_path: Path, cache_root: Path, manifest: dict[str, Any]) 
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
-
 
 def _iter_canonical(path: Path) -> Iterator[dict[str, Any]]:
     with gzip.open(path, "rt", encoding="utf-8", newline="") as stream:
@@ -511,11 +655,12 @@ def _window(path: Path, start: int, count: int) -> Iterator[dict[str, Any]]:
 
 
 def _selection_start(spec: dict[str, Any], total: int, count: int) -> int:
-    if count == total:
+    if spec.get("selection_mode") == "validated_prefix" or count == total:
         return 0
-    normalized = {key: spec[key] for key in ("dataset_id", "source_sha256", "canonical_sha256", "requested_tx_count", "seed", "selection_mode", "selector_version", "generator_version")}
-    return int.from_bytes(hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()).digest()[:8], "big") % (total - count + 1)
-
+    span = total - count + 1
+    normalized = {key: spec[key] for key in ("dataset_id", "source_sha256", "canonical_sha256", "requested_tx_count", "selection_mode", "selector_version", "generator_version", "variant_mode", "variant_parameters")}
+    base = int.from_bytes(hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()).digest()[:8], "big") % span
+    return (base + int(spec.get("seed") or 0)) % span
 
 def _logical_event_id(record: dict[str, Any], variant_id: str, index: int, occurrence: int) -> str:
     raw = f"{record['dataset_id']}|{variant_id}|{index}|{record['source_event_id']}|{occurrence}".encode()
@@ -607,12 +752,13 @@ def _is_derived_variant(variant_mode: str) -> bool:
     return variant_mode in {"contract_zipf", "key_zipf"}
 
 
-def _selection_spec(*, dataset_id: str, source_sha256: str, canonical_sha256: str, requested_tx_count: int, seed: int, total: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None) -> tuple[dict[str, Any], int, str, str | None]:
+def _selection_spec(*, dataset_id: str, source_sha256: str, canonical_sha256: str, requested_tx_count: int, seed: int, total: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, selection_mode: str = "contiguous_window", supported_counts: set[int] | frozenset[int] | None = None, variant_parameters: dict[str, Any] | None = None) -> tuple[dict[str, Any], int, str, str | None]:
     count = total if requested_tx_count == total else requested_tx_count
-    if count <= 0 or count > total or (count != total and count not in _supported_counts()):
+    allowed_counts = set(supported_counts or _supported_counts())
+    if count <= 0 or count > total or (count != total and count not in allowed_counts):
         raise WorkloadDataError("requested tx count is not supported by this dataset")
-    if variant_mode not in {"original_window", "contract_zipf", "key_zipf"}:
-        raise WorkloadDataError("unsupported materialization variant")
+    if selection_mode not in {"contiguous_window", "validated_prefix"}:
+        raise WorkloadDataError("unsupported selection_mode")
     if variant_mode == "contract_zipf" and not skew_axis:
         skew_axis = "contract"
     if _is_derived_variant(variant_mode):
@@ -620,23 +766,21 @@ def _selection_spec(*, dataset_id: str, source_sha256: str, canonical_sha256: st
             raise WorkloadDataError("unsupported key Zipf alpha")
         if not skew_axis:
             raise WorkloadDataError("derived workload requires skew_axis")
-    elif target_alpha is not None:
+    elif variant_mode == "original_window" and target_alpha is not None:
         raise WorkloadDataError("original_window does not allow target_alpha")
+    effective_parameters = dict(variant_parameters or {})
+    if target_alpha is not None:
+        effective_parameters.setdefault("target_alpha", target_alpha)
+    if skew_axis is not None:
+        effective_parameters.setdefault("skew_axis", skew_axis)
     spec = {
-        "dataset_id": dataset_id,
-        "source_sha256": source_sha256,
-        "canonical_sha256": canonical_sha256,
-        "requested_tx_count": count,
-        "seed": seed,
-        "selection_mode": "contiguous_window",
-        "selector_version": SELECTOR_VERSION,
-        "generator_version": GENERATOR_VERSION,
-        "variant_mode": variant_mode,
-        "target_alpha": target_alpha,
-        "skew_axis": skew_axis,
+        "dataset_id": dataset_id, "source_sha256": source_sha256, "canonical_sha256": canonical_sha256,
+        "requested_tx_count": count, "seed": seed, "selection_mode": selection_mode,
+        "selector_version": SELECTOR_VERSION, "generator_version": GENERATOR_VERSION,
+        "variant_mode": variant_mode, "target_alpha": target_alpha, "skew_axis": skew_axis,
+        "variant_parameters": dict(sorted(effective_parameters.items())),
     }
     return spec, count, variant_mode, skew_axis
-
 
 def _selection_digest(spec: dict[str, Any], *, start: int, count: int, base_window_sha256: str) -> str:
     payload = {**spec, "start_offset": start, "end_offset": start + count - 1, "base_window_sha256": base_window_sha256}
@@ -670,74 +814,39 @@ def _canonical_sha256_from_source(csv_path: Path, manifest: dict[str, Any]) -> s
     return sink.digest.hexdigest()
 
 
-def _selection_preview(canonical_path: Path, *, dataset_id: str, source_sha256: str, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4) -> dict[str, Any]:
+def _selection_preview(canonical_path: Path, *, dataset_id: str, source_sha256: str, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4, selection_mode: str = "contiguous_window", supported_counts: set[int] | frozenset[int] | None = None, variant_parameters: dict[str, Any] | None = None) -> dict[str, Any]:
     total = _canonical_count(canonical_path)
-    spec, count, variant_mode, skew_axis = _selection_spec(
-        dataset_id=dataset_id,
-        source_sha256=source_sha256,
-        canonical_sha256=sha256_file(canonical_path),
-        requested_tx_count=requested_tx_count,
-        seed=seed,
-        total=total,
-        variant_mode=variant_mode,
-        target_alpha=target_alpha,
-        skew_axis=skew_axis,
-    )
+    spec, count, variant_mode, skew_axis = _selection_spec(dataset_id=dataset_id, source_sha256=source_sha256, canonical_sha256=sha256_file(canonical_path), requested_tx_count=requested_tx_count, seed=seed, total=total, variant_mode=variant_mode, target_alpha=target_alpha, skew_axis=skew_axis, selection_mode=selection_mode, supported_counts=supported_counts, variant_parameters=variant_parameters)
     start = _selection_start(spec, total, count)
-    base_hash_builder = hashlib.sha256()
-    base_records: list[dict[str, Any]] = []
-    selected_start_ms: int | None = None
-    selected_end_ms: int | None = None
+    base_hash_builder = hashlib.sha256(); base_records: list[dict[str, Any]] = []
+    selected_start_ms: int | None = None; selected_end_ms: int | None = None
     for record in _window(canonical_path, start, count):
-        base_hash_builder.update(_canonical_bytes(record))
-        selected_start_ms = record["timestamp_ms"] if selected_start_ms is None else selected_start_ms
-        selected_end_ms = record["timestamp_ms"]
-        base_records.append(record)
+        base_hash_builder.update(_canonical_bytes(record)); selected_start_ms = record["timestamp_ms"] if selected_start_ms is None else selected_start_ms; selected_end_ms = record["timestamp_ms"]; base_records.append(record)
     base_hash = base_hash_builder.hexdigest()
     selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{dataset_id}|{source_sha256}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}") if _is_derived_variant(variant_mode) else base_records
     return _selected_window_preview(spec, selected, start=start, count=count, selected_start_ms=selected_start_ms, selected_end_ms=selected_end_ms, base_window_sha256=base_hash, shards=shards)
 
-
-def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4) -> dict[str, Any]:
+def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4, selection_mode: str = "contiguous_window", supported_counts: set[int] | frozenset[int] | None = None, variant_parameters: dict[str, Any] | None = None) -> dict[str, Any]:
     adapter = adapter_for_manifest(manifest)
     summary = _csv_summary(adapter.validate_source(csv_path, manifest, expected_sha256=manifest.get("source_sha256") or None))
     canonical_sha256 = _canonical_sha256_from_source(csv_path, manifest)
-    spec, count, variant_mode, skew_axis = _selection_spec(
-        dataset_id=manifest["dataset_id"],
-        source_sha256=summary.source_sha256,
-        canonical_sha256=canonical_sha256,
-        requested_tx_count=requested_tx_count,
-        seed=seed,
-        total=summary.row_count,
-        variant_mode=variant_mode,
-        target_alpha=target_alpha,
-        skew_axis=skew_axis,
-    )
+    identity_hash = str(manifest.get("dataset_source_sha256") or summary.source_sha256)
+    spec, count, variant_mode, skew_axis = _selection_spec(dataset_id=manifest["dataset_id"], source_sha256=identity_hash, canonical_sha256=canonical_sha256, requested_tx_count=requested_tx_count, seed=seed, total=summary.row_count, variant_mode=variant_mode, target_alpha=target_alpha, skew_axis=skew_axis, selection_mode=selection_mode, supported_counts=supported_counts, variant_parameters=variant_parameters)
     start = _selection_start(spec, summary.row_count, count)
-    base_hash_builder = hashlib.sha256()
-    base_records: list[dict[str, Any]] = []
-    selected_start_ms: int | None = None
-    selected_end_ms: int | None = None
-    previous_key: tuple[int, int] | None = None
+    base_hash_builder = hashlib.sha256(); base_records: list[dict[str, Any]] = []
+    selected_start_ms: int | None = None; selected_end_ms: int | None = None; previous_key: tuple[int, int] | None = None
     end = start + count
     for index, item in enumerate(adapter.iter_canonical_records(csv_path, manifest)):
         record = _validate_canonical_record(item, dataset_id=manifest["dataset_id"], row_number=index)
         key = (record["timestamp_ms"], int(record["source_row_index"]))
-        if previous_key is not None and key < previous_key:
-            raise WorkloadDataError("source order violates the canonical (timestamp_ms, source_row_index) contract")
+        if previous_key is not None and key < previous_key: raise WorkloadDataError("source order violates the canonical (timestamp_ms, source_row_index) contract")
         previous_key = key
-        if index >= end:
-            break
-        if index < start:
-            continue
-        base_hash_builder.update(_canonical_bytes(record))
-        selected_start_ms = record["timestamp_ms"] if selected_start_ms is None else selected_start_ms
-        selected_end_ms = record["timestamp_ms"]
-        base_records.append(record)
+        if index >= end: break
+        if index < start: continue
+        base_hash_builder.update(_canonical_bytes(record)); selected_start_ms = record["timestamp_ms"] if selected_start_ms is None else selected_start_ms; selected_end_ms = record["timestamp_ms"]; base_records.append(record)
     base_hash = base_hash_builder.hexdigest()
-    selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{manifest['dataset_id']}|{summary.source_sha256}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}") if _is_derived_variant(variant_mode) else base_records
+    selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{manifest['dataset_id']}|{identity_hash}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}") if _is_derived_variant(variant_mode) else base_records
     return _selected_window_preview(spec, selected, start=start, count=count, selected_start_ms=selected_start_ms, selected_end_ms=selected_end_ms, base_window_sha256=base_hash, shards=shards)
-
 
 def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]], *, start: int, count: int, selected_start_ms: int | None, selected_end_ms: int | None, base_window_sha256: str, shards: int) -> dict[str, Any]:
     operation_counts: Counter[str] = Counter()
@@ -747,8 +856,11 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
     senders: set[str] = set()
     receivers: set[str] = set()
     occurrences: Counter[int] = Counter()
+    direct_access_count = 0
     skew_axis = spec.get("skew_axis")
     for index, record in enumerate(selected):
+        if record.get("schema_version") == "mbe_workload_record_v3":
+            direct_access_count += 1
         operation_counts[str(record.get("operation_type") or "unknown")] += 1
         source_shard = _stable_shard(record.get("routing_source_key") or record.get("sender_id"), shards)
         target_shard = _stable_shard(record.get("routing_target_key") or record.get("receiver_id") or record.get("routing_source_key"), shards)
@@ -765,6 +877,7 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
         occurrences[int(record.get("source_row_index", index))] += 1
     operation_data = dict(operation_counts)
     selection_digest = _selection_digest(spec, start=start, count=count, base_window_sha256=base_window_sha256)
+    routing_source_basis = "logical_routing_key" if selected and direct_access_count == len(selected) else ("runtime_identity" if direct_access_count == 0 else "mixed")
     return {
         "requested_tx_count": spec["requested_tx_count"],
         "actual_selected_count": len(selected),
@@ -776,6 +889,7 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
         "realized_skew": _skew_statistics(skew_keys, senders, receivers, max(1, len(selected)), occurrences, str(skew_axis) if skew_axis else None),
         "cross_shard_count": cross_shard_count,
         "cross_shard_ratio": cross_shard_count / len(selected) if selected else 0,
+        "routing_source_basis": routing_source_basis,
         "shard_distribution": dict(sorted(shard_distribution.items())),
         "selection_digest": selection_digest,
         "selection_mode": spec["selection_mode"],
@@ -786,7 +900,7 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
     }
 
 
-def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, source_sha256: str, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None) -> dict[str, Any]:
+def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, source_sha256: str, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, selection_mode: str = "contiguous_window", supported_counts: set[int] | frozenset[int] | None = None, variant_parameters: dict[str, Any] | None = None, truth_label: str = "real_observed", source_file_sha256: str | None = None, audit_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     total = _canonical_count(canonical_path)
     canonical_hash = sha256_file(canonical_path)
     spec, count, variant_mode, skew_axis = _selection_spec(
@@ -799,6 +913,9 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
         variant_mode=variant_mode,
         target_alpha=target_alpha,
         skew_axis=skew_axis,
+        selection_mode=selection_mode,
+        supported_counts=supported_counts,
+        variant_parameters=variant_parameters,
     )
     materialized_id = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     target = cache_root / "materialized" / materialized_id
@@ -818,6 +935,9 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
                     variant_mode=variant_mode,
                     target_alpha=target_alpha,
                     skew_axis=skew_axis,
+                    selection_mode=selection_mode,
+                    supported_counts=supported_counts,
+                    variant_parameters=variant_parameters,
                 )
                 summary["selection_digest"] = selected_preview["selection_digest"]
                 summary["selected_window_preview"] = selected_preview
@@ -849,6 +969,9 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
         variant_mode=variant_mode,
         target_alpha=target_alpha,
         skew_axis=skew_axis,
+        selection_mode=selection_mode,
+        supported_counts=supported_counts,
+        variant_parameters=variant_parameters,
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{materialized_id}.", dir=target.parent))
@@ -873,10 +996,13 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
                         receivers.add(str(record["receiver_id"]))
                     operation_counts[str(record["operation_type"])] += 1
                     total_count += 1
-                    compressed.write(_canonical_bytes(_materialized_record(record, variant_mode, index, occurrence)))
+                    compressed.write(_canonical_bytes(_materialized_record(record, materialized_id, index, occurrence)))
         skew = _skew_statistics(skew_keys, senders, receivers, total_count, occurrences, skew_axis)
         summary = dict(spec)
-        summary.update({"materialized_id": materialized_id, "actual_tx_count": total_count, "start_offset": start, "end_offset": start + total_count - 1, "selected_time_start_ms": selected_start_ms, "selected_time_end_ms": selected_end_ms, "base_window_sha256": base_hash, "selection_digest": selected_preview["selection_digest"], "selected_window_preview": selected_preview, "materialized_sha256": sha256_file(temporary / "workload.jsonl.gz"), "materialized_relative_path": f"materialized/{materialized_id}/workload.jsonl.gz", "operation_counts": dict(operation_counts), "category_counts": dict(operation_counts), "cache_hit": False, **skew})
+        routing_source_basis = str(selected_preview.get("routing_source_basis") or "runtime_identity")
+        expected_cross_shard_count = int(selected_preview.get("cross_shard_count") or 0) if routing_source_basis == "logical_routing_key" else 0
+        expected_cross_shard_ratio = float(selected_preview.get("cross_shard_ratio") or 0.0) if routing_source_basis == "logical_routing_key" else 0.0
+        summary.update({"materialized_id": materialized_id, "actual_tx_count": total_count, "truth_label": truth_label, "source_file_sha256": source_file_sha256, "audit_metadata": audit_metadata or {}, "start_offset": start, "end_offset": start + total_count - 1, "selected_time_start_ms": selected_start_ms, "selected_time_end_ms": selected_end_ms, "base_window_sha256": base_hash, "selection_digest": selected_preview["selection_digest"], "selected_window_preview": selected_preview, "routing_source_basis": routing_source_basis, "expected_cross_shard_count": expected_cross_shard_count, "expected_cross_shard_ratio": expected_cross_shard_ratio, "materialized_sha256": sha256_file(temporary / "workload.jsonl.gz"), "materialized_relative_path": f"materialized/{materialized_id}/workload.jsonl.gz", "operation_counts": dict(operation_counts), "category_counts": dict(operation_counts), "cache_hit": False, **skew})
         (temporary / "materialization_summary.json").write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         (temporary / ".ready").write_text("ready\n", encoding="utf-8")
         os.replace(temporary, target)
@@ -887,53 +1013,47 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
 
 
 def materialize_request(request: WorkloadPreviewRequest) -> WorkloadMaterializeDTO:
-    if request.source_type != "dataset":
-        raise WorkloadDataError("materialization is only required for dataset workloads")
-    if request.plugin_id != "canonical_trace_replay":
+    if request.source_type != "dataset" or request.plugin_id != "canonical_trace_replay":
         raise WorkloadDataError("dataset materialization requires canonical_trace_replay")
-    if request.variant_mode == "original_window" and request.target_alpha is not None:
-        raise WorkloadDataError("original_window does not allow target_alpha")
     manifest = load_manifest(request.dataset_id or "")
-    available, status, blockers, _ = dataset_status(manifest)
-    if not available or status != "valid":
+    available, _, blockers, _ = dataset_status(manifest)
+    if not available:
         raise WorkloadDataError("; ".join(blockers or ["dataset is not selectable"]))
     if request.source_sha256 and request.source_sha256.lower() != str(manifest.get("source_sha256", "")).lower():
         raise WorkloadDataError("workload_source source_sha256 does not match manifest")
-    csv_path = raw_source_path(manifest)
-    canonical = build_canonical(csv_path, WORKLOAD_CACHE_ROOT, manifest)
+    definition = _variant_definition(manifest, request.variant_mode or "original_window")
     requested = int(manifest["row_count"]) if request.use_full_dataset else request.requested_tx_count
-    variant_mode = request.variant_mode or "original_window"
-    skew_axis = request.skew_axis or (manifest.get("default_skew_axis") if _is_derived_variant(variant_mode) else None)
+    if request.use_full_dataset and not manifest.get("allow_full_dataset", True):
+        raise WorkloadDataError("full dataset mode is not supported")
+    effective_request = request.model_copy(update={"requested_tx_count": requested})
+    source_path, selected_manifest, definition, resolved = resolve_dataset_source(manifest, effective_request)
+    selected_manifest["dataset_source_sha256"] = str(manifest.get("source_sha256") or "")
+    parameters = dict(resolved.get("variant_parameters") or {})
+    target_alpha = float(parameters["target_alpha"]) if "target_alpha" in parameters else request.target_alpha
+    skew_axis = str(parameters["skew_axis"]) if "skew_axis" in parameters else request.skew_axis
+    selection_mode = str(definition.get("selection_mode") or request.selection_mode)
+    supported_counts = {int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()}
+    canonical = build_canonical(source_path, WORKLOAD_CACHE_ROOT, selected_manifest)
     summary = materialize(
-        WORKLOAD_CACHE_ROOT / canonical["canonical_relative_path"],
-        WORKLOAD_CACHE_ROOT,
-        dataset_id=manifest["dataset_id"],
-        source_sha256=canonical["source_sha256"],
-        requested_tx_count=requested,
-        seed=request.seed,
-        variant_mode=variant_mode,
-        target_alpha=request.target_alpha,
-        skew_axis=skew_axis,
+        WORKLOAD_CACHE_ROOT / canonical["canonical_relative_path"], WORKLOAD_CACHE_ROOT,
+        dataset_id=manifest["dataset_id"], source_sha256=str(manifest.get("source_sha256") or canonical["source_sha256"]),
+        requested_tx_count=requested, seed=request.seed, variant_mode=str(definition["variant_mode"]),
+        target_alpha=target_alpha, skew_axis=skew_axis, selection_mode=selection_mode,
+        supported_counts=supported_counts, variant_parameters=parameters, truth_label=str(manifest.get("truth_label") or "real_observed"),
+        source_file_sha256=canonical.get("source_file_sha256"), audit_metadata=resolved.get("prefix_audit"),
     )
-    variant_id = f"{variant_mode}:count={requested}:seed={request.seed}:axis={skew_axis}:alpha={request.target_alpha}"
+    parameter_text = ",".join(f"{key}={parameters[key]}" for key in sorted(parameters))
+    variant_id = f"{definition['variant_mode']}:count={requested}:seed={request.seed}:{parameter_text}"
+    summary.update({"variant_id": variant_id, "variant_parameters": parameters, "selection_mode": selection_mode})
     return WorkloadMaterializeDTO(
-        dataset_id=manifest["dataset_id"],
-        materialized_id=summary["materialized_id"],
-        variant_id=variant_id,
-        variant_mode=variant_mode,
-        materialized_relative_path=summary["materialized_relative_path"],
-        canonical_relative_path=canonical["canonical_relative_path"],
-        source_sha256=canonical["source_sha256"],
-        canonical_sha256=canonical["canonical_sha256"],
-        materialized_sha256=summary["materialized_sha256"],
-        requested_tx_count=requested,
-        actual_tx_count=summary["actual_tx_count"],
-        seed=request.seed,
-        target_alpha=request.target_alpha,
-        cache_hit=bool(summary.get("cache_hit")),
-        summary=summary,
+        dataset_id=manifest["dataset_id"], materialized_id=summary["materialized_id"], variant_id=variant_id,
+        variant_mode=str(definition["variant_mode"]), selection_mode=selection_mode, variant_parameters=parameters,
+        truth_label=str(manifest.get("truth_label") or "real_observed"), materialized_relative_path=summary["materialized_relative_path"],
+        canonical_relative_path=canonical["canonical_relative_path"], source_sha256=str(manifest.get("source_sha256") or canonical["source_sha256"]),
+        source_file_sha256=canonical.get("source_file_sha256"), canonical_sha256=canonical["canonical_sha256"], materialized_sha256=summary["materialized_sha256"],
+        requested_tx_count=requested, actual_tx_count=summary["actual_tx_count"], seed=request.seed, target_alpha=target_alpha,
+        cache_hit=bool(summary.get("cache_hit")), summary=summary,
     )
-
 
 def materialized_absolute_path(relative_path: str) -> Path:
     candidate = (WORKLOAD_CACHE_ROOT / relative_path).resolve()
@@ -952,7 +1072,7 @@ def workload_artifact_snapshots(source: dict[str, Any], materialized: dict[str, 
     }
     selection = {
         key: materialized.get(key)
-        for key in ("materialized_id", "variant_id", "variant_mode", "requested_tx_count", "actual_tx_count", "seed", "start_offset", "end_offset", "selected_time_start_ms", "selected_time_end_ms", "base_window_sha256")
+        for key in ("materialized_id", "variant_id", "variant_mode", "selection_mode", "variant_parameters", "requested_tx_count", "actual_tx_count", "seed", "start_offset", "end_offset", "selected_time_start_ms", "selected_time_end_ms", "base_window_sha256", "source_file_sha256", "audit_metadata")
         if key in materialized
     }
     skew = {

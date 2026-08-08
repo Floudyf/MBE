@@ -2,16 +2,52 @@ import type { V3SavedConfig, V5ExperimentSpec, V5FormalMethod, V5PluginManifest,
 
 export const V5_METHOD_PROFILE_SCHEMA_VERSION = "v5_plugin_profile_v1";
 export const V5_METHOD_EXCLUDED_CATEGORIES = new Set(["workload", "fault_injection"]);
+export const V5_DEFAULT_METHOD_IDS = ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"] as const;
+
+const V5_CANONICAL_DEFAULT_PLUGIN_IDS: Record<string, string> = {
+  workload: "deterministic_signed_synthetic",
+  transaction_admission: "signature_nonce_admission",
+  txpool: "fifo_per_node_mempool",
+  sharding: "deterministic_state_key_sharding",
+  routing: "hash_routing_baseline",
+  block_producer: "time_or_count_block_producer",
+  consensus: "pbft_style_consensus",
+  network: "localhost_tcp_typed_network",
+  execution: "serial_execution_baseline",
+  scheduler: "fifo_serial_scheduler",
+  block_executor: "serial_block_executor",
+  state_access: "direct_state_access",
+  state_storage: "persistent_local_state_store",
+  cross_shard: "relay_certificate_protocol",
+  commit: "normal_commit",
+  fault_injection: "faults_disabled",
+  metrics: "runtime_core_metrics",
+  observability: "node_network_consensus_observer",
+};
+
 export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
-  { method_id: "hash_serial", display_name: "Baseline", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
-  { method_id: "hash_block_stm", display_name: "Block-STM", role: "main", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 16, incarnation_limit_action: "fail" } } },
-  { method_id: "metatrack_serial", display_name: "MetaTrack", role: "main", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "metatrack_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
-  { method_id: "metatrack_block_stm", display_name: "MetaTrack with Block-STM backend", role: "compatibility", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "block_stm_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 16, incarnation_limit_action: "fail" } } },
+  { method_id: "hash_serial", display_name: "Stateful Hash + Serial Reference", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
+  { method_id: "hash_block_stm", display_name: "Stateful Hash + Block-STM Reference", role: "main", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },
+  { method_id: "hash_aria", display_name: "Aria", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", block_producer: "aria_block_producer", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "aria_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { candidate_scan_multiplier: 4, reordering: true, read_only_optimization: true, retry_nonce_gaps: true }, block_executor: { worker_count: 4, reordering: true, read_only_optimization: true, retry_nonce_gaps: true } } },
+  { method_id: "hash_groundhog", display_name: "Groundhog", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", block_producer: "groundhog_block_producer", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "groundhog_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { candidate_scan_multiplier: 4, ordered_set_limit: 64 }, block_executor: { worker_count: 4, ordered_set_limit: 64 } } },
+  { method_id: "hash_batch_si", display_name: "Batch-SI", role: "main", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper", execution_mode: "snapshot_parallel" } } },
+  { method_id: "hash_batch_si_no_wrbp", display_name: "Batch-SI w/o WRBP", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "sequential", ordering_mode: "ofas", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "sequential", ordering_mode: "ofas", priority_mode: "paper", execution_mode: "snapshot_parallel" } } },
+  { method_id: "hash_batch_si_no_ofas", display_name: "Batch-SI w/o OFAS", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "dependency_graph", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "dependency_graph", priority_mode: "paper", execution_mode: "snapshot_parallel" } } },
+  { method_id: "hash_batch_si_serial_batch", display_name: "Batch-SI w/o Snapshot Parallelism", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper", execution_mode: "snapshot_serial" } } },
+  { method_id: "hash_batch_si_txid_priority", display_name: "Batch-SI w/o OFAS Priority", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "txid" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "txid", execution_mode: "snapshot_parallel" } } },
+  { method_id: "stateless_hash_serial", display_name: "Stateless Hash + Serial", role: "baseline", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
+  { method_id: "stateless_hash_block_stm", display_name: "Stateless Hash + Block-STM", role: "compatibility", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },
+  // MBE_META_TRACK_RAPID_FIX_V3
+  { method_id: "metatrack_serial", display_name: "MetaTrack", role: "main", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "metatrack_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { execution: { access_size_threshold: 4 }, block_executor: { worker_count: 4 } } },
+  { method_id: "metatrack_block_stm", display_name: "MetaTrack with Block-STM backend", role: "compatibility", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "block_stm_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { execution: { access_size_threshold: 4 }, block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },
 ];
 
 export function defaultV5PluginSelections(catalog: V5PluginManifest[]): V5PluginSelection[] {
   return Array.from(new Set(catalog.map((item) => item.category))).map((category) => {
-    const plugin = catalog.find((item) => item.category === category)!;
+    const canonicalPluginId = V5_CANONICAL_DEFAULT_PLUGIN_IDS[category];
+    const plugin = catalog.find((item) => item.category === category && item.plugin_id === canonicalPluginId)
+      ?? catalog.find((item) => item.category === category);
+    if (!plugin) throw new Error(`The V5 plugin catalog does not provide category ${category}.`);
     return { category, plugin_id: plugin.plugin_id, config: { ...plugin.default_config } };
   });
 }
@@ -66,7 +102,14 @@ export function applyV5MethodSelections(base: V5ExperimentSpec, method: V5Formal
     plugin_selections: base.plugin_selections.map((item) => {
       const pluginId = method.plugin_overrides[item.category] ?? item.plugin_id;
       const plugin = catalog.find((candidate) => candidate.category === item.category && candidate.plugin_id === pluginId);
-      return { ...item, plugin_id: pluginId, config: { ...(pluginId !== item.plugin_id && plugin ? plugin.default_config : item.config), ...(method.plugin_config_overrides?.[item.category] ?? {}) } };
+      const config: Record<string, unknown> = { ...(pluginId !== item.plugin_id && plugin ? plugin.default_config : item.config) };
+      if (item.category === "block_producer" && pluginId !== item.plugin_id) {
+        for (const key of ["block_size", "interval_ms", "block_interval_ms"]) {
+          if (key in item.config) config[key] = item.config[key];
+        }
+      }
+      Object.assign(config, method.plugin_config_overrides?.[item.category] ?? {});
+      return { ...item, plugin_id: pluginId, config };
     }),
   };
 }

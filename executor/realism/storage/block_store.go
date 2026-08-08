@@ -26,6 +26,8 @@ type CommitRecord struct {
 	StateCommit   bool   `json:"state_commit"`
 }
 
+const maxCommittedBlockRecordBytes = 64 * 1024 * 1024
+
 type BlockStore struct {
 	DataDir           string
 	NodeID            string
@@ -167,6 +169,11 @@ func (s *BlockStore) ReadCommitted() ([]block.Block, error) {
 	defer f.Close()
 	var out []block.Block
 	scanner := bufio.NewScanner(f)
+	// A formal block can contain thousands of signed transactions and easily
+	// exceed bufio.Scanner's 64 KiB default token limit. Catch-up reads the same
+	// durable JSONL records, so rejecting a large line would permanently strand
+	// a lagging validator.
+	scanner.Buffer(make([]byte, 64*1024), maxCommittedBlockRecordBytes)
 	for scanner.Scan() {
 		row := scanner.Bytes()
 		var fields map[string]json.RawMessage

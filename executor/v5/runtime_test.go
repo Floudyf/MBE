@@ -8,11 +8,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	realblock "metaverse-chainlab/executor/realism/block"
+	"metaverse-chainlab/executor/realism/consensus/pbft"
 	"metaverse-chainlab/executor/realism/execution"
 	"metaverse-chainlab/executor/realism/p2p"
 	"metaverse-chainlab/executor/realism/state"
@@ -459,13 +462,16 @@ func TestRuntimeScheduleBlockUsesSchedulerPluginAndRehashesProposal(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	conservative := tx.SignedTransaction{TxID: "conservative"}
-	fast := tx.SignedTransaction{TxID: "fast", AccessList: []tx.AccessItem{{Key: "state:delta", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
+	conservative := attachTestMetaTrackRouting(t, tx.SignedTransaction{TxID: "conservative"}, "s0")
+	fast := attachTestMetaTrackRouting(t, tx.SignedTransaction{TxID: "fast", AccessList: []tx.AccessItem{{Key: "state:delta", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}, "s0")
 	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{conservative.TxID, fast.TxID}, TxList: []tx.SignedTransaction{conservative, fast}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
 	realblock.AssignHash(&block)
 	originalHash := block.BlockHash
 
-	scheduled := runtime.scheduleBlock(block)
+	scheduled, err := runtime.scheduleBlock(block)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if scheduled.TxIDs[0] != "conservative" || scheduled.TxIDs[1] != "fast" {
 		t.Fatalf("metatrack proposal should preserve consensus order and defer execution ordering to block executor: %#v", scheduled.TxIDs)
@@ -487,6 +493,64 @@ func TestRuntimeScheduleBlockUsesSchedulerPluginAndRehashesProposal(t *testing.T
 	}
 }
 
+func TestMetaTrackProposalFailsClosedWithoutSignedRoutingMetadata(t *testing.T) {
+	profile := testMetaTrackProfile()
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	runtime, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := tx.SignedTransaction{
+		TxID:       "metatrack-missing-route",
+		Sender:     "sender",
+		Receiver:   "receiver",
+		StateKeys:  []string{"state:key"},
+		AccessList: []tx.AccessItem{{Key: "state:key", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}},
+	}
+	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
+	realblock.AssignHash(&block)
+	if _, err := runtime.scheduleBlock(block); err == nil || !strings.Contains(err.Error(), "missing signed execution routing metadata") {
+		t.Fatalf("expected fail-closed MetaTrack route validation, got %v", err)
+	}
+}
+
+func TestRuntimeScheduleBlockLabelsStatelessHashPlanIndependently(t *testing.T) {
+	profile := testMetaTrackProfile()
+	profile["routing"] = PluginConfig{PluginID: "stateless_hash_routing", Config: map[string]any{}}
+	profile["execution"] = PluginConfig{PluginID: "serial_execution_baseline", Config: map[string]any{}}
+	profile["scheduler"] = PluginConfig{PluginID: "fifo_serial_scheduler", Config: map[string]any{}}
+	profile["commit"] = PluginConfig{PluginID: "normal_commit", Config: map[string]any{}}
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	runtime, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := tx.SignedTransaction{TxID: "stateless-hash", StateKeys: []string{"market:0x1"}, AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
+	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
+	realblock.AssignHash(&block)
+
+	scheduled, err := runtime.scheduleBlock(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scheduled.ExecutionPlan == nil {
+		t.Fatal("stateless hash proposal did not bind a batch execution plan")
+	}
+	if scheduled.ExecutionPlan.AlgorithmID != "stateless_hash_batch_execution_plan_v1" {
+		t.Fatalf("stateless hash plan was mislabeled: %#v", scheduled.ExecutionPlan)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(scheduled.ExecutionPlan.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["algorithm_id"] != "stateless_hash_batch_execution_plan_v1" {
+		t.Fatalf("stateless hash payload was mislabeled: %#v", payload)
+	}
+	if err := runtime.verifyExecutionPlanEnvelope(scheduled); err != nil {
+		t.Fatalf("validator rejected stateless hash plan: %v", err)
+	}
+}
+
 func TestRuntimeScheduleBlockBindsMetaTrackPlanForBlockSTMBackend(t *testing.T) {
 	profile := testMetaTrackProfile()
 	profile["block_executor"] = PluginConfig{PluginID: "block_stm_block_executor", Config: map[string]any{"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off"}}
@@ -495,11 +559,14 @@ func TestRuntimeScheduleBlockBindsMetaTrackPlanForBlockSTMBackend(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := tx.SignedTransaction{TxID: "metatrack-stm", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
+	item := attachTestMetaTrackRouting(t, tx.SignedTransaction{TxID: "metatrack-stm", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}, "s0")
 	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
 	realblock.AssignHash(&block)
 
-	scheduled := runtime.scheduleBlock(block)
+	scheduled, err := runtime.scheduleBlock(block)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if scheduled.ExecutionPlan == nil || scheduled.ExecutionPlan.PayloadDigest == "" {
 		t.Fatalf("metatrack block-stm proposal did not bind an execution plan: %#v", scheduled.ExecutionPlan)
@@ -517,10 +584,13 @@ func TestRuntimeValidatorRejectsSemanticallyTamperedMetaTrackPlan(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := tx.SignedTransaction{TxID: "metatrack-tamper", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
+	item := attachTestMetaTrackRouting(t, tx.SignedTransaction{TxID: "metatrack-tamper", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}, "s0")
 	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
 	realblock.AssignHash(&block)
-	scheduled := runtime.scheduleBlock(block)
+	scheduled, err := runtime.scheduleBlock(block)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal(scheduled.ExecutionPlan.Payload, &payload); err != nil {
@@ -549,10 +619,13 @@ func TestRuntimeRejectsMetaTrackPlanExecutionShardMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := tx.SignedTransaction{TxID: "metatrack-plan-drive", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
+	item := attachTestMetaTrackRouting(t, tx.SignedTransaction{TxID: "metatrack-plan-drive", AccessList: []tx.AccessItem{{Key: "market:0x1", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}, "s0")
 	block := realblock.Block{ShardID: "s0", Height: 1, PreviousHash: "genesis", ProposerID: "n-s0", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
 	realblock.AssignHash(&block)
-	scheduled := runtime.scheduleBlock(block)
+	scheduled, err := runtime.scheduleBlock(block)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := runtime.validateMetaTrackPlanDrivesExecution(scheduled); err != nil {
 		t.Fatalf("expected local plan execution shard to pass: %v", err)
 	}
@@ -570,7 +643,7 @@ func TestRuntimeRejectsMetaTrackPlanExecutionShardMismatch(t *testing.T) {
 	}
 	scheduled.ExecutionPlan.Payload = raw
 
-	if err := runtime.validateMetaTrackPlanDrivesExecution(scheduled); err == nil || !strings.Contains(err.Error(), "plan drives execution mismatch") {
+	if err := runtime.validateMetaTrackPlanDrivesExecution(scheduled); err == nil || (!strings.Contains(err.Error(), "plan drives execution mismatch") && !strings.Contains(err.Error(), "signed route mismatch")) {
 		t.Fatalf("expected execution shard mismatch, got %v", err)
 	}
 }
@@ -591,11 +664,13 @@ func TestRuntimeScheduleTraceSeparatesRemoteHomeAccessFromStolenWork(t *testing.
 		t.Fatal(err)
 	}
 	remoteKey := keyWithHomeShard(t, "s0", []string{"s0", "s1"})
-	item := tx.SignedTransaction{TxID: "remote-home", AccessList: []tx.AccessItem{{Key: remoteKey, Mode: tx.AccessRead, UpdateSemantics: "validate"}}}
+	item := attachTestMetaTrackRouting(t, tx.SignedTransaction{TxID: "remote-home", AccessList: []tx.AccessItem{{Key: remoteKey, Mode: tx.AccessRead, UpdateSemantics: "validate"}}}, "s1")
 	block := realblock.Block{ShardID: "s1", Height: 1, PreviousHash: "genesis", ProposerID: "n-s1", Timestamp: 1, TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}, StateRootBefore: "empty", StateRootAfter: "pending_not_executed", ReceiptRoot: "pending_not_executed"}
 	realblock.AssignHash(&block)
 
-	runtime.scheduleBlock(block)
+	if _, err := runtime.scheduleBlock(block); err != nil {
+		t.Fatal(err)
+	}
 
 	if schedulerRowsSawStolen(runtime.schedulerRows, "remote-home") {
 		t.Fatalf("remote-home execution must not be reported as stolen work: %#v", runtime.schedulerRows)
@@ -1211,6 +1286,34 @@ func TestBlockSTMArtifactsPreserveKernelSerialEquivalenceEvidence(t *testing.T) 
 	}
 }
 
+func attachTestMetaTrackRouting(t *testing.T, item tx.SignedTransaction, shard string) tx.SignedTransaction {
+	t.Helper()
+	if item.Sender == "" {
+		item.Sender = "test-sender-" + item.TxID
+	}
+	if item.Receiver == "" {
+		item.Receiver = "test-receiver-" + item.TxID
+	}
+	routing := tx.ExecutionRoutingMetadata{
+		SenderID:              item.Sender,
+		ReceiverID:            item.Receiver,
+		RoutingEpoch:          0,
+		RoutingOrdinal:        1,
+		ExecutionShard:        shard,
+		RoutingReason:         "test_sender_group_epoch_affinity",
+		RoutePlanDigest:       "test-route-plan-" + shard,
+		PredictedRemoteReads:  0,
+		PredictedRemoteWrites: 0,
+	}
+	digest, err := tx.ComputeExecutionRoutingDigest(item, routing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routing.RouteEntryDigest = digest
+	item.ExecutionRouting = &routing
+	return item
+}
+
 func testMetaTrackProfile() map[string]PluginConfig {
 	return map[string]PluginConfig{
 		"workload":              {PluginID: "deterministic_signed_synthetic", Config: map[string]any{}},
@@ -1412,5 +1515,558 @@ func TestRemoteStateDeltaDrainStateKeepsPendingWorkLiveBeforeReady(t *testing.T)
 			ready[0].SourceHeight,
 			request.SourceHeight,
 		)
+	}
+}
+
+func TestValidatePrePrepareRequiresLocalNextHeightAndParent(t *testing.T) {
+	plan := Plan{NodeConfigs: []NodePlan{
+		{NodeID: "n0", ShardID: "s0", Leader: true, Validators: []string{"n0", "n1", "n2", "n3"}},
+		{NodeID: "n1", ShardID: "s0", Validators: []string{"n0", "n1", "n2", "n3"}},
+	}}
+	runtime := &NodeRuntime{
+		node:            plan.NodeConfigs[1],
+		plan:            plan,
+		committedHeight: 1,
+		committedHash:   "height-1",
+	}
+	makeBlock := func(height uint64, previous string) realblock.Block {
+		block := realblock.Block{ShardID: "s0", Height: height, PreviousHash: previous, ProposerID: "n0", Timestamp: 1}
+		realblock.AssignHash(&block)
+		return block
+	}
+	accepted, catchup, err := runtime.validatePrePrepare("n0", makeBlock(2, "height-1"))
+	if err != nil || !accepted || catchup {
+		t.Fatalf("valid next proposal rejected: accepted=%t catchup=%t err=%v", accepted, catchup, err)
+	}
+	accepted, catchup, err = runtime.validatePrePrepare("n0", makeBlock(3, "height-2"))
+	if err != nil || accepted || !catchup {
+		t.Fatalf("future proposal must be held for catch-up: accepted=%t catchup=%t err=%v", accepted, catchup, err)
+	}
+	accepted, catchup, err = runtime.validatePrePrepare("n0", makeBlock(2, "wrong-parent"))
+	if err != nil || accepted || !catchup {
+		t.Fatalf("parent mismatch must be held for catch-up: accepted=%t catchup=%t err=%v", accepted, catchup, err)
+	}
+	accepted, catchup, err = runtime.validatePrePrepare("n0", makeBlock(1, "genesis"))
+	if err != nil || accepted || catchup {
+		t.Fatalf("stale proposal must be ignored: accepted=%t catchup=%t err=%v", accepted, catchup, err)
+	}
+}
+
+func TestFuturePrePrepareConflictingSameViewDigestKeepsFirstProposal(t *testing.T) {
+	runtime := &NodeRuntime{
+		node:                NodePlan{NodeID: "n1", ShardID: "s0", Validators: []string{"n0", "n1", "n2", "n3"}},
+		committedHeight:     0,
+		committedHash:       "genesis",
+		deferredPrePrepares: map[uint64]deferredPrePrepare{},
+	}
+	first := realblock.Block{ShardID: "s0", Height: 2, PreviousHash: "height-1", ProposerID: "n0", Timestamp: 1}
+	realblock.AssignHash(&first)
+	replacement := first
+	replacement.Timestamp = 2
+	realblock.AssignHash(&replacement)
+	runtime.deferPrePrepare("n0", first)
+	runtime.deferPrePrepare("n0", replacement)
+	pending := runtime.deferredPrePrepares[2]
+	if pending.Block.BlockHash != first.BlockHash {
+		t.Fatalf("same-view conflicting future proposal replaced the first digest: got=%s want=%s", pending.Block.BlockHash, first.BlockHash)
+	}
+	if runtime.lastProposalError == "" {
+		t.Fatal("conflicting future PRE-PREPARE was not recorded")
+	}
+}
+
+func TestFuturePrePrepareIsReplayedImmediatelyAfterParentCommit(t *testing.T) {
+	plan := Plan{NodeConfigs: []NodePlan{
+		{NodeID: "n0", ShardID: "s0", Leader: true, Validators: []string{"n0", "n1", "n2", "n3"}},
+		{NodeID: "n1", ShardID: "s0", Validators: []string{"n0", "n1", "n2", "n3"}},
+	}}
+	future := realblock.Block{ShardID: "s0", Height: 2, PreviousHash: "height-1", ProposerID: "n0", Timestamp: 1}
+	realblock.AssignHash(&future)
+	sent := map[string]p2p.MessageEnvelope{}
+	runtime := &NodeRuntime{
+		node:                plan.NodeConfigs[1],
+		plan:                plan,
+		committedHeight:     0,
+		committedHash:       "genesis",
+		proposals:           map[string]realblock.Block{},
+		deferredPrePrepares: map[uint64]deferredPrePrepare{},
+		votes:               map[string]map[string]bool{},
+		runtimeMetricCounts: map[string]int64{},
+		sendToNodeHook: func(_ context.Context, nodeID string, envelope p2p.MessageEnvelope) error {
+			sent[nodeID] = envelope
+			return nil
+		},
+	}
+	accepted, catchup, err := runtime.validatePrePrepare("n0", future)
+	if err != nil || accepted || !catchup {
+		t.Fatalf("future proposal disposition mismatch: accepted=%t catchup=%t err=%v", accepted, catchup, err)
+	}
+	runtime.deferPrePrepare("n0", future)
+	if pending := runtime.deferredPrePrepares[future.Height]; pending.Block.BlockHash != future.BlockHash {
+		t.Fatalf("future proposal was not deferred: %+v", pending)
+	}
+	runtime.committedHeight = 1
+	runtime.committedHash = "height-1"
+	runtime.replayDeferredPrePrepare(context.Background())
+	if _, ok := runtime.deferredPrePrepares[future.Height]; ok {
+		t.Fatal("replayed proposal remained deferred")
+	}
+	if runtime.proposals[future.BlockHash].BlockHash != future.BlockHash {
+		t.Fatal("replayed proposal was not remembered")
+	}
+	for _, nodeID := range []string{"n0", "n2", "n3"} {
+		envelope, ok := sent[nodeID]
+		if !ok || envelope.MessageType != p2p.MessagePBFTPrepare {
+			t.Fatalf("replayed proposal did not broadcast PREPARE to %s: %+v", nodeID, envelope)
+		}
+		vote, err := p2p.DecodePayload[pbft.Prepare](envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if vote.BlockHash != future.BlockHash || vote.Height != future.Height || vote.NodeID != "n1" {
+			t.Fatalf("unexpected replayed prepare vote: %+v", vote)
+		}
+	}
+}
+
+func TestValidateConsensusCommitRequiresRememberedNextProposal(t *testing.T) {
+	plan := Plan{NodeConfigs: []NodePlan{
+		{NodeID: "n0", ShardID: "s0", Leader: true, Validators: []string{"n0", "n1", "n2", "n3"}},
+		{NodeID: "n1", ShardID: "s0", Validators: []string{"n0", "n1", "n2", "n3"}},
+	}}
+	runtime := &NodeRuntime{
+		node:            plan.NodeConfigs[1],
+		plan:            plan,
+		committedHeight: 1,
+		committedHash:   "height-1",
+		proposals:       map[string]realblock.Block{},
+	}
+	makeBlock := func(height uint64, previous string) realblock.Block {
+		block := realblock.Block{ShardID: "s0", Height: height, PreviousHash: previous, ProposerID: "n0", Timestamp: 1}
+		realblock.AssignHash(&block)
+		return block
+	}
+	next := makeBlock(2, "height-1")
+	runtime.proposals[next.BlockHash] = next
+	accepted, catchup, err := runtime.validateConsensusCommit("n0", next)
+	if err != nil || !accepted || catchup {
+		t.Fatalf("valid remembered commit rejected: accepted=%t catchup=%t err=%v", accepted, catchup, err)
+	}
+	unknown := makeBlock(2, "height-1")
+	unknown.Timestamp = 2
+	realblock.AssignHash(&unknown)
+	accepted, catchup, err = runtime.validateConsensusCommit("n0", unknown)
+	if err != nil || accepted || !catchup {
+		t.Fatalf("unremembered commit must request catch-up: accepted=%t catchup=%t err=%v", accepted, catchup, err)
+	}
+	future := makeBlock(3, "height-2")
+	accepted, catchup, err = runtime.validateConsensusCommit("n0", future)
+	if err != nil || accepted || !catchup {
+		t.Fatalf("future commit must request catch-up: accepted=%t catchup=%t err=%v", accepted, catchup, err)
+	}
+	if _, _, err := runtime.validateConsensusCommit("n2", next); err == nil {
+		t.Fatal("non-leader commit sender was accepted")
+	}
+}
+
+func TestRejectDeterministicExecutionFreezesRuntime(t *testing.T) {
+	runtime := &NodeRuntime{}
+	block := realblock.Block{Height: 7, BlockHash: "block-7"}
+	result, err := runtime.rejectDeterministicExecution(block, "invalid_execution_receipts", fmt.Errorf("missing execution receipt"))
+	if err == nil || result.Disposition != CommitRejected {
+		t.Fatalf("deterministic failure was not rejected: result=%+v err=%v", result, err)
+	}
+	if runtime.fatalExecutionError != "missing execution receipt" {
+		t.Fatalf("runtime did not freeze on deterministic failure: %q", runtime.fatalExecutionError)
+	}
+	if runtime.lastCommitFailure.Phase != "invalid_execution_receipts" || runtime.lastCommitFailure.Height != block.Height {
+		t.Fatalf("deterministic failure evidence is incomplete: %+v", runtime.lastCommitFailure)
+	}
+}
+
+func TestMetaTrackRemoteWritebackPreservesRoutingOrdinalForNonCommutativeWriters(t *testing.T) {
+	transactions := []tx.SignedTransaction{
+		{TxID: "tx-late", ExecutionRouting: &tx.ExecutionRoutingMetadata{RoutingOrdinal: 22}},
+		{TxID: "tx-early", ExecutionRouting: &tx.ExecutionRoutingMetadata{RoutingOrdinal: 7}},
+	}
+	deltas := []execution.TxDelta{
+		{TxID: "tx-late", Success: true, WriteSet: map[string]string{"asset:hot": "late"}},
+		{TxID: "tx-early", Success: true, WriteSet: map[string]string{"asset:hot": "early"}},
+	}
+	physical := state.StateKV{Key: "s1::asset:hot", Value: "late", TxIDs: []string{"tx-late", "tx-early"}, UpdateSemantics: "set"}
+	items := metaTrackRemoteWritebackItems(physical, "asset:hot", transactions, deltas)
+	if len(items) != 2 {
+		t.Fatalf("expected one remote writeback per non-commutative writer, got %#v", items)
+	}
+	if items[0].TxIDs[0] != "tx-early" || items[0].RoutingOrdinal != 7 || items[0].Value != "early" {
+		t.Fatalf("earlier routing ordinal must be first: %#v", items[0])
+	}
+	if items[1].TxIDs[0] != "tx-late" || items[1].RoutingOrdinal != 22 || items[1].Value != "late" {
+		t.Fatalf("later routing ordinal must be second: %#v", items[1])
+	}
+}
+
+func TestRemoteDeltaConsensusOrderUsesRoutingOrdinalBeforeSourceBlockShape(t *testing.T) {
+	early := StateDeltaApplyRequest{RoutingOrdinal: 3, Key: "asset:hot", SourceHeight: 99, BlockHash: "zzzz", TxID: "early", ExecutionShard: "s1"}
+	late := StateDeltaApplyRequest{RoutingOrdinal: 10, Key: "asset:hot", SourceHeight: 1, BlockHash: "aaaa", TxID: "late", ExecutionShard: "s1"}
+	if remoteDeltaConsensusOrder(early) >= remoteDeltaConsensusOrder(late) {
+		t.Fatalf("routing ordinal must dominate source block height/hash: early=%q late=%q", remoteDeltaConsensusOrder(early), remoteDeltaConsensusOrder(late))
+	}
+}
+
+func TestRemoteWritebackSequenceIsIndependentOfSourceBlockGrouping(t *testing.T) {
+	txs := []tx.SignedTransaction{
+		{TxID: "t1", ExecutionRouting: &tx.ExecutionRoutingMetadata{RoutingOrdinal: 1}},
+		{TxID: "t2", ExecutionRouting: &tx.ExecutionRoutingMetadata{RoutingOrdinal: 2}},
+		{TxID: "t3", ExecutionRouting: &tx.ExecutionRoutingMetadata{RoutingOrdinal: 3}},
+	}
+	deltas := []execution.TxDelta{
+		{TxID: "t1", Success: true, OriginalIndex: 0, WriteSet: map[string]string{"object:hot": "v1"}},
+		{TxID: "t2", Success: true, OriginalIndex: 1, WriteSet: map[string]string{"object:hot": "v2"}},
+		{TxID: "t3", Success: true, OriginalIndex: 2, WriteSet: map[string]string{"object:hot": "v3"}},
+	}
+	collect := func(groups [][]int) []state.StateKV {
+		out := []state.StateKV{}
+		for _, group := range groups {
+			groupTxs := make([]tx.SignedTransaction, 0, len(group))
+			groupDeltas := make([]execution.TxDelta, 0, len(group))
+			ids := make([]string, 0, len(group))
+			for _, index := range group {
+				groupTxs = append(groupTxs, txs[index])
+				groupDeltas = append(groupDeltas, deltas[index])
+				ids = append(ids, txs[index].TxID)
+			}
+			physical := state.StateKV{Key: "s1::object:hot", Value: groupDeltas[len(groupDeltas)-1].WriteSet["object:hot"], TxIDs: ids, UpdateSemantics: "set"}
+			out = append(out, metaTrackRemoteWritebackItems(physical, "object:hot", groupTxs, groupDeltas)...)
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].RoutingOrdinal < out[j].RoutingOrdinal })
+		return out
+	}
+	left := collect([][]int{{0, 1}, {2}})
+	right := collect([][]int{{0}, {1, 2}})
+	if !reflect.DeepEqual(left, right) {
+		t.Fatalf("remote writeback sequence changed with source block grouping:\nleft=%#v\nright=%#v", left, right)
+	}
+}
+
+func TestVersionedRemoteHomePublishesHistoricalVersionsAndNeverRegressesMaterializedState(t *testing.T) {
+	profile := testMetaTrackProfile()
+	profile["routing"] = PluginConfig{PluginID: "stateless_hash_routing", Config: map[string]any{}}
+	profile["execution"] = PluginConfig{PluginID: "serial_execution_baseline", Config: map[string]any{}}
+	profile["scheduler"] = PluginConfig{PluginID: "fifo_serial_scheduler", Config: map[string]any{}}
+	profile["commit"] = PluginConfig{PluginID: "normal_commit", Config: map[string]any{}}
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{
+		{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile},
+		{NodeID: "n-s1", ShardID: "s1", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s1"}, PluginProfile: profile},
+	}}
+	home, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := keyWithHomeShard(t, "s0", []string{"s0", "s1"})
+	home.db.Set(key, "v0")
+	home.stateVersionInitial[key] = "v0"
+
+	late := StateDeltaApplyRequest{RequestID: "v116", TxID: "tx116", BlockHash: "b116", Key: key, Value: "v116", UpdateSemantics: "set", HomeShard: "s0", ExecutionShard: "s1", SourceKey: "s1::" + key, RoutingOrdinal: 116, PreviousVersion: 80, ProducedVersion: 116}
+	early := StateDeltaApplyRequest{RequestID: "v80", TxID: "tx80", BlockHash: "b80", Key: key, Value: "v80", UpdateSemantics: "set", HomeShard: "s0", ExecutionShard: "s1", SourceKey: "s1::" + key, RoutingOrdinal: 80, PreviousVersion: 31, ProducedVersion: 80}
+	for _, request := range []StateDeltaApplyRequest{late, early} {
+		if ack := home.handleStateDeltaApplyRequest(request); !ack.Success {
+			t.Fatalf("version publication failed: %+v", ack)
+		}
+	}
+	if value, ok := home.stateVersionValue(key, 80); !ok || value != "v80" {
+		t.Fatalf("historical v80 missing after out-of-order arrival: value=%q ok=%t", value, ok)
+	}
+	if value, ok := home.stateVersionValue(key, 116); !ok || value != "v116" {
+		t.Fatalf("historical v116 missing after out-of-order arrival: value=%q ok=%t", value, ok)
+	}
+	ready := home.readyRemoteStateDeltasForConsensus(1)
+	if len(ready) != 2 || ready[0].ProducedVersion != 80 || ready[1].ProducedVersion != 116 {
+		t.Fatalf("versioned consensus order must ignore network arrival order: %#v", ready)
+	}
+	block := realblock.Block{Height: 1, ShardID: "s0", SystemStateDeltas: ready}
+	updates := home.materializableRemoteStateDeltas(block, "s0")
+	if len(updates) != 2 || updates[0].ProducedVersion != 80 || updates[1].ProducedVersion != 116 {
+		t.Fatalf("materialization did not preserve ascending per-key versions: %#v", updates)
+	}
+	if err := home.db.ApplyDeterministicBatch(updates); err != nil {
+		t.Fatal(err)
+	}
+	home.markRemoteStateDeltasApplied(ready)
+	if got := home.db.Get(key); got != "v116" {
+		t.Fatalf("latest logical version was not materialized: got=%q", got)
+	}
+
+	// A late older version remains queryable as history but must not regress the
+	// durable latest-value materialization.
+	older := StateDeltaApplyRequest{RequestID: "v70", TxID: "tx70", BlockHash: "b70", Key: key, Value: "v70", UpdateSemantics: "set", HomeShard: "s0", ExecutionShard: "s1", SourceKey: "s1::" + key, RoutingOrdinal: 70, PreviousVersion: 31, ProducedVersion: 70}
+	if ack := home.handleStateDeltaApplyRequest(older); !ack.Success {
+		t.Fatalf("late historical publication failed: %+v", ack)
+	}
+	if value, ok := home.stateVersionValue(key, 70); !ok || value != "v70" {
+		t.Fatalf("late historical version must remain fetchable: value=%q ok=%t", value, ok)
+	}
+	lateBlock := realblock.Block{Height: 2, ShardID: "s0", SystemStateDeltas: home.readyRemoteStateDeltasForConsensus(2)}
+	if updates := home.materializableRemoteStateDeltas(lateBlock, "s0"); len(updates) != 0 {
+		t.Fatalf("older version must not regress materialized DB: %#v", updates)
+	}
+	if got := home.db.Get(key); got != "v116" {
+		t.Fatalf("late old version regressed DB: got=%q", got)
+	}
+}
+
+func TestVersionedRemoteHomeNoopAdvancesVersionWithoutMutatingBusinessValue(t *testing.T) {
+	profile := testMetaTrackProfile()
+	plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile}}}
+	home, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "asset:noop"
+	home.db.Set(key, "stable")
+	home.stateVersionInitial[key] = "stable"
+	request := StateDeltaApplyRequest{RequestID: "noop-9", TxID: "tx9", BlockHash: "b9", Key: key, Value: "stable", UpdateSemantics: "set", HomeShard: "s0", ExecutionShard: "s1", SourceKey: "s1::" + key, RoutingOrdinal: 9, PreviousVersion: 4, ProducedVersion: 9, OrderingNoop: true}
+	if ack := home.handleStateDeltaApplyRequest(request); !ack.Success {
+		t.Fatalf("noop version publication failed: %+v", ack)
+	}
+	ready := home.readyRemoteStateDeltasForConsensus(1)
+	if len(ready) != 1 || !ready[0].OrderingNoop {
+		t.Fatalf("noop version did not enter consensus evidence: %#v", ready)
+	}
+	block := realblock.Block{Height: 1, ShardID: "s0", SystemStateDeltas: ready}
+	if updates := home.materializableRemoteStateDeltas(block, "s0"); len(updates) != 0 {
+		t.Fatalf("noop version must not create a physical DB write: %#v", updates)
+	}
+	home.markRemoteStateDeltasApplied(ready)
+	if got := home.db.Get(key); got != "stable" {
+		t.Fatalf("noop version mutated business value: %q", got)
+	}
+	if got := home.stateVersionMaterialized[key]; got != 9 {
+		t.Fatalf("noop version did not advance materialized frontier: got=%d", got)
+	}
+	if value, ok := home.stateVersionValue(key, 9); !ok || value != "stable" {
+		t.Fatalf("noop logical version is not available to successors: value=%q ok=%t", value, ok)
+	}
+}
+
+func TestVersionedRemoteWaveAdvancesInBlockDependencyFrontierForSerialAndBlockSTM(t *testing.T) {
+	for _, blockExecutor := range []string{"serial_block_executor", "block_stm_block_executor"} {
+		t.Run(blockExecutor, func(t *testing.T) {
+			profile := testMetaTrackProfile()
+			profile["routing"] = PluginConfig{PluginID: "stateless_hash_routing", Config: map[string]any{}}
+			profile["execution"] = PluginConfig{PluginID: "serial_execution_baseline", Config: map[string]any{}}
+			profile["scheduler"] = PluginConfig{PluginID: "fifo_serial_scheduler", Config: map[string]any{}}
+			profile["commit"] = PluginConfig{PluginID: "normal_commit", Config: map[string]any{}}
+			config := map[string]any{"worker_count": 1}
+			if blockExecutor == "block_stm_block_executor" {
+				config = map[string]any{"worker_count": 2, "execution_mode": "performance", "oracle_mode": "off"}
+			}
+			profile["block_executor"] = PluginConfig{PluginID: blockExecutor, Config: config}
+			plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{
+				{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s0"}, PluginProfile: profile},
+				{NodeID: "n-s1", ShardID: "s1", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: t.TempDir(), Validators: []string{"n-s1"}, PluginProfile: profile},
+			}}
+			runtime, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := keyWithHomeShard(t, "s0", []string{"s0", "s1"})
+			runtime.db.Set(key, "seed")
+			runtime.stateVersionInitial[key] = "seed"
+			makeItem := func(id string, ordinal, required uint64) tx.SignedTransaction {
+				item := tx.SignedTransaction{TxID: id, Sender: "sender-" + id, Receiver: "receiver-" + id, AccessListSchema: "mbe_workload_record_v3", AccessListSource: "test_versioned_frontier", AccessList: []tx.AccessItem{{Key: key, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}, StateKeys: []string{key}}
+				item.ExecutionRouting = &tx.ExecutionRoutingMetadata{RoutingOrdinal: ordinal, ExecutionShard: "s0", StateVersions: []tx.StateVersionDependency{{Key: key, RequiredVersion: required, ProducedVersion: ordinal}}}
+				return item
+			}
+			first := makeItem("tx1", 1, 0)
+			second := makeItem("tx2", 2, 1)
+			block := realblock.Block{BlockHash: "version-frontier-" + blockExecutor, Height: 1, ShardID: "s0", TxIDs: []string{first.TxID, second.TxID}, TxList: []tx.SignedTransaction{first, second}}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			result, err := runtime.executeVersionedRemoteBlock(ctx, block, runtime.db.Snapshot())
+			if err != nil {
+				t.Fatalf("version frontier execution failed: %v", err)
+			}
+			if len(result.ExecutionResult.TxDeltas) != 2 || !result.ExecutionResult.TxDeltas[0].Success || !result.ExecutionResult.TxDeltas[1].Success {
+				t.Fatalf("version frontier did not complete both transactions: %#v", result.ExecutionResult.TxDeltas)
+			}
+			if got := intValue(result.ActualMetrics["versioned_state_ready_wave_count"]); got < 2 {
+				t.Fatalf("dependent writers must advance in at least two ready waves, got %d (%#v)", got, result.ActualMetrics)
+			}
+			if _, ok := runtime.stateVersionValue(key, 1); !ok {
+				t.Fatal("first produced version was not published")
+			}
+			if _, ok := runtime.stateVersionValue(key, 2); !ok {
+				t.Fatal("second produced version was not published")
+			}
+		})
+	}
+}
+
+func TestVersionedRemoteFrontierMakesCrossShardProgressWithoutWholeBlockBarrier(t *testing.T) {
+	for _, blockExecutor := range []string{"serial_block_executor", "block_stm_block_executor"} {
+		t.Run(blockExecutor, func(t *testing.T) {
+			profile := testMetaTrackProfile()
+			profile["routing"] = PluginConfig{PluginID: "stateless_hash_routing", Config: map[string]any{}}
+			profile["execution"] = PluginConfig{PluginID: "serial_execution_baseline", Config: map[string]any{}}
+			profile["scheduler"] = PluginConfig{PluginID: "fifo_serial_scheduler", Config: map[string]any{}}
+			profile["commit"] = PluginConfig{PluginID: "normal_commit", Config: map[string]any{}}
+			config := map[string]any{"worker_count": 1}
+			if blockExecutor == "block_stm_block_executor" {
+				config = map[string]any{"worker_count": 2, "execution_mode": "performance", "oracle_mode": "off"}
+			}
+			profile["block_executor"] = PluginConfig{PluginID: blockExecutor, Config: config}
+			root := t.TempDir()
+			plan := Plan{ExecutionBackend: "real_cluster", NoFallback: true, NodeConfigs: []NodePlan{
+				{NodeID: "n-s0", ShardID: "s0", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: filepath.Join(root, "s0"), Validators: []string{"n-s0"}, PluginProfile: profile},
+				{NodeID: "n-s1", ShardID: "s1", Role: "leader", Leader: true, ListenAddr: freeLocalAddr(t), DataDir: filepath.Join(root, "s1"), Validators: []string{"n-s1"}, PluginProfile: profile},
+			}}
+			s0, err := newNodeRuntime(plan, plan.NodeConfigs[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			s1, err := newNodeRuntime(plan, plan.NodeConfigs[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtimes := map[string]*NodeRuntime{"n-s0": s0, "n-s1": s1}
+			wire := func(from *NodeRuntime) func(context.Context, string, p2p.MessageEnvelope) error {
+				return func(ctx context.Context, nodeID string, envelope p2p.MessageEnvelope) error {
+					target := runtimes[nodeID]
+					if target == nil {
+						return fmt.Errorf("unknown test node %s", nodeID)
+					}
+					switch envelope.MessageType {
+					case stateFetchRequestMessage:
+						request, err := p2p.DecodePayload[StateFetchRequest](envelope)
+						if err != nil {
+							return err
+						}
+						value, ready := target.stateVersionValue(request.Key, request.RequiredVersion)
+						response := StateFetchResponse{RequestID: request.RequestID, TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: request.HomeShard + "::" + request.Key, Value: value, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: target.plugins.StateStorage.Root(target.db), StateVersion: request.RequiredVersion, Versioned: request.Versioned, Success: ready}
+						if !ready {
+							response.Error = "state_version_not_ready"
+						}
+						response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
+						from.handleStateFetchResponse(response)
+						return nil
+					case stateDeltaApplyMessage:
+						request, err := p2p.DecodePayload[StateDeltaApplyRequest](envelope)
+						if err != nil {
+							return err
+						}
+						ack := target.handleStateDeltaApplyRequest(request)
+						from.handleStateDeltaApplyAck(ack)
+						return nil
+					default:
+						return fmt.Errorf("unexpected test state-access message %s", envelope.MessageType)
+					}
+				}
+			}
+			s0.sendToNodeHook = wire(s0)
+			s1.sendToNodeHook = wire(s1)
+
+			key := keyWithHomeShard(t, "s0", []string{"s0", "s1"})
+			s0.db.Set(key, "seed")
+			s0.stateVersionInitial[key] = "seed"
+			makeItem := func(id, execShard string, ordinal, required uint64) tx.SignedTransaction {
+				item := tx.SignedTransaction{TxID: id, Sender: "sender-" + id, Receiver: "receiver-" + id, AccessListSchema: "mbe_workload_record_v3", AccessListSource: "cross_shard_version_frontier_test", AccessList: []tx.AccessItem{{Key: key, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}, StateKeys: []string{key}}
+				item.ExecutionRouting = &tx.ExecutionRoutingMetadata{RoutingOrdinal: ordinal, ExecutionShard: execShard, StateVersions: []tx.StateVersionDependency{{Key: key, RequiredVersion: required, ProducedVersion: ordinal}}}
+				return item
+			}
+			producer := makeItem("tx1", "s1", 1, 0)
+			consumer := makeItem("tx2", "s0", 2, 1)
+			producerBlock := realblock.Block{BlockHash: "producer-" + blockExecutor, Height: 1, ShardID: "s1", TxIDs: []string{producer.TxID}, TxList: []tx.SignedTransaction{producer}}
+			consumerBlock := realblock.Block{BlockHash: "consumer-" + blockExecutor, Height: 1, ShardID: "s0", TxIDs: []string{consumer.TxID}, TxList: []tx.SignedTransaction{consumer}}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			type outcome struct {
+				result BlockExecutionResult
+				err    error
+			}
+			consumerDone := make(chan outcome, 1)
+			go func() {
+				result, err := s0.executeVersionedRemoteBlock(ctx, consumerBlock, s0.db.Snapshot())
+				consumerDone <- outcome{result: result, err: err}
+			}()
+			time.Sleep(50 * time.Millisecond)
+			producerResult, err := s1.executeVersionedRemoteBlock(ctx, producerBlock, s1.db.Snapshot())
+			if err != nil {
+				t.Fatalf("producer block failed: %v", err)
+			}
+			if len(producerResult.ExecutionResult.TxDeltas) != 1 || !producerResult.ExecutionResult.TxDeltas[0].Success {
+				t.Fatalf("producer transaction failed: %#v", producerResult.ExecutionResult.TxDeltas)
+			}
+			select {
+			case got := <-consumerDone:
+				if got.err != nil {
+					t.Fatalf("consumer block did not wake after exact version publication: %v", got.err)
+				}
+				if len(got.result.ExecutionResult.TxDeltas) != 1 || !got.result.ExecutionResult.TxDeltas[0].Success {
+					t.Fatalf("consumer transaction failed: %#v", got.result.ExecutionResult.TxDeltas)
+				}
+			case <-ctx.Done():
+				t.Fatal("cross-shard version frontier deadlocked")
+			}
+			if _, ok := s0.stateVersionValue(key, 1); !ok {
+				t.Fatal("remote producer version did not reach home shard")
+			}
+			if _, ok := s0.stateVersionValue(key, 2); !ok {
+				t.Fatal("consumer version was not published after wakeup")
+			}
+		})
+	}
+}
+
+func TestCanonicalBusinessStateDigestExcludesProtocolOnlyKeys(t *testing.T) {
+	base := map[string]string{
+		"s0::asset:1":               "v1",
+		"s0::balance:alice":         "7",
+		"s0::relay_commit:tx-cross": "1",
+		"s0::protocol:marker":       "internal",
+	}
+	changedProtocol := copyStringMap(base)
+	changedProtocol["s0::relay_commit:tx-cross"] = "2"
+	changedProtocol["s0::protocol:marker"] = "different"
+	if canonicalBusinessStateDigest(base) != canonicalBusinessStateDigest(changedProtocol) {
+		t.Fatal("protocol-only keys changed the business-state diagnostic digest")
+	}
+	changedBusiness := copyStringMap(base)
+	changedBusiness["s0::asset:1"] = "v2"
+	if canonicalBusinessStateDigest(base) == canonicalBusinessStateDigest(changedBusiness) {
+		t.Fatal("business-state diagnostic failed to detect a logical state change")
+	}
+}
+
+func TestSummarizeStateReadyEvidenceCarriesNativeAndVersionedFrontiers(t *testing.T) {
+	summary := summarizeStateReadyEvidence([]map[string]any{
+		{"state_wait_blocked_count": 2, "state_ready_wakeup_count": 1, "remote_state_fetch_latency_ms": 7, "remote_state_fetch_count": 3, "remote_state_fetch_completed_count": 2, "state_ready_scheduler_mode": "transaction_level_suspend_resume", "versioned_state_ready_wave_count": 4, "versioned_state_ready_wait_observation_count": 5, "versioned_state_ready_resolved_token_count": 6, "versioned_state_probe_count": 7, "versioned_state_probe_latency_ms": 8, "versioned_state_ready_max_wave_width": 3, "versioned_state_ready_scheduler_mode": "per_transaction_per_key_version_frontier"},
+		{"state_wait_blocked_count": 1, "state_ready_wakeup_count": 1, "remote_state_fetch_latency_ms": 11, "remote_state_fetch_count": 2, "remote_state_fetch_completed_count": 2, "state_ready_scheduler_mode": "transaction_level_suspend_resume", "versioned_state_ready_wave_count": 2, "versioned_state_ready_wait_observation_count": 1, "versioned_state_ready_resolved_token_count": 2, "versioned_state_probe_count": 3, "versioned_state_probe_latency_ms": 4, "versioned_state_ready_max_wave_width": 5, "versioned_state_ready_scheduler_mode": "per_transaction_per_key_version_frontier"},
+	})
+	if summary.waitCount != 3 || summary.resumeCount != 2 || summary.waitMS != 18 || summary.fetchCount != 5 || summary.fetchCompletedCount != 4 || summary.mode != "transaction_level_suspend_resume" {
+		t.Fatalf("native StateReady evidence aggregation mismatch: %+v", summary)
+	}
+	if summary.versionedWaveCount != 6 || summary.versionedWaitCount != 6 || summary.versionedResolvedCount != 8 || summary.versionedProbeCount != 10 || summary.versionedProbeLatencyMS != 12 || summary.versionedMaxWaveWidth != 5 || summary.versionedMode != "per_transaction_per_key_version_frontier" {
+		t.Fatalf("versioned frontier evidence aggregation mismatch: %+v", summary)
+	}
+}
+
+func TestStateFetchWitnessDigestBindsExactLogicalVersion(t *testing.T) {
+	base := StateFetchResponse{
+		BlockHash:      "block-version-witness",
+		QualifiedKey:   "s0::asset:k",
+		Value:          "same-value",
+		StateRoot:      "root",
+		HomeShard:      "s0",
+		ExecutionShard: "s1",
+		StateVersion:   3,
+		Versioned:      true,
+	}
+	later := base
+	later.StateVersion = 7
+	firstDigest := stateFetchWitnessDigest(base, string(tx.AccessReadWrite))
+	laterDigest := stateFetchWitnessDigest(later, string(tx.AccessReadWrite))
+	if firstDigest == laterDigest {
+		t.Fatal("exact logical state version must be bound into the remote witness digest")
 	}
 }

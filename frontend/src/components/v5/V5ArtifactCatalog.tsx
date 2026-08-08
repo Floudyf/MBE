@@ -110,7 +110,7 @@ function category(file: V5FormalArtifactCatalog["files"][number]): string {
   if (workloadArtifacts.some((artifact) => name.endsWith(artifact))) return "workload_evidence";
   if (/^(raw_summary|aggregate_summary|confidence_interval|comparison_summary|ablation_summary|sensitivity_summary|scaling_summary|fault_recovery_summary|paper_figure_data|paper_table_data|run_group_report)/.test(name)) return "paper_analysis";
   if (/^(formal_matrix|fairness_matrix|fairness_validation)/.test(name)) return "formal_run_group_summary";
-  if (/^(failed_children|missing_metrics)/.test(name)) return "failure_or_missing_metric";
+  if (/^(failed_children|invalid_children|blocked_children|comparison_excluded_children|missing_metrics)/.test(name)) return "failure_or_missing_metric";
   if (name.startsWith("children/")) return "child_experiment_record";
   return "raw_artifact";
 }

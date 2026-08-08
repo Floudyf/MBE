@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/execution"
+	"metaverse-chainlab/executor/realism/tx"
 )
 
 func TestBlockStoreWritesAndReadsCommittedBlock(t *testing.T) {
@@ -193,5 +195,33 @@ func writeStorageCommitMarker(t *testing.T, dir, blockHash string, height uint64
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadCommittedAtHeightSupportsLargeFormalBlockRecord(t *testing.T) {
+	dir := t.TempDir()
+	store := NewBlockStore(dir, "n0", "s0")
+	transactions := make([]tx.SignedTransaction, 0, 2000)
+	for index := 0; index < 2000; index++ {
+		transactions = append(transactions, tx.SignedTransaction{
+			TxID:   fmt.Sprintf("tx-%04d-%s", index, strings.Repeat("x", 96)),
+			Sender: "alice", Receiver: "bob", Nonce: uint64(index), Value: 1,
+		})
+	}
+	item := block.Block{ShardID: "s0", Height: 2, PreviousHash: "parent", ProposerID: "n0", TxList: transactions}
+	item.TxIDs = make([]string, 0, len(transactions))
+	for _, transaction := range transactions {
+		item.TxIDs = append(item.TxIDs, transaction.TxID)
+	}
+	block.AssignHash(&item)
+	if err := store.AppendCommitted(item, CommitRecord{BlockHash: item.BlockHash, Height: item.Height}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.ReadCommittedAtHeight(2)
+	if err != nil {
+		t.Fatalf("large committed block could not be read for catch-up: %v", err)
+	}
+	if !ok || got.BlockHash != item.BlockHash || len(got.TxList) != len(transactions) {
+		t.Fatalf("large committed block mismatch: ok=%t hash=%s txs=%d", ok, got.BlockHash, len(got.TxList))
 	}
 }

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -9,7 +9,7 @@ from backend.app.services.v5_formal_run_store import ROOT_DIR, group_dir
 
 from backend.app.models.v5_formal_experiment import V5FormalRunRequest
 from backend.app.services.v5_formal_run_store import children, create_group, read_child, read_group, write_group
-from backend.app.services.v5_formal_scheduler import start
+from backend.app.services.v5_formal_scheduler import finalize_cancelled, start, worker_active
 from backend.app.services.v5_formal_artifact_catalog import read_catalog, safe_artifact_name
 from backend.app.services.v5_formal_dto import V5FormalChildResponse, V5FormalRunGroupDetailResponse, child_detail as child_detail_dto, child_summary, group_detail, group_summary
 from backend.app.services.v5_formal_plan_validator import FormalPlanValidationError, validate_request
@@ -45,6 +45,8 @@ def create_run_group(payload: V5FormalRunRequest) -> dict:
             "total_child_runs": len(checked.rows),
             "completed_child_runs": 0,
             "failed_child_runs": 0,
+            "blocked_child_runs": 0,
+            "cancelled_child_runs": 0,
             "max_concurrent_real_clusters": 1,
         }
     )
@@ -232,10 +234,24 @@ def cancel_run_group(group_id: str) -> dict:
         group = read_group(group_id)
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, "unknown formal run group") from exc
+    if group.get("status") in {"completed", "completed_with_failures", "failed", "cancelled"}:
+        return _summary_for_group(ensure_persisted_child_counts(group))
     group["cancel_requested"] = True
-    group["status"] = "cancelled"
+    group["cancel_requested_at"] = datetime.now(UTC).isoformat()
+    # The worker/runner owns process-tree termination and only publishes the
+    # terminal cancelled state after the active supervisor has been reaped.
+    group["status"] = "cancelling"
     group = ensure_persisted_child_counts(group)
     write_group(group)
+    if not worker_active(group_id):
+        # A backend restart / forced stop can leave persisted metadata at
+        # "running" after the daemon worker thread is already gone. There is no
+        # local supervisor process object left to reap in that case, so close
+        # the persisted RunGroup truth immediately and preserve partial
+        # diagnostics instead of leaving the UI stuck at "cancelling".
+        group["cancel_cleanup_mode"] = "stale_worker_metadata_recovery"
+        write_group(group)
+        return _summary_for_group(finalize_cancelled(group_id))
     return _summary_for_group(group)
 
 
@@ -262,12 +278,14 @@ def _summary_for_group(group: dict) -> dict:
 
 
 def ensure_persisted_child_counts(group: dict) -> dict:
-    if group.get("failed_child_runs") is not None:
+    if all(group.get(key) is not None for key in ("failed_child_runs", "blocked_child_runs", "cancelled_child_runs")):
         return group
     items = children(group["run_group_id"])
     group["total_child_runs"] = group.get("total_child_runs") or len({item.get("child_run_id") for item in items})
     group["completed_child_runs"] = sum(item.get("status") == "completed" for item in items)
-    group["failed_child_runs"] = sum(item.get("status") in {"failed", "blocked", "cancelled"} for item in items)
+    group["failed_child_runs"] = sum(item.get("status") == "failed" for item in items)
+    group["blocked_child_runs"] = sum(item.get("status") == "blocked" for item in items)
+    group["cancelled_child_runs"] = sum(item.get("status") == "cancelled" for item in items)
     write_group(group)
     return group
 

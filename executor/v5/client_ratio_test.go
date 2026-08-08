@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"metaverse-chainlab/executor/realism/p2p"
+	"metaverse-chainlab/executor/realism/tx"
 )
 
 func TestSubmitWorkloadUsesConfiguredCrossShardRatioAcrossStream(t *testing.T) {
@@ -242,5 +243,61 @@ func TestSubmitDatasetWorkloadUsesBuyerHomeShardAsIngress(t *testing.T) {
 	}
 	if crossRows == 0 {
 		t.Fatal("fixture did not produce any dataset cross-shard submissions")
+	}
+}
+
+func TestStatelessDirectExecutionUsesExecutionShardAndRemovesLegacyPayload(t *testing.T) {
+	stateless := statelessHashRouting{basicPlugin: basicPlugin{category: "routing", id: "stateless_hash_routing"}}
+	if !usesStatelessDirectExecution(stateless) {
+		t.Fatal("stateless hash routing was not recognized as direct stateless execution")
+	}
+	legacy := hashRouting{basicPlugin: basicPlugin{category: "routing", id: "hash_routing_baseline"}}
+	if usesStatelessDirectExecution(legacy) {
+		t.Fatal("stateful hash reference was incorrectly moved to stateless direct execution")
+	}
+	record := WorkloadRecord{CrossShard: true, SourceShard: "s0"}
+	route := RoutingDecision{ShardID: "s1"}
+	if got := workloadIngressShard(record, route, true); got != "s1" {
+		t.Fatalf("stateless ingress=%s, want execution shard s1", got)
+	}
+	if got := workloadIngressShard(record, route, false); got != "s0" {
+		t.Fatalf("legacy ingress=%s, want source shard s0", got)
+	}
+	if got := statelessPayload("v5_cross:s1:dataset_event:asset_sale"); got != "dataset_event:asset_sale" {
+		t.Fatalf("legacy cross-shard wrapper was not removed: %q", got)
+	}
+	if got := statelessPayload("v5_cross:s1"); got != "v5_stateless" {
+		t.Fatalf("synthetic stateless payload=%q", got)
+	}
+}
+
+func TestStateVersionDependenciesPreserveGlobalWriterChainAcrossBatches(t *testing.T) {
+	lastWriter := map[string]uint64{}
+	write := WorkloadRecord{Index: 0, AccessList: []tx.AccessItem{{Key: "asset:k", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
+	read := WorkloadRecord{Index: 1, AccessList: []tx.AccessItem{{Key: "asset:k", Mode: tx.AccessRead, UpdateSemantics: "validate"}}}
+	writeAgain := WorkloadRecord{Index: 2, AccessList: []tx.AccessItem{{Key: "asset:k", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
+
+	first := stateVersionDependenciesForRecord(write, 1, lastWriter)
+	second := stateVersionDependenciesForRecord(read, 2, lastWriter)
+	third := stateVersionDependenciesForRecord(writeAgain, 3, lastWriter)
+	if len(first) != 1 || first[0].RequiredVersion != 0 || first[0].ProducedVersion != 1 {
+		t.Fatalf("unexpected first writer version: %#v", first)
+	}
+	if len(second) != 1 || second[0].RequiredVersion != 1 || second[0].ProducedVersion != 0 {
+		t.Fatalf("read must depend on previous writer without advancing writer chain: %#v", second)
+	}
+	if len(third) != 1 || third[0].RequiredVersion != 1 || third[0].ProducedVersion != 3 {
+		t.Fatalf("later writer must retain previous writer across submit batches: %#v", third)
+	}
+}
+
+func TestStateVersionDependenciesDoNotCreateUnpublishedCommutativePredecessors(t *testing.T) {
+	lastWriter := map[string]uint64{}
+	commutative := WorkloadRecord{Index: 0, AccessList: []tx.AccessItem{{Key: "counter:k", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
+	if got := stateVersionDependenciesForRecord(commutative, 1, lastWriter); len(got) != 0 {
+		t.Fatalf("commutative state must stay on the existing aggregation path, got version chain %#v", got)
+	}
+	if _, ok := lastWriter["counter:k"]; ok {
+		t.Fatalf("commutative writer became an unpublished exact-version predecessor: %#v", lastWriter)
 	}
 }

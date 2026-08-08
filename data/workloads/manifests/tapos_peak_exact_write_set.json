@@ -1,0 +1,96 @@
+{
+  "schema_version": "mbe_dataset_manifest_v2",
+  "dataset_id": "tapos_peak_exact_write_set",
+  "display_name": "Tapos峰值精确写集负载",
+  "description": "Tapos高负载区间交易，携带逐交易精确写集。",
+  "source_platform": "tapos",
+  "source_chain": "aptos",
+  "dataset_type": "exact_write_set_trace",
+  "adapter_id": "tapos_exact_write_set_v1",
+  "source_layout": "single_file",
+  "local_raw_relative_path": "dataset/Tapos/tapos_peak_exact_write_set.csv",
+  "source_sha256": "c9cf4ebd3161514dd587ebb9024d65b0ff24ef6bd7fdb21c1dd79d2c7dd9b398",
+  "source_size_bytes": 529878284,
+  "row_count": 781712,
+  "unique_source_tx_hash_count": 0,
+  "truth_label": "real_observed",
+  "catalog_validation": "file_metadata",
+  "supported_tx_counts": [
+    100,
+    1000,
+    10000,
+    50000,
+    100000,
+    250000,
+    500000,
+    750000
+  ],
+  "allow_full_dataset": true,
+  "supported_variants": [
+    "original_window",
+    "key_zipf"
+  ],
+  "supported_skew_axes": [
+    "primary_write_key",
+    "entry_function"
+  ],
+  "default_skew_axis": "primary_write_key",
+  "variant_definitions": [
+    {
+      "variant_mode": "original_window",
+      "display_name": "真实原始连续窗口",
+      "kind": "original",
+      "selection_mode": "contiguous_window",
+      "parameters": []
+    },
+    {
+      "variant_mode": "key_zipf",
+      "display_name": "真实派生偏斜负载",
+      "kind": "derived",
+      "selection_mode": "contiguous_window",
+      "parameters": [
+        {
+          "name": "skew_axis",
+          "label": "偏斜轴",
+          "type": "enum",
+          "options": [
+            "primary_write_key",
+            "entry_function"
+          ],
+          "default": "primary_write_key",
+          "required": true
+        },
+        {
+          "name": "target_alpha",
+          "label": "偏斜度 alpha",
+          "type": "number_enum",
+          "options": [
+            0.0,
+            0.2,
+            0.4,
+            0.6,
+            0.8,
+            1.0,
+            1.2,
+            1.4
+          ],
+          "default": 1.0,
+          "required": true
+        }
+      ]
+    }
+  ],
+  "included_categories": [
+    "tapos_transaction"
+  ],
+  "excluded_categories": [],
+  "operation_counts": {},
+  "time_start_ms": 0,
+  "time_end_ms": 0,
+  "verification_method": "source_file_sha256_and_exact_write_set_validation",
+  "verification_sample_count": 100,
+  "verification_results": "100-row format sample packaged; full exact-write-set validation runs before materialization.",
+  "usage_note": "Every state key is consumed as an observed exact write access.",
+  "generator_version": "v5_workload_data_plane_v4_universal_access_list",
+  "warnings": []
+}

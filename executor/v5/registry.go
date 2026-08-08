@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -89,6 +91,23 @@ type SchedulerPlugin interface {
 	Order([]tx.SignedTransaction, ExecutionPlugin) []tx.SignedTransaction
 	Schedule([]tx.SignedTransaction, ExecutionPlugin) ScheduleResult
 }
+
+// ConsensusExecutionPlanner is an optional scheduler extension for algorithms
+// whose deterministic execution schedule must be finalized and committed to the
+// block before PBFT. The runtime only transports the plan; algorithm semantics
+// remain owned by the scheduler implementation.
+type ConsensusExecutionPlanner interface {
+	SchedulerPlugin
+	PlanBlock(realblock.Block) (ConsensusExecutionPlanningResult, error)
+	VerifyBlockPlan(realblock.Block) error
+}
+
+type ConsensusExecutionPlanningResult struct {
+	Block    realblock.Block
+	Deferred []tx.SignedTransaction
+	Events   []ScheduleEvent
+}
+
 type BlockExecutorPlugin interface {
 	Plugin
 	ExecuteBlock(context.Context, BlockExecutionInput) (BlockExecutionResult, error)
@@ -158,11 +177,14 @@ type StateStorageInput struct {
 	ShardID string
 }
 type BlockProductionInput struct {
-	Pool             *mempool.Mempool
-	Proposer         *realblock.Proposer
-	Limit            int
-	Now              time.Time
-	SystemDeltaReady bool
+	Pool              *mempool.Mempool
+	Proposer          *realblock.Proposer
+	Limit             int
+	Now               time.Time
+	SystemDeltaReady  bool
+	Context           context.Context
+	BaseStateSnapshot map[string]string
+	WorkerCount       int
 }
 type RuntimeEvent struct {
 	TimestampMS int64
@@ -181,13 +203,15 @@ type RuntimeMetric struct {
 	Value any
 }
 type StateFetchInput struct {
-	RequestID      string
-	TxID           string
-	BlockHash      string
-	Key            string
-	HomeShard      string
-	ExecutionShard string
-	AccessKind     string
+	RequestID       string
+	TxID            string
+	BlockHash       string
+	Key             string
+	HomeShard       string
+	ExecutionShard  string
+	AccessKind      string
+	RequiredVersion uint64
+	Versioned       bool
 }
 type StateDeltaApplyInput struct {
 	RequestID       string
@@ -208,6 +232,10 @@ type StateDeltaApplyInput struct {
 	ExecutionShard  string
 	SourceKey       string
 	SourceHeight    uint64
+	RoutingOrdinal  uint64
+	PreviousVersion uint64
+	ProducedVersion uint64
+	OrderingNoop    bool
 }
 type CrossShardRelayInput struct {
 	Tx          tx.SignedTransaction
@@ -235,14 +263,32 @@ type WorkloadInput struct {
 	Index, Shards, Seed, TimeoutEvery int
 	CrossShard                        bool
 }
+type RemoteStateReadyEvent struct {
+	TxID           string
+	Key            string
+	ReadinessToken string
+	Value          string
+	HomeShard      string
+	StateVersion   uint64
+	LatencyMS      int64
+}
+
+type RemoteStateFetchFunc func(context.Context, tx.SignedTransaction, tx.AccessItem) (RemoteStateReadyEvent, error)
+
+type StateVersionPublishFunc func(context.Context, tx.SignedTransaction, execution.TxDelta, map[string]string) error
+
 type BlockExecutionInput struct {
-	Block             realblock.Block
-	BaseStateSnapshot map[string]string
-	NodeID            string
-	ShardID           string
-	WorkerCount       int
-	Execution         ExecutionPlugin
-	Scheduler         SchedulerPlugin
+	Block                realblock.Block
+	BaseStateSnapshot    map[string]string
+	NodeID               string
+	ShardID              string
+	WorkerCount          int
+	Execution            ExecutionPlugin
+	Scheduler            SchedulerPlugin
+	Progress             func(execution.BlockSTMProgress)
+	RemoteStateReadiness map[string]bool
+	RemoteStateFetch     RemoteStateFetchFunc
+	StateVersionPublish  StateVersionPublishFunc
 }
 type BlockExecutionResult struct {
 	ExecutionResult        execution.Result `json:"execution_result"`
@@ -272,31 +318,42 @@ type WorkloadItem struct {
 	AccessList []tx.AccessItem
 }
 type WorkloadRecord struct {
-	Index            int
-	LogicalID        string
-	SenderID         string
-	ReceiverID       string
-	OperationType    string
-	RoutingSourceKey string
-	RoutingTargetKey string
-	Payload          string
-	StateKeys        []string
-	AccessList       []tx.AccessItem
-	AccessListSchema string
-	AccessListSource string
-	AccessListDigest string
-	CrossShard       bool
-	SourceShard      string
-	TargetShard      string
-	SourceEventID    string
-	TimestampMS      int64
-	Value            int64
+	Index                 int
+	LogicalID             string
+	SenderID              string
+	ReceiverID            string
+	OperationType         string
+	RoutingSourceKey      string
+	RoutingTargetKey      string
+	Payload               string
+	StateKeys             []string
+	AccessList            []tx.AccessItem
+	AccessListSchema      string
+	AccessListSource      string
+	AccessListDigest      string
+	CrossShard            bool
+	SourceShard           string
+	TargetShard           string
+	SourceEventID         string
+	TimestampMS           int64
+	Value                 int64
+	RoutingEpoch          uint64
+	RoutingOrdinal        uint64
+	ExecutionShard        string
+	RoutingReason         string
+	RoutePlanDigest       string
+	PredictedRemoteReads  int
+	PredictedRemoteWrites int
+	StateVersions         []tx.StateVersionDependency
 }
 type WorkloadReplaySummary struct {
 	DatasetID                string         `json:"dataset_id,omitempty"`
 	VariantID                string         `json:"variant_id,omitempty"`
 	TruthLabel               string         `json:"truth_label,omitempty"`
 	SourceSHA256             string         `json:"source_sha256,omitempty"`
+	SourceFileSHA256         string         `json:"source_file_sha256,omitempty"`
+	SelectionMode            string         `json:"selection_mode,omitempty"`
+	VariantParameters        map[string]any `json:"variant_parameters,omitempty"`
 	MaterializedSHA256       string         `json:"materialized_sha256,omitempty"`
 	ExpectedCount            int            `json:"expected_count"`
 	ReadCount                int            `json:"read_count"`
@@ -337,25 +394,28 @@ type BatchRoutingInput struct {
 	Sharding   ShardingPlugin
 }
 type BatchRoutingPlan struct {
-	BatchIndex             int
-	PlanDigest             string
-	ShardingPluginID       string
-	PlacementPolicy        string
-	TransactionPolicy      string
-	PlacementBudget        int
-	PlacementMinBudget     int
-	PlacementMu            string
-	AccessMatrix           []AccessMatrixRow
-	StateFrequency         []StateFrequencyRow
-	CoaccessEdges          []CoaccessEdge
-	StatePlacements        []StatePlacement
-	TransactionPlacements  []TransactionPlacement
-	ShardLoadBefore        map[string]int
-	ShardLoadAfter         map[string]int
-	PlacementScores        []PlacementScore
-	PlacementFallbackCount int
-	RemoteAccessEstimate   int
-	RoutingOverhead        int
+	BatchIndex              int
+	PlanDigest              string
+	ShardingPluginID        string
+	PlacementPolicy         string
+	TransactionPolicy       string
+	PlacementBudget         int
+	PlacementMinBudget      int
+	PlacementMu             string
+	PlacementCapacity       int
+	PlacementTotalFrequency int
+	PlacementMaxFrequency   int
+	AccessMatrix            []AccessMatrixRow
+	StateFrequency          []StateFrequencyRow
+	CoaccessEdges           []CoaccessEdge
+	StatePlacements         []StatePlacement
+	TransactionPlacements   []TransactionPlacement
+	ShardLoadBefore         map[string]int
+	ShardLoadAfter          map[string]int
+	PlacementScores         []PlacementScore
+	PlacementFallbackCount  int
+	RemoteAccessEstimate    int
+	RoutingOverhead         int
 }
 type AccessMatrixRow struct {
 	LogicalID string
@@ -385,6 +445,9 @@ type PlacementScore struct {
 	Key                          string
 	CandidateShard               string
 	CoaccessLocalityGain         int
+	Admissible                   bool
+	Capacity                     int
+	ProjectedLoad                int
 	PredictedRemoteReadCost      int
 	PredictedRemoteWritebackCost int
 	ShardTxLoadPenalty           int
@@ -395,14 +458,21 @@ type PlacementScore struct {
 	Fallback                     bool
 }
 type TransactionPlacement struct {
-	LogicalID         string
-	TxIndex           int
-	HomeShard         string
-	ExecutionShard    string
-	TargetShard       string
-	CoaccessGroup     string
-	Reason            string
-	RemoteAccessCount int
+	LogicalID             string
+	TxIndex               int
+	SenderGroupID         string
+	RoutingEpoch          uint64
+	HomeShard             string
+	ExecutionShard        string
+	TargetShard           string
+	CoaccessGroup         string
+	Reason                string
+	PredictedRemoteReads  int
+	PredictedRemoteWrites int
+	RemoteAccessCount     int
+	MajorityCoverage      int
+	MajorityTie           bool
+	QueueLoadBefore       int
 }
 type ExecutionDecision struct{ Track, Reason string }
 type BatchClassificationInput struct {
@@ -413,6 +483,7 @@ type BatchClassificationResult struct {
 	Decisions             map[string]ExecutionDecision
 	Dependencies          map[string][]string
 	ReasonCodes           map[string][]string
+	StateWaitKeys         map[string][]string
 	ConflictEdgeCount     int
 	RAWDependencyEdges    int
 	DeduplicatedEdgeCount int
@@ -439,11 +510,12 @@ type ScheduleEvent struct {
 	SchedulerIdleMS        int64
 }
 type CommitInput struct {
-	ShardID      string
-	Height       uint64
-	Transactions []tx.SignedTransaction
-	TxDeltas     []execution.TxDelta
-	StateDelta   []state.StateKV
+	ShardID           string
+	Height            uint64
+	Transactions      []tx.SignedTransaction
+	TxDeltas          []execution.TxDelta
+	StateDelta        []state.StateKV
+	BaseStateSnapshot map[string]string
 }
 type CommitDecision struct {
 	AggregationGroupID              string
@@ -454,6 +526,9 @@ type CommitDecision struct {
 	PostAggregationPhysicalOps      int
 	AggregatedKeyCount              int
 	AggregatedLogicalDeltaCount     int
+	AtomicReservationCount          int
+	ConstraintFallbackCount         int
+	ConstraintFallbackReasons       []string
 }
 
 type Factory func(map[string]any) (Plugin, error)
@@ -561,9 +636,103 @@ func (p hashRouting) Route(input RoutingInput) RoutingDecision {
 	return RoutingDecision{ShardID: shardFor(input.Sharding, input.StateKeys, input.ShardIDs), Reason: "state_key_hash"}
 }
 
-type metaTrackRouting struct{ basicPlugin }
+type statelessHashRouting struct{ basicPlugin }
 
-func (p metaTrackRouting) Route(input RoutingInput) RoutingDecision {
+func (p statelessHashRouting) Route(input RoutingInput) RoutingDecision {
+	return hashRouting{p.basicPlugin}.Route(input)
+}
+
+func (p statelessHashRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
+	plan := BatchRoutingPlan{
+		BatchIndex:         input.BatchIndex,
+		ShardingPluginID:   shardingPluginID(input.Sharding),
+		PlacementPolicy:    "state_home_hash_v1",
+		TransactionPolicy:  "source_hash_or_state_hash_v2",
+		PlacementMu:        "0.0",
+		ShardLoadBefore:    map[string]int{},
+		ShardLoadAfter:     map[string]int{},
+		PlacementMinBudget: 0,
+	}
+	for _, shard := range input.ShardIDs {
+		plan.ShardLoadBefore[shard] = 0
+		plan.ShardLoadAfter[shard] = 0
+	}
+	frequency := map[string]*StateFrequencyRow{}
+	for _, record := range input.Records {
+		logicalID := firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index))
+		for _, access := range normalizedAccessItems(record) {
+			if access.Key == "" {
+				continue
+			}
+			plan.AccessMatrix = append(plan.AccessMatrix, AccessMatrixRow{LogicalID: logicalID, TxIndex: record.Index, Key: access.Key, Mode: access.Mode})
+			row := frequency[access.Key]
+			if row == nil {
+				row = &StateFrequencyRow{Key: access.Key}
+				frequency[access.Key] = row
+			}
+			row.Frequency++
+			if isReadMode(access.Mode) {
+				row.ReadCount++
+			}
+			if isWriteMode(access.Mode) {
+				row.WriteCount++
+			}
+		}
+	}
+	for _, row := range frequency {
+		plan.StateFrequency = append(plan.StateFrequency, *row)
+		home := shardFor(input.Sharding, []string{row.Key}, input.ShardIDs)
+		plan.StatePlacements = append(plan.StatePlacements, StatePlacement{Key: row.Key, HomeShard: home, ExecutionShard: home, Frequency: row.Frequency, Reason: "deterministic_state_home"})
+	}
+	sort.Slice(plan.StateFrequency, func(i, j int) bool { return plan.StateFrequency[i].Key < plan.StateFrequency[j].Key })
+	sort.Slice(plan.StatePlacements, func(i, j int) bool { return plan.StatePlacements[i].Key < plan.StatePlacements[j].Key })
+
+	for _, record := range input.Records {
+		// Keep one logical account/nonce stream on one deterministic execution
+		// shard.  The source shard is already the workload's stable account-hash
+		// partition.  Falling back to the state-key hash preserves deterministic
+		// placement for records that do not carry source-shard provenance.
+		executionShard := record.SourceShard
+		placementReason := "stateless_source_hash_execution"
+		if executionShard == "" {
+			executionShard = shardFor(input.Sharding, record.StateKeys, input.ShardIDs)
+			placementReason = "stateless_state_hash_execution"
+		}
+		if executionShard == "" && len(input.ShardIDs) > 0 {
+			executionShard = input.ShardIDs[0]
+		}
+		remote := 0
+		for _, access := range normalizedAccessItems(record) {
+			if access.Key != "" && shardFor(input.Sharding, []string{access.Key}, input.ShardIDs) != executionShard {
+				remote++
+			}
+		}
+		targetShard := record.TargetShard
+		plan.TransactionPlacements = append(plan.TransactionPlacements, TransactionPlacement{
+			LogicalID:         firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)),
+			TxIndex:           record.Index,
+			HomeShard:         firstNonEmpty(record.SourceShard, executionShard),
+			ExecutionShard:    executionShard,
+			TargetShard:       targetShard,
+			Reason:            placementReason,
+			RemoteAccessCount: remote,
+		})
+		plan.ShardLoadAfter[executionShard]++
+		plan.RemoteAccessEstimate += remote
+	}
+	sort.Slice(plan.TransactionPlacements, func(i, j int) bool {
+		return plan.TransactionPlacements[i].TxIndex < plan.TransactionPlacements[j].TxIndex
+	})
+	plan.RoutingOverhead = plan.RemoteAccessEstimate
+	plan.PlanDigest = routingPlanDigest(plan)
+	return plan
+}
+
+type metaTrackRouting struct {
+	basicPlugin
+}
+
+func (p *metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 	if len(input.ShardIDs) == 0 {
 		return RoutingDecision{}
 	}
@@ -576,8 +745,8 @@ func (p metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 	return RoutingDecision{ShardID: shardFor(input.Sharding, input.StateKeys, input.ShardIDs), Reason: "metatrack_access_affinity"}
 }
 
-func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
-	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardingPluginID: shardingPluginID(input.Sharding), PlacementPolicy: "frequency_coaccess_v1", TransactionPolicy: "majority_coverage_v1", PlacementMinBudget: 1, PlacementMu: "1.0", ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
+func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
+	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardingPluginID: shardingPluginID(input.Sharding), PlacementPolicy: "frequency_coaccess_admissible_v2", TransactionPolicy: "majority_place_queue_tie_v1", PlacementMinBudget: 1, PlacementMu: "1.0", ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
 	if len(input.ShardIDs) == 0 {
 		return plan
 	}
@@ -620,8 +789,14 @@ func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 			}
 		}
 	}
+	frequencyByKey := map[string]StateFrequencyRow{}
 	for _, row := range frequency {
 		plan.StateFrequency = append(plan.StateFrequency, *row)
+		frequencyByKey[row.Key] = *row
+		plan.PlacementTotalFrequency += row.Frequency
+		if row.Frequency > plan.PlacementMaxFrequency {
+			plan.PlacementMaxFrequency = row.Frequency
+		}
 	}
 	sort.Slice(plan.StateFrequency, func(i, j int) bool {
 		if plan.StateFrequency[i].Frequency != plan.StateFrequency[j].Frequency {
@@ -643,29 +818,42 @@ func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 		return plan.CoaccessEdges[i].RightKey < plan.CoaccessEdges[j].RightKey
 	})
 
+	mu := 1.0
+	if configured := strings.TrimSpace(fmt.Sprint(p.config["placement_mu"])); configured != "" && configured != "<nil>" {
+		if parsed, err := strconv.ParseFloat(configured, 64); err == nil && parsed > 0 {
+			mu = parsed
+		}
+	}
+	plan.PlacementMu = strconv.FormatFloat(mu, 'f', -1, 64)
+	plan.PlacementBudget = maxInt(plan.PlacementMinBudget, int(math.Floor(float64(len(plan.StateFrequency))*mu/float64(len(input.ShardIDs)))))
+	if len(input.ShardIDs) > 0 {
+		plan.PlacementCapacity = (plan.PlacementTotalFrequency+len(input.ShardIDs)-1)/len(input.ShardIDs) + plan.PlacementMaxFrequency
+	}
+
 	placementByKey := map[string]StatePlacement{}
-	plan.PlacementBudget = maxInt(plan.PlacementMinBudget, len(plan.StateFrequency)/len(input.ShardIDs))
-	remotePlacements := 0
-	for _, row := range plan.StateFrequency {
+	place := func(row StateFrequencyRow, shard, reason string) {
 		home := shardFor(input.Sharding, []string{row.Key}, input.ShardIDs)
-		executionShard, reason, scores, fallback := chooseStatePlacement(row, home, input.ShardIDs, plan.ShardLoadAfter, plan.CoaccessEdges, placementByKey)
-		if executionShard != home {
-			if remotePlacements >= plan.PlacementBudget {
-				executionShard = home
-				reason = "placement_budget_home_fallback"
-				fallback = true
-			} else {
-				remotePlacements++
-			}
-		}
-		plan.PlacementScores = append(plan.PlacementScores, scores...)
-		if fallback {
-			plan.PlacementFallbackCount++
-		}
-		plan.ShardLoadAfter[executionShard] += row.Frequency
-		placement := StatePlacement{Key: row.Key, HomeShard: home, ExecutionShard: executionShard, Frequency: row.Frequency, Reason: reason}
+		placement := StatePlacement{Key: row.Key, HomeShard: home, ExecutionShard: shard, Frequency: row.Frequency, Reason: reason}
 		placementByKey[row.Key] = placement
 		plan.StatePlacements = append(plan.StatePlacements, placement)
+		plan.ShardLoadAfter[shard] += row.Frequency
+	}
+	for _, row := range plan.StateFrequency {
+		if _, placed := placementByKey[row.Key]; placed {
+			continue
+		}
+		shard, scores := chooseAdmissibleStatePlacement(row, input.ShardIDs, plan.ShardLoadAfter, plan.PlacementCapacity, plan.CoaccessEdges, placementByKey)
+		plan.PlacementScores = append(plan.PlacementScores, scores...)
+		place(row, shard, "frequency_coaccess_seed")
+		for _, neighbor := range topCooccurNeighbors(row.Key, plan.CoaccessEdges, frequencyByKey, plan.PlacementBudget) {
+			if _, placed := placementByKey[neighbor.Key]; placed {
+				continue
+			}
+			if plan.ShardLoadAfter[shard]+neighbor.Frequency > plan.PlacementCapacity {
+				continue
+			}
+			place(neighbor, shard, "top_cooccur:"+row.Key)
+		}
 	}
 	sort.Slice(plan.StatePlacements, func(i, j int) bool { return plan.StatePlacements[i].Key < plan.StatePlacements[j].Key })
 	sort.Slice(plan.PlacementScores, func(i, j int) bool {
@@ -676,6 +864,7 @@ func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 	})
 
 	transactionLoad := map[string]int{}
+	routingEpoch := uint64(maxInt(0, intValue(p.config["routing_epoch"])))
 	for _, record := range input.Records {
 		accessItems := normalizedAccessItems(record)
 		homeShard := firstNonEmpty(record.SourceShard, shardFor(input.Sharding, record.StateKeys, input.ShardIDs))
@@ -683,19 +872,35 @@ func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 		if targetShard == "" && record.CrossShard && len(input.ShardIDs) > 1 {
 			targetShard = nextShardAfter(homeShard, input.ShardIDs)
 		}
-		executionShard, group, remote := transactionExecutionShard(input.ShardIDs, placementByKey, accessItems, homeShard, transactionLoad)
+		executionShard, group, _, coverage, tied, queueBefore := transactionExecutionShard(input.ShardIDs, placementByKey, accessItems, homeShard, transactionLoad)
 		transactionLoad[executionShard]++
-		if remote > 0 {
-			plan.RemoteAccessEstimate += remote
+		remoteReads, remoteWrites := predictedRemoteAccessCounts(input.Sharding, input.ShardIDs, accessItems, executionShard)
+		remote := remoteReads + remoteWrites
+		plan.RemoteAccessEstimate += remote
+		reason := fmt.Sprintf("majority_place:coverage=%d", coverage)
+		if tied {
+			reason += fmt.Sprintf(":queue_tie_load=%d", queueBefore)
 		}
-		reason := "metatrack_batch_affinity"
 		if remote == 0 {
-			reason = "metatrack_local_affinity"
+			reason += ":local"
 		}
-		if strings.Contains(group, "coaccess:") {
-			reason = "coaccess_affinity:" + group
-		}
-		plan.TransactionPlacements = append(plan.TransactionPlacements, TransactionPlacement{LogicalID: firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)), TxIndex: record.Index, HomeShard: homeShard, ExecutionShard: executionShard, TargetShard: targetShard, CoaccessGroup: group, Reason: reason, RemoteAccessCount: remote})
+		plan.TransactionPlacements = append(plan.TransactionPlacements, TransactionPlacement{
+			LogicalID:             firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)),
+			TxIndex:               record.Index,
+			SenderGroupID:         metaTrackSenderGroupID(record),
+			RoutingEpoch:          routingEpoch,
+			HomeShard:             homeShard,
+			ExecutionShard:        executionShard,
+			TargetShard:           targetShard,
+			CoaccessGroup:         group,
+			Reason:                reason,
+			PredictedRemoteReads:  remoteReads,
+			PredictedRemoteWrites: remoteWrites,
+			RemoteAccessCount:     remote,
+			MajorityCoverage:      coverage,
+			MajorityTie:           tied,
+			QueueLoadBefore:       queueBefore,
+		})
 	}
 	sort.Slice(plan.TransactionPlacements, func(i, j int) bool {
 		return plan.TransactionPlacements[i].TxIndex < plan.TransactionPlacements[j].TxIndex
@@ -703,6 +908,72 @@ func (p metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 	plan.RoutingOverhead = plan.RemoteAccessEstimate + len(plan.CoaccessEdges)
 	plan.PlanDigest = routingPlanDigest(plan)
 	return plan
+}
+
+func chooseAdmissibleStatePlacement(row StateFrequencyRow, shards []string, load map[string]int, capacity int, edges []CoaccessEdge, placed map[string]StatePlacement) (string, []PlacementScore) {
+	if len(shards) == 0 {
+		return "", nil
+	}
+	best := ""
+	bestAffinity := -1
+	scores := make([]PlacementScore, 0, len(shards))
+	for _, shard := range shards {
+		projected := load[shard] + row.Frequency
+		admissible := capacity <= 0 || projected <= capacity
+		affinity := coaccessLocalityGainForCandidate(row.Key, shard, edges, placed)
+		score := PlacementScore{Key: row.Key, CandidateShard: shard, CoaccessLocalityGain: affinity, Admissible: admissible, Capacity: capacity, ProjectedLoad: projected, ShardStateLoadPenalty: load[shard], Score: affinity}
+		scores = append(scores, score)
+		if !admissible {
+			continue
+		}
+		if best == "" || affinity > bestAffinity || (affinity == bestAffinity && load[shard] < load[best]) || (affinity == bestAffinity && load[shard] == load[best] && shard < best) {
+			best = shard
+			bestAffinity = affinity
+		}
+	}
+	if best == "" {
+		best = leastLoadedShard(shards, load, row.Key)
+	}
+	return best, scores
+}
+
+func topCooccurNeighbors(key string, edges []CoaccessEdge, frequency map[string]StateFrequencyRow, limit int) []StateFrequencyRow {
+	type candidate struct {
+		row    StateFrequencyRow
+		weight int
+	}
+	candidates := []candidate{}
+	for _, edge := range edges {
+		neighbor := ""
+		if edge.LeftKey == key {
+			neighbor = edge.RightKey
+		} else if edge.RightKey == key {
+			neighbor = edge.LeftKey
+		}
+		if neighbor == "" {
+			continue
+		}
+		if row, ok := frequency[neighbor]; ok {
+			candidates = append(candidates, candidate{row: row, weight: edge.Weight})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].weight != candidates[j].weight {
+			return candidates[i].weight > candidates[j].weight
+		}
+		if candidates[i].row.Frequency != candidates[j].row.Frequency {
+			return candidates[i].row.Frequency > candidates[j].row.Frequency
+		}
+		return candidates[i].row.Key < candidates[j].row.Key
+	})
+	if limit > 0 && len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	out := make([]StateFrequencyRow, 0, len(candidates))
+	for _, item := range candidates {
+		out = append(out, item.row)
+	}
+	return out
 }
 
 func normalizedAccessItems(record WorkloadRecord) []tx.AccessItem {
@@ -723,14 +994,23 @@ func normalizedAccessItems(record WorkloadRecord) []tx.AccessItem {
 	return items
 }
 
-func transactionExecutionShard(shardIDs []string, placementByKey map[string]StatePlacement, accesses []tx.AccessItem, homeShard string, currentLoad map[string]int) (string, string, int) {
+func metaTrackSenderGroupID(record WorkloadRecord) string {
+	if sender := strings.TrimSpace(record.SenderID); sender != "" {
+		return "sender:" + strings.ToLower(sender)
+	}
+	if source := strings.TrimSpace(record.RoutingSourceKey); source != "" {
+		return "source:" + strings.ToLower(source)
+	}
+	return "logical:" + firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index))
+}
+
+func transactionExecutionShard(shardIDs []string, placementByKey map[string]StatePlacement, accesses []tx.AccessItem, homeShard string, currentLoad map[string]int) (string, string, int, int, bool, int) {
 	if len(shardIDs) == 0 {
-		return "", "", 0
+		return "", "", 0, 0, false, 0
 	}
 	score := map[string]int{}
 	groupKeys := []string{}
 	remote := 0
-	orderedShard := ""
 	for _, access := range accesses {
 		placement, ok := placementByKey[access.Key]
 		if !ok {
@@ -741,69 +1021,51 @@ func transactionExecutionShard(shardIDs []string, placementByKey map[string]Stat
 		if placement.HomeShard != placement.ExecutionShard {
 			remote++
 		}
-		if isOrderedNonceAccess(access) {
-			orderedShard = firstNonEmpty(orderedShard, placement.ExecutionShard)
-		}
 	}
 	sort.Strings(groupKeys)
-	if orderedShard != "" {
-		return orderedShard, strings.Join(groupKeys, "+"), remote
+	bestScore := -1
+	for _, shard := range shardIDs {
+		if score[shard] > bestScore {
+			bestScore = score[shard]
+		}
+	}
+	candidates := []string{}
+	for _, shard := range shardIDs {
+		if score[shard] == bestScore {
+			candidates = append(candidates, shard)
+		}
 	}
 	best := firstNonEmpty(homeShard, shardIDs[0])
-	bestScore := -1
-	bestRemote := 1 << 30
-	for _, shard := range shardIDs {
-		candidateScore := score[shard]
-		candidateRemote := len(accesses) - candidateScore
-		if candidateScore > bestScore || (candidateScore == bestScore && candidateRemote < bestRemote) || (candidateScore == bestScore && candidateRemote == bestRemote && currentLoad[shard] < currentLoad[best]) || (candidateScore == bestScore && candidateRemote == bestRemote && currentLoad[shard] == currentLoad[best] && shard < best) {
-			best = shard
-			bestScore = candidateScore
-			bestRemote = candidateRemote
+	if len(candidates) > 0 {
+		best = candidates[0]
+		for _, shard := range candidates[1:] {
+			if currentLoad[shard] < currentLoad[best] || (currentLoad[shard] == currentLoad[best] && shard < best) {
+				best = shard
+			}
 		}
 	}
-	return best, strings.Join(groupKeys, "+"), remote
+	return best, strings.Join(groupKeys, "+"), remote, bestScore, len(candidates) > 1, currentLoad[best]
 }
 
-func isOrderedNonceWrite(row StateFrequencyRow) bool {
-	return strings.HasPrefix(row.Key, "nonce:") && row.WriteCount > 0
-}
-
-func chooseStatePlacement(row StateFrequencyRow, home string, shards []string, load map[string]int, edges []CoaccessEdge, placed map[string]StatePlacement) (string, string, []PlacementScore, bool) {
-	if len(shards) == 0 {
-		return "", "no_shards", nil, true
-	}
-	bestShard := home
-	bestAffinity := -1
-	scores := make([]PlacementScore, 0, len(shards))
-	for _, shard := range shards {
-		score := PlacementScore{Key: row.Key, CandidateShard: shard}
-		score.CoaccessLocalityGain = coaccessLocalityGainForCandidate(row.Key, shard, edges, placed)
-		score.ShardStateLoadPenalty = load[shard]
-		score.Score = score.CoaccessLocalityGain
-		if score.CoaccessLocalityGain > bestAffinity || (score.CoaccessLocalityGain == bestAffinity && load[shard] < load[bestShard]) || (score.CoaccessLocalityGain == bestAffinity && load[shard] == load[bestShard] && shard < bestShard) {
-			bestShard = shard
-			bestAffinity = score.CoaccessLocalityGain
+func predictedRemoteAccessCounts(sharding ShardingPlugin, shardIDs []string, accesses []tx.AccessItem, executionShard string) (int, int) {
+	reads := 0
+	writes := 0
+	for _, access := range accesses {
+		if access.Key == "" {
+			continue
 		}
-		scores = append(scores, score)
-	}
-	if bestShard == "" {
-		bestShard = shards[0]
-	}
-	if isOrderedNonceWrite(row) {
-		for index := range scores {
-			scores[index].Fallback = scores[index].CandidateShard == home
+		home := shardFor(sharding, []string{access.Key}, shardIDs)
+		if home == executionShard {
+			continue
 		}
-		return home, "nonce_home_constraint", scores, false
-	}
-	if bestAffinity > 0 {
-		return bestShard, "frequency_coaccess_affinity", scores, false
-	}
-	for index := range scores {
-		if scores[index].CandidateShard == home {
-			scores[index].Fallback = true
+		if isReadMode(access.Mode) {
+			reads++
+		}
+		if isWriteMode(access.Mode) {
+			writes++
 		}
 	}
-	return home, "frequency_coaccess_home_no_affinity", scores, true
+	return reads, writes
 }
 
 func coaccessLocalityGainForCandidate(key, candidate string, edges []CoaccessEdge, placed map[string]StatePlacement) int {
@@ -824,10 +1086,6 @@ func coaccessLocalityGainForCandidate(key, candidate string, edges []CoaccessEdg
 		}
 	}
 	return gain
-}
-
-func isOrderedNonceAccess(access tx.AccessItem) bool {
-	return strings.HasPrefix(access.Key, "nonce:") && isWriteMode(access.Mode)
 }
 
 func isWriteMode(mode tx.AccessMode) bool {
@@ -892,7 +1150,65 @@ func dependencyChainMax(graph map[string][]string) int {
 	return 0
 }
 
-func stronglyConnectedComponentCount(graph map[string][]string) int {
+func nonTrivialSCCNodes(graph map[string][]string) map[string]bool {
+	index := 0
+	stack := []string{}
+	onStack := map[string]bool{}
+	indexes := map[string]int{}
+	lowlink := map[string]int{}
+	members := map[string]bool{}
+	var connect func(string)
+	connect = func(node string) {
+		index++
+		indexes[node] = index
+		lowlink[node] = index
+		stack = append(stack, node)
+		onStack[node] = true
+		for _, next := range graph[node] {
+			if indexes[next] == 0 {
+				connect(next)
+				if lowlink[next] < lowlink[node] {
+					lowlink[node] = lowlink[next]
+				}
+			} else if onStack[next] && indexes[next] < lowlink[node] {
+				lowlink[node] = indexes[next]
+			}
+		}
+		if lowlink[node] != indexes[node] {
+			return
+		}
+		component := []string{}
+		for {
+			last := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			onStack[last] = false
+			component = append(component, last)
+			if last == node {
+				break
+			}
+		}
+		if len(component) > 1 {
+			for _, item := range component {
+				members[item] = true
+			}
+		}
+	}
+	nodes := map[string]bool{}
+	for node, nexts := range graph {
+		nodes[node] = true
+		for _, next := range nexts {
+			nodes[next] = true
+		}
+	}
+	for node := range nodes {
+		if indexes[node] == 0 {
+			connect(node)
+		}
+	}
+	return members
+}
+
+func countNonTrivialSCCs(graph map[string][]string) int {
 	index := 0
 	stack := []string{}
 	onStack := map[string]bool{}
@@ -945,6 +1261,10 @@ func stronglyConnectedComponentCount(graph map[string][]string) int {
 		}
 	}
 	return count
+}
+
+func stronglyConnectedComponentCount(graph map[string][]string) int {
+	return countNonTrivialSCCs(graph)
 }
 
 func leastLoadedShard(shards []string, load map[string]int, tieBreaker string) string {
@@ -1062,12 +1382,33 @@ func (p serialExecution) Classify(tx.SignedTransaction) ExecutionDecision {
 
 type dualTrackExecution struct{ basicPlugin }
 
+func (p dualTrackExecution) accessSizeThreshold() int {
+	threshold := intValue(p.config["access_size_threshold"])
+	if threshold <= 0 {
+		return 4
+	}
+	return threshold
+}
+
+func structuredAccessSize(item tx.SignedTransaction) int {
+	keys := map[string]bool{}
+	for _, access := range item.AccessList {
+		if strings.TrimSpace(access.Key) != "" {
+			keys[access.Key] = true
+		}
+	}
+	return len(keys)
+}
+
 func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecision {
 	if len(item.AccessList) == 0 {
 		return ExecutionDecision{Track: "conservative", Reason: "missing_structured_access_list"}
 	}
+	if size := structuredAccessSize(item); size > p.accessSizeThreshold() {
+		return ExecutionDecision{Track: "conservative", Reason: fmt.Sprintf("access_size_exceeds_threshold:%d>%d", size, p.accessSizeThreshold())}
+	}
 	if hasRemoteExecutionBoundary(item) {
-		return ExecutionDecision{Track: "conservative", Reason: "remote_or_cross_shard_boundary"}
+		return ExecutionDecision{Track: "conservative", Reason: "legacy_cross_shard_protocol_boundary"}
 	}
 	commutative := false
 	for _, access := range item.AccessList {
@@ -1088,9 +1429,10 @@ func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecisio
 
 func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchClassificationResult {
 	result := BatchClassificationResult{
-		Decisions:    map[string]ExecutionDecision{},
-		Dependencies: map[string][]string{},
-		ReasonCodes:  map[string][]string{},
+		Decisions:     map[string]ExecutionDecision{},
+		Dependencies:  map[string][]string{},
+		ReasonCodes:   map[string][]string{},
+		StateWaitKeys: map[string][]string{},
 	}
 
 	lastWriter := map[string]string{}
@@ -1098,209 +1440,139 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 	lastSenderTx := map[string]string{}
 	edges := map[string]bool{}
 	graph := map[string][]string{}
+	hardReasons := map[string][]string{}
+	dependencyReasons := map[string][]string{}
 
 	addDependency := func(from, to, key, kind string) {
 		if from == "" || to == "" || from == to {
 			return
 		}
-
 		edgeKey := from + "->" + to + ":" + key + ":" + kind
 		if edges[edgeKey] {
 			return
 		}
-
 		edges[edgeKey] = true
 		result.ConflictEdgeCount++
 		result.Dependencies[to] = append(result.Dependencies[to], from)
 		graph[from] = append(graph[from], to)
-
 		if kind == "raw" {
 			result.RAWDependencyEdges++
 		}
 	}
 
 	for index, item := range input.Transactions {
-		txID := firstNonEmpty(
-			item.TxID,
-			fmt.Sprintf("tx-%d", index),
-		)
+		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
+		graph[txID] = append([]string(nil), graph[txID]...)
 
-		decision := p.Classify(item)
-		reasons := []string{}
-
-		// Nonce 顺序属于交易级约束。
-		// 每个带 Sender 的交易都必须进入同一发送者的依赖链，
-		// 不能被空访问列表或跨片边界的提前返回绕过。
 		if item.Sender != "" {
 			if previous := lastSenderTx[item.Sender]; previous != "" {
-				addDependency(
-					previous,
-					txID,
-					"nonce:"+item.Sender,
-					"nonce",
-				)
-				reasons = append(
-					reasons,
-					"nonce_order_dependency",
-				)
+				addDependency(previous, txID, "nonce:"+item.Sender, "nonce")
+				dependencyReasons[txID] = append(dependencyReasons[txID], "nonce_order_dependency")
 			}
-
 			lastSenderTx[item.Sender] = txID
 		}
 
-		// 没有结构化访问列表时，仍保留已经建立的 Nonce 依赖。
 		if len(item.AccessList) == 0 {
-			if len(reasons) > 0 {
-				reasons = append(reasons, decision.Reason)
-				sort.Strings(reasons)
-				reasons = uniqueStrings(reasons)
-
-				result.ReasonCodes[txID] = reasons
-				result.Decisions[txID] = ExecutionDecision{
-					Track:  "conservative",
-					Reason: strings.Join(reasons, "|"),
-				}
-			} else {
-				result.ReasonCodes[txID] = []string{
-					decision.Reason,
-				}
-				result.Decisions[txID] = decision
-			}
-
+			hardReasons[txID] = append(hardReasons[txID], "missing_structured_access_list")
 			continue
 		}
-
-		// 跨片交易继续进入 conservative track，
-		// 同时保留发送者 Nonce 依赖。
+		if size := structuredAccessSize(item); size > p.accessSizeThreshold() {
+			hardReasons[txID] = append(hardReasons[txID], fmt.Sprintf("access_size_exceeds_threshold:%d>%d", size, p.accessSizeThreshold()))
+		}
 		if hasRemoteExecutionBoundary(item) {
-			reasons = append(reasons, decision.Reason)
-			sort.Strings(reasons)
-			reasons = uniqueStrings(reasons)
-
-			result.ReasonCodes[txID] = reasons
-			result.Decisions[txID] = ExecutionDecision{
-				Track:  "conservative",
-				Reason: strings.Join(reasons, "|"),
-			}
-
-			continue
+			hardReasons[txID] = append(hardReasons[txID], "legacy_cross_shard_protocol_boundary")
 		}
 
-		// 构建基于访问列表的 RAW、WAR 和 WAW 依赖。
 		for _, access := range item.AccessList {
+			if access.Mode != tx.AccessRead && access.Mode != tx.AccessCommutativeDelta {
+				hardReasons[txID] = append(hardReasons[txID], "non_commutative_write:"+access.Key)
+			}
 			if access.Key == "" {
-				reasons = append(
-					reasons,
-					"missing_access_key",
-				)
+				hardReasons[txID] = append(hardReasons[txID], "missing_access_key")
 				continue
 			}
-
+			// StateReady is a queue-readiness property. It is recorded separately
+			// and never changes fast/conservative channel admission.
 			if input.RemoteStateReadiness != nil {
-				if ready, ok := input.RemoteStateReadiness[access.Key]; ok && !ready {
-					reasons = append(
-						reasons,
-						"remote_state_unresolved",
-					)
+				token := stateReadinessToken(item, access)
+				if ready, ok := input.RemoteStateReadiness[token]; ok && !ready {
+					result.StateWaitKeys[txID] = append(result.StateWaitKeys[txID], token)
 				}
 			}
 
 			if writer := lastWriter[access.Key]; writer != "" {
 				if isWriteMode(access.Mode) {
-					addDependency(
-						writer,
-						txID,
-						access.Key,
-						"waw",
-					)
-					reasons = append(
-						reasons,
-						"waw_dependency",
-					)
+					addDependency(writer, txID, access.Key, "waw")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
 				} else {
-					addDependency(
-						writer,
-						txID,
-						access.Key,
-						"raw",
-					)
-					reasons = append(
-						reasons,
-						"raw_dependency",
-					)
+					addDependency(writer, txID, access.Key, "raw")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "raw_dependency")
 				}
 			}
 
 			if isWriteMode(access.Mode) {
 				for _, reader := range readers[access.Key] {
-					addDependency(
-						reader,
-						txID,
-						access.Key,
-						"war",
-					)
-					reasons = append(
-						reasons,
-						"war_dependency",
-					)
+					addDependency(reader, txID, access.Key, "war")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "war_dependency")
 				}
-
 				readers[access.Key] = nil
 				lastWriter[access.Key] = txID
 			} else {
-				readers[access.Key] = append(
-					readers[access.Key],
-					txID,
-				)
+				readers[access.Key] = append(readers[access.Key], txID)
 			}
 		}
-
-		if len(reasons) > 0 {
-			sort.Strings(reasons)
-			reasons = uniqueStrings(reasons)
-
-			result.ReasonCodes[txID] = reasons
-			result.Decisions[txID] = ExecutionDecision{
-				Track:  "conservative",
-				Reason: strings.Join(reasons, "|"),
-			}
-
-			continue
-		}
-
-		if decision.Track == "conservative" &&
-			strings.HasPrefix(
-				decision.Reason,
-				"non_commutative_write:",
-			) {
-
-			result.ReasonCodes[txID] = []string{
-				"batch_independent_write",
-			}
-			result.Decisions[txID] = ExecutionDecision{
-				Track:  "fast",
-				Reason: "batch_independent_write",
-			}
-
-			continue
-		}
-
-		result.ReasonCodes[txID] = []string{
-			decision.Reason,
-		}
-		result.Decisions[txID] = decision
 	}
 
 	result.DeduplicatedEdgeCount = len(edges)
-
 	for txID, deps := range result.Dependencies {
 		sort.Strings(deps)
 		result.Dependencies[txID] = uniqueStrings(deps)
 	}
-
+	for txID, keys := range result.StateWaitKeys {
+		sort.Strings(keys)
+		result.StateWaitKeys[txID] = uniqueStrings(keys)
+	}
 	result.DependencyChainMax = dependencyChainMax(graph)
-	result.SCCCount = stronglyConnectedComponentCount(graph)
+	sccNodes := nonTrivialSCCNodes(graph)
+	result.SCCCount = countNonTrivialSCCs(graph)
 
+	for index, item := range input.Transactions {
+		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
+		hard := append([]string(nil), hardReasons[txID]...)
+		deps := append([]string(nil), dependencyReasons[txID]...)
+		sort.Strings(hard)
+		hard = uniqueStrings(hard)
+		sort.Strings(deps)
+		deps = uniqueStrings(deps)
+
+		if sccNodes[txID] {
+			hard = append(hard, "nontrivial_scc")
+			sort.Strings(hard)
+			hard = uniqueStrings(hard)
+		}
+		if len(hard) > 0 {
+			reasons := append(append([]string(nil), hard...), deps...)
+			sort.Strings(reasons)
+			reasons = uniqueStrings(reasons)
+			result.ReasonCodes[txID] = reasons
+			result.Decisions[txID] = ExecutionDecision{Track: "conservative", Reason: strings.Join(reasons, "|")}
+			continue
+		}
+
+		if len(deps) > 0 {
+			reasons := append([]string{"topo_safe_dependency"}, deps...)
+			result.ReasonCodes[txID] = reasons
+			result.Decisions[txID] = ExecutionDecision{Track: "fast", Reason: strings.Join(reasons, "|")}
+			continue
+		}
+
+		decision := p.Classify(item)
+		if decision.Track == "" {
+			decision = ExecutionDecision{Track: "conservative", Reason: "unclassified_access"}
+		}
+		result.ReasonCodes[txID] = []string{decision.Reason}
+		result.Decisions[txID] = decision
+	}
 	return result
 }
 
@@ -1452,11 +1724,22 @@ func classifyForSchedule(item tx.SignedTransaction, execution ExecutionPlugin) E
 }
 
 func batchClassification(items []tx.SignedTransaction, execution ExecutionPlugin) BatchClassificationResult {
+	return batchClassificationWithReadiness(items, execution, nil)
+}
+
+func stateReadinessToken(item tx.SignedTransaction, access tx.AccessItem) string {
+	if dependency, ok := stateVersionDependencyForKey(item, access.Key); ok && isVersionedStateAccess(access) {
+		return fmt.Sprintf("v:%020d:%s", dependency.RequiredVersion, access.Key)
+	}
+	return "k:" + access.Key
+}
+
+func batchClassificationWithReadiness(items []tx.SignedTransaction, execution ExecutionPlugin, readiness map[string]bool) BatchClassificationResult {
 	batch, ok := execution.(BatchExecutionPlugin)
 	if !ok {
 		return BatchClassificationResult{}
 	}
-	return batch.ClassifyBatch(BatchClassificationInput{Transactions: items})
+	return batch.ClassifyBatch(BatchClassificationInput{Transactions: items, RemoteStateReadiness: readiness})
 }
 
 func decisionForTx(item tx.SignedTransaction, decisions map[string]ExecutionDecision, execution ExecutionPlugin) ExecutionDecision {
@@ -1583,19 +1866,124 @@ func (p serialBlockExecutor) ExecuteBlock(_ context.Context, input BlockExecutio
 	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: workerCount}, nil
 }
 
+type ariaBlockExecutor struct{ basicPlugin }
+
+func (p ariaBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
+	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
+	selection, evidence, err := recomputeAriaCandidateSelection(ctx, input.Block, input.BaseStateSnapshot, workerCount, p.config)
+	if err != nil {
+		return BlockExecutionResult{}, err
+	}
+
+	// The complete candidate batch is consensus-bound in proposal evidence and
+	// independently executed by every validator above. Only the deterministically
+	// selected subset is applied to the block state.
+	applyExecutor := execution.NewAriaExecutor(workerCount)
+	applyAriaExecutionConfig(applyExecutor, p.config)
+	result, err := applyExecutor.MaterializeCandidateSelection(input.Block, input.BaseStateSnapshot, selection)
+	if err != nil {
+		return BlockExecutionResult{}, err
+	}
+	metrics := selection.Metrics
+	actualMetrics := map[string]any{
+		"aria_metrics":                                   metrics,
+		"aria_epoch_trace_digest":                        stableJSONDigest(selection.Trace),
+		"aria_epoch_trace_candidate_index_count":         len(selection.Trace.CandidateIndexes),
+		"aria_epoch_trace_committed_index_count":         len(selection.Trace.CommittedIndexes),
+		"aria_epoch_trace_deferred_index_count":          len(selection.Trace.DeferredIndexes),
+		"aria_epoch_count":                               metrics.EpochCount,
+		"aria_execution_attempt_count":                   metrics.ExecutionAttemptCount,
+		"aria_conflict_abort_count":                      metrics.ConflictAbortCount,
+		"aria_reexecution_count":                         metrics.ReexecutionCount,
+		"aria_retryable_nonce_count":                     metrics.RetryableNonceCount,
+		"aria_waw_dependency_count":                      metrics.WAWDependencyCount,
+		"aria_raw_dependency_count":                      metrics.RAWDependencyCount,
+		"aria_war_dependency_count":                      metrics.WARDependencyCount,
+		"aria_read_reservation_count":                    metrics.ReadReservationCount,
+		"aria_write_reservation_count":                   metrics.WriteReservationCount,
+		"aria_candidate_transaction_count":               evidence.CandidateCount,
+		"aria_selected_transaction_count":                len(selection.Selected),
+		"aria_deferred_transaction_count":                len(selection.Deferred),
+		"aria_candidate_payload_digest":                  evidence.CandidatePayloadDigest,
+		"aria_selection_result_digest":                   evidence.SelectionResultDigest,
+		"aria_selection_semantic_digest":                 evidence.SelectionSemanticDigest,
+		"aria_validator_selection_verified":              true,
+		"aria_selected_materialized_without_reexecution": true,
+		"aria_selected_apply_execution_attempts":         0,
+		"maximum_parallel_width":                         metrics.MaximumParallelWidth,
+		"abort_count":                                    metrics.ConflictAbortCount,
+		"reexecution_count":                              metrics.ReexecutionCount,
+		"serializable":                                   true,
+		"serial_equivalent":                              false,
+		"aria_batch_lifecycle":                           "consensus_bound_full_candidate_batch_with_validator_recompute",
+		"aria_fallback_mode":                             "disabled",
+	}
+	candidateBlock := input.Block
+	candidateBlock.TxList = append([]tx.SignedTransaction(nil), evidence.CandidateTransactions...)
+	candidateBlock.TxIDs = append([]string(nil), evidence.CandidateTxIDs...)
+	events := ariaScheduleEvents(candidateBlock, []execution.AriaEpochTrace{selection.Trace})
+	return BlockExecutionResult{
+		ExecutionResult: result,
+		StateDelta:      stateKVsFromExecutionDelta(result.StateDelta),
+		PlanDigest:      result.PlanDigest,
+		WorkerCount:     result.WorkerCount,
+		ScheduleEvents:  events,
+		ActualMetrics:   actualMetrics,
+	}, nil
+}
+
+func ariaScheduleEvents(b realblock.Block, traces []execution.AriaEpochTrace) []ScheduleEvent {
+	events := []ScheduleEvent{}
+	for _, trace := range traces {
+		committed := map[int]bool{}
+		for _, index := range trace.CommittedIndexes {
+			committed[index] = true
+		}
+		for _, index := range trace.CandidateIndexes {
+			if index < 0 || index >= len(b.TxList) {
+				continue
+			}
+			txID := b.TxList[index].TxID
+			if committed[index] {
+				events = append(events, ScheduleEvent{
+					TxID:           txID,
+					Track:          "aria_epoch",
+					QueueName:      "aria_committed",
+					DecisionReason: fmt.Sprintf("aria_epoch_%d_commit", trace.Epoch),
+					LocalExecution: true,
+					Wakeup:         trace.Epoch > 1,
+				})
+				continue
+			}
+			events = append(events, ScheduleEvent{
+				TxID:           txID,
+				Track:          "aria_epoch",
+				QueueName:      "aria_deferred",
+				DecisionReason: trace.DeferredReasonByIndex[index],
+				LocalExecution: true,
+				Blocked:        true,
+			})
+		}
+	}
+	return events
+}
+
 type blockSTMBlockExecutor struct{ basicPlugin }
 
 func (p blockSTMBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
 	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
 	executor := execution.NewBlockSTMExecutor(workerCount)
+	executor.Progress = input.Progress
 	if mode := strings.TrimSpace(fmt.Sprint(p.config["execution_mode"])); mode == "correctness" || mode == "performance" {
 		executor.ExecutionMode = mode
 	}
 	if oracle := strings.TrimSpace(fmt.Sprint(p.config["oracle_mode"])); oracle == "full" || oracle == "sampled" || oracle == "off" {
 		executor.OracleMode = oracle
 	}
-	if maxIncarnations := intValue(p.config["maximum_incarnations"]); maxIncarnations > 0 {
-		executor.MaximumIncarnations = maxIncarnations
+	if raw, ok := p.config["maximum_incarnations"]; ok {
+		if maxIncarnations := intValue(raw); maxIncarnations >= 0 {
+			executor.MaximumIncarnations = maxIncarnations
+		}
 	}
 	if action := strings.TrimSpace(fmt.Sprint(p.config["incarnation_limit_action"])); action == "fail" || action == "serial_fallback" {
 		executor.IncarnationLimitAction = action
@@ -1605,11 +1993,20 @@ func (p blockSTMBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExec
 		return BlockExecutionResult{}, err
 	}
 	result.BlockSTMMetrics = executor.Metrics
+	actualMetrics := map[string]any{}
+	if _, ok := input.Execution.(BatchExecutionPlugin); ok {
+		classification := batchClassification(input.Block.TxList, input.Execution)
+		for key, value := range metaTrackClassificationMetrics(classification, len(input.Block.TxList)) {
+			actualMetrics[key] = value
+		}
+		actualMetrics["metatrack_scheduler_evidence_scope"] = "classification_plan_plus_blockstm_runtime"
+		actualMetrics["metatrack_actual_dual_track_runtime"] = false
+	}
 	delta := make([]state.StateKV, 0, len(result.StateDelta))
 	for _, item := range result.StateDelta {
 		delta = append(delta, state.StateKV{Key: item.Key, Value: item.Value})
 	}
-	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: result.WorkerCount}, nil
+	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: result.WorkerCount, ActualMetrics: actualMetrics}, nil
 }
 
 const metaTrackBlockExecutorID = "metatrack_block_executor"
@@ -1634,11 +2031,16 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	if len(schedule.Ordered) != len(input.Block.TxList) {
 		return BlockExecutionResult{}, fmt.Errorf("metatrack block executor schedule length mismatch")
 	}
-	classification := batchClassification(input.Block.TxList, executionPlugin)
-	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackSchedule(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay)
+	classification := batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
+	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackSchedule(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, input.StateVersionPublish)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
+	for key, value := range metaTrackClassificationMetrics(classification, len(input.Block.TxList)) {
+		actualMetrics[key] = value
+	}
+	actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_dual_track_runtime"
+	actualMetrics["metatrack_actual_dual_track_runtime"] = true
 	working := copyRegistryStringMap(input.BaseStateSnapshot)
 	before := state.RootOfSnapshot(working)
 	result := execution.Result{BlockHash: input.Block.BlockHash, Height: input.Block.Height, StateRootBefore: before, Deterministic: true, StateUpdates: map[string]string{}, BlockExecutorID: metaTrackBlockExecutorID, ExecutorVersion: "1.0.0", WorkerCount: workerCount}
@@ -1699,6 +2101,42 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	return BlockExecutionResult{ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: result.PlanDigest, WorkerCount: workerCount, ScheduleEvents: planEvents, ActualMetrics: actualMetrics, BusinessAttempts: attempts}, nil
 }
 
+func metaTrackClassificationMetrics(classification BatchClassificationResult, transactionCount int) map[string]any {
+	fastCount := 0
+	conservativeCount := 0
+	for _, decision := range classification.Decisions {
+		switch decision.Track {
+		case "fast":
+			fastCount++
+		case "conservative":
+			conservativeCount++
+		}
+	}
+	blockedUnique := 0
+	for _, dependencies := range classification.Dependencies {
+		if len(dependencies) > 0 {
+			blockedUnique++
+		}
+	}
+	stateWaitUnique := 0
+	for _, keys := range classification.StateWaitKeys {
+		if len(keys) > 0 {
+			stateWaitUnique++
+		}
+	}
+	return map[string]any{
+		"metatrack_classification_transaction_count":               transactionCount,
+		"metatrack_classification_fast_unique_count":               fastCount,
+		"metatrack_classification_conservative_unique_count":       conservativeCount,
+		"metatrack_classification_dependency_blocked_unique_count": blockedUnique,
+		"metatrack_classification_state_wait_unique_count":         stateWaitUnique,
+		"metatrack_classification_conflict_edge_count":             classification.ConflictEdgeCount,
+		"metatrack_classification_dependency_chain_max":            classification.DependencyChainMax,
+		"metatrack_classification_nontrivial_scc_count":            classification.SCCCount,
+		"metatrack_classification_count_scope":                     "per_replica_unique_logical_transactions",
+	}
+}
+
 type metaTrackExecutionOutcome struct {
 	Tx             tx.SignedTransaction
 	TxID           string
@@ -1711,7 +2149,7 @@ type metaTrackExecutionOutcome struct {
 	Delta          execution.TxDelta
 }
 
-func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, versionPublish StateVersionPublishFunc) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
 	ordered := append([]tx.SignedTransaction(nil), schedule.Ordered...)
 	byID := map[string]tx.SignedTransaction{}
 	decisionByID := map[string]ExecutionDecision{}
@@ -1733,6 +2171,10 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	fastReady := []string{}
 	conservativeReady := []string{}
 	blocked := map[string]bool{}
+	stateBlocked := map[string]bool{}
+	stateReady := map[string]bool{}
+	stateValueByToken := map[string]string{}
+	stateWaitStarted := map[string]time.Time{}
 	events := []ScheduleEvent{}
 	maxReadyQueueDepth := 0
 	maxFastReadyQueueDepth := 0
@@ -1749,6 +2191,63 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 			maxConservativeReadyQueueDepth = len(conservativeReady)
 		}
 	}
+	stateReadyForTx := func(txID string) bool {
+		for _, key := range classification.StateWaitKeys[txID] {
+			if !stateReady[key] {
+				return false
+			}
+		}
+		return true
+	}
+	enqueueReady := func(txID, reason string, wakeup bool) {
+		decision := decisionByID[txID]
+		if decision.Track == "fast" {
+			fastReady = append(fastReady, txID)
+		} else {
+			conservativeReady = append(conservativeReady, txID)
+		}
+		recordDepths()
+		events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: queueNameForTrack(decision.Track), DecisionReason: reason, LocalExecution: true, Wakeup: wakeup, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+	}
+
+	type remoteStateCompletion struct {
+		event RemoteStateReadyEvent
+		err   error
+	}
+	remoteStateCompletions := make(chan remoteStateCompletion, len(ordered)*4+1)
+	remoteFetchCount := 0
+	uniqueRemoteTokens := map[string]bool{}
+	if len(classification.StateWaitKeys) > 0 {
+		if remoteFetch == nil {
+			return nil, nil, nil, nil, fmt.Errorf("metatrack state-ready classification requires remote state fetcher")
+		}
+		for txID, keys := range classification.StateWaitKeys {
+			item := byID[txID]
+			for _, key := range keys {
+				stateReady[key] = false
+				if uniqueRemoteTokens[key] {
+					continue
+				}
+				uniqueRemoteTokens[key] = true
+				var access tx.AccessItem
+				for _, candidate := range item.AccessList {
+					if stateReadinessToken(item, candidate) == key {
+						access = candidate
+						break
+					}
+				}
+				remoteFetchCount++
+				go func(item tx.SignedTransaction, access tx.AccessItem) {
+					event, err := remoteFetch(ctx, item, access)
+					select {
+					case remoteStateCompletions <- remoteStateCompletion{event: event, err: err}:
+					case <-ctx.Done():
+					}
+				}(item, access)
+			}
+		}
+	}
+
 	for _, item := range ordered {
 		txID := txIdentifier(item)
 		depCount[txID] = len(deps[txID])
@@ -1761,21 +2260,26 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		}
 		if depCount[txID] > 0 {
 			blocked[txID] = true
+			if !stateReadyForTx(txID) {
+				stateBlocked[txID] = true
+				stateWaitStarted[txID] = time.Now()
+			}
 			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "blocked_queue", DecisionReason: "actual_wait_for_dependencies", LocalExecution: true, Blocked: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady), DependencyWaitMS: int64(depCount[txID])})
 			continue
 		}
-		if decision.Track == "fast" {
-			fastReady = append(fastReady, txID)
-		} else {
-			conservativeReady = append(conservativeReady, txID)
+		if !stateReadyForTx(txID) {
+			stateBlocked[txID] = true
+			stateWaitStarted[txID] = time.Now()
+			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "state_wait_queue", DecisionReason: "actual_wait_for_state", LocalExecution: true, Blocked: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+			continue
 		}
-		recordDepths()
-		events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: queueNameForTrack(decision.Track), DecisionReason: "actual_ready_initial", LocalExecution: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+		enqueueReady(txID, "actual_ready_initial", false)
 	}
 	recordDepths()
 	type job struct {
 		seq            int
 		txID           string
+		track          string
 		snapshot       map[string]string
 		attempt        int
 		assignedWorker int
@@ -1785,11 +2289,19 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		outcome metaTrackExecutionOutcome
 		err     error
 	}
-	workerQueues := make([]chan job, workerCount)
+	type workerLaneQueues struct {
+		fast         chan job
+		conservative chan job
+	}
+	workerQueues := make([]workerLaneQueues, workerCount)
 	for index := range workerQueues {
-		workerQueues[index] = make(chan job, len(ordered))
+		workerQueues[index] = workerLaneQueues{
+			fast:         make(chan job, len(ordered)),
+			conservative: make(chan job, len(ordered)),
+		}
 	}
 	completions := make(chan completion, len(ordered))
+	serialExecutor := execution.NewSerialExecutor()
 	var wg sync.WaitGroup
 	var inflightBusiness int64
 	var maxInflightBusiness int64
@@ -1804,24 +2316,32 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	var workerMu sync.Mutex
 	workerDone := make(chan struct{})
 	nextWorkerJob := func(workerID int) (job, bool) {
-		for {
-			select {
-			case <-ctx.Done():
-				return job{}, false
-			case <-workerDone:
-				return job{}, false
-			default:
+		tryLocal := func(track string) (job, bool) {
+			var queue <-chan job
+			if track == "fast" {
+				queue = workerQueues[workerID].fast
+			} else {
+				queue = workerQueues[workerID].conservative
 			}
 			select {
-			case item, ok := <-workerQueues[workerID]:
+			case item, ok := <-queue:
 				return item, ok
 			default:
+				return job{}, false
 			}
+		}
+		trySteal := func(track string) (job, bool) {
 			for offset := 1; offset < len(workerQueues); offset++ {
 				victimID := (workerID + offset) % len(workerQueues)
 				atomic.AddInt64(&stealAttemptCount, 1)
+				var queue <-chan job
+				if track == "fast" {
+					queue = workerQueues[victimID].fast
+				} else {
+					queue = workerQueues[victimID].conservative
+				}
 				select {
-				case item, ok := <-workerQueues[victimID]:
+				case item, ok := <-queue:
 					if !ok {
 						continue
 					}
@@ -1830,17 +2350,44 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 				default:
 				}
 			}
+			return job{}, false
+		}
+		for {
 			select {
 			case <-ctx.Done():
 				return job{}, false
 			case <-workerDone:
 				return job{}, false
-			case item, ok := <-workerQueues[workerID]:
+			default:
+			}
+			// Each worker owns one fast and one conservative lane. Local fast work
+			// has priority; stealing is always performed from the same lane type.
+			if item, ok := tryLocal("fast"); ok {
+				return item, true
+			}
+			if item, ok := tryLocal("conservative"); ok {
+				return item, true
+			}
+			if item, ok := trySteal("fast"); ok {
+				return item, true
+			}
+			if item, ok := trySteal("conservative"); ok {
+				return item, true
+			}
+			select {
+			case <-ctx.Done():
+				return job{}, false
+			case <-workerDone:
+				return job{}, false
+			case item, ok := <-workerQueues[workerID].fast:
+				return item, ok
+			case item, ok := <-workerQueues[workerID].conservative:
 				return item, ok
 			case <-time.After(time.Millisecond):
 			}
 		}
 	}
+
 	for workerID := 0; workerID < workerCount; workerID++ {
 		wg.Add(1)
 		go func(workerID int) {
@@ -1874,54 +2421,120 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 					case <-time.After(businessDelay):
 					}
 				}
-				single := block
 				txItem := byID[item.txID]
-				single.TxList = []tx.SignedTransaction{txItem}
-				single.TxIDs = []string{txItem.TxID}
-				singleResult := execution.NewSerialExecutor().ExecuteBlock(single, item.snapshot)
+				receipt, delta := serialExecutor.ExecuteTransaction(block, txItem, item.snapshot, item.seq)
 				atomic.AddInt64(&inflightBusiness, -1)
-				if len(singleResult.Receipts) != 1 || len(singleResult.TxDeltas) != 1 {
-					completions <- completion{seq: item.seq, err: fmt.Errorf("metatrack block executor missing single-tx result for %s", item.txID)}
-					continue
-				}
 				stolen := workerID != item.assignedWorker
 				if stolen {
 					atomic.AddInt64(&stolenTaskCount, 1)
 				}
-				completions <- completion{seq: item.seq, outcome: metaTrackExecutionOutcome{Tx: txItem, TxID: item.txID, Track: decisionByID[item.txID].Track, WorkerID: workerID, AssignedWorker: item.assignedWorker, Stolen: stolen, Attempt: item.attempt, Receipt: singleResult.Receipts[0], Delta: singleResult.TxDeltas[0]}}
+				completions <- completion{seq: item.seq, outcome: metaTrackExecutionOutcome{Tx: txItem, TxID: item.txID, Track: item.track, WorkerID: workerID, AssignedWorker: item.assignedWorker, Stolen: stolen, Attempt: item.attempt, Receipt: receipt, Delta: delta}}
 			}
 		}(workerID)
 	}
 	dispatchSeq := 0
+	fastDispatchSeq := 0
+	conservativeDispatchSeq := 0
 	completed := map[string]bool{}
 	executionOutcomes := make([]metaTrackExecutionOutcome, 0, len(ordered))
 	attempts := make([]BusinessExecutionAttempt, 0, len(ordered))
 	attemptByID := map[string]int{}
 	workingSnapshot := copyRegistryStringMap(baseSnapshot)
+	locallyWrittenKeys := map[string]bool{}
 	dispatch := func(txID string) error {
 		attemptByID[txID]++
 		snapshot := copyRegistryStringMap(workingSnapshot)
+		for _, token := range classification.StateWaitKeys[txID] {
+			value, ok := stateValueByToken[token]
+			if !ok {
+				return fmt.Errorf("metatrack state-ready token %s missing resolved value for %s", token, txID)
+			}
+			item := byID[txID]
+			for _, access := range item.AccessList {
+				if stateReadinessToken(item, access) == token {
+					snapshot[qualifyStateKey(block.ShardID, access.Key)] = value
+					break
+				}
+			}
+		}
+		track := decisionByID[txID].Track
+		if track != "fast" {
+			track = "conservative"
+		}
 		assignedWorker := 0
 		if workerCount > 0 {
-			assignedWorker = dispatchSeq % workerCount
-			if workerCount > 1 && dispatchSeq%2 == 1 {
-				assignedWorker = 0
+			if track == "fast" {
+				assignedWorker = fastDispatchSeq % workerCount
+				fastDispatchSeq++
+			} else {
+				assignedWorker = conservativeDispatchSeq % workerCount
+				conservativeDispatchSeq++
+			}
+		}
+		nextJob := job{seq: dispatchSeq, txID: txID, track: track, snapshot: snapshot, attempt: attemptByID[txID], assignedWorker: assignedWorker}
+		dispatchSeq++
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		if track == "fast" {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case workerQueues[assignedWorker].fast <- nextJob:
+				return nil
 			}
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case workerQueues[assignedWorker] <- job{seq: dispatchSeq, txID: txID, snapshot: snapshot, attempt: attemptByID[txID], assignedWorker: assignedWorker}:
-			dispatchSeq++
+		case workerQueues[assignedWorker].conservative <- nextJob:
 			return nil
 		}
 	}
+	remoteFetchCompleted := 0
+	stateReadyWakeupCount := 0
+	stateWaitBlockedCount := len(stateBlocked)
+	remoteFetchLatencyMS := int64(0)
+	handleRemoteStateCompletion := func(completion remoteStateCompletion) error {
+		remoteFetchCompleted++
+		if completion.err != nil {
+			return completion.err
+		}
+		event := completion.event
+		if event.Key == "" || event.ReadinessToken == "" {
+			return fmt.Errorf("metatrack remote state completion missing key/token")
+		}
+		remoteFetchLatencyMS += event.LatencyMS
+		stateReady[event.ReadinessToken] = true
+		stateValueByToken[event.ReadinessToken] = event.Value
+		for txID := range stateBlocked {
+			if !stateReadyForTx(txID) {
+				continue
+			}
+			delete(stateBlocked, txID)
+			waitMS := int64(0)
+			if started, ok := stateWaitStarted[txID]; ok {
+				waitMS = time.Since(started).Milliseconds()
+			}
+			decision := decisionByID[txID]
+			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "state_wait_queue", DecisionReason: "actual_state_ready:" + event.Key, LocalExecution: true, Wakeup: depCount[txID] == 0, DependencyWaitMS: waitMS, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+			if depCount[txID] == 0 && !completed[txID] {
+				stateReadyWakeupCount++
+				enqueueReady(txID, "actual_state_ready_dispatchable", true)
+			}
+		}
+		return nil
+	}
+
 	var closeWorkersOnce sync.Once
 	closeWorkers := func() {
 		closeWorkersOnce.Do(func() {
 			close(workerDone)
 			for _, queue := range workerQueues {
-				close(queue)
+				close(queue.fast)
+				close(queue.conservative)
 			}
 		})
 	}
@@ -1959,10 +2572,28 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		wg.Wait()
 		return nil, nil, nil, nil, err
 	}
-	pendingCompletions := map[int]completion{}
-	nextCompletionSeq := 0
 	for len(executionOutcomes) < len(ordered) {
 		if inFlight == 0 && len(fastReady) == 0 && len(conservativeReady) == 0 {
+			if len(stateBlocked) > 0 {
+				select {
+				case <-ctx.Done():
+					closeWorkers()
+					wg.Wait()
+					return nil, nil, nil, nil, ctx.Err()
+				case stateCompletion := <-remoteStateCompletions:
+					if err := handleRemoteStateCompletion(stateCompletion); err != nil {
+						closeWorkers()
+						wg.Wait()
+						return nil, nil, nil, nil, err
+					}
+					if err := dispatchCapacity(); err != nil {
+						closeWorkers()
+						wg.Wait()
+						return nil, nil, nil, nil, err
+					}
+					continue
+				}
+			}
 			for _, item := range ordered {
 				txID := txIdentifier(item)
 				if !completed[txID] {
@@ -1981,21 +2612,29 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 			}
 		}
 		var done completion
-		for {
-			if item, ok := pendingCompletions[nextCompletionSeq]; ok {
-				done = item
-				delete(pendingCompletions, nextCompletionSeq)
-				nextCompletionSeq++
-				break
-			}
-			select {
-			case <-ctx.Done():
+		gotCompletion := false
+		select {
+		case <-ctx.Done():
+			closeWorkers()
+			wg.Wait()
+			return nil, nil, nil, nil, ctx.Err()
+		case stateCompletion := <-remoteStateCompletions:
+			if err := handleRemoteStateCompletion(stateCompletion); err != nil {
 				closeWorkers()
 				wg.Wait()
-				return nil, nil, nil, nil, ctx.Err()
-			case item := <-completions:
-				pendingCompletions[item.seq] = item
+				return nil, nil, nil, nil, err
 			}
+			if err := dispatchCapacity(); err != nil {
+				closeWorkers()
+				wg.Wait()
+				return nil, nil, nil, nil, err
+			}
+			continue
+		case done = <-completions:
+			gotCompletion = true
+		}
+		if !gotCompletion {
+			continue
 		}
 		inFlight--
 		if done.err != nil {
@@ -2029,10 +2668,31 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 				continue
 			}
 		}
+		if versionPublish != nil {
+			publishSnapshot := copyRegistryStringMap(workingSnapshot)
+			for _, token := range classification.StateWaitKeys[doneID] {
+				value, ok := stateValueByToken[token]
+				if !ok {
+					continue
+				}
+				for _, access := range done.outcome.Tx.AccessList {
+					if stateReadinessToken(done.outcome.Tx, access) == token {
+						publishSnapshot[qualifyStateKey(block.ShardID, access.Key)] = value
+						break
+					}
+				}
+			}
+			if err := versionPublish(ctx, done.outcome.Tx, done.outcome.Delta, publishSnapshot); err != nil {
+				closeWorkers()
+				wg.Wait()
+				return nil, nil, nil, nil, err
+			}
+		}
 		completed[doneID] = true
 		if done.outcome.Receipt.Success {
 			for key, value := range done.outcome.Delta.WriteSet {
 				workingSnapshot[qualifyStateKey(block.ShardID, key)] = value
+				locallyWrittenKeys[key] = true
 			}
 		} else {
 			// Failed transactions are terminal outcomes, but their speculative
@@ -2056,14 +2716,17 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 			}
 			delete(blocked, dependent)
 			dependentDecision := decisionByID[dependent]
-			if dependentDecision.Track == "fast" {
-				fastReady = append(fastReady, dependent)
-			} else {
-				conservativeReady = append(conservativeReady, dependent)
+			if !stateReadyForTx(dependent) {
+				stateBlocked[dependent] = true
+				if _, ok := stateWaitStarted[dependent]; !ok {
+					stateWaitStarted[dependent] = time.Now()
+					stateWaitBlockedCount++
+				}
+				events = append(events, ScheduleEvent{TxID: dependent, Track: dependentDecision.Track, QueueName: "state_wait_queue", DecisionReason: "actual_dependencies_released_wait_for_state:" + doneID, LocalExecution: true, Blocked: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+				continue
 			}
+			enqueueReady(dependent, "actual_dependencies_released:"+doneID, true)
 			releasedThisCompletion++
-			recordDepths()
-			events = append(events, ScheduleEvent{TxID: dependent, Track: dependentDecision.Track, QueueName: queueNameForTrack(dependentDecision.Track), DecisionReason: "actual_dependencies_released:" + doneID, LocalExecution: true, Wakeup: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady), DependencyWaitMS: 1})
 		}
 		if releasedThisCompletion > maxDependencyFrontierWidth {
 			maxDependencyFrontierWidth = releasedThisCompletion
@@ -2076,6 +2739,17 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	}
 	closeWorkers()
 	wg.Wait()
+	// Dependency-ready completions release successors immediately, while the
+	// returned outcomes remain in the original block order. This preserves the
+	// deterministic receipt/state-root materialization contract across replicas
+	// without reintroducing head-of-line blocking into scheduler progress.
+	originalOrder := make(map[string]int, len(block.TxList))
+	for index, item := range block.TxList {
+		originalOrder[txIdentifier(item)] = index
+	}
+	sort.SliceStable(executionOutcomes, func(i, j int) bool {
+		return originalOrder[executionOutcomes[i].TxID] < originalOrder[executionOutcomes[j].TxID]
+	})
 	workerCounts := make([]int, len(workerExecutionCount))
 	copy(workerCounts, workerExecutionCount)
 	dispatchCount := countScheduleEvents(events, func(event ScheduleEvent) bool { return strings.HasPrefix(event.DecisionReason, "actual_dispatch") })
@@ -2098,6 +2772,10 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		"blocked_event_count":                   blockedCount,
 		"wakeup_event_count":                    wakeupCount,
 		"completion_channel_event_count":        completionChannelCount,
+		"completion_processing_policy":          "dependency_ready_completion_order_deterministic_final_merge",
+		"worker_queue_model":                    "per_worker_dual_lane",
+		"steal_policy":                          "same_shard_same_track_only",
+		"cross_track_steal_count":               0,
 		"business_execute_invocation_count":     int(atomic.LoadInt64(&businessExecuteInvocations)),
 		"fast_fallback_count":                   int(atomic.LoadInt64(&fastFallbackCount)),
 		"discarded_tentative_result_count":      int(atomic.LoadInt64(&discardedTentativeCount)),
@@ -2107,6 +2785,12 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		"validator_execution_completion_count":  len(executionOutcomes),
 		"unique_final_logical_completion_count": len(executionOutcomes),
 		"duplicate_final_completion_count":      0,
+		"state_wait_blocked_count":              stateWaitBlockedCount,
+		"state_ready_wakeup_count":              stateReadyWakeupCount,
+		"remote_state_fetch_count":              remoteFetchCount,
+		"remote_state_fetch_completed_count":    remoteFetchCompleted,
+		"remote_state_fetch_latency_ms":         remoteFetchLatencyMS,
+		"state_ready_scheduler_mode":            "transaction_level_suspend_resume",
 	}
 	return events, metrics, executionOutcomes, attempts, nil
 }
@@ -2271,11 +2955,11 @@ type builtinStateAccess struct{ basicPlugin }
 func (p builtinStateAccess) AccessMode() string { return "direct" }
 
 func (p builtinStateAccess) BuildFetchRequest(input StateFetchInput) StateFetchRequest {
-	return StateFetchRequest{RequestID: input.RequestID, TxID: input.TxID, BlockHash: input.BlockHash, Key: input.Key, HomeShard: input.HomeShard, ExecutionShard: input.ExecutionShard, AccessKind: input.AccessKind}
+	return StateFetchRequest{RequestID: input.RequestID, TxID: input.TxID, BlockHash: input.BlockHash, Key: input.Key, HomeShard: input.HomeShard, ExecutionShard: input.ExecutionShard, AccessKind: input.AccessKind, RequiredVersion: input.RequiredVersion, Versioned: input.Versioned}
 }
 
 func (p builtinStateAccess) BuildDeltaApplyRequest(input StateDeltaApplyInput) StateDeltaApplyRequest {
-	return StateDeltaApplyRequest{RequestID: input.RequestID, TxID: input.TxID, TxIDs: append([]string(nil), input.TxIDs...), BlockHash: input.BlockHash, Key: input.Key, Value: input.Value, UpdateSemantics: input.UpdateSemantics, Delta: input.Delta, BaseValue: input.BaseValue, BaseValueDigest: input.BaseValueDigest, ApplyOrigin: input.ApplyOrigin, DeltaKind: input.DeltaKind, HasInitialValue: input.HasInitialValue, InitialValue: input.InitialValue, HomeShard: input.HomeShard, ExecutionShard: input.ExecutionShard, SourceKey: input.SourceKey, SourceHeight: input.SourceHeight}
+	return StateDeltaApplyRequest{RequestID: input.RequestID, TxID: input.TxID, TxIDs: append([]string(nil), input.TxIDs...), BlockHash: input.BlockHash, Key: input.Key, Value: input.Value, UpdateSemantics: input.UpdateSemantics, Delta: input.Delta, BaseValue: input.BaseValue, BaseValueDigest: input.BaseValueDigest, ApplyOrigin: input.ApplyOrigin, DeltaKind: input.DeltaKind, HasInitialValue: input.HasInitialValue, InitialValue: input.InitialValue, HomeShard: input.HomeShard, ExecutionShard: input.ExecutionShard, SourceKey: input.SourceKey, SourceHeight: input.SourceHeight, RoutingOrdinal: input.RoutingOrdinal, PreviousVersion: input.PreviousVersion, ProducedVersion: input.ProducedVersion, OrderingNoop: input.OrderingNoop}
 }
 
 type builtinStateStorage struct{ basicPlugin }
@@ -2381,7 +3065,10 @@ type aggregationCommit struct{ basicPlugin }
 func (p aggregationCommit) DecideCommit(input CommitInput) CommitDecision {
 	physicalOps := physicalStateWriteCount(input)
 	d := CommitDecision{LogicalUpdates: maxInt(len(input.Transactions), physicalOps), PhysicalUpdates: physicalOps, PhysicalStateDelta: append([]state.StateKV(nil), input.StateDelta...), PreAggregationPhysicalOps: physicalOps, PostAggregationPhysicalOps: physicalOps}
-	aggregated := aggregateCommutativeStateDelta(input)
+	aggregated, validation := aggregateCommutativeStateDelta(input)
+	d.AtomicReservationCount = validation.AtomicReservationCount
+	d.ConstraintFallbackCount = validation.ConstraintFallbackCount
+	d.ConstraintFallbackReasons = append([]string(nil), validation.ConstraintFallbackReasons...)
 	aggregationApplied := false
 	if len(aggregated) > 0 {
 		d.PhysicalStateDelta = aggregated
@@ -2409,14 +3096,23 @@ func (p aggregationCommit) DecideCommit(input CommitInput) CommitDecision {
 }
 
 type commutativeAggregationCandidate struct {
-	delta int64
-	txIDs []string
-	valid bool
+	delta         int64
+	txIDs         []string
+	valid         bool
+	hasLowerBound bool
+	lowerBound    int64
 }
 
-func aggregateCommutativeStateDelta(input CommitInput) []state.StateKV {
+type aggregationValidation struct {
+	AtomicReservationCount    int
+	ConstraintFallbackCount   int
+	ConstraintFallbackReasons []string
+}
+
+func aggregateCommutativeStateDelta(input CommitInput) ([]state.StateKV, aggregationValidation) {
+	validation := aggregationValidation{}
 	if len(input.StateDelta) == 0 || len(input.Transactions) == 0 {
-		return nil
+		return nil, validation
 	}
 	txDeltaByID := map[string]execution.TxDelta{}
 	for _, delta := range input.TxDeltas {
@@ -2456,11 +3152,33 @@ func aggregateCommutativeStateDelta(input CommitInput) []state.StateKV {
 			}
 			candidate.delta += access.Delta
 			candidate.txIDs = append(candidate.txIDs, txID)
+			if lowerBound, ok := commutativeLowerBound(access); ok {
+				if candidate.hasLowerBound && candidate.lowerBound != lowerBound {
+					candidate.valid = false
+				} else {
+					candidate.hasLowerBound = true
+					candidate.lowerBound = lowerBound
+				}
+			}
 		}
 	}
 	if len(candidates) == 0 {
-		return nil
+		return nil, validation
 	}
+	for key, candidate := range candidates {
+		if candidate == nil || !candidate.valid || banned[key] || len(candidate.txIDs) < 2 {
+			continue
+		}
+		reason := validateAggregationReservation(input, key, candidate)
+		if reason != "" {
+			banned[key] = true
+			validation.ConstraintFallbackCount++
+			validation.ConstraintFallbackReasons = append(validation.ConstraintFallbackReasons, key+":"+reason)
+			continue
+		}
+		validation.AtomicReservationCount++
+	}
+	sort.Strings(validation.ConstraintFallbackReasons)
 	emitted := map[string]bool{}
 	out := make([]state.StateKV, 0, len(input.StateDelta))
 	changed := false
@@ -2486,9 +3204,71 @@ func aggregateCommutativeStateDelta(input CommitInput) []state.StateKV {
 		}
 	}
 	if !changed {
-		return nil
+		return nil, validation
 	}
-	return out
+	return out, validation
+}
+
+func commutativeLowerBound(access tx.AccessItem) (int64, bool) {
+	if access.UpdateSemantics == "market_sale_counter" {
+		return 0, true
+	}
+	for _, prefix := range []string{"balance:", "inventory:", "stock:", "supply:", "counter:"} {
+		if strings.HasPrefix(access.Key, prefix) {
+			return 0, true
+		}
+	}
+	return 0, false
+}
+
+func validateAggregationReservation(input CommitInput, logicalKey string, candidate *commutativeAggregationCandidate) string {
+	if input.BaseStateSnapshot == nil {
+		return "missing_base_snapshot"
+	}
+	qualifiedKey := qualifyStateKey(input.ShardID, logicalKey)
+	baseText, ok := input.BaseStateSnapshot[qualifiedKey]
+	if !ok {
+		baseText, ok = input.BaseStateSnapshot[logicalKey]
+	}
+	if !ok || strings.TrimSpace(baseText) == "" {
+		baseText = "0"
+	}
+	baseValue, err := strconv.ParseInt(baseText, 10, 64)
+	if err != nil {
+		return "non_numeric_base"
+	}
+	if candidate.delta > 0 && baseValue > math.MaxInt64-candidate.delta {
+		return "int64_overflow"
+	}
+	if candidate.delta < 0 && baseValue < math.MinInt64-candidate.delta {
+		return "int64_underflow"
+	}
+	finalValue := baseValue + candidate.delta
+	if candidate.hasLowerBound && finalValue < candidate.lowerBound {
+		return fmt.Sprintf("lower_bound_violation:%d", candidate.lowerBound)
+	}
+	matched := false
+	observedText := ""
+	for _, item := range input.StateDelta {
+		if stateKeysReferToSameLogicalKey(item.Key, logicalKey) {
+			matched = true
+			observedText = item.Value
+		}
+	}
+	if !matched {
+		return "missing_state_delta"
+	}
+	if strings.TrimSpace(observedText) == "" {
+		return "missing_final_value"
+	}
+	observed, err := strconv.ParseInt(observedText, 10, 64)
+	if err != nil {
+		return "non_numeric_final_value"
+	}
+	if observed != finalValue {
+		return fmt.Sprintf("base_delta_final_mismatch:%d:%d", finalValue, observed)
+	}
+	return ""
 }
 
 func writeSetContainsLogicalKey(writeSet map[string]string, logicalKey string) bool {
@@ -2667,8 +3447,11 @@ func BuiltinRegistry() *Registry {
 	register("routing", "hash_routing_baseline", func(c map[string]any) (Plugin, error) {
 		return hashRouting{makeBasic("routing", "hash_routing_baseline", c)}, nil
 	})
+	register("routing", "stateless_hash_routing", func(c map[string]any) (Plugin, error) {
+		return statelessHashRouting{makeBasic("routing", "stateless_hash_routing", c)}, nil
+	})
 	register("routing", "metatrack_coaccess_routing", func(c map[string]any) (Plugin, error) {
-		return metaTrackRouting{makeBasic("routing", "metatrack_coaccess_routing", c)}, nil
+		return &metaTrackRouting{basicPlugin: makeBasic("routing", "metatrack_coaccess_routing", c)}, nil
 	})
 	register("block_producer", "time_or_count_block_producer", func(c map[string]any) (Plugin, error) {
 		return builtinBlockProducer{makeBasic("block_producer", "time_or_count_block_producer", c)}, nil
@@ -2691,6 +3474,7 @@ func BuiltinRegistry() *Registry {
 	register("scheduler", "fast_first_scheduler", func(c map[string]any) (Plugin, error) {
 		return builtinScheduler{makeBasic("scheduler", "fast_first_scheduler", c)}, nil
 	})
+	registerBatchSIPlugins(register)
 	register("block_executor", "serial_block_executor", func(c map[string]any) (Plugin, error) {
 		return serialBlockExecutor{makeBasic("block_executor", "serial_block_executor", c)}, nil
 	})
@@ -2700,6 +3484,11 @@ func BuiltinRegistry() *Registry {
 	register("block_executor", "block_stm_block_executor", func(c map[string]any) (Plugin, error) {
 		return blockSTMBlockExecutor{makeBasic("block_executor", "block_stm_block_executor", c)}, nil
 	})
+	register("block_executor", "aria_block_executor", func(c map[string]any) (Plugin, error) {
+		return ariaBlockExecutor{makeBasic("block_executor", "aria_block_executor", c)}, nil
+	})
+	registerAriaPlugins(register)
+	registerGroundhogPlugins(register)
 	register("state_access", "direct_state_access", func(c map[string]any) (Plugin, error) {
 		return builtinStateAccess{makeBasic("state_access", "direct_state_access", c)}, nil
 	})
@@ -2822,6 +3611,15 @@ func InstantiatePlugins(profile map[string]PluginConfig) (RuntimePlugins, error)
 	}
 	if p.Observability, ok = created["observability"].(ObservabilityPlugin); !ok {
 		return p, fmt.Errorf("observability behavior missing")
+	}
+	if err := validateAriaPluginCombination(p); err != nil {
+		return p, err
+	}
+	if err := validateGroundhogPluginCombination(p); err != nil {
+		return p, err
+	}
+	if err := validateBatchSIPluginCombination(p); err != nil {
+		return p, err
 	}
 	return p, nil
 }

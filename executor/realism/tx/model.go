@@ -17,22 +17,24 @@ const (
 
 // SignedTransaction is the V4.0 transaction format admitted by real node mempools.
 type SignedTransaction struct {
-	TxID             string       `json:"tx_id"`
-	Sender           string       `json:"sender"`
-	Receiver         string       `json:"receiver"`
-	Nonce            uint64       `json:"nonce"`
-	Value            int64        `json:"value"`
-	StateKeys        []string     `json:"state_keys"`
-	AccessList       []AccessItem `json:"access_list,omitempty"`
-	AccessListDigest string       `json:"access_list_digest,omitempty"`
-	AccessListSchema string       `json:"access_list_schema,omitempty"`
-	AccessListSource string       `json:"access_list_source,omitempty"`
-	Payload          string       `json:"payload"`
-	Timestamp        int64        `json:"timestamp"`
-	Signature        string       `json:"signature"`
-	PublicKey        string       `json:"public_key"`
-	SourceKind       string       `json:"source_kind,omitempty"`
-	TraceSourceID    string       `json:"trace_source_id,omitempty"`
+	TxID             string                    `json:"tx_id"`
+	LogicalTxID      string                    `json:"logical_tx_id,omitempty"`
+	Sender           string                    `json:"sender"`
+	Receiver         string                    `json:"receiver"`
+	Nonce            uint64                    `json:"nonce"`
+	Value            int64                     `json:"value"`
+	StateKeys        []string                  `json:"state_keys"`
+	AccessList       []AccessItem              `json:"access_list,omitempty"`
+	AccessListDigest string                    `json:"access_list_digest,omitempty"`
+	AccessListSchema string                    `json:"access_list_schema,omitempty"`
+	AccessListSource string                    `json:"access_list_source,omitempty"`
+	Payload          string                    `json:"payload"`
+	Timestamp        int64                     `json:"timestamp"`
+	Signature        string                    `json:"signature"`
+	PublicKey        string                    `json:"public_key"`
+	SourceKind       string                    `json:"source_kind,omitempty"`
+	TraceSourceID    string                    `json:"trace_source_id,omitempty"`
+	ExecutionRouting *ExecutionRoutingMetadata `json:"execution_routing,omitempty"`
 }
 
 type AccessMode string
@@ -52,24 +54,27 @@ type AccessItem struct {
 }
 
 type coreFields struct {
-	Sender           string       `json:"sender"`
-	Receiver         string       `json:"receiver"`
-	Nonce            uint64       `json:"nonce"`
-	Value            int64        `json:"value"`
-	StateKeys        []string     `json:"state_keys"`
-	AccessList       []AccessItem `json:"access_list,omitempty"`
-	AccessListDigest string       `json:"access_list_digest,omitempty"`
-	AccessListSchema string       `json:"access_list_schema,omitempty"`
-	AccessListSource string       `json:"access_list_source,omitempty"`
-	Payload          string       `json:"payload"`
-	Timestamp        int64        `json:"timestamp"`
-	PublicKey        string       `json:"public_key"`
-	SourceKind       string       `json:"source_kind,omitempty"`
-	TraceSourceID    string       `json:"trace_source_id,omitempty"`
+	LogicalTxID      string                    `json:"logical_tx_id,omitempty"`
+	Sender           string                    `json:"sender"`
+	Receiver         string                    `json:"receiver"`
+	Nonce            uint64                    `json:"nonce"`
+	Value            int64                     `json:"value"`
+	StateKeys        []string                  `json:"state_keys"`
+	AccessList       []AccessItem              `json:"access_list,omitempty"`
+	AccessListDigest string                    `json:"access_list_digest,omitempty"`
+	AccessListSchema string                    `json:"access_list_schema,omitempty"`
+	AccessListSource string                    `json:"access_list_source,omitempty"`
+	Payload          string                    `json:"payload"`
+	Timestamp        int64                     `json:"timestamp"`
+	PublicKey        string                    `json:"public_key"`
+	SourceKind       string                    `json:"source_kind,omitempty"`
+	TraceSourceID    string                    `json:"trace_source_id,omitempty"`
+	ExecutionRouting *ExecutionRoutingMetadata `json:"execution_routing,omitempty"`
 }
 
 func (t SignedTransaction) core() coreFields {
 	return coreFields{
+		LogicalTxID:      t.LogicalTxID,
 		Sender:           t.Sender,
 		Receiver:         t.Receiver,
 		Nonce:            t.Nonce,
@@ -84,7 +89,17 @@ func (t SignedTransaction) core() coreFields {
 		PublicKey:        t.PublicKey,
 		SourceKind:       t.SourceKind,
 		TraceSourceID:    t.TraceSourceID,
+		ExecutionRouting: cloneExecutionRouting(t.ExecutionRouting),
 	}
+}
+
+func cloneExecutionRouting(input *ExecutionRoutingMetadata) *ExecutionRoutingMetadata {
+	if input == nil {
+		return nil
+	}
+	copyValue := *input
+	copyValue.StateVersions = append([]StateVersionDependency(nil), input.StateVersions...)
+	return &copyValue
 }
 
 func (t SignedTransaction) ValidateBasic() error {
@@ -114,6 +129,9 @@ func (t SignedTransaction) ValidateBasic() error {
 		default:
 			return errors.New(ErrMalformedTx)
 		}
+	}
+	if err := ValidateExecutionRouting(t); err != nil {
+		return err
 	}
 	if strings.TrimSpace(t.PublicKey) == "" || strings.TrimSpace(t.Signature) == "" {
 		return errors.New(ErrInvalidSignature)

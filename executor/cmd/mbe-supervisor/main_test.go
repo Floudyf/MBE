@@ -164,25 +164,39 @@ func TestMechanismAggregatesWriteRootSummaries(t *testing.T) {
 	writeJSON(t, filepath.Join(nodeA, "block_stm_summary.json"), map[string]any{
 		"serial_equivalent": true,
 		"block_stm_metrics": map[string]any{
-			"worker_count":             4,
-			"maximum_parallel_width":   3,
-			"abort_count":              2,
-			"reexecution_count":        1,
-			"validation_failure_count": 1,
-			"dependency_wait_count":    5,
-			"estimate_publish_count":   7,
+			"worker_count":                        4,
+			"maximum_parallel_width":              3,
+			"abort_count":                         2,
+			"dependency_abort_count":              1,
+			"validation_abort_count":              1,
+			"reexecution_count":                   1,
+			"validation_failure_count":            1,
+			"dependency_wait_count":               5,
+			"dependency_resume_count":             4,
+			"estimate_count":                      7,
+			"estimate_mark_count":                 7,
+			"estimate_read_count":                 5,
+			"business_execution_invocation_count": 11,
+			"committed_transaction_count":         10,
 		},
 	})
 	writeJSON(t, filepath.Join(nodeB, "block_stm_summary.json"), map[string]any{
 		"serial_equivalent": true,
 		"block_stm_metrics": map[string]any{
-			"worker_count":             4,
-			"maximum_parallel_width":   2,
-			"abort_count":              3,
-			"reexecution_count":        4,
-			"validation_failure_count": 0,
-			"dependency_wait_count":    6,
-			"estimate_publish_count":   8,
+			"worker_count":                        4,
+			"maximum_parallel_width":              2,
+			"abort_count":                         3,
+			"dependency_abort_count":              2,
+			"validation_abort_count":              1,
+			"reexecution_count":                   4,
+			"validation_failure_count":            0,
+			"dependency_wait_count":               6,
+			"dependency_resume_count":             5,
+			"estimate_count":                      8,
+			"estimate_mark_count":                 8,
+			"estimate_read_count":                 6,
+			"business_execution_invocation_count": 14,
+			"committed_transaction_count":         10,
 		},
 	})
 	remoteState := map[string]any{
@@ -193,19 +207,19 @@ func TestMechanismAggregatesWriteRootSummaries(t *testing.T) {
 	}
 
 	summary, err := writeMechanismAggregates(root, []v5NodeSummary{
-		{NodeID: "n0", FastTrackCount: 6, ConservativeTrackCount: 4, AggregationGroupCount: 2, SchedulerEventCount: 10, SchedulerBlockedCount: 1, SchedulerWakeupCount: 1, PreAggregationPhysicalOps: 9, PostAggregationPhysicalOps: 7, AggregatedKeyCount: 1, AggregatedLogicalDeltaCount: 3, PhysicalOpsSavedCount: 2, RemoteStateAccessCount: 5},
-		{NodeID: "n1", FastTrackCount: 6, ConservativeTrackCount: 4, AggregationGroupCount: 2, SchedulerEventCount: 10, SchedulerBlockedCount: 1, SchedulerWakeupCount: 1, PreAggregationPhysicalOps: 9, PostAggregationPhysicalOps: 7, AggregatedKeyCount: 1, AggregatedLogicalDeltaCount: 3, PhysicalOpsSavedCount: 2, RemoteStateAccessCount: 5},
-	}, []v5.NodePlan{{NodeID: "n0", DataDir: nodeA}, {NodeID: "n1", DataDir: nodeB}}, remoteState)
+		{NodeID: "n0", ShardID: "s0", FastTrackCount: 6, ConservativeTrackCount: 4, AggregationGroupCount: 2, SchedulerEventCount: 10, SchedulerBlockedCount: 1, SchedulerWakeupCount: 1, PreAggregationPhysicalOps: 9, PostAggregationPhysicalOps: 7, AggregatedKeyCount: 1, AggregatedLogicalDeltaCount: 3, PhysicalOpsSavedCount: 2, RemoteStateAccessCount: 5},
+		{NodeID: "n1", ShardID: "s0", FastTrackCount: 6, ConservativeTrackCount: 4, AggregationGroupCount: 2, SchedulerEventCount: 10, SchedulerBlockedCount: 1, SchedulerWakeupCount: 1, PreAggregationPhysicalOps: 9, PostAggregationPhysicalOps: 7, AggregatedKeyCount: 1, AggregatedLogicalDeltaCount: 3, PhysicalOpsSavedCount: 2, RemoteStateAccessCount: 5},
+	}, []v5.NodePlan{{NodeID: "n0", ShardID: "s0", DataDir: nodeA}, {NodeID: "n1", ShardID: "s0", DataDir: nodeB}}, remoteState)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	metatrack := summary["metatrack"].(map[string]any)
-	if metatrack["status"] != "available" || metatrack["fast_track_logical_tx_count"] != 12 || metatrack["conservative_track_logical_tx_count"] != 8 || metatrack["physical_ops_saved_count"] != 4 {
+	if metatrack["status"] != "available" || metatrack["fast_track_logical_tx_count"] != 6 || metatrack["conservative_track_logical_tx_count"] != 4 || metatrack["physical_replica_fast_track_instance_count"] != 12 || metatrack["physical_replica_conservative_track_instance_count"] != 8 || metatrack["physical_ops_saved_count"] != 4 {
 		t.Fatalf("unexpected metatrack aggregate: %#v", metatrack)
 	}
 	blockSTM := summary["block_stm"].(map[string]any)
-	if blockSTM["status"] != "available" || blockSTM["worker_count"] != 4 || blockSTM["worker_count_replica_consistent"] != true || blockSTM["maximum_parallel_width"] != 3 || blockSTM["abort_count"] != 5 || blockSTM["reexecution_count"] != 5 {
+	if blockSTM["status"] != "available" || blockSTM["worker_count"] != 4 || blockSTM["worker_count_replica_consistent"] != true || blockSTM["maximum_parallel_width"] != 3 || blockSTM["abort_count"] != 5 || blockSTM["dependency_abort_count"] != 3 || blockSTM["validation_abort_count"] != 2 || blockSTM["abort_decomposition_consistent"] != true || blockSTM["reexecution_count"] != 5 || blockSTM["estimate_publish_count"] != 15 || blockSTM["committed_transaction_count_physical_replica_total"] != 20 || blockSTM["replica_deduplicated_committed_transaction_count"] != 10 {
 		t.Fatalf("unexpected block-stm aggregate: %#v", blockSTM)
 	}
 	for _, name := range []string{"metatrack_aggregate_summary.json", "block_stm_aggregate_summary.json", "mechanism_metrics_summary.json"} {
@@ -357,7 +371,7 @@ func TestFinalityDoesNotDrainBeforeSourceFinalize(t *testing.T) {
 	writeDrainStatus(t, root, 6000)
 
 	assertSummary := func(wantTerminal, wantIncomplete int) {
-		summary, err := deriveFinalityArtifacts(root, nil)
+		summary, err := deriveFinalityArtifacts(root, nil, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -387,7 +401,7 @@ func TestDeriveLiveTerminalUsesSubmittedClassification(t *testing.T) {
 		{"durable_committed_logical_tx_ids": []any{"intra", "cross"}, "source_finalized_logical_tx_ids": []any{}, "refunded_logical_tx_ids": []any{}, "failed_logical_tx_ids": []any{}, "terminal_logical_tx_ids": []any{"intra", "cross"}},
 		{"durable_committed_logical_tx_ids": []any{"cross"}, "source_finalized_logical_tx_ids": []any{}, "refunded_logical_tx_ids": []any{}, "failed_logical_tx_ids": []any{}, "terminal_logical_tx_ids": []any{"cross"}},
 	}
-	terminal, counts, err := deriveLiveTerminal(classification, statuses)
+	terminal, counts, err := deriveLiveTerminal(classification, statuses, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +410,7 @@ func TestDeriveLiveTerminalUsesSubmittedClassification(t *testing.T) {
 	}
 	statuses[0]["source_finalized_logical_tx_ids"] = []any{"cross"}
 	statuses[1]["source_finalized_logical_tx_ids"] = []any{"cross"}
-	terminal, counts, err = deriveLiveTerminal(classification, statuses)
+	terminal, counts, err = deriveLiveTerminal(classification, statuses, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +443,7 @@ func TestDeriveLiveTerminalHandlesTargetCommitAndDuplicates(t *testing.T) {
 			statuses[0]["source_finalized_logical_tx_ids"] = append(statuses[0]["source_finalized_logical_tx_ids"].([]any), fmt.Sprintf("cross-%d", i))
 		}
 	}
-	terminal, counts, err := deriveLiveTerminal(classification, statuses)
+	terminal, counts, err := deriveLiveTerminal(classification, statuses, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +453,7 @@ func TestDeriveLiveTerminalHandlesTargetCommitAndDuplicates(t *testing.T) {
 	for i := 248; i < 250; i++ {
 		statuses[0]["source_finalized_logical_tx_ids"] = append(statuses[0]["source_finalized_logical_tx_ids"].([]any), fmt.Sprintf("cross-%d", i))
 	}
-	terminal, counts, err = deriveLiveTerminal(classification, statuses)
+	terminal, counts, err = deriveLiveTerminal(classification, statuses, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,6 +487,58 @@ func TestHasNonTerminalMempoolIgnoresTerminalResidue(t *testing.T) {
 	}
 	if !hasNonTerminalMempool(statuses, terminal) {
 		t.Fatal("legacy status without mempool IDs should remain conservative")
+	}
+}
+
+func TestHasPendingProposalWorkIgnoresTerminalOnlyResidue(t *testing.T) {
+	terminal := map[string]bool{"done": true}
+	statuses := []map[string]any{{
+		"proposal_in_flight":                true,
+		"proposal_work_details_available":   true,
+		"proposal_logical_tx_ids":           []any{"done"},
+		"proposal_system_state_delta_count": float64(0),
+	}}
+	if hasPendingProposalWork(statuses, terminal) {
+		t.Fatal("terminal-only proposal residue should not extend drain timing")
+	}
+
+	statuses[0]["proposal_logical_tx_ids"] = []any{"waiting"}
+	if !hasPendingProposalWork(statuses, terminal) {
+		t.Fatal("proposal containing a non-terminal transaction must block drain")
+	}
+
+	statuses[0]["proposal_logical_tx_ids"] = []any{"done"}
+	statuses[0]["proposal_system_state_delta_count"] = float64(1)
+	if !hasPendingProposalWork(statuses, terminal) {
+		t.Fatal("proposal containing system state deltas must block drain")
+	}
+
+	legacy := []map[string]any{{"proposal_in_flight": true}}
+	if !hasPendingProposalWork(legacy, terminal) {
+		t.Fatal("opaque legacy proposal status must remain conservative")
+	}
+}
+
+func TestQuiescentCompletionTimeUsesRuntimeProgressInsteadOfObserverDelay(t *testing.T) {
+	started := time.UnixMilli(1000)
+	observed := time.UnixMilli(7000)
+	statuses := []map[string]any{{"last_progress_at": float64(5000)}, {"last_progress_at": float64(4500)}}
+	if got := quiescentCompletionTime(started, observed, statuses); got.UnixMilli() != 5000 {
+		t.Fatalf("observer delay leaked into completion time: %d", got.UnixMilli())
+	}
+
+	statuses = []map[string]any{{"last_progress_at": float64(500)}}
+	if got := quiescentCompletionTime(started, observed, statuses); got.UnixMilli() != started.UnixMilli() {
+		t.Fatalf("completion time escaped drain start bound: %d", got.UnixMilli())
+	}
+
+	statuses = []map[string]any{{"last_progress_at": float64(9000)}}
+	if got := quiescentCompletionTime(started, observed, statuses); got.UnixMilli() != observed.UnixMilli() {
+		t.Fatalf("completion time escaped observation bound: %d", got.UnixMilli())
+	}
+
+	if got := quiescentCompletionTime(started, observed, nil); got.UnixMilli() != observed.UnixMilli() {
+		t.Fatalf("missing progress timestamp should fall back to observation: %d", got.UnixMilli())
 	}
 }
 
@@ -514,7 +580,7 @@ func TestFinalityCountsDurableCommitIndependentlyOfTerminalStageOrder(t *testing
 		{"200", id, id, "durable_committed", "n0", "s0", "", "", "2", "true"},
 	})
 	writeDrainStatus(t, root, 200)
-	summary, err := deriveFinalityArtifacts(root, nil)
+	summary, err := deriveFinalityArtifacts(root, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +629,7 @@ func TestFinalityTimingKeepsTransactionLatencyIndependentFromDrain(t *testing.T)
 		{"4000", "tx-2", "tx-2", "durable_committed", "n0", "s0", "", "", "2", "true"},
 	})
 	writeDrainStatus(t, root, 7000)
-	summary, err := deriveFinalityArtifacts(root, nil)
+	summary, err := deriveFinalityArtifacts(root, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +652,7 @@ func TestFinalityWindowCSVSeparatesLogicalAndCompletionRows(t *testing.T) {
 		{"5000", "tx-1", "tx-1", "durable_committed", "n0", "s0", "", "", "2", "true"},
 	})
 	writeDrainStatus(t, root, 7000)
-	if _, err := deriveFinalityArtifacts(root, nil); err != nil {
+	if _, err := deriveFinalityArtifacts(root, nil, false); err != nil {
 		t.Fatal(err)
 	}
 	file, err := os.Open(filepath.Join(root, "throughput_windows.csv"))
@@ -603,5 +669,82 @@ func TestFinalityWindowCSVSeparatesLogicalAndCompletionRows(t *testing.T) {
 	}
 	if rows[1][3] != "1" || rows[2][3] != "1" {
 		t.Fatalf("drain block changed logical TPS numerator: %#v", rows)
+	}
+}
+
+func TestProgressChangedRecognizesBlockSTMInternalProgressWithinSameBlock(t *testing.T) {
+	previous := progressSnapshot{BlockExecutionHeight: 3, BlockExecutionTaskCount: 10, BlockValidationTaskCount: 5}
+	current := previous
+	current.BlockExecutionTaskCount++
+	if !progressChanged(previous, current) {
+		t.Fatal("Block-STM execution task progress was ignored")
+	}
+	current = previous
+	current.BlockValidationTaskCount++
+	if !progressChanged(previous, current) {
+		t.Fatal("Block-STM validation task progress was ignored")
+	}
+	current = previous
+	current.BlockExecutionProgressAtMS++
+	if progressChanged(previous, current) {
+		t.Fatal("timestamp-only heartbeats must not hide an executor livelock")
+	}
+}
+
+func TestProgressChangedRecognizesNextBlockCounterReset(t *testing.T) {
+	previous := progressSnapshot{BlockExecutionHeight: 3, BlockExecutionTaskCount: 1000, BlockValidationTaskCount: 1000}
+	current := progressSnapshot{BlockExecutionHeight: 4, BlockExecutionTaskCount: 1}
+	if !progressChanged(previous, current) {
+		t.Fatal("next Block-STM block was not recognized after counters reset")
+	}
+}
+
+func TestDeriveLiveTerminalTreatsStatelessCrossShardCommitAsTerminal(t *testing.T) {
+	classification := map[string]bool{"cross-1": true}
+	statuses := []map[string]any{{"durable_committed_logical_tx_ids": []any{"cross-1"}}}
+	legacyTerminal, _, err := deriveLiveTerminal(classification, statuses, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacyTerminal["cross-1"] {
+		t.Fatal("legacy cross-shard transaction became terminal before finalize")
+	}
+	statelessTerminal, _, err := deriveLiveTerminal(classification, statuses, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !statelessTerminal["cross-1"] {
+		t.Fatal("stateless direct cross-shard transaction was not terminal after durable commit")
+	}
+}
+
+func TestV5NodeSummaryRetainsStateReadyAndBusinessStateEvidence(t *testing.T) {
+	raw := []byte(`{
+		"node_id":"n0",
+		"shard_id":"s0",
+		"business_state_digest":"business-digest",
+		"state_ready_wait_count":4,
+		"state_ready_resume_count":3,
+		"state_prefetch_wait_ms":17,
+		"remote_state_fetch_count":6,
+		"remote_state_fetch_completed_count":5,
+		"state_ready_scheduler_mode":"transaction_level_suspend_resume",
+		"versioned_state_ready_wave_count":8,
+		"versioned_state_ready_wait_observation_count":7,
+		"versioned_state_ready_resolved_token_count":9,
+		"versioned_state_probe_count":11,
+		"versioned_state_probe_latency_ms":23,
+		"versioned_state_ready_max_wave_width":3,
+		"versioned_state_ready_scheduler_mode":"per_transaction_per_key_version_frontier"
+	}`)
+	var summary v5NodeSummary
+	if err := json.Unmarshal(raw, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.BusinessStateDigest != "business-digest" || summary.StateReadyWaitCount != 4 || summary.StateReadyResumeCount != 3 || summary.StatePrefetchWaitMS != 17 || summary.RemoteStateFetchCount != 6 || summary.RemoteStateFetchCompletedCount != 5 || summary.StateReadySchedulerMode != "transaction_level_suspend_resume" {
+		t.Fatalf("native StateReady/business evidence was dropped: %#v", summary)
+	}
+	if summary.VersionedStateReadyWaveCount != 8 || summary.VersionedStateReadyWaitCount != 7 || summary.VersionedStateReadyResolvedCount != 9 || summary.VersionedStateProbeCount != 11 || summary.VersionedStateProbeLatencyMS != 23 || summary.VersionedStateReadyMaxWaveWidth != 3 || summary.VersionedStateReadySchedulerMode != "per_transaction_per_key_version_frontier" {
+		t.Fatalf("version-frontier evidence was dropped: %#v", summary)
 	}
 }

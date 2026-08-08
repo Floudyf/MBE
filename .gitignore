@@ -69,3 +69,5 @@ frontend/playwright-report/
 
 # Broken virtual environments preserved by smart launcher
 .venv.broken-*/
+
+/dataset/

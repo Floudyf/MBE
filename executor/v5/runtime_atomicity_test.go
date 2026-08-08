@@ -2,6 +2,7 @@ package v5
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -320,24 +321,24 @@ func TestFinalizeClearsSourceRelayAfterTargetCommit(t *testing.T) {
 	}
 }
 
-func TestExpireStaleProposalReleasesReservedTransactions(t *testing.T) {
+func TestExpireStaleProposalPreservesReservationForSameDigestRetransmit(t *testing.T) {
 	runtime, block, generated := proposalRuntimeForTest(t, "proposal-timeout")
 	runtime.votes[block.BlockHash] = map[string]bool{"n0": true}
 	if runtime.pool.ReservedCount() != 1 {
 		t.Fatal("test setup did not reserve transaction")
 	}
 	runtime.expireStaleProposal(5 * time.Second)
-	if runtime.proposalInFlight || runtime.proposalInFlightHash != "" {
-		t.Fatal("stale proposal remained in flight")
+	if !runtime.proposalInFlight || runtime.proposalInFlightHash != block.BlockHash {
+		t.Fatal("same-view timeout replaced the proposal")
 	}
-	if runtime.pool.ReservedCount() != 0 {
-		t.Fatal("stale proposal did not release reserved transaction")
+	if runtime.pool.ReservedCount() != 1 {
+		t.Fatal("same-view timeout released the proposal reservation")
 	}
 	if !runtime.pool.Has(generated[0].TxID) {
-		t.Fatal("transaction was dropped instead of being made available for reproposal")
+		t.Fatal("reserved transaction disappeared from the mempool")
 	}
-	if _, ok := runtime.proposals[block.BlockHash]; ok {
-		t.Fatal("stale proposal was not removed")
+	if _, ok := runtime.proposals[block.BlockHash]; !ok {
+		t.Fatal("same-view timeout removed the proposal")
 	}
 }
 
@@ -439,12 +440,19 @@ func TestCatchupRequestIntervalTracksProposalTimeout(t *testing.T) {
 }
 
 func TestRuntimeStatusWriteIntervalIsThrottled(t *testing.T) {
-	if got := runtimeStatusWriteInterval(75 * time.Millisecond); got != time.Second {
-		t.Fatalf("fast block intervals should not rewrite large status files every tick: %s", got)
+	t.Setenv("MBE_RUNTIME_STATUS_INTERVAL_MS", "")
+	if got := runtimeStatusWriteInterval(75 * time.Millisecond); got != 5*time.Second {
+		t.Fatalf("fast block intervals should throttle large status rewrites: %s", got)
 	}
 	if got := runtimeStatusWriteInterval(2 * time.Second); got != 2*time.Second {
 		t.Fatalf("slow block intervals should preserve their cadence: %s", got)
 	}
+
+	t.Setenv("MBE_RUNTIME_STATUS_INTERVAL_MS", "7500")
+	if got := runtimeStatusWriteInterval(75 * time.Millisecond); got != 7500*time.Millisecond {
+		t.Fatalf("runtime status interval override was ignored: %s", got)
+	}
+	// MBE_META_TRACK_RAPID_FIX_V3
 }
 
 func proposalRuntimeForTest(t *testing.T, seed string) (*NodeRuntime, realblock.Block, []tx.SignedTransaction) {
@@ -498,6 +506,38 @@ func proposalRuntimeForTest(t *testing.T, seed string) (*NodeRuntime, realblock.
 		proposalStartedAt:    time.Now().Add(-10 * time.Second),
 	}
 	return runtime, block, generated
+}
+
+func TestRuntimeStatusExposesInFlightProposalWork(t *testing.T) {
+	runtime, block, generated := proposalRuntimeForTest(t, "proposal-status")
+	block.SystemStateDeltas = []realblock.SystemStateDelta{{DeltaID: "delta-1", Key: "key", Value: "1"}}
+	runtime.proposals[block.BlockHash] = block
+	runtime.lastProgressAt = 123456
+
+	if err := runtime.writeRuntimeStatus(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(runtime.node.DataDir, "node_runtime_status.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status map[string]any
+	if err := json.Unmarshal(raw, &status); err != nil {
+		t.Fatal(err)
+	}
+	if status["proposal_in_flight"] != true || status["proposal_work_details_available"] != true {
+		t.Fatalf("proposal work status missing: %#v", status)
+	}
+	if status["proposal_in_flight_hash"] != block.BlockHash {
+		t.Fatalf("proposal hash mismatch: %#v", status["proposal_in_flight_hash"])
+	}
+	ids, ok := status["proposal_logical_tx_ids"].([]any)
+	if !ok || len(ids) != 1 || ids[0] != generated[0].TxID {
+		t.Fatalf("proposal transaction IDs mismatch: %#v", status["proposal_logical_tx_ids"])
+	}
+	if status["proposal_system_state_delta_count"] != float64(1) {
+		t.Fatalf("proposal system delta count mismatch: %#v", status["proposal_system_state_delta_count"])
+	}
 }
 
 func nowForTest() (t time.Time) { return time.Unix(100, 0) }

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from backend.app.models.v5_compiled_run_plan import V5CompiledNodeConfig, V5CompiledRunPlan
 from backend.app.models.v5_experiment_spec import V5ExperimentSpec
-from backend.app.services.v5_compatibility_engine import validate
+from backend.app.services.v5_compatibility_engine import V5CompatibilityError, validate, validate_materialized_workload
 from backend.app.services.v5_plugin_manifest_store import STORE
 from backend.app.services import v5_workload_data_plane as workload_plane
 from backend.app.services.v5_workload_data_plane import WorkloadPreviewRequest
@@ -138,7 +138,7 @@ def compile_artifact_contract(expected_artifacts: list[str], nodes: list[V5Compi
 def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_id: str | None = None) -> V5CompiledRunPlan:
     compatibility = validate(spec)
     if not compatibility.valid:
-        raise ValueError("; ".join(compatibility.blockers))
+        raise V5CompatibilityError(compatibility.blockers)
     normalized = spec.model_dump()
     raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -156,9 +156,16 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
         nodes.append(V5CompiledNodeConfig(node_id=node_id, shard_id=f"s{shard_index}", role="leader" if node_id == validators[0] else "validator", leader=node_id == validators[0], listen_addr="127.0.0.1:0", data_dir=str(run_dir / "nodes" / node_id), validators=validators, plugin_profile=profile))
     snapshot = [STORE.get(item.plugin_id).model_dump() | {"selected_config": item.config} for item in compatibility.resolved_plugins]
     workload = _compile_workload_plan(spec, profile, run_dir)
+    materialized_blockers = validate_materialized_workload(spec, profile, workload)
+    if materialized_blockers:
+        (run_dir / "workload_compatibility_blockers.json").write_text(
+            json.dumps({"status": "blocked_incompatible_workload", "blockers": materialized_blockers, "workload_plan": workload}, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        raise V5CompatibilityError(materialized_blockers, code="v5_materialized_workload_incompatible")
     node_expected_artifacts = [f"nodes/{node.node_id}/{artifact}" for node in nodes for artifact in NODE_EXPECTED_ARTIFACTS]
     expected_artifacts = EXPECTED_ARTIFACTS + node_expected_artifacts + (DATASET_ARTIFACTS if workload.get("source_type") == "dataset" else [])
-    if profile.get("routing", {}).get("plugin_id") == "metatrack_coaccess_routing":
+    if profile.get("routing", {}).get("plugin_id") in {"metatrack_coaccess_routing", "stateless_hash_routing"}:
         expected_artifacts += [
             f"client/{artifact}"
             for artifact in METATRACK_CLIENT_ARTIFACTS
@@ -225,11 +232,29 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         use_full_dataset=source.use_full_dataset,
         seed=source.seed,
         variant_mode=source.variant_mode,
+        selection_mode=source.selection_mode,
         target_alpha=source.target_alpha,
         skew_axis=source.skew_axis,
+        variant_parameters=source.variant_parameters,
         source_sha256=source.source_sha256,
     )
     materialized = workload_plane.materialize_request(request)
+    topology_preview_cross_shard_count = None
+    topology_preview_cross_shard_ratio = None
+    topology_preview_status = "unavailable"
+    try:
+        topology_preview = workload_plane.preview_workload(request, shards=spec.topology.shards)
+        selected_preview = topology_preview.selected_window_preview or {}
+        preview_count = selected_preview.get("cross_shard_count")
+        preview_ratio = selected_preview.get("cross_shard_ratio")
+        if isinstance(preview_count, (int, float)) and not isinstance(preview_count, bool):
+            topology_preview_cross_shard_count = int(preview_count)
+            topology_preview_cross_shard_ratio = float(preview_ratio or 0.0)
+            topology_preview_status = "topology_specific_preview"
+    except Exception:
+        # The exact Go preflight runs before node process creation and remains
+        # authoritative when a raw source is absent but materialization is cached.
+        topology_preview_status = "deferred_to_go_preflight"
     manifest = workload_plane.load_manifest(source.dataset_id or "")
     artifacts = workload_plane.workload_artifact_snapshots(source.model_dump(), materialized.summary | materialized.model_dump(), manifest)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -254,8 +279,10 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         "actual_tx_count": actual,
         "tx_count": actual,
         "seed": materialized.seed,
-        "truth_label": "real_observed" if materialized.variant_mode == "original_window" else "real_derived_resampled",
-        "selection_mode": source.selection_mode,
+        "truth_label": materialized.truth_label,
+        "selection_mode": materialized.selection_mode,
+        "variant_parameters": materialized.variant_parameters,
+        "source_file_sha256": materialized.source_file_sha256,
         "replay_mode": source.replay_mode,
         "skew_axis": materialized.summary.get("skew_axis") or source.skew_axis,
         "target_alpha": materialized.target_alpha,
@@ -268,6 +295,9 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         "base_window_hash": materialized.summary.get("base_window_sha256"),
         "expected_cross_shard_count": expected_cross,
         "expected_cross_shard_ratio": (float(expected_cross) / actual) if actual else 0,
+        "topology_preview_cross_shard_count": topology_preview_cross_shard_count,
+        "topology_preview_cross_shard_ratio": topology_preview_cross_shard_ratio,
+        "topology_preview_status": topology_preview_status,
         "identity_mapping_version": "mbe_dataset_identity_v1",
         "generator_version": workload_plane.GENERATOR_VERSION,
         "no_fallback": True,

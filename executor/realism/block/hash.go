@@ -30,6 +30,10 @@ func Hash(b Block) string {
 			PayloadDigest string `json:"payload_digest"`
 			PlanDigest    string `json:"plan_digest"`
 		} `json:"execution_plan,omitempty"`
+		ProposalEvidence *struct {
+			AlgorithmID   string `json:"algorithm_id"`
+			PayloadDigest string `json:"payload_digest"`
+		} `json:"proposal_evidence,omitempty"`
 	}{
 		ShardID: b.ShardID, Height: b.Height, PreviousHash: b.PreviousHash, ProposerID: b.ProposerID,
 		Timestamp: b.Timestamp, TxIDs: b.TxIDs, TxRoot: b.TxRoot, StateRootBefore: b.StateRootBefore,
@@ -41,6 +45,12 @@ func Hash(b Block) string {
 			PayloadDigest string `json:"payload_digest"`
 			PlanDigest    string `json:"plan_digest"`
 		}{AlgorithmID: b.ExecutionPlan.AlgorithmID, PayloadDigest: b.ExecutionPlan.PayloadDigest, PlanDigest: b.ExecutionPlan.PlanDigest}
+	}
+	if b.ProposalEvidence != nil {
+		core.ProposalEvidence = &struct {
+			AlgorithmID   string `json:"algorithm_id"`
+			PayloadDigest string `json:"payload_digest"`
+		}{AlgorithmID: b.ProposalEvidence.AlgorithmID, PayloadDigest: b.ProposalEvidence.PayloadDigest}
 	}
 	payload, _ := json.Marshal(core)
 	sum := sha256.Sum256(payload)

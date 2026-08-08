@@ -1,0 +1,101 @@
+{
+  "schema_version": "mbe_dataset_manifest_v2",
+  "dataset_id": "axie_2021_10_01_full_day",
+  "display_name": "Axie Infinity 2021-10-01全天负载",
+  "description": "Axie Infinity / Ronin 2021-10-01 全天交易与资产转移记录。",
+  "source_platform": "axie_infinity",
+  "source_chain": "ronin",
+  "dataset_type": "asset_transfer_trace",
+  "adapter_id": "axie_full_day_v1",
+  "source_layout": "single_file",
+  "local_raw_relative_path": "dataset/Axie_Infinity/axie_2021_10_01_full_day.csv",
+  "source_sha256": "f88657107c739601ee2eea43d56d6babb1a062d81a2ae3343f2907c4b83e68cd",
+  "source_size_bytes": 193137732,
+  "row_count": 572562,
+  "unique_source_tx_hash_count": 0,
+  "truth_label": "real_observed",
+  "catalog_validation": "file_metadata",
+  "supported_tx_counts": [
+    100,
+    1000,
+    10000,
+    50000,
+    100000,
+    250000,
+    500000
+  ],
+  "allow_full_dataset": true,
+  "supported_variants": [
+    "original_window",
+    "key_zipf"
+  ],
+  "supported_skew_axes": [
+    "axie_token",
+    "receiver",
+    "contract",
+    "marketplace"
+  ],
+  "default_skew_axis": "axie_token",
+  "variant_definitions": [
+    {
+      "variant_mode": "original_window",
+      "display_name": "真实原始连续窗口",
+      "kind": "original",
+      "selection_mode": "contiguous_window",
+      "parameters": []
+    },
+    {
+      "variant_mode": "key_zipf",
+      "display_name": "真实派生偏斜负载",
+      "kind": "derived",
+      "selection_mode": "contiguous_window",
+      "parameters": [
+        {
+          "name": "skew_axis",
+          "label": "偏斜轴",
+          "type": "enum",
+          "options": [
+            "axie_token",
+            "receiver",
+            "contract",
+            "marketplace"
+          ],
+          "default": "axie_token",
+          "required": true
+        },
+        {
+          "name": "target_alpha",
+          "label": "偏斜度 alpha",
+          "type": "number_enum",
+          "options": [
+            0.0,
+            0.2,
+            0.4,
+            0.6,
+            0.8,
+            1.0,
+            1.2,
+            1.4
+          ],
+          "default": 1.0,
+          "required": true
+        }
+      ]
+    }
+  ],
+  "included_categories": [
+    "axie_transfer"
+  ],
+  "excluded_categories": [],
+  "operation_counts": {},
+  "time_start_ms": 0,
+  "time_end_ms": 0,
+  "verification_method": "source_file_sha256_and_adapter_schema_validation",
+  "verification_sample_count": 100,
+  "verification_results": "100-row format sample packaged; full hash/schema validation runs before materialization.",
+  "usage_note": "Access lists represent observed transfer semantics at logical-state level, not physical Ronin storage slots.",
+  "generator_version": "v5_workload_data_plane_v4_universal_access_list",
+  "warnings": [
+    "访问列表为基于可观测转移字段的语义状态模型。"
+  ]
+}

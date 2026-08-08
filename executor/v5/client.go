@@ -45,6 +45,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	stateFrequencyRows := [][]string{}
 	coaccessRows := [][]string{}
 	placementRows := [][]string{}
+	placementScoreRows := [][]string{}
 	transactionPlacementRows := [][]string{}
 	dependencyRows := [][]string{}
 	remoteStateRows := [][]string{}
@@ -78,52 +79,74 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	batchIndex := 0
 	batch := []WorkloadRecord{}
+	lastWriterOrdinal := map[string]uint64{}
+	statelessDirect := usesStatelessDirectExecution(plugins.Routing)
+	bindExecutionRouting := plugins.Routing != nil && (plugins.Routing.ID() == "metatrack_coaccess_routing" || plugins.Routing.ID() == "stateless_hash_routing")
 	submitRecord := func(record WorkloadRecord, route RoutingDecision) error {
 		executionShard := route.ShardID
-		shardID := workloadIngressShard(record, route)
+		shardID := workloadIngressShard(record, route, statelessDirect)
 		leader, ok := leaders[shardID]
 		if !ok {
 			return fmt.Errorf("no leader for %s", shardID)
 		}
-		sender := fmt.Sprintf("client_%s_%d", shardID, record.Index)
 		payload := record.Payload
+		logicalSourceShard := firstNonEmpty(record.SourceShard, shardID)
+		sender := fmt.Sprintf("client_%s_%d", logicalSourceShard, record.Index)
+		targetShard := record.TargetShard
 		if payload == "v5_cross" {
 			generatedCrossShardCount++
 			targetIndex := 0
 			for candidateIndex, candidate := range shardIDs {
-				if candidate == shardID {
+				if candidate == logicalSourceShard {
 					targetIndex = (candidateIndex + 1) % shards
 					break
 				}
 			}
-			payload = "v5_cross:" + shardIDs[targetIndex]
+			targetShard = shardIDs[targetIndex]
+			payload = "v5_cross:" + targetShard
 		}
-		targetShard := ""
-		if strings.HasPrefix(payload, "v5_cross:") {
+		if targetShard == "" && strings.HasPrefix(payload, "v5_cross:") {
 			targetShard = strings.TrimPrefix(payload, "v5_cross:")
 			if colon := strings.Index(targetShard, ":"); colon >= 0 {
 				targetShard = targetShard[:colon]
 			}
 		}
-		isCrossShard := targetShard != "" && targetShard != shardID
-		stateKeys := append([]string{"shard:" + shardID + ":account"}, record.StateKeys...)
+		isCrossShard := record.CrossShard || (targetShard != "" && targetShard != logicalSourceShard)
+		if statelessDirect && isCrossShard {
+			payload = statelessPayload(payload)
+		}
+		stateKeys := append([]string{"shard:" + logicalSourceShard + ":account"}, record.StateKeys...)
 		var item tx.SignedTransaction
 		var err error
 		if datasetIterator, ok := iterator.(*CanonicalTraceIterator); ok {
 			record.StateKeys = stateKeys
+			record.Payload = payload
 			item, err = datasetIterator.SignedTransaction(record)
 			sender = item.Sender
 			generatedCrossShardCount = datasetIterator.summary.ActualCrossShardCount
 		} else {
-			seed := fmt.Sprintf("%d:%s", plan.WorkloadPlan.Seed, shardID)
-			accessList := syntheticSignedAccessList(sender, "receiver_"+shardID, record.AccessList)
-			generated, _, _, genErr := tx.Generate(tx.GenerateOptions{Count: 1, Sender: sender, Receiver: "receiver_" + shardID, StartNonce: 0, Value: 1, StateKeys: stateKeys, AccessList: accessList, Seed: seed})
+			seed := fmt.Sprintf("%d:%s", plan.WorkloadPlan.Seed, logicalSourceShard)
+			receiver := "receiver_" + logicalSourceShard
+			accessList := syntheticSignedAccessList(sender, receiver, record.AccessList)
+			generated, _, _, genErr := tx.Generate(tx.GenerateOptions{Count: 1, Sender: sender, Receiver: receiver, StartNonce: 0, Value: 1, StateKeys: stateKeys, AccessList: accessList, Seed: seed})
 			err = genErr
 			if err == nil {
 				item = generated[0]
 				item.Payload = payload
+				if bindExecutionRouting && record.RoutePlanDigest != "" {
+					routing := tx.ExecutionRoutingMetadata{SenderID: item.Sender, ReceiverID: item.Receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: executionShard, RoutingReason: firstNonEmpty(record.RoutingReason, route.Reason), RoutePlanDigest: record.RoutePlanDigest, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...)}
+					digest, digestErr := tx.ComputeExecutionRoutingDigest(item, routing)
+					if digestErr != nil {
+						err = digestErr
+					} else {
+						routing.RouteEntryDigest = digest
+						item.ExecutionRouting = &routing
+					}
+				}
 				_, privateKey := tx.DeterministicKeyPair(seed + ":" + sender)
-				err = tx.Sign(&item, privateKey)
+				if err == nil {
+					err = tx.Sign(&item, privateKey)
+				}
 			}
 		}
 		if err != nil {
@@ -135,21 +158,29 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 		start := time.Now()
 		err = sendPersistent(ctx, connections, leader.ListenAddr, envelope)
-		rows = append(rows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, sender, leader.NodeID, shardID, payload, fmt.Sprint(isCrossShard), shardID, targetShard, fmt.Sprint(err == nil), fmt.Sprint(time.Since(start).Milliseconds()), errorString(err)})
-		lifecycleRows = append(lifecycleRows, lifecycleRow(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: item.TxID, Stage: "submitted", NodeID: "mbe-client", ShardID: shardID, Success: err == nil, Error: errorString(err)}))
-		reason := route.Reason
+		rows = append(rows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, sender, leader.NodeID, shardID, payload, fmt.Sprint(isCrossShard), logicalSourceShard, targetShard, fmt.Sprint(err == nil), fmt.Sprint(time.Since(start).Milliseconds()), errorString(err)})
+		lifecycleRows = append(lifecycleRows, lifecycleRow(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "submitted", NodeID: "mbe-client", ShardID: shardID, Success: err == nil, Error: errorString(err)}))
+		reason := firstNonEmpty(record.RoutingReason, route.Reason)
 		if executionShard != "" && executionShard != shardID {
 			reason = strings.TrimSuffix(reason+";execution_shard="+executionShard, ";")
 		}
 		routingRows = append(routingRows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, plugins.Routing.ID(), strings.Join(item.StateKeys, "|"), shardID, fmt.Sprint(isCrossShard), reason})
-		resolvedAccessRows = append(resolvedAccessRows, resolvedAccessEntryFromTransaction(record, item, shardID, executionShard, route.Reason))
+		resolvedAccessRows = append(resolvedAccessRows, resolvedAccessEntryFromTransaction(record, item, logicalSourceShard, executionShard, reason))
 		return err
 	}
 	submitBatch := func(records []WorkloadRecord) error {
 		if len(records) == 0 {
 			return nil
 		}
-		decisions := map[int]RoutingDecision{}
+		if bindExecutionRouting {
+			for index := range records {
+				ordinal := uint64(records[index].Index + 1)
+				records[index].RoutingOrdinal = ordinal
+				records[index].StateVersions = stateVersionDependenciesForRecord(records[index], ordinal, lastWriterOrdinal)
+			}
+		}
+		placements := map[int]TransactionPlacement{}
+		routePlanDigest := ""
 		if planner, ok := plugins.Routing.(BatchRoutingPlugin); ok {
 			routingRecords := append([]WorkloadRecord(nil), records...)
 			if _, ok := iterator.(*CanonicalTraceIterator); ok {
@@ -164,13 +195,26 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				}
 			}
 			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding})
-			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
+			routePlanDigest = routePlan.PlanDigest
+			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &placementScoreRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
 			for _, placement := range routePlan.TransactionPlacements {
-				decisions[placement.TxIndex] = RoutingDecision{ShardID: placement.ExecutionShard, Reason: placement.Reason}
+				placements[placement.TxIndex] = placement
 			}
 		}
 		for _, record := range records {
-			route := decisions[record.Index]
+			placement, planned := placements[record.Index]
+			route := RoutingDecision{}
+			if planned {
+				route = RoutingDecision{ShardID: placement.ExecutionShard, Reason: placement.Reason}
+				record.RoutingEpoch = placement.RoutingEpoch
+				record.ExecutionShard = placement.ExecutionShard
+				record.RoutingReason = placement.Reason
+				if bindExecutionRouting {
+					record.RoutePlanDigest = routePlanDigest
+				}
+				record.PredictedRemoteReads = placement.PredictedRemoteReads
+				record.PredictedRemoteWrites = placement.PredictedRemoteWrites
+			}
 			if route.ShardID == "" {
 				route = plugins.Routing.Route(RoutingInput{Index: record.Index, StateKeys: record.StateKeys, AccessList: record.AccessList, SourceShard: record.SourceShard, ShardIDs: shardIDs, CrossShard: record.CrossShard, Sharding: plugins.Sharding})
 			}
@@ -237,7 +281,10 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if err := metrics.WriteCSV(filepath.Join(outDir, "placement_plan.csv"), []string{"batch_index", "state_key", "home_shard", "execution_shard", "frequency", "reason"}, placementRows); err != nil {
 			return err
 		}
-		if err := metrics.WriteCSV(filepath.Join(outDir, "transaction_placement.csv"), []string{"batch_index", "logical_id", "tx_index", "home_shard", "execution_shard", "target_shard", "coaccess_group", "remote_access_count", "reason"}, transactionPlacementRows); err != nil {
+		if err := metrics.WriteCSV(filepath.Join(outDir, "placement_score.csv"), []string{"batch_index", "state_key", "candidate_shard", "coaccess_affinity", "admissible", "capacity", "projected_load", "current_state_load", "score"}, placementScoreRows); err != nil {
+			return err
+		}
+		if err := metrics.WriteCSV(filepath.Join(outDir, "transaction_placement.csv"), []string{"batch_index", "logical_id", "tx_index", "sender_group_id", "routing_epoch", "home_shard", "execution_shard", "target_shard", "coaccess_group", "predicted_remote_reads", "predicted_remote_writes", "remote_access_count", "majority_coverage", "majority_tie", "queue_load_before", "reason"}, transactionPlacementRows); err != nil {
 			return err
 		}
 		if err := metrics.WriteCSV(filepath.Join(outDir, "dependency_graph.csv"), []string{"batch_index", "from_logical_id", "to_logical_id", "state_key", "dependency_type"}, dependencyRows); err != nil {
@@ -265,29 +312,104 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if err := SaveJSON(filepath.Join(outDir, "workload_identity_mapping_summary.json"), map[string]any{"identity_count": replaySummary.IdentityCount, "mapping_digest": replaySummary.MappingDigest, "nonce_continuity": replaySummary.NonceContinuity, "signature_pass_count": replaySummary.SignaturePassCount, "identity_mapping_version": replaySummary.IdentityMappingVersion}); err != nil {
 		return err
 	}
-	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows))})
+	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows)), "cross_shard_execution_mode": map[bool]string{true: "stateless_direct_execution", false: "legacy_lock_relay_finalize"}[statelessDirect]})
 }
 
-func workloadIngressShard(record WorkloadRecord, route RoutingDecision) string {
+func stateVersionDependenciesForRecord(record WorkloadRecord, ordinal uint64, lastWriter map[string]uint64) []tx.StateVersionDependency {
+	type accessSummary struct {
+		read  bool
+		write bool
+	}
+	byKey := map[string]accessSummary{}
+	for _, access := range normalizedAccessItems(record) {
+		if access.Key == "" || !isVersionedStateAccess(access) {
+			// Commutative/account state keeps its existing semantics. The exact
+			// logical version chain is reserved for non-commutative business
+			// state, so a commutative writer can never become an unpublished
+			// predecessor token.
+			continue
+		}
+		summary := byKey[access.Key]
+		summary.read = summary.read || isReadMode(access.Mode)
+		summary.write = summary.write || isWriteMode(access.Mode)
+		byKey[access.Key] = summary
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([]tx.StateVersionDependency, 0, len(keys))
+	for _, key := range keys {
+		summary := byKey[key]
+		dependency := tx.StateVersionDependency{Key: key, RequiredVersion: lastWriter[key]}
+		if summary.write {
+			dependency.ProducedVersion = ordinal
+		}
+		out = append(out, dependency)
+	}
+	for _, key := range keys {
+		if byKey[key].write {
+			lastWriter[key] = ordinal
+		}
+	}
+	return out
+}
+
+func usesStatelessDirectExecution(routing RoutingPlugin) bool {
+	if routing == nil {
+		return false
+	}
+	switch routing.ID() {
+	case "metatrack_coaccess_routing", "stateless_hash_routing":
+		return true
+	default:
+		return false
+	}
+}
+
+func workloadIngressShard(record WorkloadRecord, route RoutingDecision, statelessDirect bool) string {
+	if statelessDirect {
+		return route.ShardID
+	}
 	if record.CrossShard && record.SourceShard != "" {
 		return record.SourceShard
 	}
 	return route.ShardID
 }
 
+func statelessPayload(payload string) string {
+	if !strings.HasPrefix(payload, "v5_cross:") {
+		if payload == "v5_cross" || payload == "" {
+			return "v5_stateless"
+		}
+		return payload
+	}
+	remainder := strings.TrimPrefix(payload, "v5_cross:")
+	if colon := strings.Index(remainder, ":"); colon >= 0 && colon+1 < len(remainder) {
+		return remainder[colon+1:]
+	}
+	return "v5_stateless"
+}
+
 type resolvedAccessEntry struct {
-	Index            int             `json:"index"`
-	LogicalID        string          `json:"logical_id"`
-	TxID             string          `json:"tx_id"`
-	Sender           string          `json:"sender"`
-	Receiver         string          `json:"receiver"`
-	SourceShard      string          `json:"source_shard"`
-	ExecutionShard   string          `json:"execution_shard"`
-	RoutingReason    string          `json:"routing_reason"`
-	AccessListDigest string          `json:"access_list_digest"`
-	AccessListSchema string          `json:"access_list_schema,omitempty"`
-	AccessListSource string          `json:"access_list_source,omitempty"`
-	AccessList       []tx.AccessItem `json:"access_list"`
+	Index                 int             `json:"index"`
+	LogicalID             string          `json:"logical_id"`
+	TxID                  string          `json:"tx_id"`
+	Sender                string          `json:"sender"`
+	Receiver              string          `json:"receiver"`
+	SourceShard           string          `json:"source_shard"`
+	ExecutionShard        string          `json:"execution_shard"`
+	RoutingReason         string          `json:"routing_reason"`
+	RoutingEpoch          uint64          `json:"routing_epoch"`
+	RoutePlanDigest       string          `json:"route_plan_digest,omitempty"`
+	RouteEntryDigest      string          `json:"route_entry_digest,omitempty"`
+	PredictedRemoteReads  int             `json:"predicted_remote_reads"`
+	PredictedRemoteWrites int             `json:"predicted_remote_writes"`
+	AccessListDigest      string          `json:"access_list_digest"`
+	AccessListSchema      string          `json:"access_list_schema,omitempty"`
+	AccessListSource      string          `json:"access_list_source,omitempty"`
+	AccessList            []tx.AccessItem `json:"access_list"`
 }
 
 func resolvedAccessEntryFromTransaction(record WorkloadRecord, item tx.SignedTransaction, sourceShard, executionShard, reason string) resolvedAccessEntry {
@@ -295,7 +417,11 @@ func resolvedAccessEntryFromTransaction(record WorkloadRecord, item tx.SignedTra
 	if digest == "" {
 		digest = CanonicalAccessListDigest(item.AccessList)
 	}
-	return resolvedAccessEntry{Index: record.Index, LogicalID: firstNonEmpty(record.LogicalID, item.TxID), TxID: item.TxID, Sender: item.Sender, Receiver: item.Receiver, SourceShard: sourceShard, ExecutionShard: executionShard, RoutingReason: reason, AccessListDigest: digest, AccessListSchema: item.AccessListSchema, AccessListSource: item.AccessListSource, AccessList: append([]tx.AccessItem(nil), item.AccessList...)}
+	entry := resolvedAccessEntry{Index: record.Index, LogicalID: firstNonEmpty(record.LogicalID, item.TxID), TxID: item.TxID, Sender: item.Sender, Receiver: item.Receiver, SourceShard: sourceShard, ExecutionShard: executionShard, RoutingReason: reason, RoutingEpoch: record.RoutingEpoch, RoutePlanDigest: record.RoutePlanDigest, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, AccessListDigest: digest, AccessListSchema: item.AccessListSchema, AccessListSource: item.AccessListSource, AccessList: append([]tx.AccessItem(nil), item.AccessList...)}
+	if item.ExecutionRouting != nil {
+		entry.RouteEntryDigest = item.ExecutionRouting.RouteEntryDigest
+	}
+	return entry
 }
 
 func writeResolvedAccessArtifacts(outDir string, rows []resolvedAccessEntry) error {
@@ -497,7 +623,7 @@ func requestedCrossShardCount(total int, ratio float64) int {
 	return int(math.Floor(float64(total)*ratio + 0.5))
 }
 
-func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any, accessRows, frequencyRows, coaccessRows, placementRows, transactionRows, dependencyRows, remoteStateRows *[][]string) {
+func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any, accessRows, frequencyRows, coaccessRows, placementRows, placementScoreRows, transactionRows, dependencyRows, remoteStateRows *[][]string) {
 	*planRows = append(*planRows, map[string]any{
 		"batch_index":                   plan.BatchIndex,
 		"plan_digest":                   plan.PlanDigest,
@@ -507,6 +633,9 @@ func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any,
 		"placement_budget":              plan.PlacementBudget,
 		"placement_min_budget":          plan.PlacementMinBudget,
 		"placement_mu":                  plan.PlacementMu,
+		"placement_capacity":            plan.PlacementCapacity,
+		"placement_total_frequency":     plan.PlacementTotalFrequency,
+		"placement_max_frequency":       plan.PlacementMaxFrequency,
 		"transaction_count":             len(plan.TransactionPlacements),
 		"state_key_count":               len(plan.StateFrequency),
 		"coaccess_edge_count":           len(plan.CoaccessEdges),
@@ -529,8 +658,11 @@ func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any,
 	for _, row := range plan.StatePlacements {
 		*placementRows = append(*placementRows, []string{fmt.Sprint(plan.BatchIndex), row.Key, row.HomeShard, row.ExecutionShard, fmt.Sprint(row.Frequency), row.Reason})
 	}
+	for _, row := range plan.PlacementScores {
+		*placementScoreRows = append(*placementScoreRows, []string{fmt.Sprint(plan.BatchIndex), row.Key, row.CandidateShard, fmt.Sprint(row.CoaccessLocalityGain), fmt.Sprint(row.Admissible), fmt.Sprint(row.Capacity), fmt.Sprint(row.ProjectedLoad), fmt.Sprint(row.ShardStateLoadPenalty), fmt.Sprint(row.Score)})
+	}
 	for _, row := range plan.TransactionPlacements {
-		*transactionRows = append(*transactionRows, []string{fmt.Sprint(plan.BatchIndex), row.LogicalID, fmt.Sprint(row.TxIndex), row.HomeShard, row.ExecutionShard, row.TargetShard, row.CoaccessGroup, fmt.Sprint(row.RemoteAccessCount), row.Reason})
+		*transactionRows = append(*transactionRows, []string{fmt.Sprint(plan.BatchIndex), row.LogicalID, fmt.Sprint(row.TxIndex), row.SenderGroupID, fmt.Sprint(row.RoutingEpoch), row.HomeShard, row.ExecutionShard, row.TargetShard, row.CoaccessGroup, fmt.Sprint(row.PredictedRemoteReads), fmt.Sprint(row.PredictedRemoteWrites), fmt.Sprint(row.RemoteAccessCount), fmt.Sprint(row.MajorityCoverage), fmt.Sprint(row.MajorityTie), fmt.Sprint(row.QueueLoadBefore), row.Reason})
 	}
 	placementByKey := map[string]StatePlacement{}
 	for _, row := range plan.StatePlacements {

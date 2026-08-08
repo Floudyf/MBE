@@ -42,3 +42,19 @@ def test_child_detail_keeps_only_safe_artifact_fields():
 def test_group_detail_never_exposes_scheduler_internals():
     body = group_detail({"run_group_id": "group", "worker_pid": 1, "bundle_path": "C:/secret", "retry_attempt": 2, "plan": {"name": "safe"}}, [_child()])
     assert not ({"worker_pid", "bundle_path", "retry_attempt"} & body["group"].keys())
+
+
+
+def test_group_detail_separates_failed_blocked_and_cancelled_counts():
+    base = _child()
+    children = [
+        base | {"child_run_id": "completed", "status": "completed"},
+        base | {"child_run_id": "failed", "status": "failed"},
+        base | {"child_run_id": "blocked", "status": "blocked"},
+        base | {"child_run_id": "cancelled", "status": "cancelled"},
+    ]
+    body = group_detail({"run_group_id": "group", "total_child_runs": 4}, children)
+    group = body["group"]
+    assert group["failed_child_runs"] == 1
+    assert group["blocked_child_runs"] == 1
+    assert group["cancelled_child_runs"] == 1

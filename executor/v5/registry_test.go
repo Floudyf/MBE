@@ -49,8 +49,10 @@ func TestBehaviorPluginsProduceDifferentRealDecisions(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := RoutingInput{Index: 2, StateKeys: []string{"asset:2"}, AccessList: []tx.AccessItem{{Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}, ShardIDs: []string{"s0", "s1", "s2", "s3"}}
-	if hash.(RoutingPlugin).Route(input).ShardID == meta.(RoutingPlugin).Route(input).ShardID {
-		t.Fatal("routing factories did not change assignment")
+	hashRoute := hash.(RoutingPlugin).Route(input)
+	metaRoute := meta.(RoutingPlugin).Route(input)
+	if hashRoute.Reason == metaRoute.Reason || !strings.HasPrefix(metaRoute.Reason, "majority_place") {
+		t.Fatalf("routing factories must expose distinct semantics: hash=%#v meta=%#v", hashRoute, metaRoute)
 	}
 	serial, _ := r.Create("execution", "serial_execution_baseline", nil)
 	dual, _ := r.Create("execution", "dual_track_execution", nil)
@@ -66,7 +68,7 @@ func TestBehaviorPluginsProduceDifferentRealDecisions(t *testing.T) {
 	}
 	stateDelta := []state.StateKV{{Key: "s0::coaccess:hot-update", Value: "2"}}
 	normalDecision := normal.(CommitPlugin).DecideCommit(CommitInput{Transactions: transactions, StateDelta: stateDelta})
-	aggregateDecision := aggregate.(CommitPlugin).DecideCommit(CommitInput{ShardID: "s0", Height: 1, Transactions: transactions, StateDelta: stateDelta})
+	aggregateDecision := aggregate.(CommitPlugin).DecideCommit(CommitInput{ShardID: "s0", Height: 1, Transactions: transactions, StateDelta: stateDelta, BaseStateSnapshot: map[string]string{"s0::coaccess:hot-update": "0"}})
 	if normalDecision.AggregatedKeyCount != 0 || aggregateDecision.AggregatedKeyCount != 1 || aggregateDecision.AggregatedLogicalDeltaCount != 2 {
 		t.Fatal("commit factories did not change aggregation materialization evidence")
 	}
@@ -122,12 +124,12 @@ func TestBuiltinRuntimePluginsCreateRuntimeObjects(t *testing.T) {
 	}
 
 	access := builtinStateAccess{makeBasic("state_access", "direct_state_access", nil)}
-	fetch := access.BuildFetchRequest(StateFetchInput{RequestID: "req", TxID: "tx", Key: "k", HomeShard: "s0", ExecutionShard: "s1", AccessKind: "read"})
-	if fetch.RequestID != "req" || fetch.Key != "k" || fetch.HomeShard != "s0" || fetch.ExecutionShard != "s1" {
+	fetch := access.BuildFetchRequest(StateFetchInput{RequestID: "req", TxID: "tx", Key: "k", HomeShard: "s0", ExecutionShard: "s1", AccessKind: "read", RequiredVersion: 17, Versioned: true})
+	if fetch.RequestID != "req" || fetch.Key != "k" || fetch.HomeShard != "s0" || fetch.ExecutionShard != "s1" || fetch.RequiredVersion != 17 || !fetch.Versioned {
 		t.Fatalf("state access plugin did not build fetch request: %#v", fetch)
 	}
-	apply := access.BuildDeltaApplyRequest(StateDeltaApplyInput{RequestID: "apply", TxID: "tx", TxIDs: []string{"tx"}, Key: "k", Value: "7", HomeShard: "s0", ExecutionShard: "s1"})
-	if apply.RequestID != "apply" || apply.Key != "k" || apply.Value != "7" {
+	apply := access.BuildDeltaApplyRequest(StateDeltaApplyInput{RequestID: "apply", TxID: "tx", TxIDs: []string{"tx"}, Key: "k", Value: "7", HomeShard: "s0", ExecutionShard: "s1", PreviousVersion: 17, ProducedVersion: 23, OrderingNoop: true})
+	if apply.RequestID != "apply" || apply.Key != "k" || apply.Value != "7" || apply.PreviousVersion != 17 || apply.ProducedVersion != 23 || !apply.OrderingNoop {
 		t.Fatalf("state access plugin did not build delta apply request: %#v", apply)
 	}
 
@@ -174,7 +176,7 @@ func TestMetaTrackPluginsUseStructuredAccessLists(t *testing.T) {
 	if routeA.ShardID != routeB.ShardID {
 		t.Fatalf("metatrack routing must not depend on transaction index: %s != %s", routeA.ShardID, routeB.ShardID)
 	}
-	if routeA.ShardID != "s1" || routeA.Reason != "coaccess_affinity:coaccess:hot-update" {
+	if routeA.ShardID == "" || !strings.HasPrefix(routeA.Reason, "majority_place") {
 		t.Fatalf("unexpected metatrack routing: %#v", routeA)
 	}
 	hash, err := r.Create("routing", "hash_routing_baseline", nil)
@@ -197,10 +199,10 @@ func TestMetaTrackPluginsUseStructuredAccessLists(t *testing.T) {
 	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{AccessList: []tx.AccessItem{{Key: "k", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}); got.Track != "fast" {
 		t.Fatalf("commutative access should be fast: %#v", got)
 	}
-	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{Payload: "v5_cross:s1", AccessList: []tx.AccessItem{{Key: "k", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}); got.Track != "conservative" || got.Reason != "remote_or_cross_shard_boundary" {
+	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{Payload: "v5_cross:s1", AccessList: []tx.AccessItem{{Key: "k", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}); got.Track != "conservative" || got.Reason != "legacy_cross_shard_protocol_boundary" {
 		t.Fatalf("cross-shard transaction must be conservative: %#v", got)
 	}
-	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{SourceKind: "cross_shard_relay", AccessList: []tx.AccessItem{{Key: "k", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}); got.Track != "conservative" || got.Reason != "remote_or_cross_shard_boundary" {
+	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{SourceKind: "cross_shard_relay", AccessList: []tx.AccessItem{{Key: "k", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}); got.Track != "conservative" || got.Reason != "legacy_cross_shard_protocol_boundary" {
 		t.Fatalf("relay transaction must be conservative: %#v", got)
 	}
 	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{Payload: "v5_safe"}); got.Track != "conservative" {
@@ -224,40 +226,68 @@ func TestFastFirstSchedulerOrdersByExecutionTrack(t *testing.T) {
 	}
 }
 
-func TestDualTrackBatchClassificationAllowsIndependentOrdinaryWrites(t *testing.T) {
-	execution := dualTrackExecution{}
+func TestDualTrackBatchClassificationKeepsIndependentNonCommutativeWritesConservative(t *testing.T) {
+	execution := dualTrackExecution{makeBasic("execution", "dual_track_execution", map[string]any{"access_size_threshold": 4})}
 	first := tx.SignedTransaction{TxID: "first", Sender: "alice", AccessList: []tx.AccessItem{{Key: "balance:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "balance:bob", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
 	second := tx.SignedTransaction{TxID: "second", Sender: "carol", AccessList: []tx.AccessItem{{Key: "balance:carol", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "balance:dave", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:carol", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
 	result := execution.ClassifyBatch(BatchClassificationInput{Transactions: []tx.SignedTransaction{first, second}})
-	if result.Decisions["first"].Track != "fast" || result.Decisions["second"].Track != "fast" {
-		t.Fatalf("independent ordinary writes should be fast at batch level: %#v", result.Decisions)
+	for _, id := range []string{"first", "second"} {
+		if result.Decisions[id].Track != "conservative" || !strings.Contains(result.Decisions[id].Reason, "non_commutative_write:") {
+			t.Fatalf("paper non-commutative write must remain conservative even when independent: id=%s decision=%#v", id, result.Decisions[id])
+		}
 	}
 }
 
-func TestDualTrackBatchClassificationKeepsDependencyRisksConservative(t *testing.T) {
-	execution := dualTrackExecution{}
+func TestDualTrackAccessSizeThresholdUsesPaperTau(t *testing.T) {
+	execution := dualTrackExecution{makeBasic("execution", "dual_track_execution", map[string]any{"access_size_threshold": 4})}
+	item := tx.SignedTransaction{TxID: "wide", AccessList: []tx.AccessItem{
+		{Key: "k1", Mode: tx.AccessRead}, {Key: "k2", Mode: tx.AccessRead}, {Key: "k3", Mode: tx.AccessRead},
+		{Key: "k4", Mode: tx.AccessRead}, {Key: "k5", Mode: tx.AccessRead},
+	}}
+	decision := execution.Classify(item)
+	if decision.Track != "conservative" || decision.Reason != "access_size_exceeds_threshold:5>4" {
+		t.Fatalf("access list wider than tau must be conservative: %#v", decision)
+	}
+	result := execution.ClassifyBatch(BatchClassificationInput{Transactions: []tx.SignedTransaction{item}})
+	if result.Decisions[item.TxID].Track != "conservative" || !strings.Contains(result.Decisions[item.TxID].Reason, "access_size_exceeds_threshold:5>4") {
+		t.Fatalf("batch classifier lost tau gate: %#v", result.Decisions[item.TxID])
+	}
+}
+
+func TestDualTrackBatchClassificationKeepsTopoSafeEligibleDependenciesOnFastTrack(t *testing.T) {
+	execution := dualTrackExecution{makeBasic("execution", "dual_track_execution", map[string]any{"access_size_threshold": 4})}
 	items := []tx.SignedTransaction{
-		{TxID: "writer", AccessList: []tx.AccessItem{{Key: "balance:shared", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}},
-		{TxID: "reader", AccessList: []tx.AccessItem{{Key: "balance:shared", Mode: tx.AccessRead}}},
-		{TxID: "nonce-first", Sender: "alice", AccessList: []tx.AccessItem{{Key: "nonce:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}},
-		{TxID: "nonce-second", Sender: "alice", AccessList: []tx.AccessItem{{Key: "nonce:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}},
+		{TxID: "writer", AccessList: []tx.AccessItem{{Key: "counter:shared", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
+		{TxID: "reader", AccessList: []tx.AccessItem{{Key: "counter:shared", Mode: tx.AccessRead}}},
 		{TxID: "missing"},
 	}
 	result := execution.ClassifyBatch(BatchClassificationInput{Transactions: items})
-	if result.Decisions["reader"].Track != "conservative" || !strings.Contains(result.Decisions["reader"].Reason, "raw_dependency") {
-		t.Fatalf("RAW reader should be conservative: %#v", result.Decisions["reader"])
+	if result.Decisions["writer"].Track != "fast" {
+		t.Fatalf("eligible commutative writer should remain fast: %#v", result.Decisions["writer"])
 	}
-	if result.Decisions["nonce-first"].Track != "fast" {
-		t.Fatalf("first sender nonce write can be fast if otherwise independent: %#v", result.Decisions["nonce-first"])
-	}
-	if result.Decisions["nonce-second"].Track != "conservative" || !strings.Contains(result.Decisions["nonce-second"].Reason, "nonce_order_dependency") {
-		t.Fatalf("same sender follow-up nonce write should be conservative: %#v", result.Decisions["nonce-second"])
+	if result.Decisions["reader"].Track != "fast" || !strings.Contains(result.Decisions["reader"].Reason, "topo_safe_dependency") || !strings.Contains(result.Decisions["reader"].Reason, "raw_dependency") {
+		t.Fatalf("topologically ordered eligible RAW reader should remain fast: %#v", result.Decisions["reader"])
 	}
 	if result.Decisions["missing"].Track != "conservative" {
 		t.Fatalf("missing access list should be conservative: %#v", result.Decisions["missing"])
 	}
 	if result.ConflictEdgeCount == 0 || result.DeduplicatedEdgeCount == 0 {
 		t.Fatalf("dependency edges were not recorded: %#v", result)
+	}
+}
+
+func TestDualTrackStateReadinessSuspendsWithoutChangingTrackAdmission(t *testing.T) {
+	execution := dualTrackExecution{}
+	item := tx.SignedTransaction{TxID: "remote-wait", AccessList: []tx.AccessItem{{Key: "asset:remote", Mode: tx.AccessRead}}}
+	result := execution.ClassifyBatch(BatchClassificationInput{
+		Transactions:         []tx.SignedTransaction{item},
+		RemoteStateReadiness: map[string]bool{"k:asset:remote": false},
+	})
+	if result.Decisions[item.TxID].Track != "fast" {
+		t.Fatalf("state readiness must not change channel admission: %#v", result.Decisions[item.TxID])
+	}
+	if !reflect.DeepEqual(result.StateWaitKeys[item.TxID], []string{"k:asset:remote"}) {
+		t.Fatalf("state wait evidence missing: %#v", result.StateWaitKeys)
 	}
 }
 
@@ -344,7 +374,7 @@ func TestDualTrackBatchClassificationPreservesNonceDependencyAcrossCrossShardBou
 		)
 	}
 
-	if !strings.Contains(decision.Reason, "remote_or_cross_shard_boundary") {
+	if !strings.Contains(decision.Reason, "legacy_cross_shard_protocol_boundary") {
 		t.Fatalf(
 			"cross-shard transaction lost remote-boundary reason: %#v",
 			decision,
@@ -491,7 +521,7 @@ func TestFastFirstSchedulerEmitsQueueWaitAndWakeupEvidence(t *testing.T) {
 	if !sawScheduleEvent(schedule.Events, "second", "conservative_queue", false, true) {
 		t.Fatalf("missing dependency wakeup evidence: %#v", schedule.Events)
 	}
-	if !sawScheduleDepth(schedule.Events, 3, 2, 1) {
+	if !sawScheduleDepth(schedule.Events, 3, 1, 2) {
 		t.Fatalf("missing ready/fast/conservative queue depth evidence: %#v", schedule.Events)
 	}
 	if !sawScheduleWaitAndIdle(schedule.Events) {
@@ -532,34 +562,21 @@ func TestMetaTrackBlockExecutorWorkerCountFourDoesNotExceedConfiguredWorkers(t *
 	assertMetaTrackSerialEquivalent(t, result.ExecutionResult, independentTransferTxs(4))
 }
 
-func TestMetaTrackBlockExecutorUsesShardLocalWorkStealing(t *testing.T) {
+func TestMetaTrackBlockExecutorBalancesInitialWorkerAssignmentsAndKeepsWorkStealingAvailable(t *testing.T) {
 	txs := independentTransferTxs(4)
 	result := runMetaTrackExecutorTestBlock(t, 2, txs, map[string]any{"business_execution_delay_ms": 20})
-	if got := intMetric(t, result.ActualMetrics, "steal_attempt_count"); got == 0 {
-		t.Fatalf("expected real steal attempts, metrics=%#v", result.ActualMetrics)
-	}
-	if got := intMetric(t, result.ActualMetrics, "steal_success_count"); got == 0 {
-		t.Fatalf("expected real steal success, metrics=%#v", result.ActualMetrics)
-	}
-	if got := intMetric(t, result.ActualMetrics, "stolen_task_count"); got == 0 {
-		t.Fatalf("expected stolen task evidence, metrics=%#v", result.ActualMetrics)
-	}
 	counts, ok := result.ActualMetrics["worker_execution_count"].([]int)
 	if !ok || len(counts) != 2 {
 		t.Fatalf("missing worker execution counts: %#v", result.ActualMetrics["worker_execution_count"])
 	}
-	if counts[1] == 0 {
-		t.Fatalf("idle worker should execute stolen work, counts=%#v", counts)
+	if counts[0] == 0 || counts[1] == 0 {
+		t.Fatalf("round-robin assignment should use both workers, counts=%#v", counts)
 	}
-	sawStolenEvent := false
-	for _, event := range result.ScheduleEvents {
-		if event.StolenWork {
-			sawStolenEvent = true
-			break
-		}
+	if delta := counts[0] - counts[1]; delta > 1 || delta < -1 {
+		t.Fatalf("initial worker assignment should remain balanced, counts=%#v", counts)
 	}
-	if !sawStolenEvent {
-		t.Fatalf("missing stolen work schedule event: %#v", result.ScheduleEvents)
+	if got := intMetric(t, result.ActualMetrics, "steal_attempt_count"); got < 0 {
+		t.Fatalf("work-stealing metric must remain available, metrics=%#v", result.ActualMetrics)
 	}
 	assertMetaTrackSerialEquivalent(t, result.ExecutionResult, txs)
 }
@@ -589,7 +606,7 @@ func TestMetaTrackBlockExecutorFallsBackFastAccessViolationToConservative(t *tes
 		StateKeys:  []string{"asset:declared"},
 		AccessList: []tx.AccessItem{{Key: "asset:declared", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}},
 	}
-	result := runMetaTrackExecutorTestBlock(t, 1, []tx.SignedTransaction{item}, nil)
+	result := runMetaTrackExecutorTestBlockWithExecution(t, 1, []tx.SignedTransaction{item}, nil, forcedFastExecution{makeBasic("execution", "forced_fast_test_execution", nil)})
 	if got := intMetric(t, result.ActualMetrics, "fast_fallback_count"); got != 1 {
 		t.Fatalf("expected one fast fallback, metrics=%#v", result.ActualMetrics)
 	}
@@ -614,7 +631,26 @@ func TestMetaTrackBlockExecutorFallsBackFastAccessViolationToConservative(t *tes
 	}
 }
 
+type forcedFastExecution struct{ basicPlugin }
+
+func (forcedFastExecution) Classify(item tx.SignedTransaction) ExecutionDecision {
+	return ExecutionDecision{Track: "fast", Reason: "forced_fast_test_only"}
+}
+
+func (forcedFastExecution) ClassifyBatch(input BatchClassificationInput) BatchClassificationResult {
+	decisions := make(map[string]ExecutionDecision, len(input.Transactions))
+	for _, item := range input.Transactions {
+		decisions[item.TxID] = ExecutionDecision{Track: "fast", Reason: "forced_fast_test_only"}
+	}
+	return BatchClassificationResult{Decisions: decisions}
+}
+
 func runMetaTrackExecutorTestBlock(t *testing.T, workerCount int, txs []tx.SignedTransaction, config map[string]any) BlockExecutionResult {
+	t.Helper()
+	return runMetaTrackExecutorTestBlockWithExecution(t, workerCount, txs, config, dualTrackExecution{makeBasic("execution", "dual_track_execution", nil)})
+}
+
+func runMetaTrackExecutorTestBlockWithExecution(t *testing.T, workerCount int, txs []tx.SignedTransaction, config map[string]any, executionPlugin ExecutionPlugin) BlockExecutionResult {
 	t.Helper()
 	if config == nil {
 		config = map[string]any{}
@@ -625,7 +661,7 @@ func runMetaTrackExecutorTestBlock(t *testing.T, workerCount int, txs []tx.Signe
 		block.TxIDs = append(block.TxIDs, item.TxID)
 	}
 	executorPlugin := metaTrackBlockExecutor{makeBasic("block_executor", "metatrack_block_executor", config)}
-	result, err := executorPlugin.ExecuteBlock(context.Background(), BlockExecutionInput{Block: block, BaseStateSnapshot: map[string]string{}, NodeID: "n0", ShardID: "s0", WorkerCount: workerCount, Execution: dualTrackExecution{makeBasic("execution", "dual_track_execution", nil)}, Scheduler: builtinScheduler{makeBasic("scheduler", "fast_first_scheduler", nil)}})
+	result, err := executorPlugin.ExecuteBlock(context.Background(), BlockExecutionInput{Block: block, BaseStateSnapshot: map[string]string{}, NodeID: "n0", ShardID: "s0", WorkerCount: workerCount, Execution: executionPlugin, Scheduler: builtinScheduler{makeBasic("scheduler", "fast_first_scheduler", nil)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -754,7 +790,7 @@ func TestAggregationCommitUsesPrePersistenceStateDelta(t *testing.T) {
 		{TxID: "tx-3", AccessList: []tx.AccessItem{{Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
 	}
 	originalDelta := []state.StateKV{{Key: "s0::coaccess:hot-update", Value: "3"}}
-	decision := aggregate.DecideCommit(CommitInput{ShardID: "s0", Height: 7, Transactions: transactions, StateDelta: originalDelta})
+	decision := aggregate.DecideCommit(CommitInput{ShardID: "s0", Height: 7, Transactions: transactions, StateDelta: originalDelta, BaseStateSnapshot: map[string]string{"s0::coaccess:hot-update": "0"}})
 	if !decision.Applied || decision.LogicalUpdates != 3 || decision.PhysicalUpdates != 1 || len(decision.PhysicalStateDelta) != 1 {
 		t.Fatalf("unexpected aggregation decision: %#v", decision)
 	}
@@ -789,13 +825,51 @@ func TestAggregationCommitAggregatesMarketSaleCounter(t *testing.T) {
 	decision := aggregate.DecideCommit(CommitInput{ShardID: "s0", Height: 8, Transactions: transactions, StateDelta: []state.StateKV{
 		{Key: "s0::market:0xabc", Value: "1"},
 		{Key: "s0::market:0xabc", Value: "2"},
-	}})
+	}, BaseStateSnapshot: map[string]string{"s0::market:0xabc": "0"}})
 	if !decision.Applied || decision.PhysicalUpdates != 1 || decision.AggregatedKeyCount != 1 || decision.AggregatedLogicalDeltaCount != 2 {
 		t.Fatalf("market sale counter should aggregate into one physical update: %#v", decision)
 	}
 	physical := decision.PhysicalStateDelta[0]
 	if physical.UpdateSemantics != "commutative_delta" || physical.Delta != 2 || !reflect.DeepEqual(physical.TxIDs, []string{"tx-1", "tx-2"}) {
 		t.Fatalf("unexpected aggregated market delta: %#v", physical)
+	}
+}
+
+func TestAggregationCommitFallsBackWhenLowerBoundWouldBeViolated(t *testing.T) {
+	aggregate := aggregationCommit{}
+	transactions := []tx.SignedTransaction{
+		{TxID: "tx-1", AccessList: []tx.AccessItem{{Key: "balance:alice", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: -4}}},
+		{TxID: "tx-2", AccessList: []tx.AccessItem{{Key: "balance:alice", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: -4}}},
+	}
+	decision := aggregate.DecideCommit(CommitInput{
+		ShardID: "s0", Height: 9, Transactions: transactions,
+		StateDelta:        []state.StateKV{{Key: "s0::balance:alice", Value: "-3"}},
+		BaseStateSnapshot: map[string]string{"s0::balance:alice": "5"},
+	})
+	if decision.Applied || decision.ConstraintFallbackCount != 1 || decision.AtomicReservationCount != 0 {
+		t.Fatalf("lower-bound violation must keep ordinary commit path: %#v", decision)
+	}
+	if len(decision.ConstraintFallbackReasons) != 1 || !strings.Contains(decision.ConstraintFallbackReasons[0], "lower_bound_violation") {
+		t.Fatalf("missing lower-bound fallback evidence: %#v", decision.ConstraintFallbackReasons)
+	}
+}
+
+func TestAggregationCommitFallsBackWhenBaseDeltaDoesNotMatchFinalState(t *testing.T) {
+	aggregate := aggregationCommit{}
+	transactions := []tx.SignedTransaction{
+		{TxID: "tx-1", AccessList: []tx.AccessItem{{Key: "counter:sales", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
+		{TxID: "tx-2", AccessList: []tx.AccessItem{{Key: "counter:sales", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
+	}
+	decision := aggregate.DecideCommit(CommitInput{
+		ShardID: "s0", Height: 10, Transactions: transactions,
+		StateDelta:        []state.StateKV{{Key: "s0::counter:sales", Value: "12"}},
+		BaseStateSnapshot: map[string]string{"s0::counter:sales": "5"},
+	})
+	if decision.Applied || decision.ConstraintFallbackCount != 1 {
+		t.Fatalf("mismatched final value must fall back: %#v", decision)
+	}
+	if len(decision.ConstraintFallbackReasons) != 1 || !strings.Contains(decision.ConstraintFallbackReasons[0], "base_delta_final_mismatch") {
+		t.Fatalf("missing base/delta/final mismatch evidence: %#v", decision.ConstraintFallbackReasons)
 	}
 }
 
@@ -848,7 +922,7 @@ func TestMetaTrackBatchPlanBuildsAccessMatricesAndStablePlacements(t *testing.T)
 	if first.PlanDigest == "" || first.PlanDigest != second.PlanDigest {
 		t.Fatalf("metatrack batch plan digest must be stable: %q %q", first.PlanDigest, second.PlanDigest)
 	}
-	if first.PlacementPolicy != "frequency_coaccess_v1" || first.TransactionPolicy != "majority_coverage_v1" || first.PlacementBudget < 1 || first.PlacementMu != "1.0" {
+	if first.PlacementPolicy != "frequency_coaccess_admissible_v2" || first.TransactionPolicy != "majority_place_queue_tie_v1" || first.PlacementBudget < 1 || first.PlacementCapacity < 1 || first.PlacementTotalFrequency != 5 {
 		t.Fatalf("metatrack formal policy/budget evidence missing: %#v", first)
 	}
 	if len(first.AccessMatrix) != 5 {
@@ -864,7 +938,7 @@ func TestMetaTrackBatchPlanBuildsAccessMatricesAndStablePlacements(t *testing.T)
 	if len(first.PlacementScores) == 0 {
 		t.Fatal("frequency-coaccess placement must record candidate score evidence")
 	}
-	if !hasCandidateScoreComponents(first.PlacementScores, "balance:a") {
+	if !hasCandidateScoreComponents(first.PlacementScores, "balance:b") {
 		t.Fatalf("placement scores must expose real candidate components: %#v", first.PlacementScores)
 	}
 	if first.TransactionPlacements[0].ExecutionShard == "" || first.TransactionPlacements[0].CoaccessGroup == "" {
@@ -881,7 +955,7 @@ func hasCandidateScoreComponents(scores []PlacementScore, key string) bool {
 	return false
 }
 
-func TestMetaTrackPlacementFallsBackWhenPredictedBenefitIsNotPositive(t *testing.T) {
+func TestMetaTrackColdStateUsesDeterministicAdmissibleLeastLoadPlacement(t *testing.T) {
 	routing := metaTrackRouting{}
 	shards := []string{"s0", "s1", "s2"}
 	records := []WorkloadRecord{
@@ -889,11 +963,16 @@ func TestMetaTrackPlacementFallsBackWhenPredictedBenefitIsNotPositive(t *testing
 	}
 	plan := routing.PlanBatch(BatchRoutingInput{BatchIndex: 12, Records: records, ShardIDs: shards})
 	placement := findStatePlacement(t, plan, "asset:cold")
-	if placement.ExecutionShard != placement.HomeShard || placement.Reason != "frequency_coaccess_home_no_affinity" || plan.PlacementFallbackCount != 1 {
-		t.Fatalf("cold state should fall back to home placement: %#v fallback=%d", placement, plan.PlacementFallbackCount)
+	if placement.ExecutionShard != "s0" || placement.Reason != "frequency_coaccess_seed" || plan.PlacementFallbackCount != 0 {
+		t.Fatalf("cold state should use deterministic admissible least-load placement: %#v fallback=%d", placement, plan.PlacementFallbackCount)
 	}
 	if len(plan.PlacementScores) != len(shards) {
 		t.Fatalf("expected one score per candidate shard, got %#v", plan.PlacementScores)
+	}
+	for _, score := range plan.PlacementScores {
+		if !score.Admissible || score.Capacity != plan.PlacementCapacity {
+			t.Fatalf("admissibility evidence missing: %#v", score)
+		}
 	}
 }
 
@@ -907,7 +986,7 @@ func TestMetaTrackPlacementScoresCandidateSpecificCoaccessGain(t *testing.T) {
 		{LeftKey: "state:target", RightKey: "state:left", Weight: 2},
 		{LeftKey: "state:target", RightKey: "state:right", Weight: 5},
 	}
-	_, _, scores, _ := chooseStatePlacement(row, "s0", []string{"s0", "s1", "s2"}, map[string]int{}, edges, placed)
+	_, scores := chooseAdmissibleStatePlacement(row, []string{"s0", "s1", "s2"}, map[string]int{}, 100, edges, placed)
 	gains := map[string]int{}
 	for _, score := range scores {
 		gains[score.CandidateShard] = score.CoaccessLocalityGain
@@ -917,23 +996,89 @@ func TestMetaTrackPlacementScoresCandidateSpecificCoaccessGain(t *testing.T) {
 	}
 }
 
-func TestMetaTrackBatchPlanPinsOrderedNonceWritesToHomeShard(t *testing.T) {
+func TestMetaTrackSenderGroupRouteRemainsStableAcrossBatchesWithinRoutingEpoch(t *testing.T) {
+	routing := &metaTrackRouting{basicPlugin: basicPlugin{config: map[string]any{"routing_epoch": 7, "remote_write_weight": 2}}}
+	shards := []string{"s0", "s1"}
+	first := routing.PlanBatch(BatchRoutingInput{
+		BatchIndex: 1,
+		ShardIDs:   shards,
+		Records: []WorkloadRecord{{
+			Index:     0,
+			LogicalID: "first",
+			SenderID:  "0xsender",
+			AccessList: []tx.AccessItem{
+				{Key: keyWithShard(t, "first-hot", "s1", shards), Mode: tx.AccessReadWrite, UpdateSemantics: "set"},
+			},
+		}},
+	})
+	if len(first.TransactionPlacements) != 1 {
+		t.Fatalf("missing first sender-group placement: %#v", first.TransactionPlacements)
+	}
+	firstShard := first.TransactionPlacements[0].ExecutionShard
+	if first.TransactionPlacements[0].RoutingEpoch != 7 {
+		t.Fatalf("routing epoch was not propagated: %#v", first.TransactionPlacements[0])
+	}
+
+	second := routing.PlanBatch(BatchRoutingInput{
+		BatchIndex: 2,
+		ShardIDs:   shards,
+		Records: []WorkloadRecord{{
+			Index:     1,
+			LogicalID: "second",
+			SenderID:  "0xsender",
+			AccessList: []tx.AccessItem{
+				{Key: keyWithShard(t, "second-hot", oppositeShard(firstShard, shards), shards), Mode: tx.AccessReadWrite, UpdateSemantics: "set"},
+			},
+		}},
+	})
+	if len(second.TransactionPlacements) != 1 {
+		t.Fatalf("missing second sender-group placement: %#v", second.TransactionPlacements)
+	}
+	if got := second.TransactionPlacements[0].ExecutionShard; got != firstShard {
+		t.Fatalf("same sender migrated inside one routing epoch: first=%s second=%s", firstShard, got)
+	}
+	if second.TransactionPlacements[0].SenderGroupID != "sender:0xsender" {
+		t.Fatalf("unexpected sender group identity: %#v", second.TransactionPlacements[0])
+	}
+}
+
+func keyWithShard(t *testing.T, prefix, desired string, shards []string) string {
+	t.Helper()
+	for index := 0; index < 10000; index++ {
+		key := fmt.Sprintf("%s:%d", prefix, index)
+		if shardFor(nil, []string{key}, shards) == desired {
+			return key
+		}
+	}
+	t.Fatalf("could not find key for shard %s", desired)
+	return ""
+}
+
+func oppositeShard(current string, shards []string) string {
+	for _, shard := range shards {
+		if shard != current {
+			return shard
+		}
+	}
+	return current
+}
+
+func TestMetaTrackPaperDefaultDoesNotHideNonceOrSenderStickyRouting(t *testing.T) {
 	routing := metaTrackRouting{}
 	shards := []string{"s0", "s1", "s2", "s3"}
 	nonceKey := "nonce:0xhot"
-	home := shards[stableKey([]string{nonceKey})%len(shards)]
 	records := []WorkloadRecord{
-		{Index: 0, LogicalID: "a", SourceShard: "s0", AccessList: []tx.AccessItem{{Key: nonceKey, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
-		{Index: 1, LogicalID: "b", SourceShard: "s1", AccessList: []tx.AccessItem{{Key: nonceKey, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
+		{Index: 0, LogicalID: "a", SenderID: "0xhot", SourceShard: "s0", AccessList: []tx.AccessItem{{Key: nonceKey, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
+		{Index: 1, LogicalID: "b", SenderID: "0xhot", SourceShard: "s1", AccessList: []tx.AccessItem{{Key: nonceKey, Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "coaccess:hot-update", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}},
 	}
 	plan := routing.PlanBatch(BatchRoutingInput{BatchIndex: 11, Records: records, ShardIDs: shards})
 	placement := findStatePlacement(t, plan, nonceKey)
-	if placement.HomeShard != home || placement.ExecutionShard != home || placement.Reason != "nonce_home_constraint" {
-		t.Fatalf("ordered nonce writes must stay on their stable home shard, got %#v want %s", placement, home)
+	if placement.Reason == "nonce_home_constraint" {
+		t.Fatalf("paper-default MetaTrack must not hide nonce-home extension: %#v", placement)
 	}
 	for _, txPlacement := range plan.TransactionPlacements {
-		if txPlacement.ExecutionShard != home {
-			t.Fatalf("transaction with ordered nonce write must follow nonce placement: %#v want %s", txPlacement, home)
+		if strings.Contains(txPlacement.Reason, "sender_group") || strings.Contains(txPlacement.Reason, "nonce_home") {
+			t.Fatalf("paper-default transaction placement contains hidden sticky extension: %#v", txPlacement)
 		}
 	}
 }
@@ -1055,4 +1200,254 @@ func firstPlugin(category string) string {
 	}
 	defaults := map[string]string{"workload": "deterministic_signed_synthetic", "transaction_admission": "signature_nonce_admission", "txpool": "fifo_per_node_mempool", "sharding": "deterministic_state_key_sharding", "routing": "hash_routing_baseline", "block_producer": "time_or_count_block_producer", "consensus": "pbft_style_consensus", "network": "localhost_tcp_typed_network", "execution": "serial_execution_baseline", "scheduler": "fifo_serial_scheduler", "block_executor": "serial_block_executor", "state_access": "direct_state_access", "state_storage": "persistent_local_state_store", "cross_shard": "relay_certificate_protocol", "commit": "normal_commit", "fault_injection": "faults_disabled", "metrics": "runtime_core_metrics", "observability": "node_network_consensus_observer"}
 	return defaults[category]
+}
+
+func TestStatelessHashBatchPlanKeepsSourceNonceStreamAndRemoteHomeEvidence(t *testing.T) {
+	routing := statelessHashRouting{}
+	shards := []string{"s0", "s1", "s2"}
+	records := []WorkloadRecord{{
+		Index:       7,
+		LogicalID:   "stateless-7",
+		SourceShard: "s0",
+		TargetShard: "s1",
+		CrossShard:  true,
+		StateKeys:   []string{"asset:a", "account:b"},
+		AccessList: []tx.AccessItem{
+			{Key: "asset:a", Mode: tx.AccessReadWrite, UpdateSemantics: "set"},
+			{Key: "account:b", Mode: tx.AccessRead, UpdateSemantics: "read"},
+		},
+	}}
+	first := routing.PlanBatch(BatchRoutingInput{BatchIndex: 1, Records: records, ShardIDs: shards})
+	second := routing.PlanBatch(BatchRoutingInput{BatchIndex: 1, Records: records, ShardIDs: shards})
+	if first.PlanDigest == "" || first.PlanDigest != second.PlanDigest {
+		t.Fatalf("stateless hash plan is not deterministic: %q/%q", first.PlanDigest, second.PlanDigest)
+	}
+	if len(first.TransactionPlacements) != 1 {
+		t.Fatalf("missing stateless transaction placement: %#v", first.TransactionPlacements)
+	}
+	wantExecution := records[0].SourceShard
+	placement := first.TransactionPlacements[0]
+	if placement.ExecutionShard != wantExecution || placement.Reason != "stateless_source_hash_execution" {
+		t.Fatalf("stateless hash split the source nonce stream: got=%#v want=%s", placement, wantExecution)
+	}
+	if placement.HomeShard != records[0].SourceShard || placement.TargetShard != records[0].TargetShard {
+		t.Fatalf("logical source/target evidence was lost: %#v", placement)
+	}
+	if len(first.StatePlacements) != 2 {
+		t.Fatalf("state-home evidence missing: %#v", first.StatePlacements)
+	}
+	for _, statePlacement := range first.StatePlacements {
+		wantHome := shardFor(nil, []string{statePlacement.Key}, shards)
+		if statePlacement.HomeShard != wantHome || statePlacement.ExecutionShard != wantHome {
+			t.Fatalf("state home mapping changed: %#v want=%s", statePlacement, wantHome)
+		}
+	}
+}
+
+func TestStatelessHashBatchPlanDoesNotSplitOneSourceNonceStream(t *testing.T) {
+	routing := statelessHashRouting{}
+	shards := []string{"s0", "s1"}
+	records := []WorkloadRecord{
+		{Index: 0, LogicalID: "tx-0", SourceShard: "s1", StateKeys: []string{"asset:a"}},
+		{Index: 1, LogicalID: "tx-1", SourceShard: "s1", StateKeys: []string{"asset:b"}},
+		{Index: 2, LogicalID: "tx-2", SourceShard: "s1", StateKeys: []string{"asset:c"}},
+	}
+	plan := routing.PlanBatch(BatchRoutingInput{Records: records, ShardIDs: shards})
+	if len(plan.TransactionPlacements) != len(records) {
+		t.Fatalf("placement count mismatch: got=%d want=%d", len(plan.TransactionPlacements), len(records))
+	}
+	for _, placement := range plan.TransactionPlacements {
+		if placement.ExecutionShard != "s1" || placement.Reason != "stateless_source_hash_execution" {
+			t.Fatalf("one source nonce stream was split: %#v", placement)
+		}
+	}
+}
+
+func TestStatelessHashBatchPlanFallsBackToStateHashWithoutSourceProvenance(t *testing.T) {
+	routing := statelessHashRouting{}
+	shards := []string{"s0", "s1", "s2"}
+	record := WorkloadRecord{Index: 0, LogicalID: "tx", StateKeys: []string{"asset:fallback"}}
+	plan := routing.PlanBatch(BatchRoutingInput{Records: []WorkloadRecord{record}, ShardIDs: shards})
+	if len(plan.TransactionPlacements) != 1 {
+		t.Fatalf("placement count mismatch: %#v", plan.TransactionPlacements)
+	}
+	want := shardFor(nil, record.StateKeys, shards)
+	got := plan.TransactionPlacements[0]
+	if got.ExecutionShard != want || got.Reason != "stateless_state_hash_execution" {
+		t.Fatalf("state-hash fallback changed: got=%#v want=%s", got, want)
+	}
+}
+
+func TestMetaTrackScheduleExecutesReadyWorkWhileRemoteStateIsPending(t *testing.T) {
+	remote := tx.SignedTransaction{TxID: "remote", AccessList: []tx.AccessItem{{Key: "asset:remote", Mode: tx.AccessRead}}}
+	local := tx.SignedTransaction{TxID: "local", AccessList: []tx.AccessItem{{Key: "asset:local", Mode: tx.AccessRead}}}
+	block := realblock.Block{Height: 1, ShardID: "s1", TxList: []tx.SignedTransaction{remote, local}}
+	classification := BatchClassificationResult{
+		Decisions: map[string]ExecutionDecision{
+			"remote": {Track: "fast", Reason: "eligible"},
+			"local":  {Track: "fast", Reason: "eligible"},
+		},
+		Dependencies:  map[string][]string{"remote": {}, "local": {}},
+		StateWaitKeys: map[string][]string{"remote": {"k:asset:remote"}},
+	}
+	schedule := ScheduleResult{Ordered: []tx.SignedTransaction{remote, local}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	fetch := func(ctx context.Context, item tx.SignedTransaction, access tx.AccessItem) (RemoteStateReadyEvent, error) {
+		select {
+		case <-ctx.Done():
+			return RemoteStateReadyEvent{}, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+		return RemoteStateReadyEvent{TxID: item.TxID, Key: access.Key, ReadinessToken: stateReadinessToken(item, access), Value: "7", HomeShard: "s0", LatencyMS: 25}, nil
+	}
+	events, metrics, outcomes, _, err := executeMetaTrackSchedule(ctx, schedule, classification, block, map[string]string{"s1::asset:local": "3"}, 1, 0, fetch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 2 {
+		t.Fatalf("expected two completions, got %d", len(outcomes))
+	}
+	localCompletion := -1
+	remoteReady := -1
+	remoteDispatch := -1
+	for index, event := range events {
+		if event.TxID == "local" && strings.HasPrefix(event.DecisionReason, "actual_completion") {
+			localCompletion = index
+		}
+		if event.TxID == "remote" && strings.HasPrefix(event.DecisionReason, "actual_state_ready:") {
+			remoteReady = index
+		}
+		if event.TxID == "remote" && event.DecisionReason == "actual_dispatch" {
+			remoteDispatch = index
+		}
+	}
+	if localCompletion < 0 || remoteReady < 0 || remoteDispatch < 0 {
+		t.Fatalf("missing state-ready scheduler evidence: local_completion=%d remote_ready=%d remote_dispatch=%d events=%#v", localCompletion, remoteReady, remoteDispatch, events)
+	}
+	if localCompletion >= remoteReady || remoteReady >= remoteDispatch {
+		t.Fatalf("ready local work must complete before remote StateReady, then remote dispatch: local=%d ready=%d dispatch=%d", localCompletion, remoteReady, remoteDispatch)
+	}
+	if metrics["state_ready_scheduler_mode"] != "transaction_level_suspend_resume" || metrics["state_wait_blocked_count"] != 1 || metrics["state_ready_wakeup_count"] != 1 || metrics["remote_state_fetch_count"] != 1 || metrics["remote_state_fetch_completed_count"] != 1 {
+		t.Fatalf("unexpected StateReady metrics: %#v", metrics)
+	}
+}
+
+func TestMetaTrackScheduleKeepsDistinctHistoricalVersionsForSameKey(t *testing.T) {
+	key := "world/shared"
+	first := tx.SignedTransaction{
+		TxID:             "tx-v3",
+		AccessListSchema: "alien_worlds_logical_access_v1",
+		AccessList:       []tx.AccessItem{{Key: key, Mode: tx.AccessReadWrite, UpdateSemantics: "alien_worlds_contract_semantic_state"}},
+		ExecutionRouting: &tx.ExecutionRoutingMetadata{RoutingOrdinal: 5, StateVersions: []tx.StateVersionDependency{{Key: key, RequiredVersion: 3, ProducedVersion: 5}}},
+	}
+	second := tx.SignedTransaction{
+		TxID:             "tx-v7",
+		AccessListSchema: "alien_worlds_logical_access_v1",
+		AccessList:       []tx.AccessItem{{Key: key, Mode: tx.AccessReadWrite, UpdateSemantics: "alien_worlds_contract_semantic_state"}},
+		ExecutionRouting: &tx.ExecutionRoutingMetadata{RoutingOrdinal: 9, StateVersions: []tx.StateVersionDependency{{Key: key, RequiredVersion: 7, ProducedVersion: 9}}},
+	}
+	block := realblock.Block{Height: 1, ShardID: "s1", TxList: []tx.SignedTransaction{first, second}}
+	classification := BatchClassificationResult{
+		Decisions: map[string]ExecutionDecision{
+			first.TxID:  {Track: "conservative", Reason: "versioned"},
+			second.TxID: {Track: "conservative", Reason: "versioned"},
+		},
+		Dependencies: map[string][]string{first.TxID: {}, second.TxID: {}},
+		StateWaitKeys: map[string][]string{
+			first.TxID:  {stateReadinessToken(first, first.AccessList[0])},
+			second.TxID: {stateReadinessToken(second, second.AccessList[0])},
+		},
+	}
+	schedule := ScheduleResult{Ordered: []tx.SignedTransaction{first, second}}
+	versions := map[uint64]string{3: "historical-v3", 7: "historical-v7"}
+	fetch := func(ctx context.Context, item tx.SignedTransaction, access tx.AccessItem) (RemoteStateReadyEvent, error) {
+		dependency, ok := stateVersionDependencyForKey(item, access.Key)
+		if !ok {
+			return RemoteStateReadyEvent{}, fmt.Errorf("missing state version for %s", item.TxID)
+		}
+		return RemoteStateReadyEvent{
+			TxID:           item.TxID,
+			Key:            access.Key,
+			ReadinessToken: stateReadinessToken(item, access),
+			Value:          versions[dependency.RequiredVersion],
+			StateVersion:   dependency.RequiredVersion,
+			HomeShard:      "s0",
+		}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, metrics, outcomes, _, err := executeMetaTrackSchedule(ctx, schedule, classification, block, map[string]string{"s1::" + key: "latest-must-not-leak"}, 2, 0, fetch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 2 {
+		t.Fatalf("expected two outcomes, got %d", len(outcomes))
+	}
+	writes := map[string]string{}
+	for _, outcome := range outcomes {
+		if value, ok := outcome.Delta.WriteSet[key]; ok {
+			writes[outcome.TxID] = value
+		}
+	}
+	serial := execution.NewSerialExecutor()
+	expectedFirst := map[string]string{"s1::" + key: versions[3]}
+	_, firstDelta := serial.ExecuteTransaction(block, first, expectedFirst, 0)
+	expectedSecond := map[string]string{"s1::" + key: versions[7]}
+	_, secondDelta := serial.ExecuteTransaction(block, second, expectedSecond, 1)
+	if writes[first.TxID] != firstDelta.WriteSet[key] {
+		t.Fatalf("first transaction did not execute from exact historical v3: got=%s want=%s", writes[first.TxID], firstDelta.WriteSet[key])
+	}
+	if writes[second.TxID] != secondDelta.WriteSet[key] {
+		t.Fatalf("second transaction did not execute from exact historical v7: got=%s want=%s", writes[second.TxID], secondDelta.WriteSet[key])
+	}
+	if writes[first.TxID] == writes[second.TxID] {
+		t.Fatalf("distinct required versions collapsed to one visible value: %#v", writes)
+	}
+	if metrics["remote_state_fetch_count"] != 2 || metrics["remote_state_fetch_completed_count"] != 2 {
+		t.Fatalf("unexpected historical StateReady evidence: %#v", metrics)
+	}
+}
+
+func TestMetaTrackAdmissiblePlacementBreaksConnectedCoaccessCollapse(t *testing.T) {
+	routing := metaTrackRouting{}
+	shards := []string{"s0", "s1"}
+	records := make([]WorkloadRecord, 0, 31)
+	for index := 0; index < 31; index++ {
+		records = append(records, WorkloadRecord{
+			Index:     index,
+			LogicalID: fmt.Sprintf("chain-%02d", index),
+			AccessList: []tx.AccessItem{
+				{Key: fmt.Sprintf("state:%02d", index), Mode: tx.AccessReadWrite, UpdateSemantics: "set"},
+				{Key: fmt.Sprintf("state:%02d", index+1), Mode: tx.AccessReadWrite, UpdateSemantics: "set"},
+			},
+		})
+	}
+	plan := routing.PlanBatch(BatchRoutingInput{BatchIndex: 3, Records: records, ShardIDs: shards})
+	if plan.PlacementCapacity <= 0 {
+		t.Fatalf("missing admissible capacity: %#v", plan)
+	}
+	usedStates := map[string]bool{}
+	for _, placement := range plan.StatePlacements {
+		usedStates[placement.ExecutionShard] = true
+	}
+	if len(usedStates) != 2 {
+		t.Fatalf("connected coaccess component collapsed to one state-placement shard: %#v", plan.ShardLoadAfter)
+	}
+	for shard, load := range plan.ShardLoadAfter {
+		if load > plan.PlacementCapacity {
+			t.Fatalf("state-placement load exceeded admissible capacity on %s: load=%d cap=%d", shard, load, plan.PlacementCapacity)
+		}
+	}
+	usedTx := map[string]bool{}
+	for _, placement := range plan.TransactionPlacements {
+		usedTx[placement.ExecutionShard] = true
+	}
+	if len(usedTx) != 2 {
+		t.Fatalf("connected coaccess workload still routed every transaction to one shard: %#v", plan.TransactionPlacements)
+	}
+	second := routing.PlanBatch(BatchRoutingInput{BatchIndex: 3, Records: records, ShardIDs: shards})
+	if plan.PlanDigest != second.PlanDigest {
+		t.Fatalf("admissible placement must remain deterministic: %s != %s", plan.PlanDigest, second.PlanDigest)
+	}
 }

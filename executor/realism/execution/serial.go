@@ -109,47 +109,107 @@ func (e *SerialExecutor) ExecuteBlock(b block.Block, base map[string]string) Res
 	return result
 }
 
+// ExecuteTransaction executes one transaction against an immutable caller-provided
+// snapshot and returns only the receipt and logical delta required by
+// speculative schedulers. It avoids constructing a one-transaction block
+// result and avoids durable state-root hashing for tentative work.
+func (e *SerialExecutor) ExecuteTransaction(b block.Block, item tx.SignedTransaction, base map[string]string, originalIndex int) (Receipt, TxDelta) {
+	overlay := newTxOverlay(b.ShardID, base)
+	receipt := e.executeTxWithoutStateRoot(b, overlay, item)
+	delta := TxDelta{TxID: item.TxID, OriginalIndex: originalIndex, ReadSet: append([]ReadObservation(nil), overlay.reads...), WriteSet: overlay.logicalWrites(), Receipt: receipt, Success: receipt.Success, Error: receipt.Error}
+	return receipt, delta
+}
+
 func (e *SerialExecutor) executeTx(b block.Block, overlay txExecutionOverlay, item tx.SignedTransaction) Receipt {
+	return e.executeTxWithStateRoot(b, overlay, item, true)
+}
+
+// executeTxWithoutStateRoot is used only by speculative executors.  A
+// speculative receipt root is not durable evidence and is overwritten during
+// deterministic ordered materialization, so hashing a complete snapshot for
+// every incarnation is redundant work.
+func (e *SerialExecutor) executeTxWithoutStateRoot(b block.Block, overlay txExecutionOverlay, item tx.SignedTransaction) Receipt {
+	return e.executeTxWithStateRoot(b, overlay, item, false)
+}
+
+func (e *SerialExecutor) executeTxWithStateRoot(b block.Block, overlay txExecutionOverlay, item tx.SignedTransaction, includeStateRoot bool) Receipt {
 	receipt := Receipt{TxID: item.TxID, BlockHash: b.BlockHash, Height: b.Height, Success: false, ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...)}
+	finalize := func() Receipt {
+		if includeStateRoot {
+			receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
+		}
+		return receipt
+	}
 	applyDeclaredSemanticReads(overlay, item.AccessList)
 	if isPureCommutativeDelta(item.AccessList) {
 		overlay.applyCommutativeDeltas(item.AccessList)
 		receipt.Success = true
-		receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
-		return receipt
+		return finalize()
 	}
 	if isCrossShardTargetCommit(item, b.ShardID) {
 		overlay.set("relay_commit:"+item.TxID, "1")
 		receipt.Success = true
-		receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
-		return receipt
+		return finalize()
+	}
+	if isDirectAccessTransaction(item) {
+		applyDirectAccessTransaction(overlay, item)
+		receipt.Success = true
+		return finalize()
 	}
 	overlay.ensureAccount(item.Sender, e.DefaultInitialBalance)
 	overlay.ensureAccount(item.Receiver, 0)
 	expectedNonce := overlay.nonce(item.Sender)
 	if item.Nonce != expectedNonce {
 		receipt.Error = fmt.Sprintf("nonce_mismatch_expected_%d_got_%d", expectedNonce, item.Nonce)
-		receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
-		return receipt
+		return finalize()
 	}
 	if item.Value <= 0 {
 		receipt.Error = "invalid_value"
-		receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
-		return receipt
+		return finalize()
 	}
 	senderBalance := overlay.balance(item.Sender)
 	if senderBalance < item.Value {
 		receipt.Error = "insufficient_balance"
-		receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
-		return receipt
+		return finalize()
 	}
 	overlay.setBalance(item.Sender, senderBalance-item.Value)
 	overlay.setBalance(item.Receiver, overlay.balance(item.Receiver)+item.Value)
 	overlay.setNonce(item.Sender, item.Nonce+1)
 	overlay.applyCommutativeDeltas(item.AccessList)
 	receipt.Success = true
-	receipt.StateRootAfterTx = state.RootOfSnapshot(overlay.snapshot())
-	return receipt
+	return finalize()
+}
+
+func isDirectAccessTransaction(item tx.SignedTransaction) bool {
+	return item.AccessListSchema != "" && item.AccessListSchema != "dcl_sale_access_template_v1" && item.AccessListSource != "legacy_state_keys"
+}
+
+func applyDirectAccessTransaction(overlay txExecutionOverlay, item tx.SignedTransaction) {
+	for _, access := range item.AccessList {
+		if access.Key == "" {
+			continue
+		}
+		switch access.Mode {
+		case tx.AccessRead:
+			overlay.get(access.Key)
+		case tx.AccessCommutativeDelta:
+			overlay.applyCommutativeDeltas([]tx.AccessItem{access})
+		case tx.AccessReadWrite:
+			current := overlay.get(access.Key)
+			overlay.set(access.Key, directAccessValue(item, access, current))
+		case tx.AccessWrite:
+			overlay.set(access.Key, directAccessValue(item, access, ""))
+		}
+	}
+}
+
+func directAccessValue(item tx.SignedTransaction, access tx.AccessItem, previous string) string {
+	return stableDigest(struct {
+		LogicalTxID string `json:"logical_tx_id"`
+		Key         string `json:"key"`
+		Semantics   string `json:"semantics"`
+		Previous    string `json:"previous,omitempty"`
+	}{tx.SemanticID(item), access.Key, access.UpdateSemantics, previous})
 }
 
 func applyDeclaredSemanticReads(overlay txExecutionOverlay, accesses []tx.AccessItem) {

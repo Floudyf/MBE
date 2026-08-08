@@ -179,15 +179,16 @@ def test_method_plugin_override_resets_to_target_plugin_default_config() -> None
     assert validate_compatibility(spec).valid is True
 
 
-def test_builtin_four_method_comparison_preserves_fairness_conditions(tmp_path: Path) -> None:
+def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path) -> None:
     plan = method_plan(suites=["comparison_experiment"])
-    plan.methods = list(BUILTIN_METHODS.values())
+    plan.methods = [method for method_id, method in BUILTIN_METHODS.items() if method_id != "hash_groundhog"]
     checked = validate_request(type("Request", (), {"execution_backend": "real_cluster", "plan": plan})())
     rows = checked.rows
 
     assert [row["method_config_id"] for row in rows] == [
         "hash_serial",
         "hash_block_stm",
+        "hash_aria",
         "metatrack_serial",
         "metatrack_block_stm",
     ]
@@ -198,7 +199,7 @@ def test_builtin_four_method_comparison_preserves_fairness_conditions(tmp_path: 
     assert len({row["fault_snapshot_digest"] for row in rows}) == 1
     assert len({row["seed"] for row in rows}) == 1
     assert len({row["estimated_transactions"] for row in rows}) == 1
-    assert len({row["method_snapshot_digest"] for row in rows}) == 4
+    assert len({row["method_snapshot_digest"] for row in rows}) == 5
 
     compiled_by_method = {
         row["method_config_id"]: compiled(plan, row, tmp_path / row["method_config_id"])
@@ -220,10 +221,19 @@ def test_builtin_four_method_comparison_preserves_fairness_conditions(tmp_path: 
     assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["config"]["worker_count"] == 4
     assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["config"]["execution_mode"] == "performance"
     assert plugin(compiled_by_method["hash_block_stm"], "block_executor")["config"]["oracle_mode"] == "off"
+    assert plugin(compiled_by_method["hash_aria"], "routing")["plugin_id"] == "hash_routing_baseline"
+    assert plugin(compiled_by_method["hash_aria"], "block_executor")["plugin_id"] == "aria_block_executor"
+    assert plugin(compiled_by_method["hash_aria"], "block_executor")["config"]["worker_count"] == 4
+    assert plugin(compiled_by_method["hash_aria"], "block_executor")["config"]["reordering"] is True
+    assert plugin(compiled_by_method["hash_aria"], "block_executor")["config"]["read_only_optimization"] is True
     assert plugin(compiled_by_method["metatrack_serial"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
+    assert plugin(compiled_by_method["metatrack_serial"], "execution")["plugin_id"] == "dual_track_execution"
+    assert plugin(compiled_by_method["metatrack_serial"], "execution")["config"]["access_size_threshold"] == 4
     assert plugin(compiled_by_method["metatrack_serial"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
     assert plugin(compiled_by_method["metatrack_serial"], "block_executor")["plugin_id"] == "metatrack_block_executor"
     assert plugin(compiled_by_method["metatrack_block_stm"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
+    assert plugin(compiled_by_method["metatrack_block_stm"], "execution")["plugin_id"] == "dual_track_execution"
+    assert plugin(compiled_by_method["metatrack_block_stm"], "execution")["config"]["access_size_threshold"] == 4
     assert plugin(compiled_by_method["metatrack_block_stm"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
     assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["plugin_id"] == "block_stm_block_executor"
     assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["worker_count"] == 4

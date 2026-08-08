@@ -55,6 +55,17 @@ METATRACK_REQUIRED_METRICS = [
     "post_aggregation_physical_op_count",
 ]
 
+BATCH_SI_REQUIRED_METRICS = [
+    "configured_worker_count",
+    "maximum_parallel_width",
+    "batch_count",
+    "maximum_batch_width",
+    "write_opportunity_reuse_count",
+    "dependency_edge_count",
+    "deferred_transaction_count",
+    "batch_snapshot_create_ms",
+]
+
 
 def extract(run_dir: Path, method_id: str | None = None) -> dict:
     summary_path = run_dir / "real_cluster_summary.json"
@@ -161,12 +172,34 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "remote_state_write_apply_count": cluster.get("remote_state_write_apply_count"),
         "remote_state_access_failed_count": cluster.get("remote_state_access_failed_count"),
         "remote_state_access_avg_latency_ms": cluster.get("remote_state_access_avg_latency_ms"),
+        "global_business_state_digest": cluster.get("global_business_state_digest"),
+        "metatrack_execution_shard_transaction_counts": cluster.get("metatrack_execution_shard_transaction_counts"),
+        "metatrack_execution_shard_count": cluster.get("metatrack_execution_shard_count"),
+        "metatrack_max_execution_shard_share": cluster.get("metatrack_max_execution_shard_share"),
+        "metatrack_predicted_remote_read_count": cluster.get("metatrack_predicted_remote_read_count"),
+        "metatrack_predicted_remote_write_count": cluster.get("metatrack_predicted_remote_write_count"),
+        "metatrack_placement_reason_counts": cluster.get("metatrack_placement_reason_counts"),
+        "metatrack_placement_score_row_count": cluster.get("metatrack_placement_score_row_count"),
+        "state_ready_wait_count": cluster.get("metatrack_state_ready_wait_count"),
+        "state_ready_resume_count": cluster.get("metatrack_state_ready_resume_count"),
+        "state_prefetch_wait_ms": cluster.get("metatrack_state_prefetch_wait_ms"),
+        "remote_state_fetch_count": cluster.get("metatrack_remote_state_fetch_count"),
+        "remote_state_fetch_completed_count": cluster.get("metatrack_remote_state_fetch_completed_count"),
+        "state_ready_scheduler_mode": cluster.get("metatrack_state_ready_scheduler_mode"),
+        "versioned_state_ready_wave_count": cluster.get("versioned_state_ready_wave_count"),
+        "versioned_state_ready_wait_observation_count": cluster.get("versioned_state_ready_wait_observation_count"),
+        "versioned_state_ready_resolved_token_count": cluster.get("versioned_state_ready_resolved_token_count"),
+        "versioned_state_probe_count": cluster.get("versioned_state_probe_count"),
+        "versioned_state_probe_latency_ms": cluster.get("versioned_state_probe_latency_ms"),
+        "versioned_state_ready_max_wave_width": cluster.get("versioned_state_ready_max_wave_width"),
+        "versioned_state_ready_scheduler_mode": cluster.get("versioned_state_ready_scheduler_mode"),
         "source_artifacts": list(required_artifacts),
         "missing": missing,
     }
     _apply_artifact_contract(metrics, cluster)
 
     _apply_block_stm_metrics(metrics, run_dir)
+    _apply_batch_si_metrics(metrics, run_dir)
     _apply_metatrack_artifacts(metrics, run_dir)
     _apply_mechanism_metrics(metrics, run_dir)
 
@@ -178,6 +211,8 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     scheduler_metrics = _read_scheduler_metrics(run_dir / "metatrack_scheduler_trace.csv")
     if scheduler_metrics:
         metrics.update(scheduler_metrics)
+        if str(method_id or "").startswith("hash_batch_si") or metrics.get("block_executor_id") == "batch_si_block_executor":
+            metrics["abort_count"] = scheduler_metrics.get("batch_si_deferred_transaction_count", 0)
 
     _derive_update_metrics(metrics)
     _apply_metric_completeness(metrics, method_id=method_id)
@@ -237,6 +272,82 @@ def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     )
     metrics["source_artifacts"].append("block_stm_summary.json")
 
+
+
+def _batch_si_leader_summary_paths(run_dir: Path) -> list[Path]:
+    plan = _read_json(run_dir / "compiled_run_plan.json")
+    node_configs = plan.get("node_configs") if isinstance(plan.get("node_configs"), list) else []
+    leader_ids = [
+        str(item.get("node_id"))
+        for item in node_configs
+        if isinstance(item, dict) and (item.get("leader") is True or item.get("role") == "leader") and item.get("node_id")
+    ]
+    paths = [run_dir / "nodes" / node_id / "block_execution_summary.json" for node_id in leader_ids]
+    existing = [path for path in paths if path.is_file()]
+    if existing:
+        return existing
+    # Older compiled plans may omit the leader marker. Select one deterministic
+    # replica per shard so mechanism counts are not multiplied by PBFT replicas.
+    by_shard: dict[str, Path] = {}
+    for path in sorted((run_dir / "nodes").glob("*/block_execution_summary.json")):
+        payload = _read_json(path)
+        shard_id = str(payload.get("shard_id") or path.parent.name)
+        by_shard.setdefault(shard_id, path)
+    return list(by_shard.values())
+
+
+def _apply_batch_si_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
+    summaries = [item for item in summaries if item.get("block_executor_id") == "batch_si_block_executor"]
+    if not summaries:
+        return
+    blocks = [
+        block
+        for summary in summaries
+        for block in (summary.get("blocks") if isinstance(summary.get("blocks"), list) else [])
+        if isinstance(block, dict)
+    ]
+    if not blocks:
+        return
+    def total(name: str) -> int:
+        return sum(_int(block.get(name)) for block in blocks)
+
+    # OFAS cycle victims are part of the per-block Batch-SI execution summary.
+    # Count them from one leader per shard, just like the other Batch-SI plan
+    # metrics.  The runtime writes both keys today; the abort_count fallback
+    # keeps older result directories readable without treating a real zero as
+    # a missing metric.
+    deferred_transaction_count = sum(
+        _int(
+            block.get("deferred_transaction_count")
+            if block.get("deferred_transaction_count") is not None
+            else block.get("abort_count")
+        )
+        for block in blocks
+    )
+    metrics.update({
+        "batch_si_metrics_available": True,
+        "configured_worker_count": max((_int(block.get("configured_worker_count") or block.get("worker_count")) for block in blocks), default=0),
+        "worker_count": max((_int(block.get("configured_worker_count") or block.get("worker_count")) for block in blocks), default=0),
+        "maximum_parallel_width": max((_int(block.get("maximum_parallel_width")) for block in blocks), default=0),
+        "batch_count": total("batch_count"),
+        "maximum_batch_width": max((_int(block.get("maximum_batch_width")) for block in blocks), default=0),
+        "write_opportunity_reuse_count": total("write_opportunity_reuse_count"),
+        "dependency_edge_count": total("dependency_edge_count"),
+        "deferred_transaction_count": deferred_transaction_count,
+        "abort_count": deferred_transaction_count,
+        "planning_iteration_count": total("planning_iteration_count"),
+        "batch_snapshot_count": total("batch_snapshot_count"),
+        "batch_snapshot_create_ms": total("batch_snapshot_create_ms"),
+        "transaction_execution_ms": total("transaction_execution_ms"),
+        "deterministic_materialization_ms": total("deterministic_materialization_ms"),
+        "batch_si_cross_scheme_algorithm_reuse": False,
+    })
+    metrics["source_artifacts"].extend(
+        str(path.relative_to(run_dir)).replace("\\", "/")
+        for path in _batch_si_leader_summary_paths(run_dir)
+        if path.is_file()
+    )
 
 def _apply_metatrack_artifacts(metrics: dict[str, Any], run_dir: Path) -> None:
     for name, key in {
@@ -299,12 +410,14 @@ def _apply_mechanism_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
 
 
 def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None) -> None:
-    uses_block_stm, uses_metatrack = _method_traits(metrics, method_id)
+    uses_block_stm, uses_metatrack, uses_batch_si = _method_traits(metrics, method_id)
     required = list(COMMON_REQUIRED_METRICS)
     if uses_block_stm:
         required.extend(BLOCK_STM_REQUIRED_METRICS)
     if uses_metatrack:
         required.extend(METATRACK_REQUIRED_METRICS)
+    if uses_batch_si:
+        required.extend(BATCH_SI_REQUIRED_METRICS)
 
     statuses: dict[str, str] = {}
     metric_missing: list[str] = []
@@ -314,6 +427,8 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         statuses[name] = _metric_state(metrics.get(name), required=uses_block_stm)
     for name in METATRACK_REQUIRED_METRICS:
         statuses[name] = _metric_state(metrics.get(name), required=uses_metatrack)
+    for name in BATCH_SI_REQUIRED_METRICS:
+        statuses[name] = _metric_state(metrics.get(name), required=uses_batch_si)
     for name in required:
         if statuses.get(name) == "missing":
             metric_missing.append(f"metric:{name}")
@@ -345,7 +460,7 @@ def _derive_update_metrics(metrics: dict[str, Any]) -> None:
         metrics["aggregation_reduction_ratio"] = (float(metrics.get("physical_ops_saved_count") or 0) / denominator) if denominator > 0 else 0
 
 
-def _method_traits(metrics: dict[str, Any], method_id: str | None) -> tuple[bool, bool]:
+def _method_traits(metrics: dict[str, Any], method_id: str | None) -> tuple[bool, bool, bool]:
     normalized = str(method_id or "").lower()
     uses_block_stm = "block_stm" in normalized or metrics.get("block_executor_id") == "block_stm_block_executor"
     uses_metatrack = "metatrack" in normalized
@@ -361,7 +476,8 @@ def _method_traits(metrics: dict[str, Any], method_id: str | None) -> tuple[bool
                 "logical_physical_update_mapping_available",
             )
         )
-    return uses_block_stm, uses_metatrack
+    uses_batch_si = normalized.startswith("hash_batch_si") or metrics.get("block_executor_id") == "batch_si_block_executor" or metrics.get("batch_si_metrics_available") is True
+    return uses_block_stm, uses_metatrack, uses_batch_si
 
 
 def _metric_state(value: object, *, required: bool) -> str:
@@ -432,8 +548,26 @@ def _read_scheduler_metrics(path: Path) -> dict:
             "scheduler_dependency_wait_ms": 0,
             "scheduler_idle_ms": 0,
             "scheduler_idle_ratio": 0,
+            "batch_si_deferred_transaction_count": 0,
+            "deferred_transaction_count": 0,
+            "batch_si_accepted_transaction_count": 0,
+            "batch_si_abort_rate": 0,
         }
     idle_events = sum(1 for row in rows if _numeric(row.get("scheduler_idle_ms")) > 0)
+    # Count one logical planning decision per block and transaction. This
+    # de-duplicates replicated scheduler rows while preserving repeated OFAS
+    # deferrals of the same transaction at different block heights.
+    batch_si_deferred_events = {
+        (str(row.get("block_height") or ""), str(row.get("tx_id") or ""))
+        for row in rows
+        if "batch_si_ofas_cycle_deferred" in str(row.get("decision_reason") or "") and str(row.get("tx_id") or "")
+    }
+    batch_si_accepted_events = {
+        (str(row.get("block_height") or ""), str(row.get("tx_id") or ""))
+        for row in rows
+        if "batch_si_accepted" in str(row.get("decision_reason") or "") and str(row.get("tx_id") or "")
+    }
+    batch_si_total = len(batch_si_deferred_events) + len(batch_si_accepted_events)
     return {
         "scheduler_event_count": len(rows),
         "scheduler_blocked_count": sum(1 for row in rows if _truthy(row.get("blocked"))),
@@ -448,6 +582,10 @@ def _read_scheduler_metrics(path: Path) -> dict:
         "scheduler_dependency_wait_ms": sum(_numeric(row.get("dependency_wait_ms")) for row in rows),
         "scheduler_idle_ms": sum(_numeric(row.get("scheduler_idle_ms")) for row in rows),
         "scheduler_idle_ratio": idle_events / len(rows),
+        "batch_si_deferred_transaction_count": len(batch_si_deferred_events),
+        "deferred_transaction_count": len(batch_si_deferred_events),
+        "batch_si_accepted_transaction_count": len(batch_si_accepted_events),
+        "batch_si_abort_rate": (len(batch_si_deferred_events) / batch_si_total) if batch_si_total else 0,
     }
 
 

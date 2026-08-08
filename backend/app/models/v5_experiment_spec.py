@@ -14,9 +14,9 @@ class V5PluginSelection(BaseModel):
 
 
 class V5Topology(BaseModel):
-    nodes: int = Field(ge=1, le=16)
-    shards: int = Field(ge=1, le=4)
-    validators_per_shard: int = Field(ge=1, le=16)
+    nodes: int = Field(ge=1, le=64)
+    shards: int = Field(ge=1, le=64)
+    validators_per_shard: int = Field(ge=1, le=64)
 
 
 class V5WorkloadSourceSpec(BaseModel):
@@ -25,17 +25,18 @@ class V5WorkloadSourceSpec(BaseModel):
     source_type: Literal["synthetic", "dataset"] = "synthetic"
     plugin_id: Literal["deterministic_signed_synthetic", "canonical_trace_replay"] = "deterministic_signed_synthetic"
     dataset_id: str | None = None
-    variant_mode: Literal["original_window", "contract_zipf", "key_zipf"] | None = None
+    variant_mode: str | None = None
     variant_id: str | None = None
-    requested_tx_count: int = Field(ge=1, le=271868)
+    requested_tx_count: int = Field(ge=1, le=1_000_000)
     use_full_dataset: bool = False
     seed: int
-    selection_mode: Literal["contiguous_window"] = "contiguous_window"
+    selection_mode: Literal["contiguous_window", "validated_prefix"] = "contiguous_window"
     replay_mode: Literal["max_throughput"] = "max_throughput"
     skew_axis: str | None = None
     target_alpha: float | None = None
     materialized_id: str | None = None
     source_sha256: str | None = None
+    variant_parameters: dict[str, str | int | float | bool] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_dataset_shape(self) -> "V5WorkloadSourceSpec":
@@ -51,6 +52,8 @@ class V5WorkloadSourceSpec(BaseModel):
             raise ValueError("dataset workload_source requires dataset_id, source_sha256, and canonical_trace_replay")
         if self.variant_mode is None:
             self.variant_mode = "original_window"
+        if not self.variant_mode or not self.variant_mode.strip():
+            raise ValueError("dataset workload_source requires variant_mode")
         if self.variant_mode == "original_window" and self.target_alpha is not None:
             raise ValueError("original_window workload_source does not allow target_alpha")
         if self.variant_mode in {"contract_zipf", "key_zipf"} and self.target_alpha is None:
@@ -59,6 +62,8 @@ class V5WorkloadSourceSpec(BaseModel):
             raise ValueError("derived workload_source target_alpha is not supported")
         if self.variant_mode in {"contract_zipf", "key_zipf"} and not self.skew_axis:
             raise ValueError("derived workload_source requires skew_axis")
+        if self.selection_mode == "validated_prefix" and not self.variant_parameters:
+            raise ValueError("validated_prefix workload_source requires variant_parameters")
         if self.use_full_dataset and self.requested_tx_count < 1:
             raise ValueError("full dataset workload_source requires a positive requested_tx_count mirror")
         return self
@@ -70,7 +75,7 @@ class V5ExperimentSpec(BaseModel):
     execution_backend: V5Backend = "preview"
     plugin_selections: list[V5PluginSelection]
     topology: V5Topology
-    tx_count: int = Field(default=1000, ge=1, le=271868)
+    tx_count: int = Field(default=1000, ge=1, le=1_000_000)
     seed: int = 1
     workload_source: V5WorkloadSourceSpec | None = None
     duration_ms: int = Field(default=5000, ge=1000, le=3600000)

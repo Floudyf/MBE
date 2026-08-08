@@ -57,6 +57,7 @@ def _embedded_child(child_id: str, method_id: str, name: str, *, tps: float) -> 
                 "state_root_consistent": True,
                 "receipt_root_consistent": True,
                 "plan_digest_consistent": True,
+                "lifecycle_complete": True,
                 "orphan_process_count": 0,
                 "configured_block_size": 100,
                 "configured_block_interval_ms": 75,

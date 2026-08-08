@@ -74,6 +74,20 @@ func (e *Engine) executeTx(b block.Block, db *state.DB, item tx.SignedTransactio
 		receipt.StateRootAfterTx = db.Root()
 		return receipt
 	}
+	if isDirectAccessTransaction(item) {
+		for _, access := range item.AccessList {
+			switch access.Mode {
+			case tx.AccessCommutativeDelta:
+				current, _ := parseStateInt(db.Get(access.Key))
+				db.Set(access.Key, fmt.Sprintf("%d", current+access.Delta))
+			case tx.AccessWrite, tx.AccessReadWrite:
+				db.Set(access.Key, directAccessValue(item, access, db.Get(access.Key)))
+			}
+		}
+		receipt.Success = true
+		receipt.StateRootAfterTx = db.Root()
+		return receipt
+	}
 	ensureAccount(db, item.Sender, e.DefaultInitialBalance)
 	ensureAccount(db, item.Receiver, 0)
 	expectedNonce := db.Nonce(item.Sender)

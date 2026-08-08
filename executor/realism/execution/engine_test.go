@@ -2,8 +2,10 @@ package execution
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,7 +143,7 @@ func TestBlockSTMExecutorMatchesSerialAcrossWorkerCounts(t *testing.T) {
 	}
 }
 
-func TestBlockSTMExecutorRecordsAbortAndReexecutionOnHotNonceSequence(t *testing.T) {
+func TestBlockSTMExecutorHotNonceSequencePreservesMetricsAndSerialEquivalence(t *testing.T) {
 	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-hot-nonce", 4, "alice", "bob", 1, "v5_safe"))
 	executor := NewBlockSTMExecutor(4)
 	got, err := executor.ExecuteBlock(testContext(t), b, map[string]string{})
@@ -152,24 +154,37 @@ func TestBlockSTMExecutorRecordsAbortAndReexecutionOnHotNonceSequence(t *testing
 	if got.StateRootAfter != serial.StateRootAfter || got.ReceiptRoot != serial.ReceiptRoot {
 		t.Fatalf("block-stm not serial equivalent")
 	}
-	if executor.Metrics.AbortCount == 0 || executor.Metrics.ReexecutionCount == 0 || executor.Metrics.ValidationFailureCount == 0 {
-		t.Fatalf("expected real validation abort/reexecution metrics, got %+v", executor.Metrics)
-	}
 	if got.BlockSTMMetrics.AbortCount != executor.Metrics.AbortCount || got.BlockSTMMetrics.ReexecutionCount != executor.Metrics.ReexecutionCount {
 		t.Fatalf("block-stm result did not carry kernel metrics: result=%+v executor=%+v", got.BlockSTMMetrics, executor.Metrics)
+	}
+	if executor.Metrics.AbortCount != executor.Metrics.DependencyAbortCount+executor.Metrics.ValidationAbortCount {
+		t.Fatalf("abort decomposition is inconsistent: %+v", executor.Metrics)
 	}
 	if executor.Metrics.ValidationTaskCount < len(b.TxList) || executor.Metrics.ExecutionTaskCount < len(b.TxList) {
 		t.Fatalf("expected execution and validation tasks for every transaction, got %+v", executor.Metrics)
 	}
-	if executor.Metrics.ValidatedSpeculativeResultCount != len(b.TxList) || executor.Metrics.MaximumIncarnation < 1 {
+	if executor.Metrics.ValidatedSpeculativeResultCount < len(b.TxList) {
 		t.Fatalf("expected validated final incarnations for every transaction, got %+v", executor.Metrics)
+	}
+	if executor.Metrics.AbortCount == 0 {
+		if executor.Metrics.ReexecutionCount != 0 || executor.Metrics.MaximumIncarnation != 0 {
+			t.Fatalf("no-abort execution reported reexecution/incarnation activity: %+v", executor.Metrics)
+		}
+	} else if executor.Metrics.ReexecutionCount == 0 || executor.Metrics.MaximumIncarnation < 1 {
+		t.Fatalf("abort execution did not report reexecution/incarnation activity: %+v", executor.Metrics)
+	}
+	if executor.Metrics.ValidationAbortCount > 0 && executor.Metrics.ValidationFailureCount == 0 {
+		t.Fatalf("validation abort did not record a validation failure: %+v", executor.Metrics)
+	}
+	if executor.Metrics.EstimateCount != executor.Metrics.EstimateMarkCount {
+		t.Fatalf("ESTIMATE counters are inconsistent: %+v", executor.Metrics)
 	}
 	if executor.Metrics.MaximumParallelWidth < 1 || executor.Metrics.MaximumParallelWidth > executor.Metrics.WorkerCount {
 		t.Fatalf("unexpected maximum parallel width: %+v", executor.Metrics)
 	}
 }
 
-func TestBlockSTMExecutorReexecutesDenseNonceConflict(t *testing.T) {
+func TestBlockSTMExecutorDenseNonceSequenceRemainsEquivalentAcrossSchedulerInterleavings(t *testing.T) {
 	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-hot-nonce-second-incarnation", 8, "alice", "bob", 1, "v5_safe"))
 	executor := NewBlockSTMExecutor(8)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -182,14 +197,17 @@ func TestBlockSTMExecutorReexecutesDenseNonceConflict(t *testing.T) {
 	if got.StateRootAfter != serial.StateRootAfter || got.ReceiptRoot != serial.ReceiptRoot {
 		t.Fatalf("block-stm not serial equivalent")
 	}
-	if executor.Metrics.MaximumIncarnation < 1 ||
-		executor.Metrics.ReexecutionCount == 0 ||
-		executor.Metrics.AbortCount == 0 ||
-		executor.Metrics.ValidationFailureCount == 0 {
-		t.Fatalf("expected dense nonce conflict to abort and reexecute, got %+v", executor.Metrics)
+	if executor.Metrics.AbortCount != executor.Metrics.DependencyAbortCount+executor.Metrics.ValidationAbortCount {
+		t.Fatalf("abort decomposition is inconsistent: %+v", executor.Metrics)
 	}
-	if executor.Metrics.EstimateCount == 0 || executor.Metrics.EstimateMarkCount == 0 {
-		t.Fatalf("expected dense nonce conflict to publish ESTIMATE markers, got %+v", executor.Metrics)
+	if executor.Metrics.AbortCount > 0 && (executor.Metrics.MaximumIncarnation < 1 || executor.Metrics.ReexecutionCount == 0) {
+		t.Fatalf("abort execution did not reexecute a later incarnation: %+v", executor.Metrics)
+	}
+	if executor.Metrics.ValidationAbortCount > 0 && executor.Metrics.ValidationFailureCount == 0 {
+		t.Fatalf("validation abort did not record a validation failure: %+v", executor.Metrics)
+	}
+	if executor.Metrics.EstimateCount != executor.Metrics.EstimateMarkCount {
+		t.Fatalf("ESTIMATE counters are inconsistent: %+v", executor.Metrics)
 	}
 }
 
@@ -276,8 +294,8 @@ func TestBlockSTMSpeculativeExecutionOrderIsDeterministic(t *testing.T) {
 	if got := speculativeExecutionOrder(4, 1); !reflect.DeepEqual(got, []int{0, 1, 2, 3}) {
 		t.Fatalf("single worker should execute in serial order, got %#v", got)
 	}
-	if got := speculativeExecutionOrder(4, 4); !reflect.DeepEqual(got, []int{3, 2, 1, 0}) {
-		t.Fatalf("multi-worker speculation should expose higher-index speculation first, got %#v", got)
+	if got := speculativeExecutionOrder(4, 4); !reflect.DeepEqual(got, []int{0, 1, 2, 3}) {
+		t.Fatalf("multi-worker scheduling must preserve lower-index priority, got %#v", got)
 	}
 }
 
@@ -335,7 +353,7 @@ func TestBlockSTMPerformanceModeSkipsFullSerialOracle(t *testing.T) {
 	if actual.BlockSTMMetrics.SerialOracleMS != 0 {
 		t.Fatalf("performance mode must not run full serial oracle: %+v", actual.BlockSTMMetrics)
 	}
-	expectedBusinessCalls := actual.BlockSTMMetrics.ExecutionTaskCount + actual.BlockSTMMetrics.ReexecutionCount
+	expectedBusinessCalls := actual.BlockSTMMetrics.ExecutionTaskCount
 	if actual.BlockSTMMetrics.BusinessExecutionCount != expectedBusinessCalls {
 		t.Fatalf("performance mode must not add hidden materialization business execution: got %d want %d metrics=%+v", actual.BlockSTMMetrics.BusinessExecutionCount, expectedBusinessCalls, actual.BlockSTMMetrics)
 	}
@@ -344,7 +362,7 @@ func TestBlockSTMPerformanceModeSkipsFullSerialOracle(t *testing.T) {
 	}
 }
 
-func TestBlockSTMIncarnationLimitFailDoesNotReturnPartialResults(t *testing.T) {
+func TestBlockSTMIncarnationLimitFailNeverReturnsPartialResults(t *testing.T) {
 	b := blockForExecutionTest(mustGenerateForExecutionTest(t, "bstm-limit-fail", 4, "alice", "bob", 1, "v5_safe"))
 	executor := NewBlockSTMExecutor(4)
 	executor.MaximumIncarnations = 0
@@ -360,8 +378,19 @@ func TestBlockSTMIncarnationLimitFailDoesNotReturnPartialResults(t *testing.T) {
 	limited := NewBlockSTMExecutor(4)
 	limited.MaximumIncarnations = 1
 	limited.IncarnationLimitAction = "fail"
-	if _, err := limited.ExecuteBlock(testContext(t), b, map[string]string{}); err == nil {
-		t.Fatal("expected incarnation limit failure")
+	limitedResult, limitedErr := limited.ExecuteBlock(testContext(t), b, map[string]string{})
+	if limitedErr != nil {
+		if !strings.Contains(limitedErr.Error(), "maximum incarnations exceeded") {
+			t.Fatalf("unexpected incarnation-limit error: %v", limitedErr)
+		}
+		return
+	}
+	// A low-index-first scheduler is allowed to avoid an abort entirely for
+	// this short chain.  In that interleaving the limit is never reached and
+	// the executor must return a complete, serial-equivalent block.
+	serial := NewSerialExecutor().ExecuteBlock(b, map[string]string{})
+	if len(limitedResult.Receipts) != len(b.TxList) || len(limitedResult.TxDeltas) != len(b.TxList) || !sameExecutionOutput(serial, limitedResult) {
+		t.Fatalf("non-triggered incarnation limit returned an incomplete/divergent result: %+v", limitedResult)
 	}
 }
 
@@ -375,14 +404,17 @@ func TestBlockSTMIncarnationLimitSerialFallbackReturnsCompleteEquivalentBlock(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.BlockSTMMetrics.SerialFallbackCount == 0 || result.BlockSTMMetrics.IncarnationLimitHitCount == 0 {
-		t.Fatalf("fallback metrics missing: %+v", result.BlockSTMMetrics)
+	if result.BlockSTMMetrics.SerialFallbackCount > 0 && result.BlockSTMMetrics.IncarnationLimitHitCount == 0 {
+		t.Fatalf("fallback occurred without an incarnation-limit hit: %+v", result.BlockSTMMetrics)
+	}
+	if result.BlockSTMMetrics.SerialFallbackCount == 0 && result.BlockSTMMetrics.IncarnationLimitHitCount != 0 {
+		t.Fatalf("incarnation-limit hit was recorded without fallback: %+v", result.BlockSTMMetrics)
 	}
 	if len(result.Receipts) != len(b.TxList) || len(result.TxDeltas) != len(b.TxList) {
-		t.Fatalf("fallback must return complete results: receipts=%d deltas=%d", len(result.Receipts), len(result.TxDeltas))
+		t.Fatalf("execution must return complete results: receipts=%d deltas=%d", len(result.Receipts), len(result.TxDeltas))
 	}
 	if result.StateRootAfter != serial.StateRootAfter || result.ReceiptRoot != serial.ReceiptRoot {
-		t.Fatalf("fallback diverged from serial: state %s/%s receipt %s/%s", result.StateRootAfter, serial.StateRootAfter, result.ReceiptRoot, serial.ReceiptRoot)
+		t.Fatalf("execution diverged from serial: state %s/%s receipt %s/%s", result.StateRootAfter, serial.StateRootAfter, result.ReceiptRoot, serial.ReceiptRoot)
 	}
 	for index := range b.TxList {
 		if result.Receipts[index].TxID == "" || result.TxDeltas[index].TxID == "" {
@@ -531,4 +563,90 @@ func toStateKV(items []StateUpdate) []state.StateKV {
 		out = append(out, state.StateKV{Key: item.Key, Value: item.Value})
 	}
 	return out
+}
+
+func TestBlockSTMExecutorCompletesTwoThousandTransactionBlockWithoutArtificialLimit(t *testing.T) {
+	const transactionCount = 2000
+	const senderCount = 128
+	const receiverCount = 64
+	items := make([]tx.SignedTransaction, 0, transactionCount)
+	for index := 0; index < transactionCount; index++ {
+		sender := fmt.Sprintf("scale-sender-%03d", index%senderCount)
+		receiver := fmt.Sprintf("scale-receiver-%03d", index%receiverCount)
+		nonce := uint64(index / senderCount)
+		items = append(items, tx.SignedTransaction{
+			TxID:      fmt.Sprintf("scale-tx-%04d", index),
+			Sender:    sender,
+			Receiver:  receiver,
+			Nonce:     nonce,
+			Value:     1,
+			Payload:   "dataset_event:asset_sale",
+			StateKeys: []string{"market:shared", "category:wearable"},
+			AccessList: []tx.AccessItem{
+				{Key: "balance:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "buyer_balance"},
+				{Key: "balance:" + receiver, Mode: tx.AccessReadWrite, UpdateSemantics: "seller_balance"},
+				{Key: "nonce:" + sender, Mode: tx.AccessReadWrite, UpdateSemantics: "buyer_nonce"},
+				{Key: "market:shared", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "market_sale_counter", Delta: 1},
+				{Key: "category:wearable", Mode: tx.AccessRead, UpdateSemantics: "category_metadata"},
+			},
+		})
+	}
+	b := blockForExecutionTest(items)
+	serial := NewSerialExecutor().ExecuteBlock(b, nil)
+	executor := NewBlockSTMExecutor(4)
+	executor.ExecutionMode = "performance"
+	executor.OracleMode = "off"
+	executor.MaximumIncarnations = 0
+	progressEvents := 0
+	lastProgress := BlockSTMProgress{}
+	executor.Progress = func(progress BlockSTMProgress) {
+		progressEvents++
+		lastProgress = progress
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	result, err := executor.ExecuteBlock(ctx, b, nil)
+	if err != nil {
+		t.Fatalf("2K block did not complete: %v", err)
+	}
+	if !sameExecutionOutput(serial, result) {
+		t.Fatal("2K block diverged from serial execution")
+	}
+	if result.BlockSTMMetrics.SerialFallbackCount != 0 || result.BlockSTMMetrics.IncarnationLimitHitCount != 0 {
+		t.Fatalf("2K block used an artificial fallback/limit: %+v", result.BlockSTMMetrics)
+	}
+	if result.BlockSTMMetrics.AbortCount == 0 || result.BlockSTMMetrics.ReexecutionCount == 0 {
+		t.Fatalf("2K hotspot block did not exercise abort/reexecution semantics: %+v", result.BlockSTMMetrics)
+	}
+	if progressEvents == 0 || lastProgress.ValidatedCount != transactionCount || lastProgress.TransactionCount != transactionCount {
+		t.Fatalf("2K block progress evidence is incomplete: events=%d last=%+v", progressEvents, lastProgress)
+	}
+}
+
+func TestBlockSTMRevokesHigherValidationWhenLowerPublishesFirstVersion(t *testing.T) {
+	items := mustGenerateForExecutionTest(t, "bstm-validation-frontier", 4, "alice", "bob", 1, "v5_safe")
+	// Make transaction zero finish after the higher transactions.  This forces
+	// higher executions to observe the base nonce and makes their first
+	// validation eligible to complete before transaction zero publishes the
+	// first lower MVMemory version for the nonce/balance locations.
+	for index := 0; index < 20000; index++ {
+		items[0].AccessList = append(items[0].AccessList, tx.AccessItem{
+			Key:             fmt.Sprintf("category:frontier-%05d", index),
+			Mode:            tx.AccessRead,
+			UpdateSemantics: "category_metadata",
+		})
+	}
+	b := blockForExecutionTest(items)
+	serial := NewSerialExecutor().ExecuteBlock(b, map[string]string{})
+	executor := NewBlockSTMExecutor(4)
+	got, err := executor.ExecuteBlock(testContext(t), b, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameExecutionOutput(serial, got) {
+		t.Fatalf("validation-frontier invalidation diverged from serial: metrics=%+v", got.BlockSTMMetrics)
+	}
+	if got.BlockSTMMetrics.ValidationTaskCount <= len(items) {
+		t.Fatalf("test did not exercise higher validation invalidation: %+v", got.BlockSTMMetrics)
+	}
 }

@@ -1,5 +1,5 @@
 {
-  "schema_version": "mbe_dataset_manifest_v1",
+  "schema_version": "mbe_dataset_manifest_v2",
   "dataset_id": "dcl_sales_polygon_271868",
   "display_name": "Decentraland Polygon marketplace sales",
   "description": "Observed wearable and emote marketplace sales prepared for deterministic MBE research replay.",
@@ -8,13 +8,30 @@
   "source_chain": "polygon_mainnet",
   "dataset_type": "marketplace_sales",
   "adapter_id": "decentraland_sales_v1",
-  "supported_variants": ["original_window", "contract_zipf", "key_zipf"],
-  "supported_skew_axes": ["contract"],
+  "supported_variants": [
+    "original_window",
+    "contract_zipf",
+    "key_zipf"
+  ],
+  "supported_skew_axes": [
+    "contract"
+  ],
   "default_skew_axis": "contract",
-  "included_categories": ["wearable", "emote"],
-  "excluded_categories": ["land", "parcel", "estate", "name", "rental", "bid", "created_unfilled_order"],
+  "included_categories": [
+    "wearable",
+    "emote"
+  ],
+  "excluded_categories": [
+    "land",
+    "parcel",
+    "estate",
+    "name",
+    "rental",
+    "bid",
+    "created_unfilled_order"
+  ],
   "source_format": "csv",
-  "local_raw_relative_path": "dcl_sales_workload_chain_ready.csv",
+  "local_raw_relative_path": "dataset/Decentraland/dcl_sales_workload_chain_ready.csv",
   "source_sha256": "f690db630e061a15dfab3f2b8a654006bccb010517a8d67379817fdda522474e",
   "canonical_sha256": "",
   "row_count": 271868,
@@ -24,18 +41,87 @@
   "collection_date": "2026-07-10",
   "processing_date": "2026-07-14",
   "verification_date": "2026-07-10",
-  "operation_counts": {"wearable": 252898, "emote": 18970},
-  "category_counts": {"wearable": 252898, "emote": 18970},
+  "operation_counts": {
+    "wearable": 252898,
+    "emote": 18970
+  },
+  "category_counts": {
+    "wearable": 252898,
+    "emote": 18970
+  },
   "natural_skew_metrics": {},
   "truth_label": "real_observed",
   "collection_method": "self_crawled_marketplace_api",
   "processing_pipeline": "csv_validation_to_canonical_jsonl_gz",
-  "processing_scripts": ["scripts/workloads/validate_dcl_sales.py", "scripts/workloads/build_dcl_canonical.py", "scripts/workloads/materialize_dcl_workload.py"],
+  "processing_scripts": [
+    "scripts/workloads/validate_dcl_sales.py",
+    "scripts/workloads/build_dcl_canonical.py",
+    "scripts/workloads/materialize_dcl_workload.py"
+  ],
   "raw_fetch_script_archive": "partial",
   "verification_method": "representative_stratified_polygon_receipt_check",
   "verification_sample_count": 50,
   "verification_results": "representative samples checked; not dataset-wide receipt verification",
   "provenance": "Decentraland Marketplace API sale records; sale-ID deduplicated.",
   "usage_note": "Research replay modelling only; not Polygon EVM execution or a complete marketplace export.",
-  "generator_version": "v5_workload_data_plane_v2_generic_record"
+  "generator_version": "v5_workload_data_plane_v2_generic_record",
+  "source_layout": "single_file",
+  "source_size_bytes": 69027787,
+  "catalog_validation": "file_metadata",
+  "supported_tx_counts": [
+    100,
+    1000,
+    10000,
+    50000,
+    100000,
+    250000
+  ],
+  "allow_full_dataset": true,
+  "variant_definitions": [
+    {
+      "variant_mode": "original_window",
+      "display_name": "真实原始连续窗口",
+      "kind": "original",
+      "selection_mode": "contiguous_window",
+      "parameters": []
+    },
+    {
+      "variant_mode": "key_zipf",
+      "display_name": "真实派生偏斜负载",
+      "kind": "derived",
+      "selection_mode": "contiguous_window",
+      "parameters": [
+        {
+          "name": "skew_axis",
+          "label": "偏斜轴",
+          "type": "enum",
+          "options": [
+            "contract"
+          ],
+          "default": "contract",
+          "required": true
+        },
+        {
+          "name": "target_alpha",
+          "label": "偏斜度 alpha",
+          "type": "number_enum",
+          "options": [
+            0.0,
+            0.2,
+            0.4,
+            0.6,
+            0.8,
+            1.0,
+            1.2,
+            1.4
+          ],
+          "default": 1.0,
+          "required": true
+        }
+      ]
+    }
+  ],
+  "warnings": [
+    "代表性交易回执验证；不表示完整 Polygon EVM 重放。"
+  ]
 }

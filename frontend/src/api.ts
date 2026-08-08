@@ -1288,17 +1288,18 @@ export type V5WorkloadSourceSpec = {
   source_type: "synthetic" | "dataset";
   plugin_id: "deterministic_signed_synthetic" | "canonical_trace_replay";
   dataset_id?: string | null;
-  variant_mode?: "original_window" | "contract_zipf" | "key_zipf" | null;
+  variant_mode?: string | null;
   variant_id?: string | null;
   requested_tx_count: number;
   use_full_dataset?: boolean;
   seed: number;
-  selection_mode?: "contiguous_window";
+  selection_mode?: "contiguous_window" | "validated_prefix";
   replay_mode?: "max_throughput";
   skew_axis?: string | null;
   target_alpha?: number | null;
   materialized_id?: string | null;
   source_sha256?: string | null;
+  variant_parameters?: Record<string, string | number | boolean>;
 };
 export type V5ExperimentSpec = { schema_version?: "v5_experiment_spec_v1"; name: string; execution_backend: "preview" | "simulation" | "real_cluster"; plugin_selections: V5PluginSelection[]; topology: { nodes: number; shards: number; validators_per_shard: number }; tx_count: number; seed: number; workload_source?: V5WorkloadSourceSpec | null; duration_ms: number; fault_policy?: Record<string, unknown>; requested_metrics?: string[]; saved_config_id?: string | null; formal_plan_config_id?: string | null; method_config_id?: string | null; source_composer_draft?: Record<string, unknown> };
 export type V5CompatibilityResult = { valid: boolean; blockers: string[]; warnings: string[]; resolved_plugins: V5PluginSelection[]; resource_estimate: Record<string, unknown> };
@@ -1314,6 +1315,7 @@ export type V5FormalExperimentPlan = {
   methods: V5FormalMethod[];
   seeds: number[];
   repeats: number;
+  worker_count?: number;
   topology_points?: Array<Record<string, number>>;
   workload_points?: Array<Record<string, number>>;
   fault_points?: Array<Record<string, unknown>>;
@@ -1329,7 +1331,7 @@ export type V5FormalMatrixRow = {
   method_role?: string;
   changed_plugin_categories?: string[];
   workload_point: Record<string, unknown>;
-  topology_point: { nodes?: number; shards?: number; validators_per_shard?: number };
+  topology_point: { nodes?: number; shards?: number; validators_per_shard?: number; worker_count?: number };
   fault_point: Record<string, unknown>;
   seed: number;
   repeat_index: number;
@@ -1342,15 +1344,27 @@ export type V5FormalMatrixRow = {
   block_size?: number;
   block_interval_ms?: number;
   estimated_block_count?: number;
+  comparison_semantics_class?: string;
+  state_access_semantics?: string;
+  legacy_cross_shard_protocol?: boolean;
+  performance_comparison_valid?: boolean;
+  direct_cross_semantic_performance_comparison_valid?: boolean;
+  within_semantic_cohort_state_equivalence_valid?: boolean | null;
+  pairwise_logical_state_equivalent?: boolean | null;
+  initial_state_digest?: string;
+  state_home_mapping_digest?: string;
+  global_final_state_digest?: string;
+  comparison_semantic_classes?: string[];
+  comparison_warning?: string;
   runnable: boolean;
   blockers: string[];
   warnings: string[];
 };
 export type V5FormalPreviewResponse = { execution_backend: string; rows: V5FormalMatrixRow[]; paper_candidate: boolean };
-export type V5FormalAggregate = { count?: number | null; mean?: number | null; median?: number | null; std?: number | null; min?: number | null; max?: number | null; ci95_low?: number | null; ci95_high?: number | null; completed_count?: number | null; failed_count?: number | null; missing_count?: number | null };
+export type V5FormalAggregate = { count?: number | null; mean?: number | null; median?: number | null; std?: number | null; min?: number | null; max?: number | null; ci95_low?: number | null; ci95_high?: number | null; completed_count?: number | null; paper_valid_count?: number | null; observed_completed_count?: number | null; completed_invalid_count?: number | null; blocked_count?: number | null; execution_failed_count?: number | null; excluded_from_paper_count?: number | null; failed_count?: number | null; missing_count?: number | null };
 export type V5FinalityEvidence = { [key: string]: unknown; logical_transaction_count?: number; submitted_unique_tx_count?: number; terminal_unique_tx_count?: number; incomplete_unique_tx_count?: number; finalized_unique_logical_tx_count?: number; intra_shard_committed_unique_count?: number; intra_shard_terminal_unique_count?: number; cross_shard_requested_unique_count?: number; cross_shard_target_committed_unique_count?: number; cross_shard_finalized_unique_count?: number; cross_shard_refunded_unique_count?: number; cross_shard_failed_unique_count?: number; throughput_tps?: number; end_to_end_tps?: number; logical_finality_tps?: number; completion_duration_ms?: number; logical_finality_duration_ms?: number; tail_completion_overhead_ms?: number; p50_finality_ms?: number; p95_finality_ms?: number; p99_finality_ms?: number; metric_truth?: string; tcp_send_latency_excluded?: boolean };
 export type V5Gate = { passed?: boolean; blockers?: string[] };
-export type V5RealClusterSummary = Record<string, unknown> & { runtime_stage?: string; runtime_truth?: string; ready_to_commit?: boolean; one_node_one_os_process?: boolean; independent_tcp_ports?: boolean; all_shards_active?: boolean; per_shard_multiple_blocks?: boolean; real_client_submission?: boolean; real_cross_shard_network?: boolean; real_pbft_style_messages?: boolean; real_signed_tx?: boolean; persistent_state?: boolean; plugin_driven_runtime?: boolean; block_executor_id?: string; block_executor_consistent?: boolean; plan_digest_consistent?: boolean; state_root_consistent?: boolean; no_fallback?: boolean; orphan_process_count?: number; distinct_process_count?: number; expected_process_count?: number; shard_count?: number; shard_blocks?: Record<string, number>; finality_evidence?: V5FinalityEvidence; execution_status?: "completed" | "failed" | "running" | "cancelled" | "timed_out"; artifact_status?: "complete" | "incomplete" | "pending" | "unavailable"; formal_eligibility?: boolean; execution_gate?: V5Gate; artifact_gate?: V5Gate; completion_gate?: V5Gate; artifact_contract_version?: number; missing_artifacts?: string[]; unexpected_artifacts?: string[] };
+export type V5RealClusterSummary = Record<string, unknown> & { runtime_stage?: string; runtime_truth?: string; ready_to_commit?: boolean; one_node_one_os_process?: boolean; independent_tcp_ports?: boolean; all_shards_active?: boolean; per_shard_multiple_blocks?: boolean; real_client_submission?: boolean; real_cross_shard_network?: boolean; real_pbft_style_messages?: boolean; real_signed_tx?: boolean; persistent_state?: boolean; plugin_driven_runtime?: boolean; block_executor_id?: string; block_executor_consistent?: boolean; plan_digest_consistent?: boolean; state_root_consistent?: boolean; initial_state_digest?: string; state_home_mapping_digest?: string; global_final_state_digest?: string; no_fallback?: boolean; orphan_process_count?: number; distinct_process_count?: number; expected_process_count?: number; shard_count?: number; shard_blocks?: Record<string, number>; finality_evidence?: V5FinalityEvidence; execution_status?: "completed" | "failed" | "running" | "cancelled" | "timed_out"; artifact_status?: "complete" | "incomplete" | "pending" | "unavailable"; formal_eligibility?: boolean; execution_gate?: V5Gate; artifact_gate?: V5Gate; completion_gate?: V5Gate; artifact_contract_version?: number; missing_artifacts?: string[]; unexpected_artifacts?: string[] };
 export type V5RuntimeArtifact = {
   name: string;
   size_bytes: number;
@@ -1380,6 +1394,9 @@ export type V5FormalChildRun = V5FormalMatrixRow & {
   error?: string;
   result?: V5FormalChildResult;
   metrics?: Record<string, unknown>;
+  individual_result_valid?: boolean;
+  individual_result_validity_reasons?: string[];
+  comparison_eligibility_status?: string;
 };
 export type V5FormalRunGroup = {
   run_group_id: string;
@@ -1403,6 +1420,19 @@ export type V5FormalRunGroup = {
   method_names?: string[];
   method_ids?: string[];
   failed_child_runs?: number | null;
+  performance_comparison_valid?: boolean;
+  direct_cross_semantic_performance_comparison_valid?: boolean;
+  within_semantic_cohort_state_equivalence_valid?: boolean | null;
+  pairwise_logical_state_equivalent?: boolean | null;
+  fairness_validation?: { passed?: boolean; performance_comparison_valid?: boolean; direct_cross_semantic_performance_comparison_valid?: boolean; incomparable_groups?: Array<Record<string, unknown>>; semantic_classes?: string[] };
+  state_equivalence_validation?: {
+    passed?: boolean;
+    performance_comparison_valid?: boolean;
+    within_semantic_cohort_state_equivalence_valid?: boolean;
+    pairwise_logical_state_equivalent?: boolean | null;
+    comparable_cohort_count?: number;
+    cohorts?: Array<Record<string, unknown>>;
+  };
   source_label?: "user" | "e2e" | "script";
   tags?: string[];
   is_test?: boolean;
@@ -1454,7 +1484,10 @@ export type V5PaperMetricRow = {
   metric: string;
   metric_unit: string;
   valid_sample_count: number;
+  observed_sample_count?: number;
   excluded_sample_count: number;
+  sample_status?: "paper_eligible" | "comparison_excluded" | "completed_invalid" | "blocked_incompatible" | "execution_failed";
+  sample_status_counts?: Record<string, number>;
   raw_values: number[];
   mean: number | null;
   median: number | null;
@@ -1472,10 +1505,17 @@ export type V5PaperResultAnalysis = {
   analysis_status: string;
   fairness_status: string;
   metrics: Record<string, V5PaperMetricRow[]>;
+  observed_metrics?: Record<string, V5PaperMetricRow[]>;
+  sample_statuses?: Array<Record<string, unknown>>;
+  status_counts?: { execution_failed: number; blocked_incompatible: number; completed_invalid: number; comparison_excluded: number; paper_eligible: number };
+  performance_comparison_valid?: boolean;
+  comparison_note?: string;
   excluded_samples: Array<Record<string, unknown>>;
 };
 export type V5FormalAnalysis = { run_group_id: string; groups: Array<Record<string, unknown>>; charts: Array<{ suite_type: string; kind: "summary" | "bar" | "line"; rows: Array<Record<string, unknown>> }>; paper_result_analysis?: V5PaperResultAnalysis };
-export type V5WorkloadDatasetSummary = { schema_version: string; dataset_id: string; display_name: string; description: string; source_platform: string; source_chain: string; truth_label: string; row_count: number; operation_counts?: Record<string, number>; category_counts: Record<string, number>; source_sha256: string; available: boolean; selectable: boolean; validation_status: string; blockers: string[]; warnings: string[]; supported_skew_axes?: string[]; default_skew_axis?: string | null };
+export type V5WorkloadVariantParameter = { name: string; label?: string; type?: "enum" | "number_enum" | "number" | "string"; options?: Array<string | number | boolean>; option_labels?: Record<string, string>; default?: string | number | boolean | null; required?: boolean };
+export type V5WorkloadVariantDefinition = { variant_mode: string; display_name?: string; kind?: "original" | "derived"; selection_mode?: "contiguous_window" | "validated_prefix"; parameters?: V5WorkloadVariantParameter[] };
+export type V5WorkloadDatasetSummary = { schema_version: string; dataset_id: string; display_name: string; description: string; source_platform: string; source_chain: string; truth_label: string; row_count: number; operation_counts?: Record<string, number>; category_counts: Record<string, number>; source_sha256: string; source_layout?: string; supported_variants?: string[]; variant_definitions?: V5WorkloadVariantDefinition[]; supported_tx_counts?: number[]; allow_full_dataset?: boolean; available: boolean; selectable: boolean; validation_status: string; blockers: string[]; warnings: string[]; supported_skew_axes?: string[]; default_skew_axis?: string | null };
 export type V5WorkloadDatasetDetail = V5WorkloadDatasetSummary & { dataset_type: string; included_categories: string[]; excluded_categories: string[]; unique_source_tx_hash_count: number; time_start_ms: number; time_end_ms: number; verification_method: string; verification_sample_count: number; verification_results: string; usage_note: string; generator_version: string; variants: Array<Record<string, unknown>>; adapter_id?: string; supported_variants?: string[] };
 export type V5WorkloadPreviewRequest = V5WorkloadSourceSpec;
 export type V5WorkloadPreview = {
@@ -1549,6 +1589,10 @@ export async function createV5FormalRunGroup(payload: V5FormalRunRequest): Promi
 
 export async function fetchV5FormalRunGroup(groupId: string): Promise<V5FormalRunGroupDetail> {
   return request<V5FormalRunGroupDetail>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}`);
+}
+
+export async function cancelV5FormalRunGroup(groupId: string): Promise<V5FormalRunGroupSummary> {
+  return request<V5FormalRunGroupSummary>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/cancel`, { method: "POST" });
 }
 
 export async function listV5FormalRunGroups(): Promise<V5FormalRunGroup[]> {

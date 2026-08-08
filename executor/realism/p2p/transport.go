@@ -155,6 +155,12 @@ func (t *Transport) handleConn(ctx context.Context, conn net.Conn) {
 			t.Log.Add(entry)
 			return
 		}
+		if msg.ToNode != "" && msg.ToNode != t.NodeID {
+			entry.Success = false
+			entry.Error = "p2p envelope addressed to different node"
+			t.Log.Add(entry)
+			return
+		}
 		if decision := t.faultDecision("receive", msg.FromNode, msg); decision.FaultEvent {
 			if decision.Delay > 0 {
 				time.Sleep(decision.Delay)
@@ -191,10 +197,10 @@ func (t *Transport) send(ctx context.Context, peerID string, msg MessageEnvelope
 		return fmt.Errorf("unknown peer %s", peerID)
 	}
 	msg.ToNode = peerID
-	if msg.MessageID == "" || msg.Digest == "" {
-		msg.Digest = Digest(msg)
-		msg.MessageID = MessageID(msg)
-	}
+	// ToNode participates in Digest/MessageID, so every addressed copy must be
+	// finalized after the destination is set. Re-finalization is deterministic
+	// and keeps retries idempotent.
+	msg = FinalizeEnvelope(msg)
 	if decision := t.faultDecision("send", peerID, msg); decision.FaultEvent {
 		if decision.Delay > 0 {
 			time.Sleep(decision.Delay)

@@ -3757,3 +3757,328 @@ details summary {
     flex-direction: column;
   }
 }
+
+.analysis-chart-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.analysis-chart-scroll svg {
+  max-width: none;
+  min-width: 520px;
+}
+
+.analysis-status-strip {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0.8rem 0;
+}
+
+.analysis-status-count {
+  align-items: baseline;
+  border: 1px solid #eaecf0;
+  border-radius: 10px;
+  display: flex;
+  gap: 0.55rem;
+  padding: 0.65rem 0.8rem;
+}
+
+.analysis-status-count strong { font-size: 1.2rem; }
+.analysis-status-count.eligible { background: #ecfdf3; color: #027a48; }
+.analysis-status-count.excluded { background: #fffaeb; color: #b54708; }
+.analysis-status-count.blocked { background: #f2f4f7; color: #475467; }
+.analysis-status-count.invalid,
+.analysis-status-count.failed { background: #fef3f2; color: #b42318; }
+
+.analysis-status-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin: 0 0 0.8rem;
+}
+
+.analysis-status-legend span {
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.28rem 0.55rem;
+}
+
+.analysis-status-legend .eligible { background: #ecfdf3; color: #027a48; }
+.analysis-status-legend .excluded { background: #fffaeb; color: #b54708; }
+.analysis-status-legend .blocked { background: #f2f4f7; color: #475467; }
+.analysis-status-legend .invalid,
+.analysis-status-legend .failed { background: #fef3f2; color: #b42318; }
+
+.analysis-exclusion-summary {
+  background: #fffaeb;
+  border: 1px solid #fedf89;
+  border-radius: 10px;
+  color: #7a2e0e;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+}
+
+.analysis-exclusion-summary p { margin: 0.3rem 0 0; }
+
+@media (max-width: 720px) {
+  .analysis-status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* V5 formal experiment conditional builder: Batch-SI integration */
+.formal-suite-grid,
+.ablation-target-grid,
+.selectable-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.85rem;
+}
+
+.experiment-choice-card,
+.method-choice-card {
+  position: relative;
+  min-height: 112px;
+  padding: 1rem 1.05rem;
+  border: 1px solid #c7d5e8;
+  border-radius: 14px;
+  background: #fff;
+  color: var(--ink, #18304f);
+  text-align: left;
+  box-shadow: 0 5px 16px rgba(28, 68, 123, 0.06);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
+}
+
+.experiment-choice-card:hover:not(:disabled),
+.method-choice-card:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: #6e9fe8;
+  box-shadow: 0 8px 22px rgba(28, 92, 180, 0.12);
+}
+
+.experiment-choice-card.selected,
+.method-choice-card.selected {
+  border: 2px solid #2f73e8;
+  background: #eef5ff;
+  box-shadow: 0 8px 22px rgba(47, 115, 232, 0.15);
+}
+
+.experiment-choice-card.unavailable,
+.method-choice-card:disabled:not(.selected) {
+  opacity: 0.58;
+  cursor: not-allowed;
+  background: #f4f6f9;
+}
+
+.experiment-choice-card strong,
+.method-choice-card strong,
+.experiment-choice-card small,
+.method-choice-card small,
+.method-choice-card em {
+  display: block;
+}
+
+.experiment-choice-card strong,
+.method-choice-card strong {
+  margin-bottom: 0.35rem;
+  font-size: 1rem;
+}
+
+.experiment-choice-card small,
+.method-choice-card small {
+  color: #60738e;
+  line-height: 1.48;
+}
+
+.method-choice-card em {
+  margin-top: 0.55rem;
+  color: #2f67b8;
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.choice-check {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.65rem;
+  display: inline-grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  color: #fff;
+  background: #2f73e8;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.formal-method-groups {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.method-family {
+  padding-top: 0.2rem;
+}
+
+.method-family h4 {
+  margin: 0 0 0.55rem;
+  color: #294d7d;
+}
+
+.compact-actions {
+  justify-content: flex-start;
+  margin-bottom: 0.8rem;
+}
+
+.current-experiment-summary,
+.resource-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+}
+
+.current-experiment-summary > div,
+.resource-summary-grid > div {
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #d4e0ef;
+  border-radius: 11px;
+  background: rgba(246, 250, 255, 0.94);
+}
+
+.current-experiment-summary span,
+.resource-summary-grid span,
+.resource-summary-grid small {
+  display: block;
+}
+
+.current-experiment-summary span,
+.resource-summary-grid span {
+  margin-bottom: 0.25rem;
+  color: #667b97;
+  font-size: 0.78rem;
+}
+
+.current-experiment-summary strong,
+.resource-summary-grid strong {
+  color: #183e70;
+}
+
+.resource-summary-grid small {
+  margin-top: 0.25rem;
+  color: #7688a0;
+}
+
+.worker-option-group {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.9rem;
+}
+
+.worker-option-group > span {
+  font-weight: 700;
+  color: #294d7d;
+}
+
+.segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.segmented-control button {
+  min-width: 64px;
+  background: #fff;
+  color: #2d5e9e;
+  border: 1px solid #bfd0e8;
+}
+
+.segmented-control button.selected {
+  background: #2f73e8;
+  border-color: #2f73e8;
+  color: #fff;
+}
+
+.readonly-field {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #d7e1ee;
+  border-radius: 9px;
+  background: #f7f9fc;
+}
+
+.readonly-field span {
+  color: #6c809b;
+  font-size: 0.78rem;
+}
+
+.preflight-panel {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0.85rem 0 1rem;
+  padding: 0.85rem;
+  border: 1px solid #d4e0ef;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.preflight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  line-height: 1.45;
+}
+
+.preflight-item > span:first-child {
+  display: inline-grid;
+  flex: 0 0 1.3rem;
+  place-items: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 800;
+}
+
+.preflight-item.ok > span:first-child { background: #26865b; }
+.preflight-item.blocked > span:first-child { background: #c74a4a; }
+.preflight-item.ok { color: #285e47; }
+.preflight-item.blocked { color: #9d3434; }
+
+@media (max-width: 720px) {
+  .formal-suite-grid,
+  .ablation-target-grid,
+  .selectable-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* Native checkboxes are kept only as an automation/backward-compatibility
+   control. The visible interaction remains the button-style experiment card. */
+.experiment-choice-card,
+.method-choice-card {
+  position: relative;
+}
+
+.compatibility-checkbox {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.experiment-choice-card:disabled .compatibility-checkbox,
+.method-choice-card:disabled .compatibility-checkbox {
+  cursor: not-allowed;
+}

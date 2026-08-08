@@ -25,7 +25,7 @@ from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
 from backend.app.services.v5_workload_data_plane import supported_workload_counts
 
 
-METHOD_ORDER = ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]
+METHOD_ORDER = ["hash_serial", "hash_block_stm", "hash_aria", "metatrack_serial", "metatrack_block_stm"]
 DATASET_ID = "dcl_sales_polygon_271868"
 DATASET_SOURCE_SHA256 = "f690db630e061a15dfab3f2b8a654006bccb010517a8d67379817fdda522474e"
 
@@ -325,6 +325,34 @@ def next_retry_output(output: Path) -> Path:
     raise RuntimeError(f"no available retry directory for {logical_path(output)}")
 
 
+def collect_aria_summaries(output: Path) -> list[dict]:
+    summaries: list[dict] = []
+    for directory in node_dirs(output):
+        path = directory / "block_execution_summary.json"
+        if not path.is_file():
+            continue
+        data = read_json(path)
+        blocks = data.get("blocks")
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("block_executor_id") != "aria_block_executor":
+                continue
+            summaries.append({
+                "node_id": directory.name,
+                "height": block.get("height"),
+                "executed_transaction_count": block.get("executed_transaction_count"),
+                "aria_metrics": block.get("aria_metrics"),
+                "aria_epoch_count": block.get("aria_epoch_count"),
+                "aria_conflict_abort_count": block.get("aria_conflict_abort_count"),
+                "aria_reexecution_count": block.get("aria_reexecution_count"),
+                "serializable": block.get("serializable"),
+                "serial_equivalent": block.get("serial_equivalent"),
+                "aria_fallback_mode": block.get("aria_fallback_mode"),
+            })
+    return summaries
+
+
 def load_evidence(method_id: str, output: Path) -> dict:
     summary = read_json(output / "real_cluster_summary.json")
     finality = read_json(output / "finality_summary.json")
@@ -363,6 +391,7 @@ def load_evidence(method_id: str, output: Path) -> dict:
         "physical_update_count": sum(int(row["physical_update_count"]) for row in commits),
         "block_stm_summaries": block_stm_summaries,
         "serial_equivalence": serial_equivalence,
+        "aria_summaries": collect_aria_summaries(output),
         "workload_replay": workload_replay,
         "identity": run_identity,
         "persistence_summaries": persistence,
@@ -387,7 +416,12 @@ def validate(results: dict[str, dict], *, tx_count: int, workload_source: str) -
         finality = result["finality"]
         drain = result["drain"]
         plugins = result["plugins"]
-        expected_block_executor = "block_stm_block_executor" if method_id.endswith("block_stm") else ("metatrack_block_executor" if method_id.startswith("metatrack") else "serial_block_executor")
+        expected_block_executor = (
+            "aria_block_executor" if method_id == "hash_aria"
+            else "block_stm_block_executor" if method_id.endswith("block_stm")
+            else "metatrack_block_executor" if method_id.startswith("metatrack")
+            else "serial_block_executor"
+        )
         expected_routing = "metatrack_coaccess_routing" if method_id.startswith("metatrack") else "hash_routing_baseline"
         for key in ("git_head", "working_tree_diff_sha256", "executable_sha256", "compiled_plan_digest", "plugin_snapshot_digest", "workload_hash"):
             value = result["identity"].get(key)
@@ -414,6 +448,16 @@ def validate(results: dict[str, dict], *, tx_count: int, workload_source: str) -
                 blockers.append(f"{method_id}: Block-STM artifacts missing")
             if any(item.get("serial_equivalent") is not True for item in result["block_stm_summaries"] + result["serial_equivalence"]):
                 blockers.append(f"{method_id}: Block-STM serial equivalence failed")
+        if method_id == "hash_aria":
+            if not result["aria_summaries"]:
+                blockers.append(f"{method_id}: Aria execution summaries missing")
+            for item in result["aria_summaries"]:
+                if item.get("serializable") is not True or item.get("serial_equivalent") is not False:
+                    blockers.append(f"{method_id}: Aria serializability truth boundary failed")
+                if item.get("aria_fallback_mode") != "disabled":
+                    blockers.append(f"{method_id}: Aria fallback truth boundary failed")
+                if item.get("executed_transaction_count", 0) > 0 and (not isinstance(item.get("aria_epoch_count"), int) or item.get("aria_epoch_count", 0) <= 0):
+                    blockers.append(f"{method_id}: Aria epoch evidence failed")
         if method_id.startswith("metatrack"):
             if not (result["artifacts"]["metatrack_batch_plan"] and result["artifacts"]["remote_state_access"]):
                 blockers.append(f"{method_id}: MetaTrack artifacts missing")
@@ -443,13 +487,13 @@ def validate(results: dict[str, dict], *, tx_count: int, workload_source: str) -
             blockers.append("Hash and MetaTrack Block-STM routing assignments did not differ")
         if not (results["metatrack_serial"]["fast_track_count"] > 0 and results["metatrack_block_stm"]["fast_track_count"] > 0):
             blockers.append("MetaTrack methods did not produce dual-track fast execution evidence")
-        if not (results["hash_serial"]["fast_track_count"] == 0 and results["hash_block_stm"]["fast_track_count"] == 0):
+        if not all(results[method_id]["fast_track_count"] == 0 for method_id in ("hash_serial", "hash_block_stm", "hash_aria")):
             blockers.append("Hash methods unexpectedly produced dual-track fast execution evidence")
         for method_id in ("metatrack_serial", "metatrack_block_stm"):
             item = results[method_id]
             if not (item["aggregation_group_count"] > 0 and item["physical_update_count"] < item["logical_update_count"]):
                 blockers.append(f"{method_id}: MetaTrack aggregation evidence failed")
-        for method_id in ("hash_serial", "hash_block_stm"):
+        for method_id in ("hash_serial", "hash_block_stm", "hash_aria"):
             if results[method_id]["aggregation_group_count"] != 0:
                 blockers.append(f"{method_id}: hash baseline unexpectedly used aggregation")
     for key, values in identity_values.items():
@@ -459,7 +503,7 @@ def validate(results: dict[str, dict], *, tx_count: int, workload_source: str) -
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run V5 execution-methods closure acceptance for Hash/MetaTrack x Serial/Block-STM.")
+    parser = argparse.ArgumentParser(description="Run V5 execution-methods closure acceptance for Serial, Block-STM, Aria, and MetaTrack profiles.")
     parser.add_argument("--output-root", default=str(ROOT / ".cache" / "v5_execution_methods_closure"))
     parser.add_argument("--tx-count", type=int, default=1000)
     parser.add_argument("--workload-source", choices=["synthetic", "dataset-original", "dataset-derived"], default="synthetic")

@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 
-_SUMMARY_KEYS = ("run_group_id", "status", "execution_backend", "runtime_truth", "created_at", "updated_at", "finished_at", "total_child_runs", "completed_child_runs", "failed_child_runs")
+_SUMMARY_KEYS = ("run_group_id", "status", "execution_backend", "runtime_truth", "created_at", "updated_at", "finished_at", "total_child_runs", "completed_child_runs", "failed_child_runs", "blocked_child_runs", "cancelled_child_runs")
 _CHILD_KEYS = ("child_run_id", "run_group_id", "suite_type", "method", "method_id", "method_name", "method_config_id", "formal_plan_config_id", "method_role", "changed_plugin_categories", "topology_point", "workload_point", "fault_point", "seed", "repeat_index", "attempt", "comparison_group_id", "scan_variable", "scan_value", "estimated_processes", "estimated_transactions", "execution_backend", "status", "execution_status", "artifact_status", "formal_eligibility", "execution_gate", "artifact_gate", "completion_gate", "artifact_contract_version", "missing_artifacts", "unexpected_artifacts", "error", "paper_candidate", "metrics")
 
 
@@ -39,7 +39,9 @@ def group_summary(group: dict, *, children: list[dict] | None = None) -> dict:
     methods = plan.get("methods") if isinstance(plan.get("methods"), list) else []
     body = {key: deepcopy(group.get(key)) for key in _SUMMARY_KEYS}
     if children is not None:
-        body["failed_child_runs"] = sum(item.get("status") in {"failed", "blocked"} for item in children)
+        body["failed_child_runs"] = sum(item.get("status") == "failed" for item in children)
+        body["blocked_child_runs"] = sum(item.get("status") == "blocked" for item in children)
+        body["cancelled_child_runs"] = sum(item.get("status") == "cancelled" for item in children)
     body.update({"plan_name": plan.get("name", ""), "suite_names": list(plan.get("suites") or []), "method_names": [item.get("display_name", item.get("method_id", "")) for item in methods if isinstance(item, dict)], "method_ids": [item.get("method_id", "") for item in methods if isinstance(item, dict)], "aggregate": deepcopy(group.get("aggregate")), "source_label": plan.get("source_label", "user"), "tags": list(plan.get("tags") or []), "is_test": plan.get("source_label") == "e2e" or "e2e" in (plan.get("tags") or [])})
     return body
 

@@ -40,6 +40,10 @@ type StateKV struct {
 	InitialValue    int64    `json:"initial_value"`
 	DeltaID         string   `json:"delta_id,omitempty"`
 	BlockHeight     uint64   `json:"block_height,omitempty"`
+	RoutingOrdinal  uint64   `json:"routing_ordinal,omitempty"`
+	PreviousVersion uint64   `json:"previous_version,omitempty"`
+	ProducedVersion uint64   `json:"produced_version,omitempty"`
+	OrderingNoop    bool     `json:"ordering_noop,omitempty"`
 }
 
 type CASMismatchError struct {
@@ -812,6 +816,9 @@ func applyStateKVs(values map[string]string, updates []StateKV, namespace string
 }
 
 func applyStateKV(values map[string]string, key string, item StateKV) error {
+	if item.OrderingNoop {
+		return nil
+	}
 	if item.UpdateSemantics == "commutative_delta" {
 		currentText := values[key]
 		current, _ := strconv.ParseInt(currentText, 10, 64)
@@ -821,7 +828,7 @@ func applyStateKV(values map[string]string, key string, item StateKV) error {
 		values[key] = strconv.FormatInt(current+item.Delta, 10)
 		return nil
 	}
-	if item.BaseValueDigest != "" {
+	if item.ProducedVersion == 0 && item.BaseValueDigest != "" {
 		actual := stateValueDigest(values[key])
 		if actual != item.BaseValueDigest {
 			return CASMismatchError{Key: key, ExpectedDigest: item.BaseValueDigest, ActualDigest: actual, DeltaID: item.DeltaID, TxIDs: append([]string(nil), item.TxIDs...), BlockHeight: item.BlockHeight}

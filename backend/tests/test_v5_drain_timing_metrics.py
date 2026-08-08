@@ -77,7 +77,14 @@ def test_completion_gate_rejects_pending_system_delta_after_logical_finality(tmp
     node_dir.mkdir()
     _write_json(node_dir / "node_runtime_status.json", {"node_id": "node_0", "pending_state_delta_count": 1, "pending_state_delta_key_count": 0, "ready_state_delta_count": 0, "pending_commit_count": 0, "proposal_in_flight": False})
 
-    gate = _completion_gate(tmp_path, {"finality_evidence": {"incomplete_unique_tx_count": 0}})
+    gate = _completion_gate(
+        tmp_path,
+        {
+            "finality_evidence": {"incomplete_unique_tx_count": 0},
+            "initial_state_digest": "initial",
+            "global_final_state_digest": "final",
+        },
+    )
 
     assert gate["passed"] is False
     assert "node_runtime_status:node_0:pending_state_delta_count_not_zero" in gate["blockers"]
@@ -113,9 +120,115 @@ def test_completion_gate_passes_after_drain_quiescence_and_zero_pending(tmp_path
     node_dir.mkdir()
     _write_json(node_dir / "node_runtime_status.json", {"node_id": "node_0", "pending_state_delta_count": 0, "pending_state_delta_key_count": 0, "ready_state_delta_count": 0, "pending_commit_count": 0, "proposal_in_flight": False})
 
-    gate = _completion_gate(tmp_path, {"finality_evidence": {"incomplete_unique_tx_count": 0}})
+    gate = _completion_gate(
+        tmp_path,
+        {
+            "finality_evidence": {"incomplete_unique_tx_count": 0},
+            "initial_state_digest": "initial",
+            "global_final_state_digest": "final",
+        },
+    )
 
     assert gate == {"passed": True, "blockers": []}
+
+
+def test_completion_gate_ignores_terminal_only_proposal_residue(tmp_path: Path) -> None:
+    _write_json(tmp_path / "finality_summary.json", _finality())
+    _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
+    node_dir = tmp_path / "node_0"
+    node_dir.mkdir()
+    _write_json(
+        node_dir / "node_runtime_status.json",
+        {
+            "node_id": "node_0",
+            "pending_state_delta_count": 0,
+            "pending_state_delta_key_count": 0,
+            "ready_state_delta_count": 0,
+            "pending_commit_count": 0,
+            "proposal_in_flight": True,
+            "proposal_work_details_available": True,
+            "proposal_logical_tx_ids": ["done"],
+            "proposal_system_state_delta_count": 0,
+            "terminal_logical_tx_ids": ["done"],
+        },
+    )
+
+    gate = _completion_gate(
+        tmp_path,
+        {
+            "finality_evidence": {"incomplete_unique_tx_count": 0},
+            "initial_state_digest": "initial",
+            "global_final_state_digest": "final",
+        },
+    )
+
+    assert gate == {"passed": True, "blockers": []}
+
+
+def test_completion_gate_rejects_proposal_with_nonterminal_or_system_work(tmp_path: Path) -> None:
+    _write_json(tmp_path / "finality_summary.json", _finality())
+    _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
+    node_dir = tmp_path / "node_0"
+    node_dir.mkdir()
+    base = {
+        "node_id": "node_0",
+        "pending_state_delta_count": 0,
+        "pending_state_delta_key_count": 0,
+        "ready_state_delta_count": 0,
+        "pending_commit_count": 0,
+        "proposal_in_flight": True,
+        "proposal_work_details_available": True,
+        "proposal_logical_tx_ids": ["waiting"],
+        "proposal_system_state_delta_count": 0,
+        "terminal_logical_tx_ids": ["done"],
+    }
+    _write_json(node_dir / "node_runtime_status.json", base)
+    summary = {
+        "finality_evidence": {"incomplete_unique_tx_count": 0},
+        "initial_state_digest": "initial",
+        "global_final_state_digest": "final",
+    }
+
+    gate = _completion_gate(tmp_path, summary)
+    assert gate["passed"] is False
+    assert "node_runtime_status:node_0:proposal_in_flight_with_pending_work" in gate["blockers"]
+
+    base["proposal_logical_tx_ids"] = ["done"]
+    base["proposal_system_state_delta_count"] = 1
+    _write_json(node_dir / "node_runtime_status.json", base)
+    gate = _completion_gate(tmp_path, summary)
+    assert gate["passed"] is False
+    assert "node_runtime_status:node_0:proposal_in_flight_with_pending_work" in gate["blockers"]
+
+
+def test_completion_gate_keeps_opaque_legacy_proposal_conservative(tmp_path: Path) -> None:
+    _write_json(tmp_path / "finality_summary.json", _finality())
+    _write_json(tmp_path / "drain_status.json", {"completion_reason": "drain_quiescent", "drain_finished_at": 7000})
+    node_dir = tmp_path / "node_0"
+    node_dir.mkdir()
+    _write_json(
+        node_dir / "node_runtime_status.json",
+        {
+            "node_id": "node_0",
+            "pending_state_delta_count": 0,
+            "pending_state_delta_key_count": 0,
+            "ready_state_delta_count": 0,
+            "pending_commit_count": 0,
+            "proposal_in_flight": True,
+        },
+    )
+
+    gate = _completion_gate(
+        tmp_path,
+        {
+            "finality_evidence": {"incomplete_unique_tx_count": 0},
+            "initial_state_digest": "initial",
+            "global_final_state_digest": "final",
+        },
+    )
+
+    assert gate["passed"] is False
+    assert "node_runtime_status:node_0:proposal_in_flight_with_pending_work" in gate["blockers"]
 
 
 def test_run_status_depends_on_process_and_completion_gate_not_paper_candidate_readiness() -> None:

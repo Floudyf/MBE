@@ -1,1 +1,29 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"MBE Workload Source Spec v1","type":"object","required":["schema_version","source_type","plugin_id","requested_tx_count","seed"],"properties":{"schema_version":{"const":"mbe_workload_source_v1"},"source_type":{"enum":["synthetic","dataset"]},"requested_tx_count":{"type":"integer","minimum":1},"seed":{"type":"integer"}}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "workload_source_spec_v1.schema.json",
+  "title": "MBE Workload Source Spec v1 (universal dataset extension)",
+  "type": "object",
+  "required": ["schema_version", "source_type", "plugin_id", "requested_tx_count", "seed"],
+  "properties": {
+    "schema_version": {"const": "mbe_workload_source_v1"},
+    "source_type": {"enum": ["synthetic", "dataset"]},
+    "plugin_id": {"enum": ["deterministic_signed_synthetic", "canonical_trace_replay"]},
+    "dataset_id": {"type": ["string", "null"]},
+    "variant_mode": {"type": ["string", "null"]},
+    "variant_id": {"type": ["string", "null"]},
+    "requested_tx_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+    "use_full_dataset": {"type": "boolean"},
+    "seed": {"type": "integer"},
+    "selection_mode": {"enum": ["contiguous_window", "validated_prefix"]},
+    "replay_mode": {"const": "max_throughput"},
+    "skew_axis": {"type": ["string", "null"]},
+    "target_alpha": {"type": ["number", "null"]},
+    "variant_parameters": {
+      "type": "object",
+      "additionalProperties": {"type": ["string", "integer", "number", "boolean"]}
+    },
+    "materialized_id": {"type": ["string", "null"]},
+    "source_sha256": {"type": ["string", "null"], "pattern": "^[a-f0-9]{64}$"}
+  },
+  "additionalProperties": false
+}

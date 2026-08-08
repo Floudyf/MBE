@@ -16,6 +16,43 @@ streaming replay, frontend selection, result/artifact display, and local
 real-cluster acceptance. The current closure round is **V5 Generic Workload
 Interface and Data Adapter Closure**, not V5.3, V5.2.1, or V6.
 
+### 1.1 Current universal dataset extension
+
+The current implementation generalizes the first Decentraland-only closure into
+one method-independent dataset plane. The repository-local ignored data layout
+is:
+
+```text
+dataset/
+├─ Decentraland/dcl_sales_workload_chain_ready.csv
+├─ Alien_World/datasets/{read_heavy,balanced,write_heavy}/theta_*_10k.csv.gz
+├─ Axie_Infinity/axie_2021_10_01_full_day.csv
+└─ Tapos/tapos_peak_exact_write_set.csv
+```
+
+Git tracks dataset manifests, adapters, schemas, small samples, and tests under
+`data/workloads/` and `backend/app/services/workload_adapters/`; it never tracks
+the full `dataset/` tree. A manifest may describe either a `single_file` source
+or a `variant_file_family`. Family variants resolve a physical file and a
+validated prefix from generic parameters such as `access_profile`,
+`target_theta`, and `requested_tx_count`.
+
+The canonical reader is backward compatible with `mbe_workload_record_v1` and
+the Decentraland access-template `mbe_workload_record_v2`. New heterogeneous
+sources use `mbe_workload_record_v3` with a direct access list containing only
+`read`, `write`, `read_write`, and `commutative_delta`. Each v3 access list is
+content-digested and its key set must exactly equal `state_keys`. The Go replay
+iterator, routing path, Serial, Aria, Block-STM, Groundhog, and MetaTrack-facing
+execution path consume this common contract; adapters never branch on execution
+method and executors never branch on dataset ID.
+
+The same materialized workload ID and SHA-256 are compiled once per workload
+point and reused by every compared method. The registered real-data adapters
+are `decentraland_sales_v1`, `alien_worlds_rmw_v1`, `axie_full_day_v1`, and
+`tapos_exact_write_set_v1`; `canonical_csv_v1` remains the generic canonical
+adapter. Open, size, hash, schema, count, variant, prefix, or access-digest
+failure blocks the Child with `no_fallback=true`.
+
 ## 2. Current gap
 
 The V5 plugin catalog keeps `workload/deterministic_signed_synthetic` and adds
@@ -61,13 +98,15 @@ reported as complete per-row verification. Source/RPC credentials are read only
 from environment variables and never appear in source, manifest, artifacts,
 screenshots, or Git.
 
-Truth labels are `synthetic_generated`, `real_observed`, and
-`real_derived_resampled`. A derived workload is a deterministic resampling of
-observed rows, not an original trace and not Polygon contract execution.
+Truth labels include `synthetic_generated`, `real_observed`,
+`real_derived_resampled`, and `real_derived_controlled`. Resampled workloads
+reuse observed rows; controlled workloads preserve an observed transaction
+skeleton while deterministically controlling documented access-distribution
+axes. Neither label claims native contract execution.
 
 ## 5. Directories and data safety
 
-The next round will add Git-managed definitions only:
+Git-managed workload definitions are limited to:
 
 ```text
 data/workloads/manifests/
@@ -81,11 +120,10 @@ outputs belong under `.cache/workloads/{canonical,materialized,reports}`.
 Full CSV, canonical traces, and materialized workloads never enter Git.
 Artifacts expose only dataset IDs and relative logical paths, never local
 absolute paths, secrets, private keys, commands, environments, or raw-file
-copies. The next implementation must add (but this design round must not edit)
-these ignore rules:
+copies. The active ignore rules include:
 
 ```text
-/dcl_sales_workload_chain_ready.csv
+/dataset/
 /data_local/workloads/
 /.cache/workloads/
 ```
@@ -108,9 +146,12 @@ verification_method, verification_sample_count, verification_results,
 provenance, usage_note, available, validation_status, generator_version.
 ```
 
-The Git-managed manifest never stores a Windows absolute path. It records
-`local_raw_relative_path="dcl_sales_workload_chain_ready.csv"`, resolved at
-runtime relative to repository root. Public APIs and artifacts never return the
+The Git-managed manifest never stores a Windows absolute path. For example,
+Decentraland records
+`local_raw_relative_path="dataset/Decentraland/dcl_sales_workload_chain_ready.csv"`,
+resolved at runtime relative to repository root. Alien World records the family
+root `dataset/Alien_World` and resolves physical master files through its
+manifest index. Public APIs and artifacts never return the
 resolved path, repository root, or `local_raw_relative_path` resolution.
 
 For the initial manifest: `source_platform=decentraland_marketplace`,
@@ -118,11 +159,12 @@ For the initial manifest: `source_platform=decentraland_marketplace`,
 `adapter_id=decentraland_sales_v1`,
 `truth_label=real_observed`, `collection_method=self_crawled_marketplace_api`,
 and `raw_fetch_script_archive=partial`. Public responses redact `local_raw_path`.
-A manifest is selectable only when its schema, hashes, count, availability, and
-validation status pass. An initial static manifest may be
-`available=false, validation_status=unvalidated`; only the runtime registry may
-report `selectable=true` after validator success. Failure blocks the child
-rather than selecting synthetic.
+The catalog performs bounded presence and file-size checks so opening the
+frontend never hashes or parses hundreds of megabytes. A present source may be
+reported as `present_unvalidated` and selectable for preview. Preview and
+materialization then perform full source hash, row-count, schema, variant, and
+access-list validation before a Child can start. Failure blocks the Child rather
+than selecting synthetic.
 
 Adapters implement:
 
@@ -138,19 +180,26 @@ columns and semantics stay inside adapters and record `metadata`.
 
 Implemented adapters:
 
-- `decentraland_sales_v1`: maps Decentraland sales CSV rows into generic MBE
-  workload records.
+- `decentraland_sales_v1`: maps Decentraland sales CSV rows into the semantic
+  access-template contract.
+- `alien_worlds_rmw_v1`: streams indexed `.csv.gz` masters and preserves each
+  observed read-modify-write key as one `read_write` access.
+- `axie_full_day_v1`: derives a documented logical ownership-transfer access
+  list from observed Ronin transfer fields.
+- `tapos_exact_write_set_v1`: maps observed exact state-key sets to direct
+  `write` accesses.
 - `canonical_csv_v1`: accepts already-normalized generic canonical CSV files.
 
 ## 7. Canonical and Materialized Workload Records
 
-The converter writes streaming JSONL.GZ canonical records with this exact
-schema:
+The converter writes streaming JSONL.GZ canonical records. Legacy v1 and the
+Decentraland v2 template remain readable. New heterogeneous adapters emit the
+v3 direct-access schema:
 
 ```json
 {
-  "schema_version": "mbe_workload_record_v1",
-  "dataset_id": "dcl_sales_polygon_271868",
+  "schema_version": "mbe_workload_record_v3",
+  "dataset_id": "registered_dataset_id",
   "source_row_index": 0,
   "source_event_id": "sale-id",
   "source_tx_hash": "0x...",
@@ -164,7 +213,13 @@ schema:
   "routing_target_key": "contract:...",
   "skew_keys": {"contract": "contract:...", "receiver": "account:receiver:..."},
   "provenance": {"source_platform": "...", "source_chain": "...", "adapter_id": "..."},
-  "metadata": {}
+  "metadata": {},
+  "access_list_schema": "dataset-specific-versioned-schema",
+  "access_list_source": "observed-or-semantics-derived-boundary",
+  "access_list": [
+    {"key": "state:key", "mode": "read_write", "update_semantics": "documented_semantics"}
+  ],
+  "access_list_digest": "sha256-of-normalized-access-list"
 }
 ```
 
@@ -251,15 +306,16 @@ next `V5ExperimentSpec` extension is run-level, not method-level:
   "source_type": "synthetic|dataset",
   "plugin_id": "deterministic_signed_synthetic|canonical_trace_replay",
   "dataset_id": "required for dataset",
-  "variant_mode": "original_window|contract_zipf",
+  "variant_mode": "manifest-defined string",
   "variant_id": "stable normalized variant identifier",
   "requested_tx_count": 10000,
   "use_full_dataset": false,
   "seed": 47,
-  "selection_mode": "contiguous_window",
+  "selection_mode": "contiguous_window|validated_prefix",
   "replay_mode": "max_throughput",
-  "skew_axis": "contract",
+  "skew_axis": "optional legacy mirror",
   "target_alpha": null,
+  "variant_parameters": {"manifest_defined_parameter": "value"},
   "materialized_id": null,
   "source_sha256": "required for dataset"
 }
@@ -357,7 +413,9 @@ Workload Library becomes a registry view with dataset metadata, truth label,
 coverage, category counts, natural skew, hash summary, verification summary,
 availability, variants, and boundaries. Run Experiment selects a source through
 generic workload API/schema data, not dataset-ID conditionals. Dataset controls
-show size, seed, selection preview, original/derived variant, and contract alpha.
+show manifest-defined transaction sizes, seed, selection preview, original or
+derived variant, and generic variant parameters such as skew axis, alpha,
+read/write profile, or target theta.
 Synthetic retains tx count, cross-shard ratio, timeout, and seed controls.
 
 Any workload edit invalidates workload preview and Formal Matrix preview. Results

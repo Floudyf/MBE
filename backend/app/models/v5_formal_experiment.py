@@ -25,8 +25,9 @@ class V5FormalExperimentPlan(BaseModel):
     methods: list[V5FormalMethod] = Field(default_factory=list)
     seeds: list[int] = Field(default_factory=lambda: [42])
     repeats: int = Field(default=1, ge=1, le=20)
+    worker_count: int = Field(default=4, ge=1, le=8)
     topology_points: list[dict[str, int]] = Field(default_factory=list)
-    workload_points: list[dict[str, int | float]] = Field(default_factory=list)
+    workload_points: list[dict[str, object]] = Field(default_factory=list)
     fault_points: list[dict[str, object]] = Field(default_factory=list)
     source_label: Literal["user", "e2e", "script"] = "user"
     tags: list[str] = Field(default_factory=list)

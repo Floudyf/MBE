@@ -123,7 +123,7 @@ test("downloads formal chart data and image artifacts", async ({ page }) => {
   await openResults(page);
   const chart = page.getByTestId("v5-paper-chart-end_to_end_tps");
   const expectations = [
-    { label: "Download CSV", filename: "end_to_end_tps.csv", marker: "method_id,method_name,metric" },
+    { label: "Download CSV", filename: "end_to_end_tps.csv", marker: "method_id,method_name,sample_status" },
     { label: "Download SVG", filename: "end_to_end_tps.svg", marker: "<svg" },
     { label: "Download PNG", filename: "end_to_end_tps.png", marker: "\u0089PNG" },
     { label: "Download PDF", filename: "end_to_end_tps.pdf", marker: "%PDF" },
@@ -162,4 +162,163 @@ test("groups formal artifact catalog by V5.2 truth roles and opens only core ana
   await expect(page.getByTestId("v5-artifact-group-client-workload-evidence")).toContainText("canonical_workload_selection");
   await page.getByTestId("v5-artifact-group-logs-audit").locator("summary").click();
   await expect(page.getByTestId("v5-artifact-group-logs-audit")).toContainText("audit_log");
+});
+
+
+function v2PaperRow(method_id: string, method_name: string, mean: number, sample_status: "paper_eligible" | "completed_invalid") {
+  return {
+    method_id,
+    method_name,
+    metric: "end_to_end_tps",
+    metric_unit: "tps",
+    valid_sample_count: sample_status === "paper_eligible" ? 1 : 0,
+    observed_sample_count: 1,
+    excluded_sample_count: sample_status === "paper_eligible" ? 0 : 1,
+    sample_status,
+    sample_status_counts: { [sample_status]: 1 },
+    raw_values: [mean],
+    mean,
+    median: mean,
+    std: null,
+    min: mean,
+    max: mean,
+    ci95_low: null,
+    ci95_high: null,
+    statistical_note: "single_sample_no_variance_or_ci",
+    source_child_ids: [`child-${method_id}`],
+  };
+}
+
+async function openV2SevenMethodResults(page: Page) {
+  const methods = [
+    ["hash_serial", "Stateful Hash + Serial", 17.87, "paper_eligible"],
+    ["hash_block_stm", "Stateful Hash + Block-STM", 17.90, "paper_eligible"],
+    ["hash_aria", "Stateful Hash + Aria", 9.35, "paper_eligible"],
+    ["stateless_hash_serial", "Stateless Hash + Serial", 45.15, "completed_invalid"],
+    ["stateless_hash_block_stm", "Stateless Hash + Block-STM", 8.69, "completed_invalid"],
+    ["metatrack_serial", "MetaTrack + Serial", 17.88, "paper_eligible"],
+    ["metatrack_block_stm", "MetaTrack + Block-STM", 12.27, "paper_eligible"],
+  ] as const;
+  const observed = methods.map(([id, name, mean, status]) => v2PaperRow(id, name, mean, status));
+  const eligible = observed.filter((row) => row.sample_status === "paper_eligible");
+  const withMetric = (rows: typeof observed, metric: string, unit: string, multiplier: number) => rows.map((row) => ({ ...row, metric, metric_unit: unit, mean: row.mean * multiplier, median: row.mean * multiplier, min: row.mean * multiplier, max: row.mean * multiplier, raw_values: [row.mean * multiplier] }));
+  const paper = {
+    schema_version: "mbe_paper_result_analysis_v2",
+    run_group_id: group.run_group_id,
+    analysis_status: "incomplete",
+    fairness_status: "passed",
+    performance_comparison_valid: true,
+    metrics: {
+      end_to_end_tps: eligible,
+      p95_finality_ms: withMetric(eligible, "p95_finality_ms", "ms", 100),
+      p99_finality_ms: withMetric(eligible, "p99_finality_ms", "ms", 110),
+    },
+    observed_metrics: {
+      end_to_end_tps: observed,
+      p95_finality_ms: withMetric(observed, "p95_finality_ms", "ms", 100),
+      p99_finality_ms: withMetric(observed, "p99_finality_ms", "ms", 110),
+    },
+    sample_statuses: [],
+    status_counts: { execution_failed: 0, blocked_incompatible: 0, completed_invalid: 2, comparison_excluded: 0, paper_eligible: 5 },
+    excluded_samples: [
+      { child_run_id: "child-stateless_hash_serial", method_id: "stateless_hash_serial", status: "completed_invalid", reasons: ["finalized_not_equal_submitted"] },
+      { child_run_id: "child-stateless_hash_block_stm", method_id: "stateless_hash_block_stm", status: "completed_invalid", reasons: ["cross_shard_failed_not_zero"] },
+    ],
+  };
+  await page.route("**/api/v5/formal/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/summaries")) return route.fulfill({ json: { items: [{ ...group, total_child_runs: 7, completed_child_runs: 7, method_ids: methods.map(([id]) => id), method_names: methods.map(([, name]) => name) }], total: 1, next_cursor: null } });
+    if (url.pathname.endsWith(`/run-groups/${group.run_group_id}/metrics`)) return route.fulfill({ json: {} });
+    if (url.pathname.endsWith(`/run-groups/${group.run_group_id}/artifacts`)) return route.fulfill({ json: { run_group_id: group.run_group_id, status: "ready", bundle_ready: true, bundle_size_bytes: 1, file_count: 0, files: [] } });
+    if (url.pathname.endsWith(`/run-groups/${group.run_group_id}/analysis`)) return route.fulfill({ json: { run_group_id: group.run_group_id, charts: [], groups: [], paper_result_analysis: paper } });
+    if (url.pathname.endsWith(`/run-groups/${group.run_group_id}`)) return route.fulfill({ json: { group: { ...group, total_child_runs: 7, completed_child_runs: 7 }, children: [] } });
+    return route.fulfill({ status: 404, json: { detail: "unexpected V5 formal endpoint" } });
+  });
+  await page.goto("/");
+  await page.getByTestId("primary-navigation").getByRole("button").nth(2).click();
+  await expect(page.getByTestId("v5-analysis-panel")).toBeVisible();
+}
+
+test("defaults to paper-valid samples and keeps invalid completed runs distinct in the observed view", async ({ page }) => {
+  await openV2SevenMethodResults(page);
+
+  const tpsChart = page.getByTestId("v5-paper-chart-end_to_end_tps-svg");
+  await expect(page.getByTestId("v5-analysis-view-toggle").getByRole("button", { name: "论文有效样本" })).toHaveClass(/active/);
+  await expect(tpsChart.locator("g[data-sample-status]")).toHaveCount(5);
+  await expect(tpsChart).not.toContainText("Stateless Hash");
+  await expect(page.getByTestId("v5-analysis-status-counts")).toContainText("2完成但无效");
+  await expect(page.getByTestId("v5-analysis-status-counts")).toContainText("0兼容性阻止");
+  await expect(page.getByTestId("v5-analysis-status-counts")).toContainText("0执行失败");
+
+  await page.getByTestId("v5-analysis-view-toggle").getByRole("button", { name: "全部运行结果" }).click();
+  await expect(page.getByTestId("v5-paper-chart-end_to_end_tps-svg").locator("g[data-sample-status]")).toHaveCount(7);
+  await expect(page.getByTestId("v5-paper-chart-end_to_end_tps-svg").locator('g[data-sample-status="completed_invalid"]')).toHaveCount(2);
+  await expect(page.getByTestId("v5-paper-chart-end_to_end_tps-svg")).toHaveAttribute("data-chart-width", "866");
+});
+
+
+async function openBatchSIComparisonResults(page: Page) {
+  const batchSI = {
+    ...v2PaperRow("hash_batch_si", "Batch-SI", 386.4, "paper_eligible"),
+    metric: "end_to_end_tps",
+    metric_unit: "tps",
+  };
+  const metatrack = {
+    ...v2PaperRow("metatrack_serial", "MetaTrack", 488.28, "paper_eligible"),
+    metric: "end_to_end_tps",
+    metric_unit: "tps",
+  };
+  const withMetric = (rows: Array<typeof batchSI>, metric: string, multiplier: number) => rows.map((row) => ({
+    ...row,
+    metric,
+    metric_unit: "ms",
+    mean: row.mean * multiplier,
+    median: row.mean * multiplier,
+    min: row.mean * multiplier,
+    max: row.mean * multiplier,
+    raw_values: [row.mean * multiplier],
+  }));
+  const rows = [batchSI, metatrack];
+  const paper = {
+    schema_version: "mbe_paper_result_analysis_v2",
+    run_group_id: group.run_group_id,
+    analysis_status: "complete",
+    fairness_status: "passed",
+    performance_comparison_valid: false,
+    metrics: {
+      end_to_end_tps: rows,
+      p95_finality_ms: withMetric(rows, "p95_finality_ms", 2),
+      p99_finality_ms: withMetric(rows, "p99_finality_ms", 2.2),
+    },
+    observed_metrics: {
+      end_to_end_tps: rows,
+      p95_finality_ms: withMetric(rows, "p95_finality_ms", 2),
+      p99_finality_ms: withMetric(rows, "p99_finality_ms", 2.2),
+    },
+    sample_statuses: [],
+    status_counts: { execution_failed: 0, blocked_incompatible: 0, completed_invalid: 0, comparison_excluded: 0, paper_eligible: 2 },
+    excluded_samples: [],
+  };
+  await page.route("**/api/v5/formal/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/summaries")) return route.fulfill({ json: { items: [{ ...group, total_child_runs: 2, completed_child_runs: 2, method_ids: ["hash_batch_si", "metatrack_serial"], method_names: ["Batch-SI", "MetaTrack"] }], total: 1, next_cursor: null } });
+    if (url.pathname.endsWith(`/run-groups/${group.run_group_id}/metrics`)) return route.fulfill({ json: {} });
+    if (url.pathname.endsWith(`/run-groups/${group.run_group_id}/artifacts`)) return route.fulfill({ json: { run_group_id: group.run_group_id, status: "ready", bundle_ready: true, bundle_size_bytes: 1, file_count: 0, files: [] } });
+    if (url.pathname.endsWith(`/run-groups/${group.run_group_id}/analysis`)) return route.fulfill({ json: { run_group_id: group.run_group_id, charts: [], groups: [], paper_result_analysis: paper } });
+    if (url.pathname.endsWith(`/run-groups/${group.run_group_id}`)) return route.fulfill({ json: { group: { ...group, total_child_runs: 2, completed_child_runs: 2 }, children: [] } });
+    return route.fulfill({ status: 404, json: { detail: "unexpected V5 formal endpoint" } });
+  });
+  await page.goto("/");
+  await page.getByTestId("primary-navigation").getByRole("button").nth(2).click();
+  await expect(page.getByTestId("v5-analysis-panel")).toBeVisible();
+}
+
+test("renders a paper-valid Batch-SI bar with its registered label", async ({ page }) => {
+  await openBatchSIComparisonResults(page);
+
+  const chart = page.getByTestId("v5-paper-chart-end_to_end_tps-svg");
+  await expect(chart.locator("g[data-sample-status]")).toHaveCount(2);
+  await expect(chart).toContainText("Batch-SI");
+  await expect(chart).toContainText("386.40");
+  await expect(chart.locator('g[data-sample-status="paper_eligible"]')).toHaveCount(2);
 });

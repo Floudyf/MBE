@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,7 +18,7 @@ import (
 )
 
 const BlockSTMExecutorID = "block_stm_block_executor"
-const BlockSTMExecutorVersion = "0.1.0"
+const BlockSTMExecutorVersion = "0.2.1"
 
 type BlockSTMMetrics struct {
 	WorkerCount                     int         `json:"worker_count"`
@@ -25,6 +26,8 @@ type BlockSTMMetrics struct {
 	ExecutionTaskCount              int         `json:"execution_task_count"`
 	ValidationTaskCount             int         `json:"validation_task_count"`
 	AbortCount                      int         `json:"abort_count"`
+	DependencyAbortCount            int         `json:"dependency_abort_count"`
+	ValidationAbortCount            int         `json:"validation_abort_count"`
 	ReexecutionCount                int         `json:"reexecution_count"`
 	EstimateCount                   int         `json:"estimate_count"`
 	EstimateMarkCount               int         `json:"estimate_mark_count"`
@@ -47,6 +50,22 @@ type BlockSTMMetrics struct {
 	IncarnationHistogram            map[int]int `json:"incarnation_histogram"`
 }
 
+type BlockSTMProgress struct {
+	BlockHeight         uint64 `json:"block_height"`
+	TransactionCount    int    `json:"transaction_count"`
+	ExecutionTaskCount  int    `json:"execution_task_count"`
+	ValidationTaskCount int    `json:"validation_task_count"`
+	ValidatedCount      int    `json:"validated_count"`
+	AbortCount          int    `json:"abort_count"`
+	ReexecutionCount    int    `json:"reexecution_count"`
+	ActiveTaskCount     int    `json:"active_task_count"`
+	SchedulerQueueLen   int    `json:"scheduler_queue_length"`
+	MaximumIncarnation  int    `json:"maximum_incarnation"`
+	CurrentTxnIndex     int    `json:"current_txn_index"`
+	CurrentIncarnation  int    `json:"current_incarnation"`
+	LastProgressAtMS    int64  `json:"last_progress_at_ms"`
+}
+
 type BlockSTMExecutor struct {
 	DefaultInitialBalance  int64
 	WorkerCount            int
@@ -55,6 +74,7 @@ type BlockSTMExecutor struct {
 	MaximumIncarnations    int
 	IncarnationLimitAction string
 	Metrics                BlockSTMMetrics
+	Progress               func(BlockSTMProgress)
 	serialSemantics        *SerialExecutor
 }
 
@@ -62,7 +82,7 @@ func NewBlockSTMExecutor(workerCount int) *BlockSTMExecutor {
 	if workerCount < 1 {
 		workerCount = 1
 	}
-	return &BlockSTMExecutor{DefaultInitialBalance: 1_000_000, WorkerCount: workerCount, ExecutionMode: "correctness", OracleMode: "full", MaximumIncarnations: 16, IncarnationLimitAction: "fail", serialSemantics: NewSerialExecutor()}
+	return &BlockSTMExecutor{DefaultInitialBalance: 1_000_000, WorkerCount: workerCount, ExecutionMode: "correctness", OracleMode: "full", MaximumIncarnations: 0, IncarnationLimitAction: "fail", serialSemantics: NewSerialExecutor()}
 }
 
 func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
@@ -80,16 +100,131 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 	writeSets := make([]map[string]string, len(b.TxList))
 	receipts := make([]Receipt, len(b.TxList))
 	incarnations := make([]int, len(b.TxList))
+	validationGeneration := make([]uint64, len(b.TxList))
 	metrics := BlockSTMMetrics{WorkerCount: workerCount, IncarnationHistogram: map[int]int{}}
-	initialOrder := txnOrderFromInts(speculativeExecutionOrder(len(b.TxList), workerCount))
-	scheduler := blockstm.NewSchedulerWithOrder(len(b.TxList), initialOrder)
+	scheduler := blockstm.NewScheduler(len(b.TxList))
 	dependencies := blockstm.NewDependencyRegistry()
 	validated := make([]bool, len(b.TxList))
 	executed := make([]bool, len(b.TxList))
 	waiting := make([]bool, len(b.TxList))
 	validationQueued := make([]bool, len(b.TxList))
 	validatedCount := 0
-	jobs := make(chan blockstm.SchedulerTask)
+	maximumIncarnationObserved := 0
+	readersByKey := map[string]map[int]bool{}
+	readKeysByTxn := make([][]string, len(b.TxList))
+
+	clearReadIndex := func(index int) {
+		if index < 0 || index >= len(readKeysByTxn) {
+			return
+		}
+		for _, key := range readKeysByTxn[index] {
+			readers := readersByKey[key]
+			delete(readers, index)
+			if len(readers) == 0 {
+				delete(readersByKey, key)
+			}
+		}
+		readKeysByTxn[index] = nil
+	}
+	indexCapturedReads := func(index int, reads blockstm.CapturedReads) {
+		clearReadIndex(index)
+		seen := map[string]bool{}
+		for _, read := range reads.Reads {
+			if read.Key == "" || seen[read.Key] {
+				continue
+			}
+			seen[read.Key] = true
+			if readersByKey[read.Key] == nil {
+				readersByKey[read.Key] = map[int]bool{}
+			}
+			readersByKey[read.Key][index] = true
+			readKeysByTxn[index] = append(readKeysByTxn[index], read.Key)
+		}
+	}
+	scheduleValidation := func(index int) bool {
+		if index < 0 || index >= len(b.TxList) || validated[index] || !executed[index] || waiting[index] || validationQueued[index] {
+			return false
+		}
+		validationQueued[index] = true
+		scheduler.ScheduleValidationGeneration(
+			blockstm.Version{Txn: blockstm.TxnIndex(index), Incarnation: blockstm.Incarnation(incarnations[index])},
+			validationGeneration[index],
+		)
+		return true
+	}
+	scheduleValidationRange := func(start int) bool {
+		if start < 0 {
+			start = 0
+		}
+		scheduled := false
+		for index := start; index < len(b.TxList); index++ {
+			if scheduleValidation(index) {
+				scheduled = true
+			}
+		}
+		return scheduled
+	}
+	scheduleReadyValidations := func() bool {
+		return scheduleValidationRange(0)
+	}
+	invalidateValidationReaders := func(lowerIndex int, writes map[string]string) bool {
+		targets := map[int]bool{}
+		for key := range writes {
+			for readerIndex := range readersByKey[key] {
+				if readerIndex > lowerIndex {
+					targets[readerIndex] = true
+				}
+			}
+		}
+		orderedTargets := make([]int, 0, len(targets))
+		for index := range targets {
+			orderedTargets = append(orderedTargets, index)
+		}
+		sort.Ints(orderedTargets)
+		scheduled := false
+		for _, index := range orderedTargets {
+			if !executed[index] || waiting[index] {
+				continue
+			}
+			if validated[index] {
+				validated[index] = false
+				validatedCount--
+			}
+			// Any queued or in-flight validation for this reader was computed
+			// before the lower transaction published its first version for an
+			// observed location. Supersede it and validate the same execution
+			// result against the new MVMemory. Readers of unrelated locations
+			// remain valid because their captured descriptors cannot change.
+			validationGeneration[index]++
+			validationQueued[index] = false
+			if scheduleValidation(index) {
+				scheduled = true
+			}
+		}
+		return scheduled
+	}
+	reportProgress := func(currentIndex, currentIncarnation, activeTasks int) {
+		if e.Progress == nil {
+			return
+		}
+		e.Progress(BlockSTMProgress{
+			BlockHeight:         b.Height,
+			TransactionCount:    len(b.TxList),
+			ExecutionTaskCount:  metrics.ExecutionTaskCount,
+			ValidationTaskCount: metrics.ValidationTaskCount,
+			ValidatedCount:      validatedCount,
+			AbortCount:          metrics.AbortCount,
+			ReexecutionCount:    metrics.ReexecutionCount,
+			ActiveTaskCount:     activeTasks,
+			SchedulerQueueLen:   scheduler.QueueLen(),
+			MaximumIncarnation:  maximumIncarnationObserved,
+			CurrentTxnIndex:     currentIndex,
+			CurrentIncarnation:  currentIncarnation,
+			LastProgressAtMS:    time.Now().UnixMilli(),
+		})
+	}
+
+	jobs := make(chan blockSTMTaskInput)
 	results := make(chan blockSTMTaskResult, workerCount)
 	var activeExecutions int64
 	var maxExecutions int64
@@ -98,8 +233,8 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 		workers.Add(1)
 		go func(workerID int) {
 			defer workers.Done()
-			for task := range jobs {
-				taskResult := e.runBlockSTMTask(ctx, b, base, logicalBase, memory, captured, readSets, validated, writeSets, task, workerID, &activeExecutions, &maxExecutions)
+			for input := range jobs {
+				taskResult := e.runBlockSTMTask(ctx, b, base, logicalBase, memory, input, workerID, &activeExecutions, &maxExecutions)
 				results <- taskResult
 			}
 		}(worker)
@@ -117,59 +252,114 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 		if queueLen := scheduler.QueueLen(); queueLen+activeTasks+1 > metrics.SchedulerQueuePeak {
 			metrics.SchedulerQueuePeak = queueLen + activeTasks + 1
 		}
+		input := blockSTMTaskInput{Task: task}
+		index := int(task.Version.Txn)
+		if index >= 0 && index < len(b.TxList) {
+			if task.Kind == blockstm.TaskValidate {
+				input.Captured = cloneCapturedReads(captured[index])
+			} else {
+				input.PreviousWrites = copyStringMap(writeSets[index])
+			}
+		}
 		select {
-		case jobs <- task:
+		case jobs <- input:
 			activeTasks++
 			return true
 		case <-ctx.Done():
 			return false
 		}
 	}
+
+	reportProgress(-1, 0, 0)
 	for validatedCount < len(b.TxList) {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
+		scheduleReadyValidations()
 		for activeTasks < workerCount && dispatch() {
 		}
 		if activeTasks == 0 {
-			if recoverBlockSTMSchedulerProgress(scheduler, validated, executed, validationQueued, incarnations, &metrics) {
+			scheduled := scheduleReadyValidations()
+			for index := range b.TxList {
+				if validated[index] || waiting[index] || executed[index] {
+					continue
+				}
+				scheduler.ScheduleExecution(blockstm.Version{Txn: blockstm.TxnIndex(index), Incarnation: blockstm.Incarnation(incarnations[index])})
+				scheduled = true
+			}
+			if scheduled && dispatch() {
 				continue
 			}
-			return Result{}, fmt.Errorf("block-stm scheduler drained before all transactions validated: validated=%d total=%d", validatedCount, len(b.TxList))
+			for index := range b.TxList {
+				if !validated[index] && waiting[index] {
+					return Result{}, fmt.Errorf("block-stm scheduler stalled on unresolved dependency: tx=%d incarnation=%d", index, incarnations[index])
+				}
+			}
+			return Result{}, fmt.Errorf("block-stm scheduler stalled without runnable work: validated=%d total=%d", validatedCount, len(b.TxList))
 		}
 		select {
 		case taskResult := <-results:
-			if activeTasks > 0 {
-				activeTasks--
-			}
+			activeTasks--
 			if taskResult.Err != nil {
 				return Result{}, taskResult.Err
 			}
 			index := int(taskResult.Version.Txn)
-			if index < 0 || index >= len(b.TxList) || int(taskResult.Version.Incarnation) != incarnations[index] || validated[index] {
-				if index >= 0 && index < len(validationQueued) {
-					validationQueued[index] = false
-				}
+			if index < 0 || index >= len(b.TxList) || int(taskResult.Version.Incarnation) != incarnations[index] {
 				metrics.StaleTaskCount++
+				reportProgress(index, int(taskResult.Version.Incarnation), activeTasks)
+				continue
+			}
+			if taskResult.Kind == blockstm.TaskValidate && taskResult.Generation != validationGeneration[index] {
+				metrics.StaleTaskCount++
+				reportProgress(index, int(taskResult.Version.Incarnation), activeTasks)
+				continue
+			}
+			if validated[index] {
+				metrics.StaleTaskCount++
+				reportProgress(index, int(taskResult.Version.Incarnation), activeTasks)
 				continue
 			}
 			switch taskResult.Kind {
 			case blockstm.TaskExecute:
+				metrics.ExecutionTaskCount++
+				metrics.BusinessExecutionCount++
+				metrics.SpeculativeReadCount += len(taskResult.Captured.Reads)
+				if taskResult.Version.Incarnation > 0 {
+					metrics.ReexecutionCount++
+				}
 				if taskResult.Dependency != nil {
 					dependencyIndex := int(taskResult.Dependency.Txn)
-					if dependencyIndex >= 0 && dependencyIndex < len(validated) && validated[dependencyIndex] {
+					dependencyResolved := dependencyIndex >= 0 && dependencyIndex < len(executed) && executed[dependencyIndex] && incarnations[dependencyIndex] > int(taskResult.Dependency.Incarnation)
+					if dependencyResolved {
 						waiting[index] = false
 						scheduler.ScheduleExecution(taskResult.Version)
 						metrics.DependencyResumeCount++
-						continue
+						break
+					}
+					next := scheduler.AbortAndWait(taskResult.Version)
+					incarnations[index] = int(next.Incarnation)
+					metrics.AbortCount = scheduler.AbortCount()
+					metrics.DependencyAbortCount++
+					if incarnations[index] > maximumIncarnationObserved {
+						maximumIncarnationObserved = incarnations[index]
+					}
+					if e.MaximumIncarnations > 0 && incarnations[index] >= e.MaximumIncarnations {
+						metrics.IncarnationLimitHitCount++
+						if e.IncarnationLimitAction == "serial_fallback" {
+							metrics.SerialFallbackCount++
+							return e.serialFallbackResult(b, base, workerCount, metrics), nil
+						}
+						return Result{}, fmt.Errorf("block-stm maximum incarnations exceeded for tx %s", b.TxList[index].TxID)
 					}
 					waiting[index] = true
-					scheduler.Wait(taskResult.Version)
-					dependencies.Register(taskResult.Version, *taskResult.Dependency)
+					executed[index] = false
+					validationQueued[index] = false
+					clearReadIndex(index)
+					dependencies.RegisterTask(blockstm.SchedulerTask{Kind: blockstm.TaskExecute, Version: next}, *taskResult.Dependency)
 					metrics.DependencyWaitCount++
 					metrics.EstimateReadCount++
 					readSets[index] = append([]ReadObservation(nil), taskResult.ReadSet...)
-					continue
+					break
 				}
 				captured[index] = taskResult.Captured
 				readSets[index] = append([]ReadObservation(nil), taskResult.ReadSet...)
@@ -177,63 +367,51 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 				receipts[index] = taskResult.Receipt
 				executed[index] = true
 				waiting[index] = false
-				metrics.ExecutionTaskCount++
-				metrics.BusinessExecutionCount++
-				metrics.SpeculativeReadCount += len(taskResult.Captured.Reads)
-				if taskResult.Version.Incarnation > 0 {
-					metrics.ReexecutionCount++
-				}
-				if (taskResult.Version.Incarnation > 0 || initialAttemptsComplete(executed, waiting)) && lowerTransactionsValidated(validated, index) {
-					validationQueued[index] = true
-					scheduler.ScheduleValidation(taskResult.Version)
-				}
-				for nextIndex := range b.TxList {
-					if executed[nextIndex] && !validated[nextIndex] && !validationQueued[nextIndex] && (incarnations[nextIndex] > 0 || initialAttemptsComplete(executed, waiting)) && lowerTransactionsValidated(validated, nextIndex) {
-						validationQueued[nextIndex] = true
-						scheduler.ScheduleValidation(blockstm.Version{Txn: blockstm.TxnIndex(nextIndex), Incarnation: blockstm.Incarnation(incarnations[nextIndex])})
+				indexCapturedReads(index, taskResult.Captured)
+
+				// An execution dependency is resolved when the blocking
+				// transaction finishes its next incarnation, not when that
+				// incarnation is later validated.
+				for incarnation := 0; incarnation < int(taskResult.Version.Incarnation); incarnation++ {
+					resolved := blockstm.Version{Txn: taskResult.Version.Txn, Incarnation: blockstm.Incarnation(incarnation)}
+					for _, waiter := range dependencies.ResolveTasks(resolved) {
+						waiterIndex := int(waiter.Version.Txn)
+						if waiterIndex < 0 || waiterIndex >= len(waiting) || !waiting[waiterIndex] || int(waiter.Version.Incarnation) != incarnations[waiterIndex] {
+							continue
+						}
+						waiting[waiterIndex] = false
+						executed[waiterIndex] = false
+						validationQueued[waiterIndex] = false
+						scheduler.ResumeTask(waiter)
+						metrics.DependencyResumeCount++
 					}
 				}
+				if taskResult.WroteNewLocation {
+					// Block-STM lowers the validation frontier when a transaction
+					// publishes a location that did not exist in its previous
+					// incarnation.  Higher transactions may already have validated
+					// against the absence of that version, so their successful
+					// validation state must be revoked before re-validation.
+					scheduleValidation(index)
+					invalidateValidationReaders(index, taskResult.WriteSet)
+				} else {
+					scheduleValidation(index)
+				}
+
 			case blockstm.TaskValidate:
 				metrics.ValidationTaskCount++
+				validationQueued[index] = false
 				if taskResult.Validation.Valid {
 					validated[index] = true
 					validatedCount++
 					metrics.ValidatedSpeculativeResultCount++
 					scheduler.Commit(taskResult.Version)
-					for incarnation := 0; incarnation <= int(taskResult.Version.Incarnation); incarnation++ {
-						resolved := blockstm.Version{Txn: taskResult.Version.Txn, Incarnation: blockstm.Incarnation(incarnation)}
-						for _, waiter := range dependencies.Resolve(resolved) {
-							waiterIndex := int(waiter.Txn)
-							if waiterIndex >= 0 && waiterIndex < len(waiting) && waiting[waiterIndex] {
-								incarnations[waiterIndex] = int(waiter.Incarnation)
-								waiting[waiterIndex] = false
-								executed[waiterIndex] = false
-								validationQueued[waiterIndex] = false
-								scheduler.ScheduleExecution(waiter)
-							} else {
-								scheduler.Resume(waiter)
-							}
-							metrics.DependencyResumeCount++
-						}
-					}
-					for nextIndex := range b.TxList {
-						if executed[nextIndex] && !validated[nextIndex] && !validationQueued[nextIndex] && (incarnations[nextIndex] > 0 || initialAttemptsComplete(executed, waiting)) && lowerTransactionsValidated(validated, nextIndex) {
-							validationQueued[nextIndex] = true
-							scheduler.ScheduleValidation(blockstm.Version{Txn: blockstm.TxnIndex(nextIndex), Incarnation: blockstm.Incarnation(incarnations[nextIndex])})
-						}
-					}
-					continue
+					break
 				}
+
 				metrics.ValidationFailureCount++
-				validationQueued[index] = false
 				if taskResult.Validation.Dependency != nil {
-					waiting[index] = true
-					scheduler.Wait(taskResult.Version)
-					dependencies.Register(taskResult.Version, *taskResult.Validation.Dependency)
-					metrics.DependencyWaitCount++
 					metrics.EstimateReadCount++
-					executed[index] = false
-					continue
 				}
 				abortedWrites := writeSets[index]
 				for key := range abortedWrites {
@@ -243,30 +421,32 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 				}
 				next := scheduler.Abort(taskResult.Version)
 				metrics.AbortCount = scheduler.AbortCount()
+				metrics.ValidationAbortCount++
 				incarnations[index] = int(next.Incarnation)
+				validationGeneration[index]++
+				if incarnations[index] > maximumIncarnationObserved {
+					maximumIncarnationObserved = incarnations[index]
+				}
 				executed[index] = false
 				waiting[index] = false
+				validationQueued[index] = false
+				clearReadIndex(index)
+
+				// A successful validation abort schedules every higher
+				// transaction that has already executed for optimistic
+				// re-validation. Transactions still in E or currently executing
+				// will schedule their own validation when execution finishes.
 				for higher := index + 1; higher < len(b.TxList); higher++ {
-					if validated[higher] || !executed[higher] || !capturedReadsTouchWrites(captured[higher], abortedWrites) {
+					if !executed[higher] || waiting[higher] {
 						continue
 					}
-					higherWrites := writeSets[higher]
-					higherVersion := blockstm.Version{Txn: blockstm.TxnIndex(higher), Incarnation: blockstm.Incarnation(incarnations[higher])}
-					for key := range higherWrites {
-						memory.MarkEstimate(key, higherVersion)
-						metrics.EstimateCount++
-						metrics.EstimateMarkCount++
+					if validated[higher] {
+						validated[higher] = false
+						validatedCount--
 					}
-					nextHigher := scheduler.Abort(higherVersion)
-					metrics.AbortCount = scheduler.AbortCount()
-					incarnations[higher] = int(nextHigher.Incarnation)
-					executed[higher] = false
+					validationGeneration[higher]++
 					validationQueued[higher] = false
-					waiting[higher] = true
-					scheduler.Wait(nextHigher)
-					dependencies.Register(nextHigher, next)
-					metrics.DependencyWaitCount++
-					metrics.EstimateReadCount++
+					scheduleValidation(higher)
 				}
 				if e.MaximumIncarnations > 0 && incarnations[index] >= e.MaximumIncarnations {
 					metrics.IncarnationLimitHitCount++
@@ -277,6 +457,7 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 					return Result{}, fmt.Errorf("block-stm maximum incarnations exceeded for tx %s", b.TxList[index].TxID)
 				}
 			}
+			reportProgress(index, int(taskResult.Version.Incarnation), activeTasks)
 		case <-ctx.Done():
 			return Result{}, ctx.Err()
 		}
@@ -341,6 +522,7 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 		return Result{}, fmt.Errorf("block-stm ordered materialization root mismatch")
 	}
 	result.SerialEquivalent = true
+	reportProgress(-1, metrics.MaximumIncarnation, 0)
 	return result, nil
 }
 
@@ -366,16 +548,39 @@ func (e *BlockSTMExecutor) serialFallbackResult(b block.Block, base map[string]s
 	return serial
 }
 
+type blockSTMTaskInput struct {
+	Task           blockstm.SchedulerTask
+	Captured       blockstm.CapturedReads
+	PreviousWrites map[string]string
+}
+
+func cloneCapturedReads(input blockstm.CapturedReads) blockstm.CapturedReads {
+	return blockstm.CapturedReads{Reads: append([]blockstm.ReadDescriptor(nil), input.Reads...)}
+}
+
+func copyStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
 type blockSTMTaskResult struct {
-	Kind       blockstm.SchedulerTaskKind
-	Version    blockstm.Version
-	Captured   blockstm.CapturedReads
-	ReadSet    []ReadObservation
-	WriteSet   map[string]string
-	Receipt    Receipt
-	Validation blockstm.ValidationResult
-	Dependency *blockstm.Version
-	Err        error
+	Kind             blockstm.SchedulerTaskKind
+	Version          blockstm.Version
+	Generation       uint64
+	Captured         blockstm.CapturedReads
+	ReadSet          []ReadObservation
+	WriteSet         map[string]string
+	WroteNewLocation bool
+	Receipt          Receipt
+	Validation       blockstm.ValidationResult
+	Dependency       *blockstm.Version
+	Err              error
 }
 
 type stmOverlay struct {
@@ -391,7 +596,9 @@ type stmOverlay struct {
 }
 
 func newSTMOverlay(shardID string, base, logicalBase map[string]string, memory *blockstm.MVMemory, reader blockstm.TxnIndex) *stmOverlay {
-	return &stmOverlay{shardID: shardID, base: copySnapshot(base), logicalBase: copySnapshot(logicalBase), memory: memory, reader: reader, writes: map[string]string{}}
+	// base and logicalBase are immutable for the lifetime of ExecuteBlock.
+	// Sharing them avoids copying the complete state for every incarnation.
+	return &stmOverlay{shardID: shardID, base: base, logicalBase: logicalBase, memory: memory, reader: reader, writes: map[string]string{}}
 }
 
 func (o *stmOverlay) get(key string) string {
@@ -472,13 +679,14 @@ func (o *stmOverlay) applyCommutativeDeltas(accesses []tx.AccessItem) {
 	}
 }
 
-func (e *BlockSTMExecutor) runBlockSTMTask(ctx context.Context, b block.Block, base, logicalBase map[string]string, memory *blockstm.MVMemory, captured []blockstm.CapturedReads, readSets [][]ReadObservation, validated []bool, writeSets []map[string]string, task blockstm.SchedulerTask, workerID int, activeExecutions, maxExecutions *int64) blockSTMTaskResult {
+func (e *BlockSTMExecutor) runBlockSTMTask(ctx context.Context, b block.Block, base, logicalBase map[string]string, memory *blockstm.MVMemory, input blockSTMTaskInput, workerID int, activeExecutions, maxExecutions *int64) blockSTMTaskResult {
+	task := input.Task
 	if err := ctx.Err(); err != nil {
-		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Err: err}
+		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Err: err}
 	}
 	index := int(task.Version.Txn)
 	if index < 0 || index >= len(b.TxList) {
-		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Err: fmt.Errorf("block-stm task index out of range: %+v", task)}
+		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Err: fmt.Errorf("block-stm task index out of range: %+v", task)}
 	}
 	switch task.Kind {
 	case blockstm.TaskExecute:
@@ -495,24 +703,33 @@ func (e *BlockSTMExecutor) runBlockSTMTask(ctx context.Context, b block.Block, b
 		receipt := e.executeTx(b, overlay, b.TxList[index])
 		writes := overlay.logicalWrites()
 		if overlay.dependency != nil {
-			return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Captured: overlay.captured, ReadSet: append([]ReadObservation(nil), overlay.reads...), WriteSet: writes, Receipt: receipt, Dependency: overlay.dependency}
+			return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Captured: overlay.captured, ReadSet: append([]ReadObservation(nil), overlay.reads...), WriteSet: writes, Receipt: receipt, Dependency: overlay.dependency}
 		}
-		for key := range writeSets[index] {
+		previousWrites := input.PreviousWrites
+		wroteNewLocation := false
+		for key := range writes {
+			if _, existed := previousWrites[key]; !existed {
+				wroteNewLocation = true
+			}
+		}
+		for key := range previousWrites {
 			if _, ok := writes[key]; ok {
 				continue
 			}
+			// MVMemory.record removes locations dropped by the latest
+			// incarnation, including stale ESTIMATE entries.
 			memory.ClearTxnVersions(key, task.Version.Txn)
 		}
 		for key, value := range writes {
 			memory.Write(key, task.Version, value)
 		}
 		_ = workerID
-		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Captured: overlay.captured, ReadSet: append([]ReadObservation(nil), overlay.reads...), WriteSet: writes, Receipt: receipt}
+		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Captured: overlay.captured, ReadSet: append([]ReadObservation(nil), overlay.reads...), WriteSet: writes, WroteNewLocation: wroteNewLocation, Receipt: receipt}
 	case blockstm.TaskValidate:
-		validation := memory.Validate(blockstm.TxnIndex(index), logicalBase, captured[index])
-		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Validation: validation}
+		validation := memory.Validate(blockstm.TxnIndex(index), logicalBase, input.Captured)
+		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Validation: validation}
 	default:
-		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Err: fmt.Errorf("unknown block-stm task kind %s", task.Kind)}
+		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Err: fmt.Errorf("unknown block-stm task kind %s", task.Kind)}
 	}
 }
 
@@ -522,66 +739,6 @@ func txnOrderFromInts(values []int) []blockstm.TxnIndex {
 		out = append(out, blockstm.TxnIndex(value))
 	}
 	return out
-}
-
-func lowerTransactionsValidated(validated []bool, index int) bool {
-	for lower := 0; lower < index; lower++ {
-		if !validated[lower] {
-			return false
-		}
-	}
-	return true
-}
-
-func allTransactionsExecuted(executed []bool) bool {
-	for _, ok := range executed {
-		if !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func initialAttemptsComplete(executed, waiting []bool) bool {
-	for index := range executed {
-		if !executed[index] && !waiting[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func recoverBlockSTMSchedulerProgress(scheduler *blockstm.Scheduler, validated, executed, validationQueued []bool, incarnations []int, metrics *BlockSTMMetrics) bool {
-	for index := range validated {
-		if validated[index] {
-			continue
-		}
-		version := blockstm.Version{Txn: blockstm.TxnIndex(index), Incarnation: blockstm.Incarnation(incarnations[index])}
-		if executed[index] && !validationQueued[index] {
-			validationQueued[index] = true
-			scheduler.ScheduleValidation(version)
-		} else {
-			scheduler.ScheduleExecution(version)
-		}
-		if queueLen := scheduler.QueueLen(); queueLen > metrics.SchedulerQueuePeak {
-			metrics.SchedulerQueuePeak = queueLen
-		}
-		metrics.StaleTaskCount++
-		return true
-	}
-	return false
-}
-
-func capturedReadsTouchWrites(captured blockstm.CapturedReads, writes map[string]string) bool {
-	if len(captured.Reads) == 0 || len(writes) == 0 {
-		return false
-	}
-	for _, read := range captured.Reads {
-		if _, ok := writes[read.Key]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func validateCapturedAgainstPrefix(shardID string, base map[string]string, validated []bool, writeSets []map[string]string, index int, captured blockstm.CapturedReads) blockstm.ValidationResult {
@@ -686,7 +843,7 @@ func readSetMatchesSnapshot(shardID string, snapshot map[string]string, reads []
 func (e *BlockSTMExecutor) executeTx(b block.Block, overlay txExecutionOverlay, item tx.SignedTransaction) Receipt {
 	semantics := NewSerialExecutor()
 	semantics.DefaultInitialBalance = e.DefaultInitialBalance
-	return semantics.executeTx(b, overlay, item)
+	return semantics.executeTxWithoutStateRoot(b, overlay, item)
 }
 
 func (e *BlockSTMExecutor) executeSpeculative(ctx context.Context, b block.Block, base, logicalBase map[string]string, memory *blockstm.MVMemory, captured []blockstm.CapturedReads, readSets [][]ReadObservation, writeSets []map[string]string, receipts []Receipt, metrics *BlockSTMMetrics) error {
@@ -786,14 +943,9 @@ func (e *BlockSTMExecutor) executeSpeculative(ctx context.Context, b block.Block
 }
 
 func speculativeExecutionOrder(count, workerCount int) []int {
+	_ = workerCount
 	out := make([]int, 0, count)
-	if workerCount <= 1 {
-		for index := 0; index < count; index++ {
-			out = append(out, index)
-		}
-		return out
-	}
-	for index := count - 1; index >= 0; index-- {
+	for index := 0; index < count; index++ {
 		out = append(out, index)
 	}
 	return out

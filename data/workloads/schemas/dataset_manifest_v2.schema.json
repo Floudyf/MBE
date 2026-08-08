@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dataset_manifest_v2.schema.json",
+  "title": "MBE Dataset Manifest v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "dataset_id",
+    "display_name",
+    "adapter_id",
+    "source_layout",
+    "local_raw_relative_path",
+    "source_sha256",
+    "row_count",
+    "truth_label",
+    "supported_tx_counts",
+    "variant_definitions",
+    "generator_version"
+  ],
+  "properties": {
+    "schema_version": {"const": "mbe_dataset_manifest_v2"},
+    "dataset_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "display_name": {"type": "string", "minLength": 1},
+    "adapter_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "source_layout": {"enum": ["single_file", "variant_file_family"]},
+    "local_raw_relative_path": {"type": "string", "pattern": "^[^:]+$"},
+    "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "source_size_bytes": {"type": "integer", "minimum": 1},
+    "row_count": {"type": "integer", "minimum": 1},
+    "truth_label": {"enum": ["real_observed", "real_derived_resampled", "real_derived_controlled", "fixture_generic_canonical"]},
+    "supported_tx_counts": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "uniqueItems": true},
+    "allow_full_dataset": {"type": "boolean"},
+    "variant_definitions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["variant_mode", "display_name", "kind", "selection_mode"],
+        "properties": {
+          "variant_mode": {"type": "string", "minLength": 1},
+          "display_name": {"type": "string", "minLength": 1},
+          "kind": {"enum": ["original", "derived"]},
+          "selection_mode": {"enum": ["contiguous_window", "validated_prefix"]},
+          "parameters": {"type": "array", "items": {"type": "object"}}
+        },
+        "additionalProperties": true
+      }
+    },
+    "prefix_variants": {"type": "array", "items": {"type": "object"}},
+    "generator_version": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": true
+}
