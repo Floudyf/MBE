@@ -121,7 +121,7 @@ func TestBatchSIOFASPlacesReaderBeforeWriter(t *testing.T) {
 	}
 }
 
-func TestBatchSIOFASCycleDefersTransactionAndConverges(t *testing.T) {
+func TestBatchSIOFASCycleDefersTransactionInSingleFirstPass(t *testing.T) {
 	items := []tx.SignedTransaction{
 		batchSITestTx("T1", []string{"k1"}, []string{"k3"}),
 		batchSITestTx("T2", []string{"k2"}, []string{"k1"}),
@@ -137,16 +137,35 @@ func TestBatchSIOFASCycleDefersTransactionAndConverges(t *testing.T) {
 	if len(result.Ordered)+len(result.Deferred) != len(items) {
 		t.Fatalf("planning lost transactions: accepted=%d deferred=%d", len(result.Ordered), len(result.Deferred))
 	}
+	if result.Plan.Metrics.PlanningIterationCount != 1 {
+		t.Fatalf("Batch-SI must execute one AWRT/WRBP/OFAS pass per proposal, got %d", result.Plan.Metrics.PlanningIterationCount)
+	}
+	if result.Plan.Metrics.FirstPassOFASAbortedTransactionCount != len(result.Deferred) {
+		t.Fatalf("first-pass abort evidence mismatch: metrics=%d deferred=%d", result.Plan.Metrics.FirstPassOFASAbortedTransactionCount, len(result.Deferred))
+	}
 	acceptedBlock := batchSITestBlock(result.Ordered...)
-	accepted, err := BuildBatchSIPlan(acceptedBlock, DefaultBatchSIConfig())
+	acceptedBlock.Height = result.Plan.BlockHeight
+	if err := VerifyBatchSIPlan(acceptedBlock, result.Plan, DefaultBatchSIConfig()); err != nil {
+		t.Fatalf("fixed first-pass plan should verify without accepted-set replanning: %v", err)
+	}
+}
+
+func TestBatchSIFixedPlanVerificationRejectsCandidateTamper(t *testing.T) {
+	items := []tx.SignedTransaction{
+		batchSITestTx("T1", []string{"k1"}, []string{"k3"}),
+		batchSITestTx("T2", []string{"k2"}, []string{"k1"}),
+		batchSITestTx("T3", []string{"k3"}, []string{"k2"}),
+	}
+	result, err := BuildBatchSIPlan(batchSITestBlock(items...), DefaultBatchSIConfig())
 	if err != nil {
-		t.Fatalf("accepted-set plan rebuild failed: %v", err)
+		t.Fatal(err)
 	}
-	if len(accepted.Deferred) != 0 {
-		t.Fatalf("accepted-set plan must be closed: %+v", accepted.Deferred)
-	}
-	if err := VerifyBatchSIPlan(acceptedBlock, accepted.Plan, DefaultBatchSIConfig()); err != nil {
-		t.Fatalf("accepted plan should verify: %v", err)
+	acceptedBlock := batchSITestBlock(result.Ordered...)
+	plan := result.Plan
+	plan.CandidateTransactionIDs = append([]string(nil), plan.CandidateTransactionIDs...)
+	plan.CandidateTransactionIDs[0] = "tampered"
+	if err := VerifyBatchSIPlan(acceptedBlock, plan, DefaultBatchSIConfig()); err == nil {
+		t.Fatal("tampered candidate evidence must not verify")
 	}
 }
 

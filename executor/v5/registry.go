@@ -185,6 +185,7 @@ type BlockProductionInput struct {
 	Context           context.Context
 	BaseStateSnapshot map[string]string
 	WorkerCount       int
+	RoutingPluginID   string
 }
 type RuntimeEvent struct {
 	TimestampMS int64
@@ -318,33 +319,36 @@ type WorkloadItem struct {
 	AccessList []tx.AccessItem
 }
 type WorkloadRecord struct {
-	Index                 int
-	LogicalID             string
-	SenderID              string
-	ReceiverID            string
-	OperationType         string
-	RoutingSourceKey      string
-	RoutingTargetKey      string
-	Payload               string
-	StateKeys             []string
-	AccessList            []tx.AccessItem
-	AccessListSchema      string
-	AccessListSource      string
-	AccessListDigest      string
-	CrossShard            bool
-	SourceShard           string
-	TargetShard           string
-	SourceEventID         string
-	TimestampMS           int64
-	Value                 int64
-	RoutingEpoch          uint64
-	RoutingOrdinal        uint64
-	ExecutionShard        string
-	RoutingReason         string
-	RoutePlanDigest       string
-	PredictedRemoteReads  int
-	PredictedRemoteWrites int
-	StateVersions         []tx.StateVersionDependency
+	Index                           int
+	LogicalID                       string
+	SenderID                        string
+	ReceiverID                      string
+	OperationType                   string
+	RoutingSourceKey                string
+	RoutingTargetKey                string
+	Payload                         string
+	StateKeys                       []string
+	AccessList                      []tx.AccessItem
+	AccessListSchema                string
+	AccessListSource                string
+	AccessListDigest                string
+	CrossShard                      bool
+	SourceShard                     string
+	TargetShard                     string
+	SourceEventID                   string
+	TimestampMS                     int64
+	Value                           int64
+	RoutingEpoch                    uint64
+	RoutingOrdinal                  uint64
+	ExecutionShard                  string
+	RoutingReason                   string
+	RoutePlanDigest                 string
+	RouteBatchSequence              uint64
+	RouteBatchTransactionCount      int
+	RouteBatchShardTransactionCount int
+	PredictedRemoteReads            int
+	PredictedRemoteWrites           int
+	StateVersions                   []tx.StateVersionDependency
 }
 type WorkloadReplaySummary struct {
 	DatasetID                string         `json:"dataset_id,omitempty"`
@@ -480,15 +484,16 @@ type BatchClassificationInput struct {
 	RemoteStateReadiness map[string]bool
 }
 type BatchClassificationResult struct {
-	Decisions             map[string]ExecutionDecision
-	Dependencies          map[string][]string
-	ReasonCodes           map[string][]string
-	StateWaitKeys         map[string][]string
-	ConflictEdgeCount     int
-	RAWDependencyEdges    int
-	DeduplicatedEdgeCount int
-	DependencyChainMax    int
-	SCCCount              int
+	Decisions                            map[string]ExecutionDecision
+	Dependencies                         map[string][]string
+	ReasonCodes                          map[string][]string
+	StateWaitKeys                        map[string][]string
+	ConflictEdgeCount                    int
+	RAWDependencyEdges                   int
+	DeduplicatedEdgeCount                int
+	DependencyChainMax                   int
+	SCCCount                             int
+	CommutativeDependencySuppressedCount int
 }
 type ScheduleResult struct {
 	Ordered []tx.SignedTransaction
@@ -1351,6 +1356,26 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 	if now.IsZero() {
 		now = time.Now()
 	}
+	if input.RoutingPluginID == "metatrack_coaccess_routing" {
+		reserved := input.Pool.ReserveReady(limit)
+		if len(reserved) == 0 {
+			return realblock.Block{}, fmt.Errorf("empty_mempool")
+		}
+		selected, deferred, err := selectMetaTrackBatchProjection(reserved, limit, input.Proposer.ShardID)
+		if err != nil {
+			input.Pool.ReleaseReserved(reserved)
+			return realblock.Block{}, err
+		}
+		if len(deferred) > 0 {
+			input.Pool.ReleaseReserved(deferred)
+		}
+		block, err := input.Proposer.BuildFromReserved(selected, now)
+		if err != nil {
+			input.Pool.ReleaseReserved(selected)
+			return realblock.Block{}, err
+		}
+		return block, nil
+	}
 	return input.Proposer.Build(input.Pool, limit, now)
 }
 
@@ -1435,7 +1460,13 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		StateWaitKeys: map[string][]string{},
 	}
 
+	// Non-commutative writers establish ordinary serial-order barriers. Pure
+	// commutative writers on the same key intentionally do not depend on one
+	// another: they commute and are folded at deterministic materialization.
+	// Readers and ordinary writers still depend on every earlier commutative
+	// writer so a later non-commutative observation sees the complete prefix.
 	lastWriter := map[string]string{}
+	commutativeWriters := map[string][]string{}
 	readers := map[string][]string{}
 	lastSenderTx := map[string]string{}
 	edges := map[string]bool{}
@@ -1455,7 +1486,7 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		result.ConflictEdgeCount++
 		result.Dependencies[to] = append(result.Dependencies[to], from)
 		graph[from] = append(graph[from], to)
-		if kind == "raw" {
+		if kind == "raw" || kind == "raw_commutative" {
 			result.RAWDependencyEdges++
 		}
 	}
@@ -1491,8 +1522,6 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 				hardReasons[txID] = append(hardReasons[txID], "missing_access_key")
 				continue
 			}
-			// StateReady is a queue-readiness property. It is recorded separately
-			// and never changes fast/conservative channel admission.
 			if input.RemoteStateReadiness != nil {
 				token := stateReadinessToken(item, access)
 				if ready, ok := input.RemoteStateReadiness[token]; ok && !ready {
@@ -1500,25 +1529,49 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 				}
 			}
 
-			if writer := lastWriter[access.Key]; writer != "" {
-				if isWriteMode(access.Mode) {
+			switch access.Mode {
+			case tx.AccessCommutativeDelta:
+				if writer := lastWriter[access.Key]; writer != "" {
 					addDependency(writer, txID, access.Key, "waw")
 					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
-				} else {
+				}
+				for _, reader := range readers[access.Key] {
+					addDependency(reader, txID, access.Key, "war")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "war_dependency")
+				}
+				// Every existing commutative writer would have been a WAW edge under
+				// the ordinary writer rule. Count the deliberately suppressed edges
+				// as evidence that Fast commutative parallelism was actually exposed.
+				result.CommutativeDependencySuppressedCount += len(commutativeWriters[access.Key])
+				commutativeWriters[access.Key] = append(commutativeWriters[access.Key], txID)
+
+			case tx.AccessRead:
+				if writer := lastWriter[access.Key]; writer != "" {
 					addDependency(writer, txID, access.Key, "raw")
 					dependencyReasons[txID] = append(dependencyReasons[txID], "raw_dependency")
 				}
-			}
+				for _, writer := range commutativeWriters[access.Key] {
+					addDependency(writer, txID, access.Key, "raw_commutative")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "raw_dependency")
+				}
+				readers[access.Key] = append(readers[access.Key], txID)
 
-			if isWriteMode(access.Mode) {
+			default:
+				if writer := lastWriter[access.Key]; writer != "" {
+					addDependency(writer, txID, access.Key, "waw")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
+				}
+				for _, writer := range commutativeWriters[access.Key] {
+					addDependency(writer, txID, access.Key, "waw_commutative")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
+				}
 				for _, reader := range readers[access.Key] {
 					addDependency(reader, txID, access.Key, "war")
 					dependencyReasons[txID] = append(dependencyReasons[txID], "war_dependency")
 				}
 				readers[access.Key] = nil
+				commutativeWriters[access.Key] = nil
 				lastWriter[access.Key] = txID
-			} else {
-				readers[access.Key] = append(readers[access.Key], txID)
 			}
 		}
 	}
@@ -2062,12 +2115,16 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 			continue
 		}
 		finalSeen[outcome.TxID] = true
-		for key, value := range outcome.Delta.WriteSet {
-			working[qualifyStateKey(input.Block.ShardID, key)] = value
+		delta := outcome.Delta
+		if outcome.Receipt.Success && metaTrackPureCommutativeTransaction(outcome.Tx) {
+			delta.WriteSet = metaTrackApplyCommutativeTransaction(working, input.Block.ShardID, outcome.Tx)
+		} else {
+			for key, value := range delta.WriteSet {
+				working[qualifyStateKey(input.Block.ShardID, key)] = value
+			}
 		}
 		receipt := outcome.Receipt
 		receipt.StateRootAfterTx = state.RootOfSnapshot(working)
-		delta := outcome.Delta
 		index := originalIndex[outcome.TxID]
 		delta.OriginalIndex = index
 		delta.Receipt = receipt
@@ -2125,15 +2182,16 @@ func metaTrackClassificationMetrics(classification BatchClassificationResult, tr
 		}
 	}
 	return map[string]any{
-		"metatrack_classification_transaction_count":               transactionCount,
-		"metatrack_classification_fast_unique_count":               fastCount,
-		"metatrack_classification_conservative_unique_count":       conservativeCount,
-		"metatrack_classification_dependency_blocked_unique_count": blockedUnique,
-		"metatrack_classification_state_wait_unique_count":         stateWaitUnique,
-		"metatrack_classification_conflict_edge_count":             classification.ConflictEdgeCount,
-		"metatrack_classification_dependency_chain_max":            classification.DependencyChainMax,
-		"metatrack_classification_nontrivial_scc_count":            classification.SCCCount,
-		"metatrack_classification_count_scope":                     "per_replica_unique_logical_transactions",
+		"metatrack_classification_transaction_count":                       transactionCount,
+		"metatrack_classification_fast_unique_count":                       fastCount,
+		"metatrack_classification_conservative_unique_count":               conservativeCount,
+		"metatrack_classification_dependency_blocked_unique_count":         blockedUnique,
+		"metatrack_classification_state_wait_unique_count":                 stateWaitUnique,
+		"metatrack_classification_conflict_edge_count":                     classification.ConflictEdgeCount,
+		"metatrack_classification_dependency_chain_max":                    classification.DependencyChainMax,
+		"metatrack_classification_nontrivial_scc_count":                    classification.SCCCount,
+		"metatrack_classification_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
+		"metatrack_classification_count_scope":                             "per_replica_unique_logical_transactions",
 	}
 }
 
@@ -2175,6 +2233,13 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	stateReady := map[string]bool{}
 	stateValueByToken := map[string]string{}
 	stateWaitStarted := map[string]time.Time{}
+	stateWaitersByToken := map[string][]string{}
+	for _, item := range ordered {
+		txID := txIdentifier(item)
+		for _, token := range classification.StateWaitKeys[txID] {
+			stateWaitersByToken[token] = append(stateWaitersByToken[token], txID)
+		}
+	}
 	events := []ScheduleEvent{}
 	maxReadyQueueDepth := 0
 	maxFastReadyQueueDepth := 0
@@ -2221,9 +2286,13 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		if remoteFetch == nil {
 			return nil, nil, nil, nil, fmt.Errorf("metatrack state-ready classification requires remote state fetcher")
 		}
-		for txID, keys := range classification.StateWaitKeys {
+		// Traverse the deterministic schedule order when creating unique token
+		// fetches so diagnostics and request ownership do not depend on Go map
+		// iteration order. Completion order may still follow real network timing.
+		for _, scheduled := range ordered {
+			txID := txIdentifier(scheduled)
 			item := byID[txID]
-			for _, key := range keys {
+			for _, key := range classification.StateWaitKeys[txID] {
 				stateReady[key] = false
 				if uniqueRemoteTokens[key] {
 					continue
@@ -2276,6 +2345,52 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		enqueueReady(txID, "actual_ready_initial", false)
 	}
 	recordDepths()
+	type versionPublishTask struct {
+		item     tx.SignedTransaction
+		delta    execution.TxDelta
+		snapshot map[string]string
+	}
+	var publishQueue chan versionPublishTask
+	var publishDone chan struct{}
+	var publishErrors chan error
+	publishClosed := false
+	versionPublishEnqueued := 0
+	if versionPublish != nil {
+		publishQueue = make(chan versionPublishTask, len(ordered))
+		publishDone = make(chan struct{})
+		publishErrors = make(chan error, 1)
+		go func() {
+			defer close(publishDone)
+			failed := false
+			for task := range publishQueue {
+				if failed {
+					continue
+				}
+				if err := versionPublish(ctx, task.item, task.delta, task.snapshot); err != nil {
+					failed = true
+					select {
+					case publishErrors <- err:
+					default:
+					}
+				}
+			}
+		}()
+	}
+	finishPublishers := func() error {
+		if publishQueue == nil || publishClosed {
+			return nil
+		}
+		publishClosed = true
+		close(publishQueue)
+		<-publishDone
+		select {
+		case err := <-publishErrors:
+			return err
+		default:
+			return nil
+		}
+	}
+	defer func() { _ = finishPublishers() }()
 	type job struct {
 		seq            int
 		txID           string
@@ -2441,9 +2556,11 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	attemptByID := map[string]int{}
 	workingSnapshot := copyRegistryStringMap(baseSnapshot)
 	locallyWrittenKeys := map[string]bool{}
+	transactionSnapshotTotalKeys := 0
 	dispatch := func(txID string) error {
 		attemptByID[txID]++
-		snapshot := copyRegistryStringMap(workingSnapshot)
+		item := byID[txID]
+		snapshot := metaTrackTransactionSnapshot(workingSnapshot, block.ShardID, item)
 		for _, token := range classification.StateWaitKeys[txID] {
 			value, ok := stateValueByToken[token]
 			if !ok {
@@ -2457,6 +2574,7 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 				}
 			}
 		}
+		transactionSnapshotTotalKeys += len(snapshot)
 		track := decisionByID[txID].Track
 		if track != "fast" {
 			track = "conservative"
@@ -2509,8 +2627,8 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		remoteFetchLatencyMS += event.LatencyMS
 		stateReady[event.ReadinessToken] = true
 		stateValueByToken[event.ReadinessToken] = event.Value
-		for txID := range stateBlocked {
-			if !stateReadyForTx(txID) {
+		for _, txID := range stateWaitersByToken[event.ReadinessToken] {
+			if !stateBlocked[txID] || !stateReadyForTx(txID) {
 				continue
 			}
 			delete(stateBlocked, txID)
@@ -2576,6 +2694,10 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		if inFlight == 0 && len(fastReady) == 0 && len(conservativeReady) == 0 {
 			if len(stateBlocked) > 0 {
 				select {
+				case err := <-publishErrors:
+					closeWorkers()
+					wg.Wait()
+					return nil, nil, nil, nil, err
 				case <-ctx.Done():
 					closeWorkers()
 					wg.Wait()
@@ -2614,6 +2736,10 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		var done completion
 		gotCompletion := false
 		select {
+		case err := <-publishErrors:
+			closeWorkers()
+			wg.Wait()
+			return nil, nil, nil, nil, err
 		case <-ctx.Done():
 			closeWorkers()
 			wg.Wait()
@@ -2668,8 +2794,27 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 				continue
 			}
 		}
+		if done.outcome.Receipt.Success {
+			if metaTrackPureCommutativeTransaction(done.outcome.Tx) {
+				done.outcome.Delta.WriteSet = metaTrackApplyCommutativeTransaction(workingSnapshot, block.ShardID, done.outcome.Tx)
+				for key := range done.outcome.Delta.WriteSet {
+					locallyWrittenKeys[key] = true
+				}
+			} else {
+				for key, value := range done.outcome.Delta.WriteSet {
+					workingSnapshot[qualifyStateKey(block.ShardID, key)] = value
+					locallyWrittenKeys[key] = true
+				}
+			}
+		} else {
+			// Failed transactions are terminal outcomes, but their speculative
+			// writes must not enter the block working snapshot or commit plan.
+			done.outcome.Delta.WriteSet = nil
+			done.outcome.Delta.Success = false
+			done.outcome.Delta.Error = done.outcome.Receipt.Error
+		}
 		if versionPublish != nil {
-			publishSnapshot := copyRegistryStringMap(workingSnapshot)
+			publishSnapshot := metaTrackTransactionSnapshot(workingSnapshot, block.ShardID, done.outcome.Tx)
 			for _, token := range classification.StateWaitKeys[doneID] {
 				value, ok := stateValueByToken[token]
 				if !ok {
@@ -2682,25 +2827,20 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 					}
 				}
 			}
-			if err := versionPublish(ctx, done.outcome.Tx, done.outcome.Delta, publishSnapshot); err != nil {
+			select {
+			case publishQueue <- versionPublishTask{item: done.outcome.Tx, delta: done.outcome.Delta, snapshot: publishSnapshot}:
+				versionPublishEnqueued++
+			case err := <-publishErrors:
 				closeWorkers()
 				wg.Wait()
 				return nil, nil, nil, nil, err
+			case <-ctx.Done():
+				closeWorkers()
+				wg.Wait()
+				return nil, nil, nil, nil, ctx.Err()
 			}
 		}
 		completed[doneID] = true
-		if done.outcome.Receipt.Success {
-			for key, value := range done.outcome.Delta.WriteSet {
-				workingSnapshot[qualifyStateKey(block.ShardID, key)] = value
-				locallyWrittenKeys[key] = true
-			}
-		} else {
-			// Failed transactions are terminal outcomes, but their speculative
-			// writes must not enter the block working snapshot or commit plan.
-			done.outcome.Delta.WriteSet = nil
-			done.outcome.Delta.Success = false
-			done.outcome.Delta.Error = done.outcome.Receipt.Error
-		}
 		executionOutcomes = append(executionOutcomes, done.outcome)
 		attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: done.outcome.Track, Attempt: done.outcome.Attempt, Reason: fmt.Sprintf("worker_%d_completion", done.outcome.WorkerID), Success: done.outcome.Receipt.Success, FinalCompletion: true})
 		decision := decisionByID[doneID]
@@ -2739,6 +2879,9 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	}
 	closeWorkers()
 	wg.Wait()
+	if err := finishPublishers(); err != nil {
+		return nil, nil, nil, nil, err
+	}
 	// Dependency-ready completions release successors immediately, while the
 	// returned outcomes remain in the original block order. This preserves the
 	// deterministic receipt/state-root materialization contract across replicas
@@ -2757,40 +2900,43 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	wakeupCount := countScheduleEvents(events, func(event ScheduleEvent) bool { return event.Wakeup })
 	completionChannelCount := countScheduleEvents(events, func(event ScheduleEvent) bool { return strings.HasPrefix(event.DecisionReason, "actual_completion") })
 	metrics := map[string]any{
-		"configured_worker_count":               workerCount,
-		"max_ready_queue_depth":                 maxReadyQueueDepth,
-		"max_fast_ready_queue_depth":            maxFastReadyQueueDepth,
-		"max_conservative_ready_queue_depth":    maxConservativeReadyQueueDepth,
-		"max_dependency_frontier_width":         maxDependencyFrontierWidth,
-		"max_inflight_business_executions":      int(atomic.LoadInt64(&maxInflightBusiness)),
-		"worker_execution_count":                workerCounts,
-		"steal_attempt_count":                   int(atomic.LoadInt64(&stealAttemptCount)),
-		"steal_success_count":                   int(atomic.LoadInt64(&stealSuccessCount)),
-		"stolen_task_count":                     int(atomic.LoadInt64(&stolenTaskCount)),
-		"submitted_logical_tx_count":            len(ordered),
-		"scheduler_dispatch_event_count":        dispatchCount,
-		"blocked_event_count":                   blockedCount,
-		"wakeup_event_count":                    wakeupCount,
-		"completion_channel_event_count":        completionChannelCount,
-		"completion_processing_policy":          "dependency_ready_completion_order_deterministic_final_merge",
-		"worker_queue_model":                    "per_worker_dual_lane",
-		"steal_policy":                          "same_shard_same_track_only",
-		"cross_track_steal_count":               0,
-		"business_execute_invocation_count":     int(atomic.LoadInt64(&businessExecuteInvocations)),
-		"fast_fallback_count":                   int(atomic.LoadInt64(&fastFallbackCount)),
-		"discarded_tentative_result_count":      int(atomic.LoadInt64(&discardedTentativeCount)),
-		"conservative_reexecution_count":        int(atomic.LoadInt64(&conservativeReexecutionCount)),
-		"retry_execution_count":                 int(atomic.LoadInt64(&conservativeReexecutionCount)),
-		"reexecution_count":                     int(atomic.LoadInt64(&conservativeReexecutionCount)),
-		"validator_execution_completion_count":  len(executionOutcomes),
-		"unique_final_logical_completion_count": len(executionOutcomes),
-		"duplicate_final_completion_count":      0,
-		"state_wait_blocked_count":              stateWaitBlockedCount,
-		"state_ready_wakeup_count":              stateReadyWakeupCount,
-		"remote_state_fetch_count":              remoteFetchCount,
-		"remote_state_fetch_completed_count":    remoteFetchCompleted,
-		"remote_state_fetch_latency_ms":         remoteFetchLatencyMS,
-		"state_ready_scheduler_mode":            "transaction_level_suspend_resume",
+		"configured_worker_count":                           workerCount,
+		"metatrack_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
+		"metatrack_transaction_snapshot_total_key_count":    transactionSnapshotTotalKeys,
+		"metatrack_version_publish_async_enqueued_count":    versionPublishEnqueued,
+		"max_ready_queue_depth":                             maxReadyQueueDepth,
+		"max_fast_ready_queue_depth":                        maxFastReadyQueueDepth,
+		"max_conservative_ready_queue_depth":                maxConservativeReadyQueueDepth,
+		"max_dependency_frontier_width":                     maxDependencyFrontierWidth,
+		"max_inflight_business_executions":                  int(atomic.LoadInt64(&maxInflightBusiness)),
+		"worker_execution_count":                            workerCounts,
+		"steal_attempt_count":                               int(atomic.LoadInt64(&stealAttemptCount)),
+		"steal_success_count":                               int(atomic.LoadInt64(&stealSuccessCount)),
+		"stolen_task_count":                                 int(atomic.LoadInt64(&stolenTaskCount)),
+		"submitted_logical_tx_count":                        len(ordered),
+		"scheduler_dispatch_event_count":                    dispatchCount,
+		"blocked_event_count":                               blockedCount,
+		"wakeup_event_count":                                wakeupCount,
+		"completion_channel_event_count":                    completionChannelCount,
+		"completion_processing_policy":                      "dependency_ready_completion_order_deterministic_final_merge",
+		"worker_queue_model":                                "per_worker_dual_lane",
+		"steal_policy":                                      "same_shard_same_track_only",
+		"cross_track_steal_count":                           0,
+		"business_execute_invocation_count":                 int(atomic.LoadInt64(&businessExecuteInvocations)),
+		"fast_fallback_count":                               int(atomic.LoadInt64(&fastFallbackCount)),
+		"discarded_tentative_result_count":                  int(atomic.LoadInt64(&discardedTentativeCount)),
+		"conservative_reexecution_count":                    int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"retry_execution_count":                             int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"reexecution_count":                                 int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"validator_execution_completion_count":              len(executionOutcomes),
+		"unique_final_logical_completion_count":             len(executionOutcomes),
+		"duplicate_final_completion_count":                  0,
+		"state_wait_blocked_count":                          stateWaitBlockedCount,
+		"state_ready_wakeup_count":                          stateReadyWakeupCount,
+		"remote_state_fetch_count":                          remoteFetchCount,
+		"remote_state_fetch_completed_count":                remoteFetchCompleted,
+		"remote_state_fetch_latency_ms":                     remoteFetchLatencyMS,
+		"state_ready_scheduler_mode":                        "transaction_level_suspend_resume",
 	}
 	return events, metrics, executionOutcomes, attempts, nil
 }
@@ -2908,6 +3054,77 @@ func copyRegistryStringMap(input map[string]string) map[string]string {
 		out[key] = value
 	}
 	return out
+}
+
+func metaTrackPureCommutativeTransaction(item tx.SignedTransaction) bool {
+	if len(item.AccessList) == 0 {
+		return false
+	}
+	hasDelta := false
+	for _, access := range item.AccessList {
+		switch access.Mode {
+		case tx.AccessRead:
+			continue
+		case tx.AccessCommutativeDelta:
+			hasDelta = true
+		default:
+			return false
+		}
+	}
+	return hasDelta
+}
+
+func metaTrackTransactionSnapshot(base map[string]string, shardID string, item tx.SignedTransaction) map[string]string {
+	keys := map[string]bool{}
+	for _, access := range item.AccessList {
+		if access.Key != "" {
+			keys[access.Key] = true
+		}
+	}
+	for _, key := range item.StateKeys {
+		if strings.TrimSpace(key) != "" {
+			keys[key] = true
+		}
+	}
+	for _, key := range []string{
+		"balance:" + item.Sender,
+		"nonce:" + item.Sender,
+		"balance:" + item.Receiver,
+		"nonce:" + item.Receiver,
+		"relay_commit:" + item.TxID,
+	} {
+		if key != "balance:" && key != "nonce:" && key != "relay_commit:" {
+			keys[key] = true
+		}
+	}
+	out := make(map[string]string, len(keys))
+	for key := range keys {
+		qualified := qualifyStateKey(shardID, key)
+		if value, ok := base[qualified]; ok {
+			out[qualified] = value
+			continue
+		}
+		if value, ok := base[key]; ok {
+			out[qualified] = value
+		}
+	}
+	return out
+}
+
+func metaTrackApplyCommutativeTransaction(snapshot map[string]string, shardID string, item tx.SignedTransaction) map[string]string {
+	writes := map[string]string{}
+	for _, access := range item.AccessList {
+		if access.Mode != tx.AccessCommutativeDelta || access.Key == "" {
+			continue
+		}
+		qualified := qualifyStateKey(shardID, access.Key)
+		current, _ := strconv.ParseInt(snapshot[qualified], 10, 64)
+		next := current + access.Delta
+		value := strconv.FormatInt(next, 10)
+		snapshot[qualified] = value
+		writes[access.Key] = value
+	}
+	return writes
 }
 
 func executionStateDelta(before, after map[string]string) []execution.StateUpdate {

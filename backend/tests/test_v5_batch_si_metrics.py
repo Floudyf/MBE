@@ -97,7 +97,12 @@ def test_batch_si_block_metrics_sum_deferred_transactions_across_committed_block
     _apply_batch_si_metrics(metrics, tmp_path)
 
     assert metrics["deferred_transaction_count"] == 3
-    assert metrics["abort_count"] == 3
+    # Legacy summary abort_count is only a backward-compatible deferral source.
+    # Formal Batch-SI execution abort_count remains distinct from proposal-level
+    # OFAS deferrals, so accepted committed blocks report zero execution aborts.
+    assert metrics["abort_count"] == 0
+    assert metrics["batch_si_first_pass_candidate_count"] == 0
+    assert metrics["batch_si_first_pass_ofas_abort_count"] == 0
 
 
 def test_batch_si_zero_deferral_is_a_complete_paper_metric_sample(tmp_path: Path) -> None:

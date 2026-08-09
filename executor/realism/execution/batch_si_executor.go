@@ -21,7 +21,7 @@ const (
 	BatchSIBlockExecutorID      = "batch_si_block_executor"
 	BatchSIBlockExecutorVersion = "1.0.0"
 	BatchSIPlanAlgorithmID      = "batch_si_execution_plan_v1"
-	BatchSIPlanVersion          = "1.1.0"
+	BatchSIPlanVersion          = "1.2.0"
 
 	BatchSIPartitionWRBP       = "wrbp"
 	BatchSIPartitionSequential = "sequential"
@@ -110,16 +110,19 @@ type BatchSIBatch struct {
 }
 
 type BatchSIPlanMetrics struct {
-	TransactionCount            int `json:"transaction_count"`
-	ReadOnlyTransactionCount    int `json:"read_only_transaction_count"`
-	AWRTAddressCount            int `json:"awrt_address_count"`
-	AWRTWriteReferenceCount     int `json:"awrt_write_reference_count"`
-	BatchCount                  int `json:"batch_count"`
-	MaximumBatchWidth           int `json:"maximum_batch_width"`
-	WriteOpportunityReuseCount  int `json:"write_opportunity_reuse_count"`
-	DependencyEdgeCount         int `json:"dependency_edge_count"`
-	OFASAbortedTransactionCount int `json:"ofas_aborted_transaction_count"`
-	PlanningIterationCount      int `json:"planning_iteration_count"`
+	TransactionCount                     int `json:"transaction_count"`
+	CandidateTransactionCount            int `json:"candidate_transaction_count"`
+	AcceptedTransactionCount             int `json:"accepted_transaction_count"`
+	FirstPassOFASAbortedTransactionCount int `json:"first_pass_ofas_aborted_transaction_count"`
+	ReadOnlyTransactionCount             int `json:"read_only_transaction_count"`
+	AWRTAddressCount                     int `json:"awrt_address_count"`
+	AWRTWriteReferenceCount              int `json:"awrt_write_reference_count"`
+	BatchCount                           int `json:"batch_count"`
+	MaximumBatchWidth                    int `json:"maximum_batch_width"`
+	WriteOpportunityReuseCount           int `json:"write_opportunity_reuse_count"`
+	DependencyEdgeCount                  int `json:"dependency_edge_count"`
+	OFASAbortedTransactionCount          int `json:"ofas_aborted_transaction_count"`
+	PlanningIterationCount               int `json:"planning_iteration_count"`
 }
 
 type BatchSIOrderEvidence struct {
@@ -130,17 +133,19 @@ type BatchSIOrderEvidence struct {
 }
 
 type BatchSIPlan struct {
-	AlgorithmID         string                 `json:"algorithm_id"`
-	Version             string                 `json:"version"`
-	BlockHeight         uint64                 `json:"block_height"`
-	PartitionMode       string                 `json:"partition_mode"`
-	OrderingMode        string                 `json:"ordering_mode"`
-	PriorityMode        string                 `json:"priority_mode"`
-	TransactionOrdinals map[string]int         `json:"transaction_ordinals"`
-	OrderEvidence       []BatchSIOrderEvidence `json:"order_evidence"`
-	Batches             []BatchSIBatch         `json:"batches"`
-	Metrics             BatchSIPlanMetrics     `json:"metrics"`
-	PlanDigest          string                 `json:"plan_digest"`
+	AlgorithmID             string                 `json:"algorithm_id"`
+	Version                 string                 `json:"version"`
+	BlockHeight             uint64                 `json:"block_height"`
+	PartitionMode           string                 `json:"partition_mode"`
+	OrderingMode            string                 `json:"ordering_mode"`
+	PriorityMode            string                 `json:"priority_mode"`
+	CandidateTransactionIDs []string               `json:"candidate_transaction_ids"`
+	DeferredTransactions    []tx.SignedTransaction `json:"deferred_transactions,omitempty"`
+	TransactionOrdinals     map[string]int         `json:"transaction_ordinals"`
+	OrderEvidence           []BatchSIOrderEvidence `json:"order_evidence"`
+	Batches                 []BatchSIBatch         `json:"batches"`
+	Metrics                 BatchSIPlanMetrics     `json:"metrics"`
+	PlanDigest              string                 `json:"plan_digest"`
 }
 
 type BatchSIPlanningResult struct {
@@ -150,26 +155,29 @@ type BatchSIPlanningResult struct {
 }
 
 type BatchSIMetrics struct {
-	WorkerCount                    int    `json:"worker_count"`
-	PartitionMode                  string `json:"partition_mode"`
-	OrderingMode                   string `json:"ordering_mode"`
-	PriorityMode                   string `json:"priority_mode"`
-	ExecutionMode                  string `json:"execution_mode"`
-	BatchCount                     int    `json:"batch_count"`
-	MaximumBatchWidth              int    `json:"maximum_batch_width"`
-	AverageBatchWidthMilli         int    `json:"average_batch_width_milli"`
-	AWRTAddressCount               int    `json:"awrt_address_count"`
-	AWRTWriteReferenceCount        int    `json:"awrt_write_reference_count"`
-	WriteOpportunityReuseCount     int    `json:"write_opportunity_reuse_count"`
-	DependencyEdgeCount            int    `json:"dependency_edge_count"`
-	OFASAbortedTransactionCount    int    `json:"ofas_aborted_transaction_count"`
-	PlanningIterationCount         int    `json:"planning_iteration_count"`
-	SnapshotCount                  int    `json:"snapshot_count"`
-	ExecutionTaskCount             int    `json:"execution_task_count"`
-	MaximumObservedParallelWidth   int    `json:"maximum_observed_parallel_width"`
-	BatchSnapshotCreateMS          int64  `json:"batch_snapshot_create_ms"`
-	TransactionExecutionMS         int64  `json:"transaction_execution_ms"`
-	DeterministicMaterializationMS int64  `json:"deterministic_materialization_ms"`
+	WorkerCount                          int    `json:"worker_count"`
+	CandidateTransactionCount            int    `json:"candidate_transaction_count"`
+	AcceptedTransactionCount             int    `json:"accepted_transaction_count"`
+	FirstPassOFASAbortedTransactionCount int    `json:"first_pass_ofas_aborted_transaction_count"`
+	PartitionMode                        string `json:"partition_mode"`
+	OrderingMode                         string `json:"ordering_mode"`
+	PriorityMode                         string `json:"priority_mode"`
+	ExecutionMode                        string `json:"execution_mode"`
+	BatchCount                           int    `json:"batch_count"`
+	MaximumBatchWidth                    int    `json:"maximum_batch_width"`
+	AverageBatchWidthMilli               int    `json:"average_batch_width_milli"`
+	AWRTAddressCount                     int    `json:"awrt_address_count"`
+	AWRTWriteReferenceCount              int    `json:"awrt_write_reference_count"`
+	WriteOpportunityReuseCount           int    `json:"write_opportunity_reuse_count"`
+	DependencyEdgeCount                  int    `json:"dependency_edge_count"`
+	OFASAbortedTransactionCount          int    `json:"ofas_aborted_transaction_count"`
+	PlanningIterationCount               int    `json:"planning_iteration_count"`
+	SnapshotCount                        int    `json:"snapshot_count"`
+	ExecutionTaskCount                   int    `json:"execution_task_count"`
+	MaximumObservedParallelWidth         int    `json:"maximum_observed_parallel_width"`
+	BatchSnapshotCreateMS                int64  `json:"batch_snapshot_create_ms"`
+	TransactionExecutionMS               int64  `json:"transaction_execution_ms"`
+	DeterministicMaterializationMS       int64  `json:"deterministic_materialization_ms"`
 }
 
 type batchSITxDescriptor struct {
@@ -210,95 +218,85 @@ func BuildBatchSIPlanWithOrdinals(b block.Block, config BatchSIConfig, ordinals 
 	if err != nil {
 		return BatchSIPlanningResult{}, err
 	}
-	active := append([]batchSITxDescriptor(nil), descriptors...)
+	awrt, awrtReferences := batchSIBuildAWRT(descriptors)
+	var partitions []batchSIPartition
+	var opportunityReuse int
+	switch config.PartitionMode {
+	case BatchSIPartitionSequential:
+		partitions = batchSISequentialPartition(descriptors)
+	default:
+		partitions, opportunityReuse = batchSIWRBPPartition(descriptors)
+	}
+
 	deferredByID := map[string]batchSITxDescriptor{}
-	iterations := 0
-	var finalPartitions []batchSIPartition
-	var finalMetrics BatchSIPlanMetrics
-	for {
-		iterations++
-		if iterations > len(descriptors)+1 {
-			return BatchSIPlanningResult{}, fmt.Errorf("batch-si planning did not converge")
-		}
-		awrt, awrtReferences := batchSIBuildAWRT(active)
-		var partitions []batchSIPartition
-		var opportunityReuse int
-		switch config.PartitionMode {
-		case BatchSIPartitionSequential:
-			partitions = batchSISequentialPartition(active)
+	dependencyEdges := 0
+	for index := range partitions {
+		var ordered []batchSITxDescriptor
+		var rejected []batchSITxDescriptor
+		var edges int
+		switch config.OrderingMode {
+		case BatchSIOrderingDependencyGraph:
+			ordered, rejected, edges = batchSIDependencyGraphOrder(partitions[index].Txs)
 		default:
-			partitions, opportunityReuse = batchSIWRBPPartition(active)
+			ordered, rejected, edges = batchSIOFASOrder(partitions[index].Txs, config.PriorityMode)
 		}
-		aborted := map[string]batchSITxDescriptor{}
-		dependencyEdges := 0
-		for index := range partitions {
-			var ordered []batchSITxDescriptor
-			var rejected []batchSITxDescriptor
-			var edges int
-			switch config.OrderingMode {
-			case BatchSIOrderingDependencyGraph:
-				ordered, rejected, edges = batchSIDependencyGraphOrder(partitions[index].Txs)
-			default:
-				ordered, rejected, edges = batchSIOFASOrder(partitions[index].Txs, config.PriorityMode)
-			}
-			partitions[index].Txs = ordered
-			dependencyEdges += edges
-			for _, item := range rejected {
-				aborted[item.TxID] = item
-			}
+		partitions[index].Txs = ordered
+		dependencyEdges += edges
+		for _, item := range rejected {
+			deferredByID[item.TxID] = item
 		}
-		if len(aborted) == 0 {
-			finalPartitions = partitions
-			maximumWidth := 0
-			readOnlyCount := 0
-			for _, item := range active {
-				if len(item.WriteKeys) == 0 {
-					readOnlyCount++
-				}
-			}
-			for _, partition := range partitions {
-				if len(partition.Txs) > maximumWidth {
-					maximumWidth = len(partition.Txs)
-				}
-			}
-			finalMetrics = BatchSIPlanMetrics{
-				TransactionCount:            len(active),
-				ReadOnlyTransactionCount:    readOnlyCount,
-				AWRTAddressCount:            len(awrt),
-				AWRTWriteReferenceCount:     awrtReferences,
-				BatchCount:                  len(partitions),
-				MaximumBatchWidth:           maximumWidth,
-				WriteOpportunityReuseCount:  opportunityReuse,
-				DependencyEdgeCount:         dependencyEdges,
-				OFASAbortedTransactionCount: len(deferredByID),
-				PlanningIterationCount:      iterations,
-			}
-			break
+	}
+
+	finalPartitions := make([]batchSIPartition, 0, len(partitions))
+	maximumWidth := 0
+	for _, partition := range partitions {
+		if len(partition.Txs) == 0 {
+			continue
 		}
-		for id, item := range aborted {
-			deferredByID[id] = item
+		if len(partition.Txs) > maximumWidth {
+			maximumWidth = len(partition.Txs)
 		}
-		next := make([]batchSITxDescriptor, 0, len(active)-len(aborted))
-		for _, item := range active {
-			if _, rejected := aborted[item.TxID]; !rejected {
-				next = append(next, item)
-			}
+		finalPartitions = append(finalPartitions, partition)
+	}
+	readOnlyCount := 0
+	for _, item := range descriptors {
+		if len(item.WriteKeys) == 0 {
+			readOnlyCount++
 		}
-		active = next
+	}
+	acceptedCount := len(descriptors) - len(deferredByID)
+	metrics := BatchSIPlanMetrics{
+		TransactionCount:                     len(descriptors),
+		CandidateTransactionCount:            len(descriptors),
+		AcceptedTransactionCount:             acceptedCount,
+		FirstPassOFASAbortedTransactionCount: len(deferredByID),
+		ReadOnlyTransactionCount:             readOnlyCount,
+		AWRTAddressCount:                     len(awrt),
+		AWRTWriteReferenceCount:              awrtReferences,
+		BatchCount:                           len(finalPartitions),
+		MaximumBatchWidth:                    maximumWidth,
+		WriteOpportunityReuseCount:           opportunityReuse,
+		DependencyEdgeCount:                  dependencyEdges,
+		OFASAbortedTransactionCount:          len(deferredByID),
+		PlanningIterationCount:               1,
 	}
 
 	plan := BatchSIPlan{
-		AlgorithmID:         BatchSIPlanAlgorithmID,
-		Version:             BatchSIPlanVersion,
-		BlockHeight:         b.Height,
-		PartitionMode:       config.PartitionMode,
-		OrderingMode:        config.OrderingMode,
-		PriorityMode:        config.PriorityMode,
-		TransactionOrdinals: normalizedOrdinals,
-		Metrics:             finalMetrics,
+		AlgorithmID:             BatchSIPlanAlgorithmID,
+		Version:                 BatchSIPlanVersion,
+		BlockHeight:             b.Height,
+		PartitionMode:           config.PartitionMode,
+		OrderingMode:            config.OrderingMode,
+		PriorityMode:            config.PriorityMode,
+		CandidateTransactionIDs: make([]string, 0, len(b.TxList)),
+		TransactionOrdinals:     normalizedOrdinals,
+		Metrics:                 metrics,
 	}
-	byID := make(map[string]tx.SignedTransaction, len(active))
-	for _, item := range active {
+	for _, item := range b.TxList {
+		plan.CandidateTransactionIDs = append(plan.CandidateTransactionIDs, item.TxID)
+	}
+	byID := make(map[string]tx.SignedTransaction, len(descriptors))
+	for _, item := range descriptors {
 		byID[item.TxID] = item.Item
 	}
 	for _, partition := range finalPartitions {
@@ -309,8 +307,7 @@ func BuildBatchSIPlanWithOrdinals(b block.Block, config BatchSIConfig, ordinals 
 		plan.Batches = append(plan.Batches, batch)
 	}
 	plan.OrderEvidence = batchSIOrderEvidence(plan.TransactionOrdinals, plan.Batches)
-	plan.PlanDigest = batchSIPlanDigest(plan)
-	ordered := make([]tx.SignedTransaction, 0, len(active))
+	ordered := make([]tx.SignedTransaction, 0, acceptedCount)
 	for _, batch := range plan.Batches {
 		for _, id := range batch.OrderedTransactionIDs {
 			ordered = append(ordered, byID[id])
@@ -327,6 +324,8 @@ func BuildBatchSIPlanWithOrdinals(b block.Block, config BatchSIConfig, ordinals 
 		}
 		return deferred[i].TxID < deferred[j].TxID
 	})
+	plan.DeferredTransactions = append([]tx.SignedTransaction(nil), deferred...)
+	plan.PlanDigest = batchSIPlanDigest(plan)
 	return BatchSIPlanningResult{Plan: plan, Ordered: ordered, Deferred: deferred}, nil
 }
 
@@ -348,50 +347,96 @@ func ParseBatchSIPlan(raw []byte) (BatchSIPlan, error) {
 	return plan, nil
 }
 
-// VerifyBatchSIPlan recomputes the accepted-set plan. Deferred transactions are
-// intentionally absent from the proposed block and are released to the leader's
-// mempool before PBFT.
+// VerifyBatchSIPlan recomputes the original fixed candidate plan from consensus-bound
+// evidence. Deferred transactions are intentionally absent from the proposed block and
+// are released to the leader's mempool before PBFT; accepted transactions are never
+// repartitioned or re-ordered after first-pass OFAS.
 func VerifyBatchSIPlan(b block.Block, plan BatchSIPlan, config BatchSIConfig) error {
 	config = config.Normalized()
 	if plan.PartitionMode != config.PartitionMode || plan.OrderingMode != config.OrderingMode || plan.PriorityMode != config.PriorityMode {
 		return fmt.Errorf("batch-si plan config mismatch")
 	}
-	if len(plan.TransactionOrdinals) != len(b.TxList) {
-		return fmt.Errorf("batch-si transaction ordinal count mismatch")
+	if len(plan.CandidateTransactionIDs) == 0 && len(b.TxList) > 0 {
+		return fmt.Errorf("batch-si candidate evidence is missing")
 	}
-	seenOrdinals := map[int]bool{}
+	if len(plan.TransactionOrdinals) != len(plan.CandidateTransactionIDs) {
+		return fmt.Errorf("batch-si candidate ordinal count mismatch")
+	}
+
+	candidateByID := make(map[string]tx.SignedTransaction, len(plan.CandidateTransactionIDs))
+	acceptedIDs := make(map[string]bool, len(b.TxList))
 	for _, item := range b.TxList {
-		ordinal := plan.TransactionOrdinals[item.TxID]
-		if ordinal < 1 {
-			return fmt.Errorf("batch-si missing paper transaction ordinal for %s", item.TxID)
+		if item.TxID == "" || acceptedIDs[item.TxID] {
+			return fmt.Errorf("batch-si accepted block has missing or duplicate transaction id")
 		}
-		if seenOrdinals[ordinal] {
-			return fmt.Errorf("batch-si duplicate paper transaction ordinal %d", ordinal)
+		acceptedIDs[item.TxID] = true
+		candidateByID[item.TxID] = item
+	}
+	deferredIDs := make(map[string]bool, len(plan.DeferredTransactions))
+	for _, item := range plan.DeferredTransactions {
+		if item.TxID == "" || deferredIDs[item.TxID] || acceptedIDs[item.TxID] {
+			return fmt.Errorf("batch-si deferred evidence has missing, duplicate, or accepted transaction id")
+		}
+		// Real runtime candidates have already passed transaction admission. Recheck
+		// embedded deferred evidence when signature material is present; unit-level
+		// planning fixtures intentionally use unsigned deterministic descriptors.
+		if item.Signature != "" || item.PublicKey != "" {
+			if err := tx.Verify(item); err != nil {
+				return fmt.Errorf("batch-si deferred transaction verification failed for %s: %w", item.TxID, err)
+			}
+		}
+		deferredIDs[item.TxID] = true
+		candidateByID[item.TxID] = item
+	}
+
+	seenCandidate := map[string]bool{}
+	seenOrdinals := map[int]bool{}
+	candidate := b
+	candidate.TxList = make([]tx.SignedTransaction, 0, len(plan.CandidateTransactionIDs))
+	candidate.TxIDs = make([]string, 0, len(plan.CandidateTransactionIDs))
+	candidate.ExecutionPlan = nil
+	for _, txID := range plan.CandidateTransactionIDs {
+		if txID == "" || seenCandidate[txID] {
+			return fmt.Errorf("batch-si candidate evidence has missing or duplicate transaction id")
+		}
+		seenCandidate[txID] = true
+		item, ok := candidateByID[txID]
+		if !ok {
+			return fmt.Errorf("batch-si candidate transaction %s is missing from accepted/deferred evidence", txID)
+		}
+		ordinal := plan.TransactionOrdinals[txID]
+		if ordinal < 1 || seenOrdinals[ordinal] {
+			return fmt.Errorf("batch-si invalid candidate transaction ordinal for %s", txID)
 		}
 		seenOrdinals[ordinal] = true
+		candidate.TxList = append(candidate.TxList, item)
+		candidate.TxIDs = append(candidate.TxIDs, txID)
 	}
-	candidate := b
-	candidate.ExecutionPlan = nil
-	result, err := BuildBatchSIPlanWithOrdinals(candidate, config, plan.TransactionOrdinals)
+	if len(candidateByID) != len(plan.CandidateTransactionIDs) {
+		return fmt.Errorf("batch-si accepted/deferred evidence contains transaction outside candidate order")
+	}
+
+	recomputed, err := BuildBatchSIPlanWithOrdinals(candidate, config, plan.TransactionOrdinals)
 	if err != nil {
 		return err
 	}
-	if len(result.Deferred) != 0 {
-		return fmt.Errorf("batch-si accepted block still contains %d non-serializable transactions", len(result.Deferred))
+	if recomputed.Plan.PlanDigest != plan.PlanDigest {
+		return fmt.Errorf("batch-si fixed candidate plan digest mismatch")
 	}
-	if result.Plan.PlanDigest != plan.PlanDigest {
-		return fmt.Errorf("batch-si semantic recompute mismatch")
-	}
-	flattened := make([]string, 0, len(b.TxList))
-	for _, batch := range plan.Batches {
-		flattened = append(flattened, batch.OrderedTransactionIDs...)
-	}
-	if len(flattened) != len(b.TxList) {
-		return fmt.Errorf("batch-si plan transaction count mismatch")
+	if len(recomputed.Ordered) != len(b.TxList) {
+		return fmt.Errorf("batch-si accepted transaction count mismatch")
 	}
 	for index, item := range b.TxList {
-		if flattened[index] != item.TxID {
-			return fmt.Errorf("batch-si plan order mismatch at index %d", index)
+		if recomputed.Ordered[index].TxID != item.TxID {
+			return fmt.Errorf("batch-si accepted order mismatch at index %d", index)
+		}
+	}
+	if len(recomputed.Deferred) != len(plan.DeferredTransactions) {
+		return fmt.Errorf("batch-si deferred transaction count mismatch")
+	}
+	for index, item := range recomputed.Deferred {
+		if plan.DeferredTransactions[index].TxID != item.TxID {
+			return fmt.Errorf("batch-si deferred transaction evidence mismatch at index %d", index)
 		}
 	}
 	return nil
@@ -1140,26 +1185,29 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 		averageMilli = len(b.TxList) * 1000 / len(plan.Batches)
 	}
 	e.Metrics = BatchSIMetrics{
-		WorkerCount:                    e.Config.WorkerCount,
-		PartitionMode:                  plan.PartitionMode,
-		OrderingMode:                   plan.OrderingMode,
-		PriorityMode:                   plan.PriorityMode,
-		ExecutionMode:                  e.Config.ExecutionMode,
-		BatchCount:                     plan.Metrics.BatchCount,
-		MaximumBatchWidth:              plan.Metrics.MaximumBatchWidth,
-		AverageBatchWidthMilli:         averageMilli,
-		AWRTAddressCount:               plan.Metrics.AWRTAddressCount,
-		AWRTWriteReferenceCount:        plan.Metrics.AWRTWriteReferenceCount,
-		WriteOpportunityReuseCount:     plan.Metrics.WriteOpportunityReuseCount,
-		DependencyEdgeCount:            plan.Metrics.DependencyEdgeCount,
-		OFASAbortedTransactionCount:    plan.Metrics.OFASAbortedTransactionCount,
-		PlanningIterationCount:         plan.Metrics.PlanningIterationCount,
-		SnapshotCount:                  len(plan.Batches),
-		ExecutionTaskCount:             len(b.TxList),
-		MaximumObservedParallelWidth:   maximumObserved,
-		BatchSnapshotCreateMS:          snapshotMS,
-		TransactionExecutionMS:         executionMS,
-		DeterministicMaterializationMS: materializationMS,
+		WorkerCount:                          e.Config.WorkerCount,
+		CandidateTransactionCount:            plan.Metrics.CandidateTransactionCount,
+		AcceptedTransactionCount:             plan.Metrics.AcceptedTransactionCount,
+		FirstPassOFASAbortedTransactionCount: plan.Metrics.FirstPassOFASAbortedTransactionCount,
+		PartitionMode:                        plan.PartitionMode,
+		OrderingMode:                         plan.OrderingMode,
+		PriorityMode:                         plan.PriorityMode,
+		ExecutionMode:                        e.Config.ExecutionMode,
+		BatchCount:                           plan.Metrics.BatchCount,
+		MaximumBatchWidth:                    plan.Metrics.MaximumBatchWidth,
+		AverageBatchWidthMilli:               averageMilli,
+		AWRTAddressCount:                     plan.Metrics.AWRTAddressCount,
+		AWRTWriteReferenceCount:              plan.Metrics.AWRTWriteReferenceCount,
+		WriteOpportunityReuseCount:           plan.Metrics.WriteOpportunityReuseCount,
+		DependencyEdgeCount:                  plan.Metrics.DependencyEdgeCount,
+		OFASAbortedTransactionCount:          plan.Metrics.OFASAbortedTransactionCount,
+		PlanningIterationCount:               plan.Metrics.PlanningIterationCount,
+		SnapshotCount:                        len(plan.Batches),
+		ExecutionTaskCount:                   len(b.TxList),
+		MaximumObservedParallelWidth:         maximumObserved,
+		BatchSnapshotCreateMS:                snapshotMS,
+		TransactionExecutionMS:               executionMS,
+		DeterministicMaterializationMS:       materializationMS,
 	}
 	return result, nil
 }

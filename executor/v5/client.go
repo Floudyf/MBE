@@ -81,7 +81,8 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	batch := []WorkloadRecord{}
 	lastWriterOrdinal := map[string]uint64{}
 	statelessDirect := usesStatelessDirectExecution(plugins.Routing)
-	bindExecutionRouting := plugins.Routing != nil && (plugins.Routing.ID() == "metatrack_coaccess_routing" || plugins.Routing.ID() == "stateless_hash_routing")
+	isMetaTrackRouting := plugins.Routing != nil && plugins.Routing.ID() == "metatrack_coaccess_routing"
+	bindExecutionRouting := plugins.Routing != nil && (isMetaTrackRouting || plugins.Routing.ID() == "stateless_hash_routing")
 	submitRecord := func(record WorkloadRecord, route RoutingDecision) error {
 		executionShard := route.ShardID
 		shardID := workloadIngressShard(record, route, statelessDirect)
@@ -90,7 +91,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			return fmt.Errorf("no leader for %s", shardID)
 		}
 		payload := record.Payload
-		logicalSourceShard := firstNonEmpty(record.SourceShard, shardID)
+		logicalSourceShard := logicalSourceShardForRecord(record, route, plugins.Sharding, shardIDs)
 		sender := fmt.Sprintf("client_%s_%d", logicalSourceShard, record.Index)
 		targetShard := record.TargetShard
 		if payload == "v5_cross" {
@@ -134,7 +135,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				item = generated[0]
 				item.Payload = payload
 				if bindExecutionRouting && record.RoutePlanDigest != "" {
-					routing := tx.ExecutionRoutingMetadata{SenderID: item.Sender, ReceiverID: item.Receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: executionShard, RoutingReason: firstNonEmpty(record.RoutingReason, route.Reason), RoutePlanDigest: record.RoutePlanDigest, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...)}
+					routing := tx.ExecutionRoutingMetadata{SenderID: item.Sender, ReceiverID: item.Receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: executionShard, RoutingReason: firstNonEmpty(record.RoutingReason, route.Reason), RoutePlanDigest: record.RoutePlanDigest, RouteBatchSequence: record.RouteBatchSequence, RouteBatchTransactionCount: record.RouteBatchTransactionCount, RouteBatchShardTransactionCount: record.RouteBatchShardTransactionCount, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...)}
 					digest, digestErr := tx.ComputeExecutionRoutingDigest(item, routing)
 					if digestErr != nil {
 						err = digestErr
@@ -181,6 +182,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 		placements := map[int]TransactionPlacement{}
 		routePlanDigest := ""
+		routeBatchShardCounts := map[string]int{}
 		if planner, ok := plugins.Routing.(BatchRoutingPlugin); ok {
 			routingRecords := append([]WorkloadRecord(nil), records...)
 			if _, ok := iterator.(*CanonicalTraceIterator); ok {
@@ -199,6 +201,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &placementScoreRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
 			for _, placement := range routePlan.TransactionPlacements {
 				placements[placement.TxIndex] = placement
+				if isMetaTrackRouting {
+					routeBatchShardCounts[placement.ExecutionShard]++
+				}
 			}
 		}
 		for _, record := range records {
@@ -211,6 +216,11 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				record.RoutingReason = placement.Reason
 				if bindExecutionRouting {
 					record.RoutePlanDigest = routePlanDigest
+				}
+				if isMetaTrackRouting {
+					record.RouteBatchSequence = uint64(batchIndex + 1)
+					record.RouteBatchTransactionCount = len(records)
+					record.RouteBatchShardTransactionCount = routeBatchShardCounts[placement.ExecutionShard]
 				}
 				record.PredictedRemoteReads = placement.PredictedRemoteReads
 				record.PredictedRemoteWrites = placement.PredictedRemoteWrites
@@ -374,6 +384,22 @@ func workloadIngressShard(record WorkloadRecord, route RoutingDecision, stateles
 	}
 	if record.CrossShard && record.SourceShard != "" {
 		return record.SourceShard
+	}
+	return route.ShardID
+}
+
+// logicalSourceShardForRecord preserves workload identity independently of
+// execution placement. MetaTrack may move a transaction to a different
+// execution shard than stateless hash routing, but that placement decision
+// must not change synthetic sender/receiver IDs, semantic state keys, or the
+// deterministic signing seed. Explicit source-shard evidence wins; otherwise
+// the stable state-key partition is the logical source/home identity.
+func logicalSourceShardForRecord(record WorkloadRecord, route RoutingDecision, sharding ShardingPlugin, shardIDs []string) string {
+	if record.SourceShard != "" {
+		return record.SourceShard
+	}
+	if source := shardFor(sharding, record.StateKeys, shardIDs); source != "" {
+		return source
 	}
 	return route.ShardID
 }

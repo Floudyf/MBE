@@ -180,8 +180,14 @@ func TestBatchSIConsensusPlannerDefersCycleAndProducesClosedPlan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Metrics.OFASAbortedTransactionCount != 0 {
-		t.Fatalf("consensus-bound accepted-set plan must not embed candidate-only deferrals: %#v", plan.Metrics)
+	if plan.Metrics.OFASAbortedTransactionCount != len(planned.Deferred) || plan.Metrics.PlanningIterationCount != 1 {
+		t.Fatalf("consensus plan must preserve first-pass deferral evidence: metrics=%#v deferred=%d", plan.Metrics, len(planned.Deferred))
+	}
+	if len(plan.CandidateTransactionIDs) != len(items) {
+		t.Fatalf("consensus plan must bind the original candidate set: got=%d want=%d", len(plan.CandidateTransactionIDs), len(items))
+	}
+	if len(plan.DeferredTransactions) != len(planned.Deferred) {
+		t.Fatalf("consensus plan should duplicate only deferred transaction evidence: got=%d want=%d", len(plan.DeferredTransactions), len(planned.Deferred))
 	}
 }
 

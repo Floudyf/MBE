@@ -25,6 +25,7 @@ import {
   type V5OrphanRealClusterScan,
 } from "../api";
 import V5AnalysisPanel from "../components/v5/V5AnalysisPanel";
+import V5SkewTpsChart from "../components/v5/V5SkewTpsChart"; // V5_SKEW_TPS_CHART_V1
 import V5ArtifactCatalog from "../components/v5/V5ArtifactCatalog";
 import V5ChildDetail from "../components/v5/V5ChildDetail";
 import V5GroupSummary from "../components/v5/V5GroupSummary";
@@ -365,6 +366,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     </article>
     {selectedGroup && <V5GroupSummary group={selectedGroup} aggregate={aggregate} children={detail?.children ?? []} />}
     <V5AnalysisPanel analysis={analysis} />
+    <V5SkewTpsChart children={detail?.children ?? []} />
     {detail && <article className="final-card wide">
       <h2>子实验</h2>
       <div className="table-wrap"><table data-testid="v5-child-table">

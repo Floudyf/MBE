@@ -34,6 +34,7 @@ const catchupBlockMessage = "V5_CATCHUP_BLOCK"
 const catchupUnavailableMessage = "V5_CATCHUP_UNAVAILABLE"
 const stateFetchRequestMessage = "V5_STATE_FETCH_REQUEST"
 const stateFetchResponseMessage = "V5_STATE_FETCH_RESPONSE"
+const statelessVersionAdmissionProbeAccessKind = "state_version_admission_probe"
 const stateDeltaApplyMessage = "V5_STATE_DELTA_APPLY"
 const stateDeltaApplyAckMessage = "V5_STATE_DELTA_APPLY_ACK"
 const remoteStateDeltaApplyLagBlocks uint64 = 1
@@ -275,113 +276,115 @@ type stateFetchResponseTask struct {
 }
 
 type NodeRuntime struct {
-	plan                     Plan
-	node                     NodePlan
-	peers                    []p2p.Peer
-	transport                *p2p.Transport
-	consensus                *pbft.State
-	sendToNodeHook           func(context.Context, string, p2p.MessageEnvelope) error
-	pool                     *mempool.Mempool
-	proposer                 *realblock.Proposer
-	db                       *state.DB
-	store                    *storage.BlockStore
-	mu                       sync.Mutex
-	commitMu                 sync.Mutex
-	commitTasks              chan commitTask
-	commitWorkerCancel       context.CancelFunc
-	commitWorkerContext      context.Context
-	commitWorkerWG           sync.WaitGroup
-	queuedCommitTasks        map[string]bool
-	stateFetchTasks          chan stateFetchTask
-	stateFetchWorkerCancel   context.CancelFunc
-	stateFetchWorkerContext  context.Context
-	stateFetchWorkerWG       sync.WaitGroup
-	stateFetchResponseTasks  chan stateFetchResponseTask
-	stateFetchResponseWG     sync.WaitGroup
-	stateFetchSnapshotMu     sync.Mutex
-	proposals                map[string]realblock.Block
-	deferredPrePrepares      map[uint64]deferredPrePrepare
-	votes                    map[string]map[string]bool
-	committed                map[string]bool
-	committing               map[string]bool
-	committedHeight          uint64
-	committedHash            string
-	commitPhase              string
-	commitPhaseHeight        uint64
-	commitPhaseHash          string
-	lastProgressAt           int64
-	pendingCommits           map[uint64]realblock.Block
-	pendingCommitErrors      map[uint64]string
-	proposalInFlight         bool
-	proposalInFlightHash     string
-	proposalStartedAt        time.Time
-	proposalLastBroadcastAt  time.Time
-	proposalRetransmitCount  int
-	proposalWorkUnits        atomic.Int64
-	viewChangeStartedAt      time.Time
-	viewChangeLastBroadcast  time.Time
-	viewChangeRetransmits    int
-	viewChangeTarget         uint64
-	lastProposalError        string
-	lastCommitFailure        CommitFailure
-	fatalPersistenceError    string
-	fatalExecutionError      string
-	blockExecutionProgress   execution.BlockSTMProgress
-	lastCatchupRequest       time.Time
-	catchupResponsesInFlight int
-	lastCrossShardRetry      time.Time
-	relaySource              map[string]Relay
-	pendingOutboundRelays    map[string]Relay
-	pendingFinalizeMessages  map[string]Finalize
-	outboundRelayRetryAfter  map[string]time.Time
-	finalizeRetryAfter       map[string]time.Time
-	outboundRelaySendErrors  map[string]string
-	finalizeSendErrors       map[string]string
-	crossEventSeen           map[string]bool
-	relayAdmissionFailures   map[string]string
-	events                   []Event
-	lifecycle                []LifecycleEvent
-	consensusRows            [][]string
-	executionRows            [][]string
-	schedulerRows            [][]string
-	schedulerAggregate       schedulerSummary
-	schedulerRowsDropped     int64
-	commitRows               [][]string
-	logicalPhysicalRows      [][]string
-	chainRows                [][]string
-	blockExecutionSummaries  []map[string]any
-	executionPlans           []map[string]any
-	proposalEvidence         []map[string]any
-	txExecutionTraceRows     [][]string
-	observedStateAccessRows  [][]string
-	businessExecutionRows    [][]string
-	stateDeltaRows           [][]string
-	planDigestRows           [][]string
-	remoteStateRows          [][]string
-	runtimeEventRows         [][]string
-	runtimeEventTotal        int64
-	runtimeEventRowsDropped  int64
-	runtimeMetricCounts      map[string]int64
-	stateFetchWaiters        map[string]chan StateFetchResponse
-	pendingStateFetches      map[string]StateFetchDiagnostic
-	lastStateFetch           StateFetchDiagnostic
-	stateFetchFailures       []StateFetchDiagnostic
-	lastStateFetchService    StateFetchDiagnostic
-	stateFetchServiceErrors  []StateFetchDiagnostic
-	stateFetchWitnesses      map[string]StateFetchResponse
-	stateFetchSnapshots      map[string]map[string]string
-	stateFetchSnapshotRoots  map[string]string
-	stateFetchSnapshotOrder  []string
-	stateVersionInitial      map[string]string
-	stateVersionValues       map[string]map[uint64]string
-	stateVersionMaterialized map[string]uint64
-	stateApplyWaiters        map[string]chan StateDeltaApplyAck
-	pendingStateDeltas       []StateDeltaApplyRequest
-	pendingStateDeltaKeys    map[string]bool
-	appliedStateDeltaKeys    map[string]bool
-	pluginSnapshot           map[string]PluginConfig
-	plugins                  RuntimePlugins
-	blockCount               int
+	plan                            Plan
+	node                            NodePlan
+	peers                           []p2p.Peer
+	transport                       *p2p.Transport
+	consensus                       *pbft.State
+	sendToNodeHook                  func(context.Context, string, p2p.MessageEnvelope) error
+	pool                            *mempool.Mempool
+	proposer                        *realblock.Proposer
+	db                              *state.DB
+	store                           *storage.BlockStore
+	mu                              sync.Mutex
+	commitMu                        sync.Mutex
+	commitTasks                     chan commitTask
+	commitWorkerCancel              context.CancelFunc
+	commitWorkerContext             context.Context
+	commitWorkerWG                  sync.WaitGroup
+	queuedCommitTasks               map[string]bool
+	stateFetchTasks                 chan stateFetchTask
+	stateFetchWorkerCancel          context.CancelFunc
+	stateFetchWorkerContext         context.Context
+	stateFetchWorkerWG              sync.WaitGroup
+	stateFetchResponseTasks         chan stateFetchResponseTask
+	stateFetchResponseWG            sync.WaitGroup
+	stateFetchSnapshotMu            sync.Mutex
+	proposals                       map[string]realblock.Block
+	deferredPrePrepares             map[uint64]deferredPrePrepare
+	votes                           map[string]map[string]bool
+	committed                       map[string]bool
+	committing                      map[string]bool
+	committedHeight                 uint64
+	committedHash                   string
+	commitPhase                     string
+	commitPhaseHeight               uint64
+	commitPhaseHash                 string
+	lastProgressAt                  int64
+	pendingCommits                  map[uint64]realblock.Block
+	pendingCommitErrors             map[uint64]string
+	proposalInFlight                bool
+	proposalInFlightHash            string
+	proposalStartedAt               time.Time
+	proposalLastBroadcastAt         time.Time
+	proposalRetransmitCount         int
+	proposalWorkUnits               atomic.Int64
+	viewChangeStartedAt             time.Time
+	viewChangeLastBroadcast         time.Time
+	viewChangeRetransmits           int
+	viewChangeTarget                uint64
+	lastProposalError               string
+	lastCommitFailure               CommitFailure
+	fatalPersistenceError           string
+	fatalExecutionError             string
+	blockExecutionProgress          execution.BlockSTMProgress
+	lastCatchupRequest              time.Time
+	catchupResponsesInFlight        int
+	lastCrossShardRetry             time.Time
+	relaySource                     map[string]Relay
+	pendingOutboundRelays           map[string]Relay
+	pendingFinalizeMessages         map[string]Finalize
+	outboundRelayRetryAfter         map[string]time.Time
+	finalizeRetryAfter              map[string]time.Time
+	outboundRelaySendErrors         map[string]string
+	finalizeSendErrors              map[string]string
+	crossEventSeen                  map[string]bool
+	relayAdmissionFailures          map[string]string
+	events                          []Event
+	lifecycle                       []LifecycleEvent
+	consensusRows                   [][]string
+	executionRows                   [][]string
+	schedulerRows                   [][]string
+	schedulerAggregate              schedulerSummary
+	schedulerRowsDropped            int64
+	commitRows                      [][]string
+	logicalPhysicalRows             [][]string
+	chainRows                       [][]string
+	blockExecutionSummaries         []map[string]any
+	executionPlans                  []map[string]any
+	proposalEvidence                []map[string]any
+	txExecutionTraceRows            [][]string
+	observedStateAccessRows         [][]string
+	businessExecutionRows           [][]string
+	stateDeltaRows                  [][]string
+	planDigestRows                  [][]string
+	remoteStateRows                 [][]string
+	runtimeEventRows                [][]string
+	runtimeEventTotal               int64
+	runtimeEventRowsDropped         int64
+	runtimeMetricCounts             map[string]int64
+	stateFetchWaiters               map[string]chan StateFetchResponse
+	pendingStateFetches             map[string]StateFetchDiagnostic
+	lastStateFetch                  StateFetchDiagnostic
+	stateFetchFailures              []StateFetchDiagnostic
+	lastStateFetchService           StateFetchDiagnostic
+	stateFetchServiceErrors         []StateFetchDiagnostic
+	stateFetchWitnesses             map[string]StateFetchResponse
+	stateFetchSnapshots             map[string]map[string]string
+	stateFetchSnapshotRoots         map[string]string
+	stateFetchSnapshotOrder         []string
+	stateVersionInitial             map[string]string
+	stateVersionValues              map[string]map[uint64]string
+	stateVersionMaterialized        map[string]uint64
+	stateVersionSignals             map[string]chan struct{}
+	stateVersionRemoteSubscriptions map[string]map[string]stateVersionRemoteSubscription
+	stateApplyWaiters               map[string]chan StateDeltaApplyAck
+	pendingStateDeltas              []StateDeltaApplyRequest
+	pendingStateDeltaKeys           map[string]bool
+	appliedStateDeltaKeys           map[string]bool
+	pluginSnapshot                  map[string]PluginConfig
+	plugins                         RuntimePlugins
+	blockCount                      int
 }
 
 func RunNode(ctx context.Context, plan Plan, nodeID string) error {
@@ -1081,7 +1084,7 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 	policy := mempool.DefaultPolicy()
 	policy.Capacity = plugins.TxPool.Capacity()
 	pool := plugins.TxPool.CreatePool(TxPoolInput{NodeID: node.NodeID, ShardID: node.ShardID, Policy: policy})
-	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, consensus: pbft.NewState(node.NodeID, node.ShardID, initialLeaderID(plan, node.ShardID), node.Validators), proposals: map[string]realblock.Block{}, deferredPrePrepares: map[uint64]deferredPrePrepare{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, queuedCommitTasks: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, pendingOutboundRelays: map[string]Relay{}, pendingFinalizeMessages: map[string]Finalize{}, outboundRelaySendErrors: map[string]string{}, finalizeSendErrors: map[string]string{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, pendingStateFetches: map[string]StateFetchDiagnostic{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateFetchSnapshotRoots: map[string]string{}, stateVersionInitial: map[string]string{}, stateVersionValues: map[string]map[uint64]string{}, stateVersionMaterialized: map[string]uint64{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
+	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, consensus: pbft.NewState(node.NodeID, node.ShardID, initialLeaderID(plan, node.ShardID), node.Validators), proposals: map[string]realblock.Block{}, deferredPrePrepares: map[uint64]deferredPrePrepare{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, queuedCommitTasks: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, pendingOutboundRelays: map[string]Relay{}, pendingFinalizeMessages: map[string]Finalize{}, outboundRelaySendErrors: map[string]string{}, finalizeSendErrors: map[string]string{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, pendingStateFetches: map[string]StateFetchDiagnostic{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateFetchSnapshotRoots: map[string]string{}, stateVersionInitial: map[string]string{}, stateVersionValues: map[string]map[uint64]string{}, stateVersionMaterialized: map[string]uint64{}, stateVersionSignals: map[string]chan struct{}{}, stateVersionRemoteSubscriptions: map[string]map[string]stateVersionRemoteSubscription{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
 	for qualifiedKey, value := range plugins.StateStorage.Snapshot(db) {
 		if key, ok := unqualifiedLocalKey(qualifiedKey, node.ShardID); ok {
 			r.stateVersionInitial[key] = value
@@ -1527,6 +1530,10 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	if r.plugins.BlockProducer != nil && (r.plugins.BlockProducer.ID() == groundhogBlockProducerID || r.plugins.BlockProducer.ID() == ariaBlockProducerID) {
 		productionSnapshot = r.plugins.StateStorage.Snapshot(r.db)
 	}
+	routingPluginID := ""
+	if r.plugins.Routing != nil {
+		routingPluginID = r.plugins.Routing.ID()
+	}
 	input := BlockProductionInput{
 		Pool:              r.pool,
 		Proposer:          r.proposer,
@@ -1536,12 +1543,21 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		Context:           ctx,
 		BaseStateSnapshot: productionSnapshot,
 		WorkerCount:       blockExecutorWorkerCountFromProfile(r.pluginSnapshot),
+		RoutingPluginID:   routingPluginID,
 	}
 	if !r.plugins.BlockProducer.ShouldProduce(input) {
 		return
 	}
 
 	block, err := r.plugins.BlockProducer.BuildCandidate(input)
+	if err != nil && errors.Is(err, errMetaTrackBatchProjectionIncomplete) {
+		if systemDrainPending {
+			block = r.buildSystemDeltaDrainBlock(input.Now, readySystemDeltas)
+			err = nil
+		} else {
+			return
+		}
+	}
 	if err != nil && err.Error() == "empty_mempool" && systemDrainPending {
 		block = r.buildSystemDeltaDrainBlock(input.Now, readySystemDeltas)
 		err = nil
@@ -1553,6 +1569,27 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		}
 		r.mu.Unlock()
 		return
+	}
+	if r.statelessVersionAdmissionEnabled(block) {
+		originalCandidate := append([]tx.SignedTransaction(nil), block.TxList...)
+		admitted, deferred, admissionErr := r.admitStatelessVersionCandidate(ctx, block)
+		if admissionErr != nil {
+			r.pool.ReleaseReserved(originalCandidate)
+			r.setLastProposalError(admissionErr)
+			return
+		}
+		if len(deferred) > 0 {
+			r.pool.ReleaseReserved(deferred)
+		}
+		if len(admitted.TxList) == 0 {
+			if systemDrainPending {
+				block = r.buildSystemDeltaDrainBlock(input.Now, readySystemDeltas)
+			} else {
+				return
+			}
+		} else {
+			block = admitted
+		}
 	}
 	scheduledBlock, scheduleErr := r.scheduleBlock(block)
 	if scheduleErr != nil {
@@ -1571,6 +1608,258 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		r.pool.ReleaseReserved(block.TxList)
 		r.setLastProposalError(err)
 	}
+}
+
+type statelessVersionAdmissionRequirement struct {
+	token       string
+	key         string
+	version     uint64
+	homeShard   string
+	transaction tx.SignedTransaction
+}
+
+type statelessVersionAdmissionProbeResult struct {
+	token string
+	ready bool
+	err   error
+}
+
+func (r *NodeRuntime) statelessVersionAdmissionEnabled(block realblock.Block) bool {
+	if r == nil || len(block.TxList) == 0 || len(r.shardIDs()) < 2 || r.plugins.Routing == nil || r.plugins.Routing.ID() != "stateless_hash_routing" {
+		return false
+	}
+	for _, item := range block.TxList {
+		if item.ExecutionRouting != nil && len(item.ExecutionRouting.StateVersions) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func statelessVersionAdmissionToken(key string, version uint64) string {
+	return key + "@" + fmt.Sprint(version)
+}
+
+// admitStatelessVersionCandidate prevents a PBFT proposal from binding a
+// stateless transaction whose exact predecessor version can only be produced
+// outside the current candidate and is not yet published at its persistent
+// home.  Dependencies produced by another transaction in this same candidate
+// remain admissible and are resolved by the existing versioned wave executor.
+// The function never substitutes a latest value and never changes a required
+// logical version.
+func (r *NodeRuntime) admitStatelessVersionCandidate(ctx context.Context, block realblock.Block) (realblock.Block, []tx.SignedTransaction, error) {
+	if !r.statelessVersionAdmissionEnabled(block) {
+		return block, nil, nil
+	}
+	shardIDs := r.shardIDs()
+	producerIndex := map[string]int{}
+	for index, item := range block.TxList {
+		if item.ExecutionRouting == nil {
+			continue
+		}
+		for _, dependency := range item.ExecutionRouting.StateVersions {
+			if dependency.Key == "" || dependency.ProducedVersion == 0 {
+				continue
+			}
+			producerIndex[statelessVersionAdmissionToken(dependency.Key, dependency.ProducedVersion)] = index
+		}
+	}
+
+	external := map[string]statelessVersionAdmissionRequirement{}
+	for _, item := range block.TxList {
+		if item.ExecutionRouting == nil {
+			continue
+		}
+		for _, dependency := range item.ExecutionRouting.StateVersions {
+			if dependency.Key == "" || dependency.RequiredVersion == 0 {
+				continue
+			}
+			token := statelessVersionAdmissionToken(dependency.Key, dependency.RequiredVersion)
+			if _, internal := producerIndex[token]; internal {
+				continue
+			}
+			homeShard := r.homeShardFor([]string{dependency.Key}, shardIDs)
+			if homeShard == "" {
+				return realblock.Block{}, nil, fmt.Errorf("stateless version admission has no home shard for %s", dependency.Key)
+			}
+			external[token] = statelessVersionAdmissionRequirement{token: token, key: dependency.Key, version: dependency.RequiredVersion, homeShard: homeShard, transaction: item}
+		}
+	}
+
+	externalReady, err := r.probeStatelessVersionAdmissionRequirements(ctx, block, external)
+	if err != nil {
+		return realblock.Block{}, nil, err
+	}
+	selected := make([]bool, len(block.TxList))
+	progress := true
+	for progress {
+		progress = false
+		for index, item := range block.TxList {
+			if selected[index] {
+				continue
+			}
+			ready := true
+			if item.ExecutionRouting != nil {
+				for _, dependency := range item.ExecutionRouting.StateVersions {
+					if dependency.Key == "" || dependency.RequiredVersion == 0 {
+						continue
+					}
+					token := statelessVersionAdmissionToken(dependency.Key, dependency.RequiredVersion)
+					if producer, internal := producerIndex[token]; internal {
+						if !selected[producer] {
+							ready = false
+							break
+						}
+						continue
+					}
+					if !externalReady[token] {
+						ready = false
+						break
+					}
+				}
+			}
+			if ready {
+				selected[index] = true
+				progress = true
+			}
+		}
+	}
+
+	admittedItems := make([]tx.SignedTransaction, 0, len(block.TxList))
+	deferred := make([]tx.SignedTransaction, 0, len(block.TxList))
+	for index, item := range block.TxList {
+		if selected[index] {
+			admittedItems = append(admittedItems, item)
+		} else {
+			deferred = append(deferred, item)
+		}
+	}
+	r.addRuntimeMetric("stateless_version_admission_candidate_tx_count", int64(len(block.TxList)))
+	r.addRuntimeMetric("stateless_version_admission_admitted_tx_count", int64(len(admittedItems)))
+	r.addRuntimeMetric("stateless_version_admission_deferred_event_count", int64(len(deferred)))
+	if len(admittedItems) == 0 {
+		return realblock.Block{}, deferred, nil
+	}
+	admitted, err := r.proposer.BuildFromReserved(admittedItems, time.UnixMilli(block.Timestamp))
+	if err != nil {
+		return realblock.Block{}, deferred, err
+	}
+	return admitted, deferred, nil
+}
+
+func (r *NodeRuntime) probeStatelessVersionAdmissionRequirements(ctx context.Context, block realblock.Block, requirements map[string]statelessVersionAdmissionRequirement) (map[string]bool, error) {
+	ready := make(map[string]bool, len(requirements))
+	if len(requirements) == 0 {
+		return ready, nil
+	}
+	items := make([]statelessVersionAdmissionRequirement, 0, len(requirements))
+	for _, requirement := range requirements {
+		items = append(items, requirement)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].token < items[j].token })
+	workerCount := 16
+	if len(items) < workerCount {
+		workerCount = len(items)
+	}
+	jobs := make(chan statelessVersionAdmissionRequirement, len(items))
+	results := make(chan statelessVersionAdmissionProbeResult, len(items))
+	var wg sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for requirement := range jobs {
+				isReady, probeErr := r.probeStatelessVersionAdmissionOnce(ctx, block, requirement)
+				results <- statelessVersionAdmissionProbeResult{token: requirement.token, ready: isReady, err: probeErr}
+			}
+		}()
+	}
+	for _, requirement := range items {
+		jobs <- requirement
+	}
+	close(jobs)
+	wg.Wait()
+	close(results)
+	var firstErr error
+	notReady := int64(0)
+	for result := range results {
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+		}
+		ready[result.token] = result.ready
+		if !result.ready && result.err == nil {
+			notReady++
+		}
+	}
+	r.addRuntimeMetric("stateless_version_admission_probe_count", int64(len(items)))
+	r.addRuntimeMetric("stateless_version_admission_probe_not_ready_count", notReady)
+	if firstErr != nil {
+		return ready, firstErr
+	}
+	return ready, nil
+}
+
+func (r *NodeRuntime) probeStatelessVersionAdmissionOnce(ctx context.Context, block realblock.Block, requirement statelessVersionAdmissionRequirement) (bool, error) {
+	if requirement.version == 0 {
+		return true, nil
+	}
+	if requirement.homeShard == r.node.ShardID {
+		_, ready := r.stateVersionValue(requirement.key, requirement.version)
+		return ready, nil
+	}
+	targetNode := r.leaderID(requirement.homeShard)
+	if targetNode == "" {
+		return false, fmt.Errorf("stateless version admission home leader missing for %s", requirement.homeShard)
+	}
+	requestID := stableTextDigest(strings.Join([]string{"admission", r.node.NodeID, requirement.transaction.TxID, fmt.Sprint(block.Height), requirement.key, requirement.homeShard, fmt.Sprint(requirement.version), fmt.Sprint(time.Now().UnixNano())}, "|"))
+	waiter := make(chan StateFetchResponse, 1)
+	r.mu.Lock()
+	if r.stateFetchWaiters == nil {
+		r.stateFetchWaiters = map[string]chan StateFetchResponse{}
+	}
+	r.stateFetchWaiters[requestID] = waiter
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.stateFetchWaiters, requestID)
+		r.mu.Unlock()
+	}()
+	request := r.plugins.StateAccess.BuildFetchRequest(StateFetchInput{RequestID: requestID, TxID: requirement.transaction.TxID, BlockHash: block.BlockHash, Key: requirement.key, HomeShard: requirement.homeShard, ExecutionShard: r.node.ShardID, AccessKind: statelessVersionAdmissionProbeAccessKind, RequiredVersion: requirement.version, Versioned: true})
+	envelope, err := p2p.NewEnvelope(stateFetchRequestMessage, r.node.NodeID, targetNode, r.node.ShardID, block.Height, 0, block.Height, request)
+	if err != nil {
+		return false, err
+	}
+	if err := r.sendStateAccessToNode(ctx, targetNode, envelope); err != nil {
+		return false, err
+	}
+	timer := time.NewTimer(750 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case response := <-waiter:
+		if response.Success {
+			return response.Versioned && response.StateVersion == requirement.version, nil
+		}
+		if response.Error == "state_version_not_ready" {
+			return false, nil
+		}
+		return false, fmt.Errorf("stateless version admission probe failed: %s", response.Error)
+	case <-timer.C:
+		return false, fmt.Errorf("stateless version admission probe timed out for %s version %d from %s", requirement.key, requirement.version, requirement.homeShard)
+	case <-ctx.Done():
+		return false, ctx.Err()
+	}
+}
+
+func (r *NodeRuntime) addRuntimeMetric(name string, value int64) {
+	if value == 0 {
+		return
+	}
+	r.mu.Lock()
+	if r.runtimeMetricCounts == nil {
+		r.runtimeMetricCounts = map[string]int64{}
+	}
+	r.runtimeMetricCounts[name] += value
+	r.mu.Unlock()
 }
 
 func (r *NodeRuntime) buildSystemDeltaDrainBlock(now time.Time, ready []realblock.SystemStateDelta) realblock.Block {
@@ -1836,6 +2125,10 @@ func (r *NodeRuntime) metaTrackExecutionPlanPayload(block realblock.Block) (map[
 }
 
 func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block) (map[string]any, error) {
+	batchProjection, err := validateMetaTrackBatchProjection(block, false)
+	if err != nil {
+		return nil, err
+	}
 	orderedIDs := make([]string, 0, len(block.TxList))
 	accessDigests := make([]string, 0, len(block.TxList))
 	placements := make([]TransactionPlacement, 0, len(block.TxList))
@@ -1895,28 +2188,38 @@ func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block)
 	}
 	sort.Strings(digests)
 	routingDigestPayload := struct {
-		BlockShard       string                 `json:"block_shard"`
-		BlockHeight      uint64                 `json:"block_height"`
-		SourceDigests    []string               `json:"source_route_plan_digests"`
-		Placements       []TransactionPlacement `json:"transaction_placements"`
-		AccessListDigest []string               `json:"access_list_digests"`
-	}{BlockShard: block.ShardID, BlockHeight: block.Height, SourceDigests: digests, Placements: placements, AccessListDigest: accessDigests}
+		BlockShard                      string                 `json:"block_shard"`
+		BlockHeight                     uint64                 `json:"block_height"`
+		SourceDigests                   []string               `json:"source_route_plan_digests"`
+		RouteBatchSequence              uint64                 `json:"route_batch_sequence,omitempty"`
+		RouteBatchTransactionCount      int                    `json:"route_batch_transaction_count,omitempty"`
+		RouteBatchShardTransactionCount int                    `json:"route_batch_shard_transaction_count,omitempty"`
+		Placements                      []TransactionPlacement `json:"transaction_placements"`
+		AccessListDigest                []string               `json:"access_list_digests"`
+	}{
+		BlockShard: block.ShardID, BlockHeight: block.Height, SourceDigests: digests,
+		RouteBatchSequence: batchProjection.Sequence, RouteBatchTransactionCount: batchProjection.TransactionCount, RouteBatchShardTransactionCount: batchProjection.ShardTransactionCount,
+		Placements: placements, AccessListDigest: accessDigests,
+	}
 	raw, err := json.Marshal(routingDigestPayload)
 	if err != nil {
 		return nil, err
 	}
 	routingDigest := stableTextDigest(string(raw))
 	return map[string]any{
-		"algorithm_id":              r.batchExecutionPlanAlgorithmID(),
-		"ordered_transaction_ids":   orderedIDs,
-		"access_list_digests":       accessDigests,
-		"routing_plan_digest":       routingDigest,
-		"source_route_plan_digests": digests,
-		"placement_policy":          "signed_client_route_entries_v1",
-		"transaction_policy":        "sender_group_remote_cost_v2",
-		"access_matrix":             accessMatrix,
-		"transaction_placements":    placements,
-		"remote_access_estimate":    remoteEstimate,
+		"algorithm_id":                        r.batchExecutionPlanAlgorithmID(),
+		"ordered_transaction_ids":             orderedIDs,
+		"access_list_digests":                 accessDigests,
+		"routing_plan_digest":                 routingDigest,
+		"source_route_plan_digests":           digests,
+		"route_batch_sequence":                batchProjection.Sequence,
+		"route_batch_transaction_count":       batchProjection.TransactionCount,
+		"route_batch_shard_transaction_count": batchProjection.ShardTransactionCount,
+		"placement_policy":                    "signed_client_route_entries_v1",
+		"transaction_policy":                  "sender_group_remote_cost_v2",
+		"access_matrix":                       accessMatrix,
+		"transaction_placements":              placements,
+		"remote_access_estimate":              remoteEstimate,
 	}, nil
 }
 
@@ -2280,8 +2583,6 @@ func (r *NodeRuntime) enqueueStateFetchResponse(ctx context.Context, requester s
 		return ctx.Err()
 	case tasks <- stateFetchResponseTask{requester: requester, response: response}:
 		return nil
-	default:
-		return fmt.Errorf("state fetch response mailbox full")
 	}
 }
 
@@ -2302,8 +2603,6 @@ func (r *NodeRuntime) enqueueStateFetchTask(requester string, request StateFetch
 		return ctx.Err()
 	case tasks <- task:
 		return nil
-	default:
-		return fmt.Errorf("state fetch mailbox is full")
 	}
 }
 
@@ -3792,15 +4091,7 @@ func isVersionedStateAccess(access tx.AccessItem) bool {
 func (r *NodeRuntime) stateVersionValue(key string, version uint64) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if version == 0 {
-		return r.stateVersionInitial[key], true
-	}
-	values := r.stateVersionValues[key]
-	if values == nil {
-		return "", false
-	}
-	value, ok := values[version]
-	return value, ok
+	return r.stateVersionValueLocked(key, version)
 }
 
 // waitForLocalStateVersion implements MetaTrack StateReady semantics for an
@@ -3809,16 +4100,18 @@ func (r *NodeRuntime) stateVersionValue(key string, version uint64) (string, boo
 // failure. The wait ends only when the version is published or the enclosing
 // run/block context is cancelled.
 func (r *NodeRuntime) waitForLocalStateVersion(ctx context.Context, key string, version uint64) (string, error) {
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
 	for {
-		if value, ready := r.stateVersionValue(key, version); ready {
+		r.mu.Lock()
+		if value, ready := r.stateVersionValueLocked(key, version); ready {
+			r.mu.Unlock()
 			return value, nil
 		}
+		signal := r.stateVersionSignalLocked(key, version)
+		r.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case <-ticker.C:
+		case <-signal:
 		}
 	}
 }
@@ -3834,17 +4127,31 @@ func (r *NodeRuntime) publishStateVersionLocked(key string, version uint64, valu
 		r.stateVersionValues[key] = map[uint64]string{}
 	}
 	if existing, ok := r.stateVersionValues[key][version]; ok && existing != value {
-		// A consensus/workload version must be single-valued. Preserve the first
-		// publication so a duplicate network delivery cannot rewrite history.
 		return
 	}
 	r.stateVersionValues[key][version] = value
+	waitKey := stateVersionWaitKey(key, version)
+	if signal := r.stateVersionSignals[waitKey]; signal != nil {
+		close(signal)
+		delete(r.stateVersionSignals, waitKey)
+	}
 }
 
 func (r *NodeRuntime) publishStateVersion(key string, version uint64, value string) {
 	r.mu.Lock()
 	r.publishStateVersionLocked(key, version, value)
+	subscriptions := r.takeStateVersionRemoteSubscriptionsLocked(key, version)
+	workerCtx := r.stateFetchWorkerContext
 	r.mu.Unlock()
+	if len(subscriptions) == 0 {
+		return
+	}
+	if workerCtx == nil {
+		workerCtx = context.Background()
+	}
+	if err := r.notifyStateVersionRemoteSubscriptions(workerCtx, key, version, value, subscriptions); err != nil && workerCtx.Err() == nil {
+		r.recordStateFetchWorkerError(err)
+	}
 }
 
 func (r *NodeRuntime) stateVersionPublisher(block realblock.Block) StateVersionPublishFunc {
@@ -3888,7 +4195,12 @@ func (r *NodeRuntime) publishTransactionStateVersions(ctx context.Context, block
 			r.publishStateVersion(dependency.Key, dependency.ProducedVersion, value)
 			continue
 		}
-		if !r.isCurrentLeader() {
+		// Exact-version publication ownership must remain stable even if PBFT
+		// changes view while this already-consensus-bound block is executing.
+		// The original block proposer remains an owner; the current leader is a
+		// bounded failover owner. Home-side stateDeltaApplyKey deduplicates an
+		// identical duplicate publication from those at-most-two validators.
+		if r.node.NodeID != block.ProposerID && !r.isCurrentLeader() {
 			continue
 		}
 		versionItem := state.StateKV{
@@ -3969,8 +4281,6 @@ func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Bloc
 		deadline = deadlineTimer.C
 		defer deadlineTimer.Stop()
 	}
-	retry := time.NewTicker(20 * time.Millisecond)
-	defer retry.Stop()
 	for {
 		select {
 		case response := <-waiter:
@@ -3982,13 +4292,6 @@ func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Bloc
 			}
 			outcome = "response_error"
 			return response, time.Since(start), fmt.Errorf("remote state fetch failed: %s", response.Error)
-		case <-retry.C:
-			if versioned {
-				if err := send(); err != nil {
-					outcome = "retry_send_error"
-					return StateFetchResponse{}, time.Since(start), err
-				}
-			}
 		case <-deadline:
 			outcome = "timeout"
 			return StateFetchResponse{}, time.Since(start), fmt.Errorf("remote state fetch timed out for %s version %d from %s", access.Key, requiredVersion, homeShard)
@@ -4007,11 +4310,21 @@ func (r *NodeRuntime) handleStateFetchRequest(ctx context.Context, requester str
 		return r.enqueueStateFetchResponse(ctx, requester, response)
 	}
 	if request.Versioned {
-		value, ready := r.stateVersionValue(request.Key, request.RequiredVersion)
-		response := StateFetchResponse{RequestID: request.RequestID, TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, Value: value, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: r.plugins.StateStorage.Root(r.db), StateVersion: request.RequiredVersion, Versioned: true, Success: ready}
+		r.mu.Lock()
+		value, ready := r.stateVersionValueLocked(request.Key, request.RequiredVersion)
 		if !ready {
-			response.Error = "state_version_not_ready"
+			if request.AccessKind == statelessVersionAdmissionProbeAccessKind {
+				r.mu.Unlock()
+				response := StateFetchResponse{RequestID: request.RequestID, TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateVersion: request.RequiredVersion, Versioned: true, Success: false, Error: "state_version_not_ready"}
+				response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
+				return r.enqueueStateFetchResponse(ctx, requester, response)
+			}
+			r.registerStateVersionRemoteSubscriptionLocked(requester, request)
+			r.mu.Unlock()
+			return nil
 		}
+		r.mu.Unlock()
+		response := StateFetchResponse{RequestID: request.RequestID, TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, Value: value, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: r.plugins.StateStorage.Root(r.db), StateVersion: request.RequiredVersion, Versioned: true, Success: true}
 		response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
 		return r.enqueueStateFetchResponse(ctx, requester, response)
 	}

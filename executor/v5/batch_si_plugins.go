@@ -81,26 +81,11 @@ func (p batchSIScheduler) PlanBlock(block realblock.Block) (ConsensusExecutionPl
 	for _, item := range block.TxList {
 		block.TxIDs = append(block.TxIDs, item.TxID)
 	}
-	// The consensus-bound accepted-set plan preserves the ordering node's
-	// original paper T.id ordinals even after OFAS has reordered transactions.
-	// Candidate-only deferrals are released to the mempool and do not receive
-	// new ordinals on the accepted block.
-	acceptedOrdinals := make(map[string]int, len(block.TxList))
-	for _, item := range block.TxList {
-		ordinal := planned.Plan.TransactionOrdinals[item.TxID]
-		if ordinal < 1 {
-			return ConsensusExecutionPlanningResult{}, fmt.Errorf("batch-si missing original paper transaction ordinal for %s", item.TxID)
-		}
-		acceptedOrdinals[item.TxID] = ordinal
-	}
-	acceptedPlan, err := execution.BuildBatchSIPlanWithOrdinals(block, config, acceptedOrdinals)
-	if err != nil {
-		return ConsensusExecutionPlanningResult{}, err
-	}
-	if len(acceptedPlan.Deferred) != 0 || len(acceptedPlan.Ordered) != len(block.TxList) {
-		return ConsensusExecutionPlanningResult{}, fmt.Errorf("batch-si accepted-set plan is not closed")
-	}
-	raw, err := execution.MarshalBatchSIPlan(acceptedPlan.Plan)
+	// The exact first-pass AWRT -> WRBP -> OFAS result is consensus-bound.
+	// Candidate TxID order plus deferred signed transactions remain in the plan as
+	// verification evidence; accepted transactions stay only in the block body. The
+	// accepted block is the fixed projection of the first pass, not a second WRBP run.
+	raw, err := execution.MarshalBatchSIPlan(planned.Plan)
 	if err != nil {
 		return ConsensusExecutionPlanningResult{}, err
 	}
@@ -108,7 +93,7 @@ func (p batchSIScheduler) PlanBlock(block realblock.Block) (ConsensusExecutionPl
 	block.ExecutionPlan = &realblock.ExecutionPlanEnvelope{
 		AlgorithmID:   execution.BatchSIPlanAlgorithmID,
 		PayloadDigest: payloadDigest,
-		PlanDigest:    acceptedPlan.Plan.PlanDigest,
+		PlanDigest:    planned.Plan.PlanDigest,
 		Payload:       append(json.RawMessage(nil), raw...),
 	}
 	return ConsensusExecutionPlanningResult{
@@ -174,12 +159,24 @@ func (p batchSIBlockExecutor) Validate(_ map[string]any) error {
 
 func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
 	config := batchSIConfigFromPlugin(p.config, input.WorkerCount)
+	if input.Block.ExecutionPlan == nil || input.Block.ExecutionPlan.AlgorithmID != execution.BatchSIPlanAlgorithmID {
+		return BlockExecutionResult{}, fmt.Errorf("batch-si execution plan is missing before execution")
+	}
+	consensusPlan, err := execution.ParseBatchSIPlan(input.Block.ExecutionPlan.Payload)
+	if err != nil {
+		return BlockExecutionResult{}, err
+	}
 	executor := execution.NewBatchSIExecutor(config)
 	result, err := executor.ExecuteBlock(ctx, input.Block, input.BaseStateSnapshot)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
 	metrics := executor.Metrics
+	deferredTxIDs := make([]string, 0, len(consensusPlan.DeferredTransactions))
+	for _, item := range consensusPlan.DeferredTransactions {
+		deferredTxIDs = append(deferredTxIDs, item.TxID)
+	}
+	acceptedTxIDs := transactionIDs(input.Block.TxList)
 	actual := map[string]any{
 		"batch_si_metrics":                        metrics,
 		"configured_worker_count":                 metrics.WorkerCount,
@@ -191,8 +188,14 @@ func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 		"awrt_write_reference_count":              metrics.AWRTWriteReferenceCount,
 		"write_opportunity_reuse_count":           metrics.WriteOpportunityReuseCount,
 		"dependency_edge_count":                   metrics.DependencyEdgeCount,
-		"abort_count":                             metrics.OFASAbortedTransactionCount,
+		"abort_count":                             0,
 		"deferred_transaction_count":              metrics.OFASAbortedTransactionCount,
+		"batch_si_first_pass_candidate_count":     metrics.CandidateTransactionCount,
+		"batch_si_first_pass_accepted_count":      metrics.AcceptedTransactionCount,
+		"batch_si_first_pass_ofas_abort_count":    metrics.FirstPassOFASAbortedTransactionCount,
+		"batch_si_first_pass_ofas_abort_rate":     batchSIRatio(metrics.FirstPassOFASAbortedTransactionCount, metrics.CandidateTransactionCount),
+		"batch_si_deferred_tx_ids":                deferredTxIDs,
+		"batch_si_accepted_tx_ids":                acceptedTxIDs,
 		"planning_iteration_count":                metrics.PlanningIterationCount,
 		"batch_snapshot_count":                    metrics.SnapshotCount,
 		"batch_snapshot_create_ms":                metrics.BatchSnapshotCreateMS,
@@ -216,6 +219,13 @@ func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 		DeterministicApplyMS:   metrics.DeterministicMaterializationMS,
 		ActualMetrics:          actual,
 	}, nil
+}
+
+func batchSIRatio(numerator, denominator int) float64 {
+	if denominator <= 0 {
+		return 0
+	}
+	return float64(numerator) / float64(denominator)
 }
 
 func batchSIConfigFromPlugin(config map[string]any, workerFallback int) execution.BatchSIConfig {

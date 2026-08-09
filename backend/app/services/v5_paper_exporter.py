@@ -652,10 +652,31 @@ def _group_key(child: dict, base_workload: dict) -> tuple:
     )
 
 
+def _eligible_for_within_method_sensitivity(child: dict) -> bool:
+    # A within-method theta/scale trend does not require a second method in the
+    # same semantic cohort.  Keep this exception deliberately narrow: only an
+    # otherwise individually valid/formally eligible sample excluded solely
+    # because its cohort has insufficient comparison runs is admitted here.
+    if child.get("suite_type") != "workload_sensitivity":
+        return _sample_status_for_child(child) == "paper_eligible"
+    if child.get("execution_status", child.get("status")) != "completed":
+        return False
+    if child.get("formal_eligibility") is not True:
+        return False
+    if _individual_result_reasons(child):
+        return False
+    if child.get("paper_candidate") is not False:
+        return True
+    return str(child.get("comparison_eligibility_status") or "").strip() == "insufficient_valid_runs"
+
+
 def _aggregate(key: tuple, entries: list[dict]) -> dict:
     suite, method_id, method_name, role, scan_variable, scan_value, nodes, shards, validators, worker_count, tx_count, ratio, timeout, fault, block_size, block_interval_ms, changed = key
     observed_completed = [entry for entry in entries if entry.get("status") == "completed"]
-    completed = [entry for entry in entries if _sample_status_for_child(entry) == "paper_eligible"]
+    if suite == "workload_sensitivity":
+        completed = [entry for entry in entries if _eligible_for_within_method_sensitivity(entry)]
+    else:
+        completed = [entry for entry in entries if _sample_status_for_child(entry) == "paper_eligible"]
     completed_invalid = [entry for entry in observed_completed if _sample_status_for_child(entry) == "completed_invalid"]
     blocked = [entry for entry in entries if entry.get("status") == "blocked" or entry.get("execution_status") == "blocked_incompatible_workload"]
     failed = [entry for entry in entries if _sample_status_for_child(entry) == "execution_failed" and entry not in blocked]

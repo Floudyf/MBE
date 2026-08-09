@@ -27,6 +27,7 @@ import WorkloadSourceEditor, { type WorkloadEditorState } from "../components/v5
 import { backendLabel, blockerLabel, faultModeLabel, statusLabel, suiteLabel } from "../v5Labels";
 import { BATCH_SI_ABLATION_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
 import { V5_BUILTIN_METHODS, V5_DEFAULT_METHOD_IDS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
+import { buildThetaSweepPoints, compactCount, thetaOptionsForDataset, type SkewExperimentPreset } from "../v5SkewExperiment"; // V5_SKEW_MAIN_PRESET_V1
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
 const groundhogMethodId = "hash_groundhog";
@@ -76,6 +77,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   const [topology, setTopology] = useState<Topology>({ nodes: 8, shards: 2, validators_per_shard: 4 });
   const [blockProduction, setBlockProduction] = useState<BlockProduction>({ block_size: 100, block_interval_ms: 75 });
   const [workload, setWorkload] = useState<WorkloadEditorState>(defaultWorkload);
+  const [skewPreset, setSkewPreset] = useState<SkewExperimentPreset>("single_theta");
   const [repeats, setRepeats] = useState(1);
   const [workloadPoints, setWorkloadPoints] = useState<WorkloadPoint[]>([]);
   const [topologyPoints, setTopologyPoints] = useState<TopologyPoint[]>([]);
@@ -99,6 +101,9 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
 
   const methods = useMemo(() => V5_BUILTIN_METHODS, []);
   const seeds = useMemo(() => parseSeeds(workload.seedText), [workload.seedText]);
+  const thetaOptions = useMemo(() => thetaOptionsForDataset(datasets, workload.datasetId, workload.variantMode), [datasets, workload.datasetId, workload.variantMode]);
+  const thetaMainActive = skewPreset === "theta_main" && workload.mode === "dataset_derived" && thetaOptions.length > 1;
+  const thetaMainTransactionsPerMethod = thetaOptions.length * workload.txCount;
   const catalogReady = useMemo(() => {
     const categories = new Set(catalog.map((item) => item.category));
     return catalog.length > 0 && defaultV5PluginSelections(catalog).length === categories.size;
@@ -164,9 +169,43 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
     setMethodCompatibility({});
   }
   function update(fn: () => void) { fn(); invalidateAll(); }
-  function updateWorkload(next: WorkloadEditorState) { setWorkload(next); invalidateAll(); }
+  function updateWorkload(next: WorkloadEditorState) {
+    setWorkload(next);
+    if (skewPreset === "theta_main") {
+      const values = thetaOptionsForDataset(datasets, next.datasetId, next.variantMode);
+      if (next.mode === "dataset_derived" && values.length > 1) {
+        setSelectedSuite("workload_sensitivity");
+        setWorkloadPoints(buildThetaSweepPoints(next.txCount, values));
+      } else {
+        setSkewPreset("single_theta");
+        setWorkloadPoints([]);
+      }
+    }
+    invalidateAll();
+  }
+  function selectSkewPreset(next: SkewExperimentPreset) {
+    if (next === "theta_main") {
+      const values = thetaOptionsForDataset(datasets, workload.datasetId, workload.variantMode);
+      if (values.length < 2) { setError("当前真实派生负载没有可展开的 target_theta 扫描点。"); return; }
+      setSkewPreset(next);
+      setSelectedSuite("workload_sensitivity");
+      setWorkloadPoints(buildThetaSweepPoints(workload.txCount, values));
+      const visible = selectedMethods.filter((methodId) => methodDefinition(methodId)?.comparisonVisible);
+      setSelectedMethods(visible.length ? visible : [...V5_DEFAULT_METHOD_IDS]);
+    } else {
+      setSkewPreset(next);
+      if (selectedSuite === "workload_sensitivity") {
+        setSelectedSuite("comparison_experiment");
+        setWorkloadPoints([]);
+        const visible = selectedMethods.filter((methodId) => methodDefinition(methodId)?.comparisonVisible);
+        setSelectedMethods(visible.length ? visible : [...V5_DEFAULT_METHOD_IDS]);
+      }
+    }
+    invalidateAll();
+  }
 
   function selectSuite(suite: V5FormalSuite) {
+    if (suite !== "workload_sensitivity" && skewPreset === "theta_main") setSkewPreset("single_theta");
     setSelectedSuite(suite);
     if (suite === "workload_sensitivity" && workloadPoints.length < 2) {
       const base = defaultWorkloadPoint(workload);
@@ -482,6 +521,14 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
     </article>
 
     <WorkloadSourceEditor state={workload} datasets={datasets} onChange={updateWorkload} />
+    {workload.mode === "dataset_derived" && thetaOptions.length > 1 && <article className="final-card wide" data-testid="v5-skew-main-preset-panel">
+      <div className="section-heading"><div><h3>真实派生/重构负载 · 实验预设</h3><p className="muted">偏斜度主实验直接使用数据集 manifest 已注册的 target_theta 档位，不生成或插值不存在的负载。</p></div></div>
+      <div className="experiment-condition-grid">
+        <label><span>实验预设</span><select data-testid="v5-skew-experiment-preset" value={skewPreset} onChange={(event) => selectSkewPreset(event.target.value as SkewExperimentPreset)}><option value="single_theta">单偏斜度实验</option><option value="theta_main">偏斜度主实验（θ={thetaOptions[0].toFixed(1)}–{thetaOptions[thetaOptions.length - 1].toFixed(1)}，共 {thetaOptions.length} 点）</option></select></label>
+        {thetaMainActive && <><div className="readonly-field"><span>每个偏斜度交易规模</span><strong>{compactCount(workload.txCount)}</strong></div><div className="readonly-field"><span>偏斜度点数</span><strong>{thetaOptions.length}</strong></div><div className="readonly-field"><span>单方法总交易量</span><strong>{compactCount(thetaMainTransactionsPerMethod)}</strong></div></>}
+      </div>
+      {thetaMainActive && <p className="notice" data-testid="v5-skew-main-summary">已自动切换到负载敏感性实验并生成 {thetaOptions.length} 个独立 child 点：{thetaOptions.map((value) => `θ=${value.toFixed(1)}`).join("、")}。当前“交易规模”按每个 θ 解释；正式矩阵不会把这些点拼成一个大 trace。</p>}
+    </article>}
 
     <article className="final-card wide">
       <h3>Block Production</h3>
@@ -517,7 +564,9 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
 
     <WorkloadPreviewPanel preview={workloadPreview} dirty={workloadPreviewDirty} error={workloadPreviewError} onPreview={() => void previewWorkload()} disabled={busy} />
 
-    {selectedSuite === "workload_sensitivity" && <PointEditor title="负载扫描点" onAdd={() => update(() => setWorkloadPoints((items) => [...items, defaultWorkloadPoint(workload)]))}>{workloadPoints.map((point, index) => <div key={index} className="experiment-condition-grid">
+    {selectedSuite === "workload_sensitivity" && thetaMainActive && <article className="final-card wide" data-testid="v5-auto-theta-points"><div className="section-heading"><div><h3>自动偏斜度扫描点</h3><p className="muted">预设锁定为 manifest 中的 {thetaOptions.length} 个 θ 点；需要手动编辑时切回“单偏斜度实验”。</p></div></div><p>{thetaOptions.map((value) => `θ=${value.toFixed(1)} / ${compactCount(workload.txCount)}`).join("；")}</p></article>}
+
+    {selectedSuite === "workload_sensitivity" && !thetaMainActive && <PointEditor title="负载扫描点" onAdd={() => update(() => setWorkloadPoints((items) => [...items, defaultWorkloadPoint(workload)]))}>{workloadPoints.map((point, index) => <div key={index} className="experiment-condition-grid">
       <NumericInput label="交易数量" value={point.tx_count} onChange={(value) => update(() => setWorkloadPoints(replace(workloadPoints, index, { ...point, tx_count: value })))} />
       {workload.mode === "dataset_derived" && typeof workload.variantParameters.target_alpha === "number" && <NumericInput label="target_alpha" value={point.target_alpha ?? workload.targetAlpha} step={0.2} onChange={(value) => update(() => setWorkloadPoints(replace(workloadPoints, index, { ...point, target_alpha: snapAlpha(value) })))} />}
       {workload.mode === "dataset_derived" && typeof workload.variantParameters.target_theta === "number" && <NumericInput label="target_theta" value={point.target_theta ?? Number(workload.variantParameters.target_theta)} step={0.1} min={0} max={1.2} onChange={(value) => update(() => setWorkloadPoints(replace(workloadPoints, index, { ...point, target_theta: Math.round(value * 10) / 10 })))} />}

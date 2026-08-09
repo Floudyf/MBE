@@ -18,35 +18,41 @@ type StateVersionDependency struct {
 }
 
 type ExecutionRoutingMetadata struct {
-	SenderID              string                   `json:"sender_id"`
-	ReceiverID            string                   `json:"receiver_id"`
-	RoutingEpoch          uint64                   `json:"routing_epoch"`
-	RoutingOrdinal        uint64                   `json:"routing_ordinal"`
-	ExecutionShard        string                   `json:"execution_shard"`
-	RoutingReason         string                   `json:"routing_reason"`
-	RoutePlanDigest       string                   `json:"route_plan_digest"`
-	RouteEntryDigest      string                   `json:"route_entry_digest"`
-	PredictedRemoteReads  int                      `json:"predicted_remote_reads"`
-	PredictedRemoteWrites int                      `json:"predicted_remote_writes"`
-	StateVersions         []StateVersionDependency `json:"state_versions,omitempty"`
+	SenderID                        string                   `json:"sender_id"`
+	ReceiverID                      string                   `json:"receiver_id"`
+	RoutingEpoch                    uint64                   `json:"routing_epoch"`
+	RoutingOrdinal                  uint64                   `json:"routing_ordinal"`
+	ExecutionShard                  string                   `json:"execution_shard"`
+	RoutingReason                   string                   `json:"routing_reason"`
+	RoutePlanDigest                 string                   `json:"route_plan_digest"`
+	RouteBatchSequence              uint64                   `json:"route_batch_sequence,omitempty"`
+	RouteBatchTransactionCount      int                      `json:"route_batch_transaction_count,omitempty"`
+	RouteBatchShardTransactionCount int                      `json:"route_batch_shard_transaction_count,omitempty"`
+	RouteEntryDigest                string                   `json:"route_entry_digest"`
+	PredictedRemoteReads            int                      `json:"predicted_remote_reads"`
+	PredictedRemoteWrites           int                      `json:"predicted_remote_writes"`
+	StateVersions                   []StateVersionDependency `json:"state_versions,omitempty"`
 }
 
 type executionRoutingDigestPayload struct {
-	SenderID              string                   `json:"sender_id"`
-	ReceiverID            string                   `json:"receiver_id"`
-	Nonce                 uint64                   `json:"nonce"`
-	StateKeys             []string                 `json:"state_keys"`
-	AccessListDigest      string                   `json:"access_list_digest"`
-	Payload               string                   `json:"payload"`
-	RoutingEpoch          uint64                   `json:"routing_epoch"`
-	RoutingOrdinal        uint64                   `json:"routing_ordinal"`
-	ExecutionShard        string                   `json:"execution_shard"`
-	RoutingReason         string                   `json:"routing_reason"`
-	RoutePlanDigest       string                   `json:"route_plan_digest"`
-	PredictedRemoteReads  int                      `json:"predicted_remote_reads"`
-	PredictedRemoteWrites int                      `json:"predicted_remote_writes"`
-	StateVersions         []StateVersionDependency `json:"state_versions,omitempty"`
-	AccessList            []AccessItem             `json:"access_list,omitempty"`
+	SenderID                        string                   `json:"sender_id"`
+	ReceiverID                      string                   `json:"receiver_id"`
+	Nonce                           uint64                   `json:"nonce"`
+	StateKeys                       []string                 `json:"state_keys"`
+	AccessListDigest                string                   `json:"access_list_digest"`
+	Payload                         string                   `json:"payload"`
+	RoutingEpoch                    uint64                   `json:"routing_epoch"`
+	RoutingOrdinal                  uint64                   `json:"routing_ordinal"`
+	ExecutionShard                  string                   `json:"execution_shard"`
+	RoutingReason                   string                   `json:"routing_reason"`
+	RoutePlanDigest                 string                   `json:"route_plan_digest"`
+	RouteBatchSequence              uint64                   `json:"route_batch_sequence,omitempty"`
+	RouteBatchTransactionCount      int                      `json:"route_batch_transaction_count,omitempty"`
+	RouteBatchShardTransactionCount int                      `json:"route_batch_shard_transaction_count,omitempty"`
+	PredictedRemoteReads            int                      `json:"predicted_remote_reads"`
+	PredictedRemoteWrites           int                      `json:"predicted_remote_writes"`
+	StateVersions                   []StateVersionDependency `json:"state_versions,omitempty"`
+	AccessList                      []AccessItem             `json:"access_list,omitempty"`
 }
 
 // ComputeExecutionRoutingDigest binds a route entry to the signed transaction
@@ -54,21 +60,24 @@ type executionRoutingDigestPayload struct {
 // digest deliberately excludes TxID and Signature to avoid a circular hash.
 func ComputeExecutionRoutingDigest(t SignedTransaction, routing ExecutionRoutingMetadata) (string, error) {
 	payload := executionRoutingDigestPayload{
-		SenderID:              t.Sender,
-		ReceiverID:            t.Receiver,
-		Nonce:                 t.Nonce,
-		StateKeys:             append([]string(nil), t.StateKeys...),
-		AccessListDigest:      t.AccessListDigest,
-		Payload:               t.Payload,
-		RoutingEpoch:          routing.RoutingEpoch,
-		RoutingOrdinal:        routing.RoutingOrdinal,
-		ExecutionShard:        routing.ExecutionShard,
-		RoutingReason:         routing.RoutingReason,
-		RoutePlanDigest:       routing.RoutePlanDigest,
-		PredictedRemoteReads:  routing.PredictedRemoteReads,
-		PredictedRemoteWrites: routing.PredictedRemoteWrites,
-		StateVersions:         append([]StateVersionDependency(nil), routing.StateVersions...),
-		AccessList:            append([]AccessItem(nil), t.AccessList...),
+		SenderID:                        t.Sender,
+		ReceiverID:                      t.Receiver,
+		Nonce:                           t.Nonce,
+		StateKeys:                       append([]string(nil), t.StateKeys...),
+		AccessListDigest:                t.AccessListDigest,
+		Payload:                         t.Payload,
+		RoutingEpoch:                    routing.RoutingEpoch,
+		RoutingOrdinal:                  routing.RoutingOrdinal,
+		ExecutionShard:                  routing.ExecutionShard,
+		RoutingReason:                   routing.RoutingReason,
+		RoutePlanDigest:                 routing.RoutePlanDigest,
+		RouteBatchSequence:              routing.RouteBatchSequence,
+		RouteBatchTransactionCount:      routing.RouteBatchTransactionCount,
+		RouteBatchShardTransactionCount: routing.RouteBatchShardTransactionCount,
+		PredictedRemoteReads:            routing.PredictedRemoteReads,
+		PredictedRemoteWrites:           routing.PredictedRemoteWrites,
+		StateVersions:                   append([]StateVersionDependency(nil), routing.StateVersions...),
+		AccessList:                      append([]AccessItem(nil), t.AccessList...),
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -100,6 +109,12 @@ func ValidateExecutionRouting(t SignedTransaction) error {
 	}
 	if strings.TrimSpace(routing.RoutePlanDigest) == "" {
 		return fmt.Errorf("invalid execution routing route_plan_digest")
+	}
+	batchMetadataPresent := routing.RouteBatchSequence != 0 || routing.RouteBatchTransactionCount != 0 || routing.RouteBatchShardTransactionCount != 0
+	if batchMetadataPresent {
+		if routing.RouteBatchSequence == 0 || routing.RouteBatchTransactionCount <= 0 || routing.RouteBatchShardTransactionCount <= 0 || routing.RouteBatchShardTransactionCount > routing.RouteBatchTransactionCount {
+			return fmt.Errorf("invalid execution routing route batch metadata")
+		}
 	}
 	if routing.PredictedRemoteReads < 0 || routing.PredictedRemoteWrites < 0 {
 		return fmt.Errorf("invalid execution routing remote-access prediction")

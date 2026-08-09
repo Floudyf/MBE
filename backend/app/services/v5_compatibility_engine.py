@@ -196,7 +196,9 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
                 blockers.append(f"Batch-SI scheduler and executor {key} must match")
         if ratio != 0:
             blockers.append("Batch-SI core reproduction requires cross_shard_ratio=0")
-        warnings.append("Batch-SI runs independently inside each selected shard; batches are sequential and transactions inside one batch use a common immutable snapshot")
+        if spec.topology.shards != 1:
+            blockers.append("Batch-SI core literature reproduction requires exactly 1 shard; multi-shard Batch-SI must be labeled as an extension")
+        warnings.append("Batch-SI literature baseline uses one shard; batches are sequential and transactions inside one batch use a common immutable snapshot")
     if spec.execution_backend == "real_cluster" and blockers:
         warnings.append("real_cluster is blocked and will not fall back to simulation or V4 smoke")
     estimate = {**RESOURCE_POLICY, "estimated_processes": spec.topology.nodes, "estimated_ports": spec.topology.nodes, "estimate_only": True}

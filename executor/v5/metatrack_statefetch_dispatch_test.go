@@ -78,22 +78,10 @@ func TestMetaTrackVersionedRemoteFetchTreatsNotReadyAsSuspension(t *testing.T) {
 		t.Fatal(err)
 	}
 	remoteKey := keyWithHomeShard(t, "s0", []string{"s0", "s1"})
-	item := tx.SignedTransaction{
-		TxID:             "versioned-not-ready-then-ready",
-		Sender:           "alice",
-		Receiver:         "bob",
-		StateKeys:        []string{remoteKey},
-		AccessListSchema: "mbe_workload_record_v3",
-		AccessListSource: "test_exact_version_state_ready",
-		AccessList:       []tx.AccessItem{{Key: remoteKey, Mode: tx.AccessRead, UpdateSemantics: "validate"}},
-		ExecutionRouting: &tx.ExecutionRoutingMetadata{
-			RoutingOrdinal: 18,
-			ExecutionShard: "s1",
-			StateVersions:  []tx.StateVersionDependency{{Key: remoteKey, RequiredVersion: 17}},
-		},
-	}
+	item := tx.SignedTransaction{TxID: "versioned-not-ready-then-ready", Sender: "alice", Receiver: "bob", StateKeys: []string{remoteKey}, AccessListSchema: "mbe_workload_record_v3", AccessListSource: "test_exact_version_state_ready", AccessList: []tx.AccessItem{{Key: remoteKey, Mode: tx.AccessRead, UpdateSemantics: "validate"}}, ExecutionRouting: &tx.ExecutionRoutingMetadata{RoutingOrdinal: 18, ExecutionShard: "s1", StateVersions: []tx.StateVersionDependency{{Key: remoteKey, RequiredVersion: 17}}}}
 	block := realblock.Block{ShardID: "s1", Height: 2, PreviousHash: "b1", ProposerID: "n1", Timestamp: nowForTest().UnixMilli(), TxIDs: []string{item.TxID}, TxList: []tx.SignedTransaction{item}}
 	realblock.AssignHash(&block)
+	requestSent := make(chan StateFetchRequest, 2)
 	attempts := 0
 	runtime.sendToNodeHook = func(_ context.Context, _ string, message p2p.MessageEnvelope) error {
 		if message.MessageType != stateFetchRequestMessage {
@@ -104,34 +92,38 @@ func TestMetaTrackVersionedRemoteFetchTreatsNotReadyAsSuspension(t *testing.T) {
 			return err
 		}
 		attempts++
-		response := StateFetchResponse{
-			RequestID:      request.RequestID,
-			TxID:           request.TxID,
-			BlockHash:      request.BlockHash,
-			Key:            request.Key,
-			QualifiedKey:   request.HomeShard + "::" + request.Key,
-			HomeShard:      request.HomeShard,
-			ExecutionShard: request.ExecutionShard,
-			StateVersion:   request.RequiredVersion,
-			Versioned:      request.Versioned,
-			Success:        attempts >= 4,
-		}
-		if response.Success {
-			response.Value = "v17"
-		} else {
-			response.Error = "state_version_not_ready"
-		}
-		runtime.handleStateFetchResponse(response)
+		requestSent <- request
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	response, _, err := runtime.fetchRemoteState(ctx, block, item, item.AccessList[0], "s0")
-	if err != nil {
-		t.Fatalf("temporary state_version_not_ready must suspend and retry, got %v", err)
+	type fetchResult struct {
+		response StateFetchResponse
+		err      error
 	}
-	if response.Value != "v17" || response.StateVersion != 17 || attempts < 4 {
-		t.Fatalf("versioned StateReady did not retry until exact version became ready: response=%+v attempts=%d", response, attempts)
+	done := make(chan fetchResult, 1)
+	go func() {
+		response, _, err := runtime.fetchRemoteState(ctx, block, item, item.AccessList[0], "s0")
+		done <- fetchResult{response, err}
+	}()
+	var request StateFetchRequest
+	select {
+	case request = <-requestSent:
+	case <-ctx.Done():
+		t.Fatalf("initial request missing: %v", ctx.Err())
+	}
+	time.Sleep(80 * time.Millisecond)
+	if attempts != 1 {
+		t.Fatalf("versioned StateReady polled/retransmitted: attempts=%d", attempts)
+	}
+	runtime.handleStateFetchResponse(StateFetchResponse{RequestID: request.RequestID, TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: "s0::" + request.Key, Value: "v17", HomeShard: "s0", ExecutionShard: "s1", StateVersion: 17, Versioned: true, Success: true})
+	select {
+	case got := <-done:
+		if got.err != nil || got.response.Value != "v17" || got.response.StateVersion != 17 {
+			t.Fatalf("event-driven resume failed: response=%+v err=%v", got.response, got.err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("fetch remained blocked after publication: %v", ctx.Err())
 	}
 }
 

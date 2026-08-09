@@ -63,6 +63,10 @@ BATCH_SI_REQUIRED_METRICS = [
     "write_opportunity_reuse_count",
     "dependency_edge_count",
     "deferred_transaction_count",
+    "batch_si_first_pass_candidate_count",
+    "batch_si_first_pass_accepted_count",
+    "batch_si_first_pass_ofas_abort_count",
+    "batch_si_first_pass_ofas_abort_rate",
     "batch_snapshot_create_ms",
 ]
 
@@ -210,9 +214,22 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
 
     scheduler_metrics = _read_scheduler_metrics(run_dir / "metatrack_scheduler_trace.csv")
     if scheduler_metrics:
+        # Scheduler traces are optional diagnostics.  Preserve consensus-bound
+        # Batch-SI accepted/deferred identity evidence when it is available so
+        # a truncated/omitted trace cannot change formal unique-deferral counts.
+        consensus_deferral_evidence = {
+            key: metrics.get(key)
+            for key in (
+                "batch_si_deferred_identity_evidence_available",
+                "batch_si_deferred_event_count",
+                "batch_si_unique_deferred_tx_count",
+                "batch_si_unique_deferral_rate",
+                "batch_si_mean_deferrals_per_finalized_tx",
+            )
+            if metrics.get("batch_si_deferred_identity_evidence_available") is True
+        }
         metrics.update(scheduler_metrics)
-        if str(method_id or "").startswith("hash_batch_si") or metrics.get("block_executor_id") == "batch_si_block_executor":
-            metrics["abort_count"] = scheduler_metrics.get("batch_si_deferred_transaction_count", 0)
+        metrics.update(consensus_deferral_evidence)
 
     _derive_update_metrics(metrics)
     _apply_metric_completeness(metrics, method_id=method_id)
@@ -312,6 +329,27 @@ def _apply_batch_si_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     def total(name: str) -> int:
         return sum(_int(block.get(name)) for block in blocks)
 
+    # Consensus-bound Batch-SI plans persist accepted/deferred identities in
+    # each committed block summary.  This evidence survives even when the
+    # optional scheduler trace is omitted from a formal artifact bundle.
+    identity_evidence_available = bool(blocks) and all(
+        isinstance(block.get("batch_si_deferred_tx_ids"), list)
+        and isinstance(block.get("batch_si_accepted_tx_ids"), list)
+        for block in blocks
+    )
+    deferred_tx_ids = {
+        str(tx_id)
+        for block in blocks
+        for tx_id in (block.get("batch_si_deferred_tx_ids") or [])
+        if str(tx_id)
+    } if identity_evidence_available else set()
+    accepted_tx_ids = {
+        str(tx_id)
+        for block in blocks
+        for tx_id in (block.get("batch_si_accepted_tx_ids") or [])
+        if str(tx_id)
+    } if identity_evidence_available else set()
+
     # OFAS cycle victims are part of the per-block Batch-SI execution summary.
     # Count them from one leader per shard, just like the other Batch-SI plan
     # metrics.  The runtime writes both keys today; the abort_count fallback
@@ -335,7 +373,30 @@ def _apply_batch_si_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "write_opportunity_reuse_count": total("write_opportunity_reuse_count"),
         "dependency_edge_count": total("dependency_edge_count"),
         "deferred_transaction_count": deferred_transaction_count,
-        "abort_count": deferred_transaction_count,
+        "batch_si_first_pass_candidate_count": total("batch_si_first_pass_candidate_count"),
+        "batch_si_first_pass_accepted_count": total("batch_si_first_pass_accepted_count"),
+        "batch_si_first_pass_ofas_abort_count": total("batch_si_first_pass_ofas_abort_count"),
+        "batch_si_first_pass_ofas_abort_rate": (
+            total("batch_si_first_pass_ofas_abort_count") / total("batch_si_first_pass_candidate_count")
+            if total("batch_si_first_pass_candidate_count")
+            else 0
+        ),
+        "batch_si_deferred_identity_evidence_available": identity_evidence_available,
+        "batch_si_deferred_event_count": total("batch_si_first_pass_ofas_abort_count"),
+        "batch_si_unique_deferred_tx_count": len(deferred_tx_ids) if identity_evidence_available else None,
+        "batch_si_unique_deferral_rate": (
+            len(deferred_tx_ids) / len(accepted_tx_ids)
+            if identity_evidence_available and accepted_tx_ids
+            else None
+        ),
+        "batch_si_mean_deferrals_per_finalized_tx": (
+            total("batch_si_first_pass_ofas_abort_count") / len(accepted_tx_ids)
+            if identity_evidence_available and accepted_tx_ids
+            else None
+        ),
+        # Accepted Batch-SI blocks execute without a second in-block abort.
+        # OFAS victims are proposal deferrals and are reported above separately.
+        "abort_count": 0,
         "planning_iteration_count": total("planning_iteration_count"),
         "batch_snapshot_count": total("batch_snapshot_count"),
         "batch_snapshot_create_ms": total("batch_snapshot_create_ms"),
@@ -568,6 +629,9 @@ def _read_scheduler_metrics(path: Path) -> dict:
         if "batch_si_accepted" in str(row.get("decision_reason") or "") and str(row.get("tx_id") or "")
     }
     batch_si_total = len(batch_si_deferred_events) + len(batch_si_accepted_events)
+    batch_si_unique_deferred_tx_ids = {tx_id for _, tx_id in batch_si_deferred_events}
+    batch_si_unique_accepted_tx_ids = {tx_id for _, tx_id in batch_si_accepted_events}
+    batch_si_unique_decision_tx_ids = batch_si_unique_deferred_tx_ids | batch_si_unique_accepted_tx_ids
     return {
         "scheduler_event_count": len(rows),
         "scheduler_blocked_count": sum(1 for row in rows if _truthy(row.get("blocked"))),
@@ -582,10 +646,25 @@ def _read_scheduler_metrics(path: Path) -> dict:
         "scheduler_dependency_wait_ms": sum(_numeric(row.get("dependency_wait_ms")) for row in rows),
         "scheduler_idle_ms": sum(_numeric(row.get("scheduler_idle_ms")) for row in rows),
         "scheduler_idle_ratio": idle_events / len(rows),
+        # Backward-compatible aliases remain, but paper analysis should use
+        # the explicit event/unique/first-pass fields below.
         "batch_si_deferred_transaction_count": len(batch_si_deferred_events),
         "deferred_transaction_count": len(batch_si_deferred_events),
         "batch_si_accepted_transaction_count": len(batch_si_accepted_events),
         "batch_si_abort_rate": (len(batch_si_deferred_events) / batch_si_total) if batch_si_total else 0,
+        "batch_si_deferred_event_count": len(batch_si_deferred_events),
+        "batch_si_unique_deferred_tx_count": len(batch_si_unique_deferred_tx_ids),
+        "batch_si_deferral_event_rate": (len(batch_si_deferred_events) / batch_si_total) if batch_si_total else 0,
+        "batch_si_unique_deferral_rate": (
+            len(batch_si_unique_deferred_tx_ids) / len(batch_si_unique_decision_tx_ids)
+            if batch_si_unique_decision_tx_ids
+            else 0
+        ),
+        "batch_si_mean_deferrals_per_finalized_tx": (
+            len(batch_si_deferred_events) / len(batch_si_unique_accepted_tx_ids)
+            if batch_si_unique_accepted_tx_ids
+            else 0
+        ),
     }
 
 
