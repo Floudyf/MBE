@@ -1625,6 +1625,10 @@ export function v5FormalBundleURL(groupId: string): string {
   return `${requestBaseURL}/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/bundle`;
 }
 
+export async function rebuildV5FormalBundle(groupId: string): Promise<{ run_group_id: string; bundle_status: string; bundle_path: string }> {
+  return request<{ run_group_id: string; bundle_status: string; bundle_path: string }>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/bundle/rebuild`, { method: "POST" });
+}
+
 export function v5RealClusterArtifactURL(downloadURL: string): string {
   return `${requestBaseURL}${downloadURL}`;
 }

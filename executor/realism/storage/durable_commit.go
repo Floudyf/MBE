@@ -2,8 +2,14 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -55,6 +61,128 @@ type PersistenceMetrics struct {
 	WrittenBytes        int64 `json:"persistence_written_bytes"`
 }
 
+const durableProposalPayloadCodec = "mbe_v5_durable_proposal_gzip_v1"
+const durableProposalCompressionThreshold = 16 * 1024
+const durableProposalMaximumSemanticBytes = 512 * 1024 * 1024
+
+type durableCompressedProposalPayload struct {
+	Codec              string `json:"_mbe_storage_codec"`
+	Encoding           string `json:"encoding"`
+	UncompressedBytes  int    `json:"uncompressed_bytes"`
+	UncompressedSHA256 string `json:"uncompressed_sha256"`
+	PayloadGzipBase64  string `json:"payload_gzip_base64"`
+}
+
+// blockForDurableStorage compresses only the persisted copy of large proposal
+// evidence. The in-memory/PBFT block remains byte-for-byte unchanged, so this
+// storage optimization cannot change proposal validation or live network cost.
+// Block.Hash commits to AlgorithmID+PayloadDigest rather than raw evidence
+// bytes, therefore the stored representation preserves the same block hash.
+func blockForDurableStorage(value block.Block) (block.Block, error) {
+	if value.ProposalEvidence == nil || len(value.ProposalEvidence.Payload) < durableProposalCompressionThreshold {
+		return value, nil
+	}
+	semantic := append([]byte(nil), value.ProposalEvidence.Payload...)
+	if len(semantic) > durableProposalMaximumSemanticBytes {
+		return block.Block{}, fmt.Errorf("durable proposal evidence exceeds %d bytes", durableProposalMaximumSemanticBytes)
+	}
+	var compressed bytes.Buffer
+	writer, err := gzip.NewWriterLevel(&compressed, gzip.BestSpeed)
+	if err != nil {
+		return block.Block{}, fmt.Errorf("create durable proposal gzip writer: %w", err)
+	}
+	if _, err := writer.Write(semantic); err != nil {
+		_ = writer.Close()
+		return block.Block{}, fmt.Errorf("compress durable proposal evidence: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return block.Block{}, fmt.Errorf("finish durable proposal compression: %w", err)
+	}
+	sum := sha256.Sum256(semantic)
+	wrapper := durableCompressedProposalPayload{
+		Codec:              durableProposalPayloadCodec,
+		Encoding:           "gzip+base64+json",
+		UncompressedBytes:  len(semantic),
+		UncompressedSHA256: hex.EncodeToString(sum[:]),
+		PayloadGzipBase64:  base64.StdEncoding.EncodeToString(compressed.Bytes()),
+	}
+	encoded, err := json.Marshal(wrapper)
+	if err != nil {
+		return block.Block{}, fmt.Errorf("encode durable proposal wrapper: %w", err)
+	}
+	if len(encoded) >= len(semantic) {
+		return value, nil
+	}
+	next := value
+	envelope := *value.ProposalEvidence
+	envelope.Payload = encoded
+	next.ProposalEvidence = &envelope
+	return next, nil
+}
+
+// restoreBlockFromDurableStorage transparently restores the exact proposal
+// evidence bytes before recovery/certified catch-up re-executes a stored block.
+func restoreBlockFromDurableStorage(value *block.Block) error {
+	if value == nil || value.ProposalEvidence == nil || len(value.ProposalEvidence.Payload) == 0 {
+		return nil
+	}
+	var wrapper durableCompressedProposalPayload
+	if err := json.Unmarshal(value.ProposalEvidence.Payload, &wrapper); err != nil || wrapper.Codec == "" {
+		return nil
+	}
+	if wrapper.Codec != durableProposalPayloadCodec {
+		return fmt.Errorf("unsupported durable proposal payload codec %q", wrapper.Codec)
+	}
+	if wrapper.Encoding != "gzip+base64+json" {
+		return fmt.Errorf("unsupported durable proposal payload encoding %q", wrapper.Encoding)
+	}
+	if wrapper.UncompressedBytes < 1 || wrapper.UncompressedBytes > durableProposalMaximumSemanticBytes {
+		return fmt.Errorf("invalid durable proposal uncompressed size %d", wrapper.UncompressedBytes)
+	}
+	compressed, err := base64.StdEncoding.DecodeString(wrapper.PayloadGzipBase64)
+	if err != nil {
+		return fmt.Errorf("decode durable proposal base64: %w", err)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return fmt.Errorf("open durable proposal gzip: %w", err)
+	}
+	semantic, readErr := io.ReadAll(io.LimitReader(reader, durableProposalMaximumSemanticBytes+1))
+	closeErr := reader.Close()
+	if readErr != nil {
+		return fmt.Errorf("decompress durable proposal evidence: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close durable proposal gzip: %w", closeErr)
+	}
+	if len(semantic) != wrapper.UncompressedBytes {
+		return fmt.Errorf("durable proposal uncompressed size mismatch: got=%d want=%d", len(semantic), wrapper.UncompressedBytes)
+	}
+	sum := sha256.Sum256(semantic)
+	digest := hex.EncodeToString(sum[:])
+	if digest != wrapper.UncompressedSHA256 {
+		return fmt.Errorf("durable proposal uncompressed digest mismatch")
+	}
+	if value.ProposalEvidence.PayloadDigest != "" && value.ProposalEvidence.PayloadDigest != digest {
+		return fmt.Errorf("durable proposal commitment mismatch")
+	}
+	envelope := *value.ProposalEvidence
+	envelope.Payload = append(json.RawMessage(nil), semantic...)
+	value.ProposalEvidence = &envelope
+	return nil
+}
+
+func durableProposalStorageEncoding(value block.Block) string {
+	if value.ProposalEvidence == nil {
+		return "none"
+	}
+	var wrapper durableCompressedProposalPayload
+	if json.Unmarshal(value.ProposalEvidence.Payload, &wrapper) == nil && wrapper.Codec == durableProposalPayloadCodec {
+		return wrapper.Encoding
+	}
+	return "plain_json"
+}
+
 func (s *BlockStore) DurableCommit(b block.Block, result execution.Result) (CommitSummary, error) {
 	_, err := s.DurableCommitWithMetrics(b, result)
 	if err != nil {
@@ -98,7 +226,11 @@ func (s *BlockStore) DurableCommitWithMetrics(b block.Block, result execution.Re
 	}
 	pm.WrittenBytes += written
 
-	written, err = appendJSON(filepath.Join(s.DataDir, "blocks.jsonl"), b)
+	storedBlock, err := blockForDurableStorage(b)
+	if err != nil {
+		return pm, err
+	}
+	written, err = appendJSON(filepath.Join(s.DataDir, "blocks.jsonl"), storedBlock)
 	if err != nil {
 		return pm, err
 	}

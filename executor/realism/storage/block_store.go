@@ -188,6 +188,9 @@ func (s *BlockStore) ReadCommitted() ([]block.Block, error) {
 		if err := json.Unmarshal(raw, &item); err != nil {
 			return nil, fmt.Errorf("decode committed block: %w", err)
 		}
+		if err := restoreBlockFromDurableStorage(&item); err != nil {
+			return nil, fmt.Errorf("restore committed block payload: %w", err)
+		}
 		if item.Height == 0 || item.BlockHash == "" {
 			return nil, fmt.Errorf("invalid committed block row: height=%d block_hash=%q", item.Height, item.BlockHash)
 		}

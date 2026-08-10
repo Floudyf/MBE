@@ -43,9 +43,25 @@ type SampleStatus = "paper_eligible" | "comparison_excluded" | "completed_invali
 
 export default function V5AnalysisPanel({ analysis }: { analysis: V5FormalAnalysis | null }) {
   if (!analysis) return null;
+  const workloadSensitivity = analysis.groups.some((row) => row.suite_type === "workload_sensitivity");
+  if (analysis.paper_result_analysis && workloadSensitivity) return <SensitivityAnalysisNotice analysis={analysis.paper_result_analysis} />;
   if (analysis.paper_result_analysis) return <PaperAnalysisPanel analysis={analysis.paper_result_analysis} />;
   if (!analysis.charts.length || !analysis.groups.length) return <article className="final-card wide"><h2>实验分析</h2><p>当前实验类型没有可绘制的分组数据。</p></article>;
   return <article className="final-card wide" data-testid="v5-analysis-panel"><h2>实验分析</h2><p className="muted">图表和下方数据表都来自后端按真实子实验分组的结果。</p>{analysis.charts.map((chart, index) => <LegacyChart key={`${chart.kind}-${chart.suite_type}-${index}`} chart={chart} />)}<LegacyAnalysisTable groups={analysis.groups} /></article>;
+}
+
+function SensitivityAnalysisNotice({ analysis }: { analysis: V5PaperResultAnalysis }) {
+  const counts = analysis.status_counts;
+  return <article className="final-card wide" data-testid="v5-sensitivity-analysis-notice">
+    <h2>偏斜度敏感性实验分析</h2>
+    <p className="muted">不同 θ 是不同实验条件，不能合并成一个方法总平均或跨 θ 的 95% 置信区间。论文结果请使用下方 θ–TPS、θ–P99 曲线与 sensitivity_summary.csv；每个 θ 内仅对 repeats/seeds 聚合。</p>
+    {counts && <div className="analysis-status-strip">
+      <StatusCount label="执行失败" value={counts.execution_failed} tone="failed" />
+      <StatusCount label="兼容性阻止" value={counts.blocked_incompatible} tone="blocked" />
+      <StatusCount label="完成但无效" value={counts.completed_invalid} tone="invalid" />
+      <StatusCount label="论文有效" value={counts.paper_eligible} tone="eligible" />
+    </div>}
+  </article>;
 }
 
 function PaperAnalysisPanel({ analysis }: { analysis: V5PaperResultAnalysis }) {

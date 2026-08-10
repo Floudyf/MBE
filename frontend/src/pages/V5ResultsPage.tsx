@@ -12,6 +12,7 @@ import {
   fetchV5FormalGroupMetrics,
   fetchV5FormalRunGroup,
   listV5FormalRunGroupSummaries,
+  rebuildV5FormalBundle,
   scanV5LegacySavedConfigs,
   scanV5OrphanRealClusterDirs,
   type V5FormalAggregate,
@@ -51,6 +52,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   const [historyError, setHistoryError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [bundleBusy, setBundleBusy] = useState(false);
   const [cleanupReport, setCleanupReport] = useState<V5CleanupReport | null>(null);
   const [orphanScan, setOrphanScan] = useState<V5OrphanRealClusterScan | null>(null);
   const [legacyScan, setLegacyScan] = useState<V5LegacySavedConfigScan | null>(null);
@@ -350,6 +352,20 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     }
   }
 
+  async function rebuildBundle() {
+    if (!selectedGroupId) return;
+    setBundleBusy(true);
+    try {
+      await rebuildV5FormalBundle(selectedGroupId);
+      setNotice("一键下载包已重新生成。");
+      await loadGroup(selectedGroupId, true);
+    } catch (caught) {
+      setError(`重新生成一键下载包失败：${message(caught)}`);
+    } finally {
+      setBundleBusy(false);
+    }
+  }
+
   const selectedGroup = detail?.group;
   return <section className="page-grid" data-testid="v5-results-page">
     <article className="final-card wide page-hero">
@@ -366,7 +382,12 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     </article>
     {selectedGroup && <V5GroupSummary group={selectedGroup} aggregate={aggregate} children={detail?.children ?? []} />}
     <V5AnalysisPanel analysis={analysis} />
-    <V5SkewTpsChart children={detail?.children ?? []} />
+    <V5SkewTpsChart
+      children={detail?.children ?? []}
+      plannedThetaValues={(selectedGroup?.plan?.workload_points ?? [])
+        .map((point) => Number((point as Record<string, unknown>).target_theta))
+        .filter((value) => Number.isFinite(value))}
+    />
     {detail && <article className="final-card wide">
       <h2>子实验</h2>
       <div className="table-wrap"><table data-testid="v5-child-table">
@@ -375,7 +396,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       </table></div>
     </article>}
     <V5ChildDetail child={selectedChild} />
-    {selectedGroup && <V5ArtifactCatalog groupId={selectedGroup.run_group_id} catalog={catalog} />}
+    {selectedGroup && <V5ArtifactCatalog groupId={selectedGroup.run_group_id} catalog={catalog} onRebuild={() => void rebuildBundle()} rebuilding={bundleBusy} />}
     <details className="final-card wide" data-testid="v5-run-group-list" open={historyOpen} onToggle={(event) => setHistoryOpen((event.currentTarget as HTMLDetailsElement).open)}>
       <summary>实验组历史</summary>
       <div className="section-heading">

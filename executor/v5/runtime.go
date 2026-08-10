@@ -1625,7 +1625,7 @@ type statelessVersionAdmissionProbeResult struct {
 }
 
 func (r *NodeRuntime) statelessVersionAdmissionEnabled(block realblock.Block) bool {
-	if r == nil || len(block.TxList) == 0 || len(r.shardIDs()) < 2 || r.plugins.Routing == nil || r.plugins.Routing.ID() != "stateless_hash_routing" {
+	if r == nil || len(block.TxList) == 0 || len(r.shardIDs()) < 2 || !routingUsesStatelessVersionAdmission(r.plugins.Routing) {
 		return false
 	}
 	for _, item := range block.TxList {
@@ -1934,17 +1934,7 @@ func (r *NodeRuntime) shouldAttachMetaTrackExecutionPlan() bool {
 }
 
 func (r *NodeRuntime) batchExecutionPlanAlgorithmID() string {
-	if r.plugins.Routing == nil {
-		return ""
-	}
-	switch r.plugins.Routing.ID() {
-	case "metatrack_coaccess_routing":
-		return "metatrack_batch_execution_plan_v1"
-	case "stateless_hash_routing":
-		return "stateless_hash_batch_execution_plan_v1"
-	default:
-		return "batch_routing_execution_plan_v1"
-	}
+	return batchExecutionPlanAlgorithmIDForRouting(r.plugins.Routing)
 }
 
 func (r *NodeRuntime) attachMetaTrackExecutionPlan(block *realblock.Block) error {
@@ -2082,7 +2072,7 @@ func (r *NodeRuntime) verifyMetaTrackExecutionPlanPayload(block realblock.Block)
 }
 
 func (r *NodeRuntime) metaTrackExecutionPlanPayload(block realblock.Block) (map[string]any, error) {
-	if r.plugins.Routing != nil && r.plugins.Routing.ID() == "metatrack_coaccess_routing" {
+	if routingUsesSignedBatchExecutionPlan(r.plugins.Routing) {
 		return r.signedMetaTrackExecutionPlanPayload(block)
 	}
 	planner, ok := r.plugins.Routing.(BatchRoutingPlugin)
@@ -3364,8 +3354,8 @@ func (r *NodeRuntime) homeShardFor(keys, shards []string) string {
 }
 
 func (r *NodeRuntime) nativeMetaTrackStateReadyEnabled() bool {
-	return r != nil && r.plugins.Routing != nil && r.plugins.BlockExecutor != nil &&
-		r.plugins.Routing.ID() == "metatrack_coaccess_routing" &&
+	return r != nil && r.plugins.BlockExecutor != nil &&
+		routingUsesNativeVersionedStateReady(r.plugins.Routing) &&
 		r.plugins.BlockExecutor.ID() == metaTrackBlockExecutorID && len(r.shardIDs()) > 1
 }
 
@@ -4028,7 +4018,7 @@ func (r *NodeRuntime) prepareRemoteStateSnapshot(ctx context.Context, block real
 }
 
 func (r *NodeRuntime) validateMetaTrackPlanDrivesExecution(block realblock.Block) error {
-	if r.plugins.Routing == nil || r.plugins.Routing.ID() != "metatrack_coaccess_routing" {
+	if !routingUsesSignedBatchExecutionPlan(r.plugins.Routing) {
 		return nil
 	}
 	if block.ExecutionPlan == nil {
@@ -6366,18 +6356,10 @@ func (r *NodeRuntime) recordProposalEvidence(block realblock.Block) {
 	var payload any
 	if err := json.Unmarshal(block.ProposalEvidence.Payload, &payload); err != nil {
 		payload = string(block.ProposalEvidence.Payload)
-	} else if block.ProposalEvidence.AlgorithmID == ariaCandidateSelectionEvidenceID {
-		// Validators still receive and verify the complete consensus-bound Aria
-		// evidence. The persisted audit copy does not need to duplicate every
-		// candidate transaction again: candidate IDs, logical IDs, payload digest,
-		// selection/deferred sets, reasons, metrics and trace remain sufficient to
-		// audit the deterministic selection while the original workload is already
-		// preserved by the run artifacts.
-		if object, ok := payload.(map[string]any); ok {
-			candidateCount := object["candidate_count"]
-			delete(object, "candidate_transactions")
-			object["candidate_transactions_retained"] = false
-			object["candidate_transactions_omitted_count"] = candidateCount
+	} else if object, ok := payload.(map[string]any); ok {
+		switch block.ProposalEvidence.AlgorithmID {
+		case ariaCandidateSelectionEvidenceID, groundhogCandidateSelectionEvidenceID:
+			compactProposalAuditPayload(object)
 		}
 	}
 	row := map[string]any{
@@ -6506,6 +6488,61 @@ func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result B
 	r.businessExecutionRows = append(r.businessExecutionRows, businessRows...)
 	r.stateDeltaRows = append(r.stateDeltaRows, stateRows...)
 	r.planDigestRows = append(r.planDigestRows, planRow)
+}
+
+func compactProposalAuditPayload(payload map[string]any) {
+	// proposal_selection_evidence.jsonl is an observational audit copy. The
+	// consensus-bound Block.ProposalEvidence payload is never mutated here, and
+	// the durable block store independently preserves/restores the complete
+	// proposal evidence. Repeated candidate/selection vectors can therefore be
+	// represented by count+digest commitments in this secondary artifact.
+	// Keep the compact identity/selection vectors needed for direct audit and
+	// downstream evidence consumers. Only the two high-volume repeated payloads
+	// are compacted here: full signed candidate transactions (Aria) and the
+	// per-candidate trace (Aria/Groundhog).
+	fields := []string{"candidate_transactions", "trace"}
+	compacted := false
+	for _, key := range fields {
+		value, ok := payload[key]
+		if !ok || value == nil {
+			continue
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			continue
+		}
+		payload[key+"_audit_digest"] = stableTextDigest(string(raw))
+		// Preserve the v6 audit contract used by runtime_resource_hardening_test.go
+		// and existing artifact consumers. The marker describes only the secondary
+		// proposal_selection_evidence.jsonl copy; consensus-bound evidence is intact.
+		if key == "candidate_transactions" {
+			payload["candidate_transactions_retained"] = false
+			if count, ok := payload["candidate_count"]; ok {
+				payload["candidate_transactions_omitted_count"] = count
+			}
+		}
+		switch typed := value.(type) {
+		case []any:
+			payload[key+"_audit_count"] = len(typed)
+			if len(typed) > 0 {
+				limit := len(typed)
+				if limit > 16 {
+					limit = 16
+				}
+				payload[key+"_audit_sample"] = append([]any(nil), typed[:limit]...)
+			}
+		case map[string]any:
+			payload[key+"_audit_count"] = len(typed)
+		default:
+			payload[key+"_audit_count"] = 1
+		}
+		delete(payload, key)
+		compacted = true
+	}
+	if compacted {
+		payload["audit_payload_compacted"] = true
+		payload["audit_payload_compaction_version"] = "proposal_selection_audit_digest_v2"
+	}
 }
 
 func workerCountFromBlockSummaries(items []map[string]any) int {

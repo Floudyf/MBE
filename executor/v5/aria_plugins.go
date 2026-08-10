@@ -117,7 +117,9 @@ func (p ariaBlockProducer) BuildCandidate(input BlockProductionInput) (realblock
 	}
 	multiplier := intValue(p.config["candidate_scan_multiplier"])
 	if multiplier < 1 {
-		multiplier = 4
+		// Canonical Aria: one conflict-analysis epoch is one formal batch.
+		// A wider scan changes the epoch conflict set before the block cap.
+		multiplier = 1
 	}
 	depth := input.Pool.Len()
 	scanLimit := depth

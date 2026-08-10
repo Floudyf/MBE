@@ -16,7 +16,7 @@ def test_aria_manifests_lock_official_source_and_one_batch_truth_boundary():
         "read_only_optimization": True,
         "retry_nonce_gaps": True,
     }
-    assert producer.default_config["candidate_scan_multiplier"] == 4
+    assert producer.default_config["candidate_scan_multiplier"] == 1
     assert "deterministic_reordering_rule2" in executor.capabilities
     assert "fifo_deferred_transactions" in producer.capabilities
     assert producer.truth_boundary == executor.truth_boundary == "aria_rule2_one_consensus_block_per_batch_fallback_disabled"
@@ -35,6 +35,7 @@ def test_aria_builtin_method_pairs_batch_producer_and_fixed_block_executor():
         "block_executor": "aria_block_executor",
         "commit": "normal_commit",
     }
+    assert method.plugin_config_overrides["block_producer"]["candidate_scan_multiplier"] == 1
     assert method.plugin_config_overrides["block_producer"]["reordering"] is True
     assert method.plugin_config_overrides["block_executor"]["reordering"] is True
     assert "maximum_epochs" not in method.plugin_config_overrides["block_executor"]

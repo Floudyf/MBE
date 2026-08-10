@@ -59,6 +59,81 @@ type BatchRoutingPlugin interface {
 	RoutingPlugin
 	PlanBatch(BatchRoutingInput) BatchRoutingPlan
 }
+
+// RoutingRuntimeCapabilities keeps algorithm-specific runtime behavior owned by
+// the routing plugin instead of branching on plugin IDs in shared runtime code.
+type RoutingRuntimeCapabilities interface {
+	RoutingPlugin
+	StatelessDirectExecution() bool
+	BindExecutionRoutingMetadata() bool
+	BindBatchProjectionMetadata() bool
+	BatchExecutionPlanAlgorithmID() string
+	SignedBatchExecutionPlan() bool
+	NativeVersionedStateReady() bool
+	StatelessVersionAdmission() bool
+}
+
+func routingRuntimeCapabilitiesOf(r RoutingPlugin) (RoutingRuntimeCapabilities, bool) {
+	if r == nil {
+		return nil, false
+	}
+	c, ok := r.(RoutingRuntimeCapabilities)
+	return c, ok
+}
+func usesStatelessDirectExecution(r RoutingPlugin) bool {
+	c, ok := routingRuntimeCapabilitiesOf(r)
+	return ok && c.StatelessDirectExecution()
+}
+func routingBindsExecutionMetadata(r RoutingPlugin) bool {
+	c, ok := routingRuntimeCapabilitiesOf(r)
+	return ok && c.BindExecutionRoutingMetadata()
+}
+func routingBindsBatchProjectionMetadata(r RoutingPlugin) bool {
+	c, ok := routingRuntimeCapabilitiesOf(r)
+	return ok && c.BindBatchProjectionMetadata()
+}
+func batchExecutionPlanAlgorithmIDForRouting(r RoutingPlugin) string {
+	if c, ok := routingRuntimeCapabilitiesOf(r); ok {
+		if id := c.BatchExecutionPlanAlgorithmID(); id != "" {
+			return id
+		}
+	}
+	if _, ok := r.(BatchRoutingPlugin); ok {
+		return "batch_routing_execution_plan_v1"
+	}
+	return ""
+}
+func routingUsesSignedBatchExecutionPlan(r RoutingPlugin) bool {
+	c, ok := routingRuntimeCapabilitiesOf(r)
+	return ok && c.SignedBatchExecutionPlan()
+}
+func routingUsesNativeVersionedStateReady(r RoutingPlugin) bool {
+	c, ok := routingRuntimeCapabilitiesOf(r)
+	return ok && c.NativeVersionedStateReady()
+}
+func routingUsesStatelessVersionAdmission(r RoutingPlugin) bool {
+	c, ok := routingRuntimeCapabilitiesOf(r)
+	return ok && c.StatelessVersionAdmission()
+}
+
+// PlanUsesStatelessDirectExecution lets the supervisor resolve behavior from
+// registry capabilities without knowing concrete routing plugin IDs.
+func PlanUsesStatelessDirectExecution(plan Plan) bool {
+	if len(plan.NodeConfigs) == 0 {
+		return false
+	}
+	cfg, ok := plan.NodeConfigs[0].PluginProfile["routing"]
+	if !ok || cfg.PluginID == "" {
+		return false
+	}
+	p, err := BuiltinRegistry().Create("routing", cfg.PluginID, cfg.Config)
+	if err != nil {
+		return false
+	}
+	r, ok := p.(RoutingPlugin)
+	return ok && usesStatelessDirectExecution(r)
+}
+
 type BlockProducerPlugin interface {
 	Plugin
 	BlockSize() int
@@ -646,6 +721,15 @@ type statelessHashRouting struct{ basicPlugin }
 func (p statelessHashRouting) Route(input RoutingInput) RoutingDecision {
 	return hashRouting{p.basicPlugin}.Route(input)
 }
+func (p statelessHashRouting) StatelessDirectExecution() bool     { return true }
+func (p statelessHashRouting) BindExecutionRoutingMetadata() bool { return true }
+func (p statelessHashRouting) BindBatchProjectionMetadata() bool  { return false }
+func (p statelessHashRouting) BatchExecutionPlanAlgorithmID() string {
+	return "stateless_hash_batch_execution_plan_v1"
+}
+func (p statelessHashRouting) SignedBatchExecutionPlan() bool  { return false }
+func (p statelessHashRouting) NativeVersionedStateReady() bool { return false }
+func (p statelessHashRouting) StatelessVersionAdmission() bool { return true }
 
 func (p statelessHashRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 	plan := BatchRoutingPlan{
@@ -736,6 +820,16 @@ func (p statelessHashRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPla
 type metaTrackRouting struct {
 	basicPlugin
 }
+
+func (p *metaTrackRouting) StatelessDirectExecution() bool     { return true }
+func (p *metaTrackRouting) BindExecutionRoutingMetadata() bool { return true }
+func (p *metaTrackRouting) BindBatchProjectionMetadata() bool  { return true }
+func (p *metaTrackRouting) BatchExecutionPlanAlgorithmID() string {
+	return "metatrack_batch_execution_plan_v1"
+}
+func (p *metaTrackRouting) SignedBatchExecutionPlan() bool  { return true }
+func (p *metaTrackRouting) NativeVersionedStateReady() bool { return true }
+func (p *metaTrackRouting) StatelessVersionAdmission() bool { return false }
 
 func (p *metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 	if len(input.ShardIDs) == 0 {
@@ -3692,6 +3786,7 @@ func BuiltinRegistry() *Registry {
 		return builtinScheduler{makeBasic("scheduler", "fast_first_scheduler", c)}, nil
 	})
 	registerBatchSIPlugins(register)
+	registerLiteratureBaselinePlugins(register)
 	register("block_executor", "serial_block_executor", func(c map[string]any) (Plugin, error) {
 		return serialBlockExecutor{makeBasic("block_executor", "serial_block_executor", c)}, nil
 	})
@@ -3836,6 +3931,9 @@ func InstantiatePlugins(profile map[string]PluginConfig) (RuntimePlugins, error)
 		return p, err
 	}
 	if err := validateBatchSIPluginCombination(p); err != nil {
+		return p, err
+	}
+	if err := validateLiteratureBaselineCombination(p); err != nil {
 		return p, err
 	}
 	return p, nil

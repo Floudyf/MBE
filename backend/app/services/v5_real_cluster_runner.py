@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import signal
+import shutil
 import subprocess
 import time
 from collections.abc import Callable
@@ -22,6 +23,51 @@ from backend.app.services.v5_artifact_contract import evaluate_expected_artifact
 
 
 RUNS_ROOT = V5_REAL_CLUSTER_RUNS_ROOT
+_DEFAULT_START_FREE_GB = 20.0
+_DEFAULT_EMERGENCY_FREE_GB = 8.0
+_DISK_CHECK_INTERVAL_SECONDS = 1.0
+
+class V5ResourcePressureError(RuntimeError):
+    def __init__(self, message: str, *, evidence: dict | None = None, run_id: str = "", output_dir: str = ""):
+        super().__init__(message)
+        self.evidence = evidence or {}
+        self.run_id = run_id
+        self.output_dir = output_dir
+
+def _threshold_bytes(env_name: str, default_gb: float) -> int:
+    raw = os.environ.get(env_name, "").strip()
+    try:
+        gb = float(raw) if raw else default_gb
+    except ValueError:
+        gb = default_gb
+    return max(0, int(gb * 1024**3))
+
+def _disk_pressure_evidence(path: Path, *, threshold_bytes: int, phase: str) -> dict:
+    usage = shutil.disk_usage(path)
+    return {
+        "schema_version": "mbe_v5_disk_pressure_guard_v1",
+        "phase": phase, "path": str(path),
+        "total_bytes": int(usage.total), "used_bytes": int(usage.used), "free_bytes": int(usage.free),
+        "threshold_bytes": int(threshold_bytes),
+        "below_threshold": int(usage.free) < int(threshold_bytes),
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
+
+def _write_resource_guard(run_dir: Path, evidence: dict) -> None:
+    try:
+        (run_dir / "resource_guard.json").write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+def _ensure_start_disk_capacity(run_dir: Path, run_id: str) -> None:
+    threshold = _threshold_bytes("MBE_V5_START_MIN_FREE_GB", _DEFAULT_START_FREE_GB)
+    evidence = _disk_pressure_evidence(run_dir, threshold_bytes=threshold, phase="before_child_start")
+    if evidence["below_threshold"]:
+        _write_resource_guard(run_dir, evidence)
+        raise V5ResourcePressureError(
+            f"insufficient free disk before real-cluster child: free={evidence['free_bytes']} threshold={evidence['threshold_bytes']}",
+            evidence=evidence, run_id=run_id, output_dir=_logical_output_dir(run_dir),
+        )
 
 
 def status() -> dict:
@@ -118,6 +164,8 @@ def _run_supervisor_process(
     cancelled = False
     timed_out = False
     started = time.monotonic()
+    last_disk_check = 0.0
+    emergency_threshold = _threshold_bytes("MBE_V5_EMERGENCY_MIN_FREE_GB", _DEFAULT_EMERGENCY_FREE_GB)
     with stdout_path.open("w", encoding="utf-8", buffering=1) as stdout_handle, stderr_path.open(
         "w", encoding="utf-8", buffering=1
     ) as stderr_handle:
@@ -137,6 +185,16 @@ def _run_supervisor_process(
                     cancelled = False
                 if cancelled:
                     stderr_handle.write("\nformal RunGroup cancellation requested; terminating supervisor process tree\n")
+                    stderr_handle.flush()
+                    _terminate_process_tree(process)
+                    break
+            now_monotonic = time.monotonic()
+            if now_monotonic - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
+                last_disk_check = now_monotonic
+                evidence = _disk_pressure_evidence(run_dir, threshold_bytes=emergency_threshold, phase="running_child")
+                if evidence["below_threshold"]:
+                    _write_resource_guard(run_dir, evidence)
+                    stderr_handle.write("\nreal cluster stopped by disk-pressure guard\n")
                     stderr_handle.flush()
                     _terminate_process_tree(process)
                     break
@@ -196,6 +254,7 @@ def run(spec: V5ExperimentSpec, *, cancel_check: Callable[[], bool] | None = Non
     run_id = "v5_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8]
     run_dir = RUNS_ROOT / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
+    _ensure_start_disk_capacity(run_dir, run_id)
     try:
         plan = compile_plan(spec, run_dir, source_saved_config_id=spec.saved_config_id)
     except ValueError:
@@ -213,6 +272,29 @@ def run(spec: V5ExperimentSpec, *, cancel_check: Callable[[], bool] | None = Non
         return _cancelled_run_result(run_id, run_dir, stdout, stderr)
     if timed_out:
         returncode = 124
+
+    resource_guard_path = run_dir / "resource_guard.json"
+    resource_guard_triggered = resource_guard_path.is_file() or "real cluster stopped by disk-pressure guard" in (stderr or "")
+    if resource_guard_triggered:
+        try:
+            guard = json.loads(resource_guard_path.read_text(encoding="utf-8")) if resource_guard_path.is_file() else _disk_pressure_evidence(
+                run_dir,
+                threshold_bytes=_threshold_bytes("MBE_V5_EMERGENCY_MIN_FREE_GB", _DEFAULT_EMERGENCY_FREE_GB),
+                phase="running_child",
+            )
+        except (OSError, json.JSONDecodeError):
+            guard = {"schema_version": "mbe_v5_disk_pressure_guard_v1", "phase": "running_child", "below_threshold": True}
+        # Under emergency disk pressure even the diagnostic catalog may fail.
+        # Resource-pressure classification must still escape to the scheduler so
+        # the remaining sweep is stopped instead of continuing after a catalog I/O error.
+        try:
+            write_run_artifact_catalog(run_dir, run_id=run_id)
+        except Exception:
+            pass
+        raise V5ResourcePressureError(
+            "real-cluster child stopped because free disk crossed the emergency floor",
+            evidence=guard, run_id=run_id, output_dir=_logical_output_dir(run_dir),
+        )
 
     compatibility_prefix = "V5_COMPATIBILITY_BLOCKED:"
     combined_output = "\n".join([stdout or "", stderr or ""])

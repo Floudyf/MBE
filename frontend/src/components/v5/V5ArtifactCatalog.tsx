@@ -39,7 +39,7 @@ const artifactLabels: Record<string, string> = {
   workload_replay_summary: "Workload replay summary",
 };
 
-export default function V5ArtifactCatalog({ groupId, catalog }: { groupId: string; catalog: V5FormalArtifactCatalog | null }) {
+export default function V5ArtifactCatalog({ groupId, catalog, onRebuild, rebuilding = false }: { groupId: string; catalog: V5FormalArtifactCatalog | null; onRebuild?: () => void; rebuilding?: boolean }) {
   const files = catalog?.files ?? [];
   const groups = groupedArtifacts(files);
   return <section className="final-card wide" data-testid="v5-group-artifact-catalog">
@@ -50,7 +50,7 @@ export default function V5ArtifactCatalog({ groupId, catalog }: { groupId: strin
       <Metric label="Bundle ready" value={catalog?.bundle_ready} testId="v5-bundle-ready" />
       <Metric label="Bundle bytes" value={catalog?.bundle_size_bytes} />
     </dl>
-    {catalog?.bundle_ready ? <a data-testid="v5-bundle-download" href={v5FormalBundleURL(groupId)} download>Download full artifact bundle</a> : <p className="muted">Artifact bundle is not ready yet.</p>}
+    {catalog?.bundle_ready ? <a data-testid="v5-bundle-download" href={v5FormalBundleURL(groupId)} download>Download full artifact bundle</a> : <div className="button-row"><span className="muted">Artifact bundle is not ready yet.</span>{onRebuild && <button type="button" data-testid="v5-bundle-rebuild" onClick={onRebuild} disabled={rebuilding}>{rebuilding ? "正在生成…" : "重新生成一键下载包"}</button>}</div>}
     {groups.map((group, index) => group.files.length ? <details key={group.id} open={index === 0} data-testid={`v5-artifact-group-${group.id}`}>
       <summary>{group.label} ({group.files.length})</summary>
       <ArtifactTable files={group.files} />

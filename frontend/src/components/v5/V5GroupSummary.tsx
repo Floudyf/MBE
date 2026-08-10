@@ -11,6 +11,7 @@ export default function V5GroupSummary({ group, aggregate, children }: Props) {
   const completedValid = children.filter((item) => item.status === "completed" && item.individual_result_valid !== false).length;
   const performanceComparisonValid = group.direct_cross_semantic_performance_comparison_valid ?? group.performance_comparison_valid ?? group.fairness_validation?.performance_comparison_valid;
   const stateEquivalent = group.within_semantic_cohort_state_equivalence_valid ?? group.pairwise_logical_state_equivalent ?? group.state_equivalence_validation?.within_semantic_cohort_state_equivalence_valid ?? group.state_equivalence_validation?.pairwise_logical_state_equivalent;
+  const partialRun = children.length < group.total_child_runs || group.completed_child_runs < group.total_child_runs || failedOrBlocked > 0 || completedInvalid > 0 || group.status !== "completed";
   return <section className="final-card wide" data-testid="v5-group-summary">
     <h2>实验组摘要</h2>
     <dl className="stage-flow-kpis">
@@ -27,6 +28,7 @@ export default function V5GroupSummary({ group, aggregate, children }: Props) {
       <Metric label="基础交易数量" value={base?.tx_count} /><Metric label="负载插件" value={workload?.plugin_id} />
       <Metric label="跨片交易比例" value={workload?.config.cross_shard_ratio} /><Metric label="超时间隔" value={workload?.config.timeout_every} />
     </dl>
+    {partialRun && <div className="notice" data-testid="v5-partial-run-warning"><strong>PARTIAL / NOT PAPER READY</strong><span>正式矩阵尚未全部成功完成；图表会保留计划中的缺失点，但本组不能作为完整论文结果。</span></div>}
     {performanceComparisonValid === false && <div className="notice" data-testid="v5-performance-incomparable"><strong>性能比较不可直接使用</strong><span>执行语义、公平性或跨方法最终状态等价门未通过。包含有状态与无状态方法时，请使用 Stateless Hash 与 MetaTrack 进行直接性能比较；同语义方法还必须具有相同初始状态、状态归属映射和最终全局状态。</span></div>}
     {stateEquivalent === false && <div className="notice" data-testid="v5-state-incomparable"><strong>跨方法状态不等价</strong><span>至少一个可比较方法组的初始状态、状态归属映射或最终全局状态摘要不一致，本轮性能结论已被禁止进入论文分析。</span></div>}
     <p className="muted">Local multi-process, localhost TCP, PBFT-style, signed transactions, persistent local state, and no silent fallback. This is not a production blockchain or production PBFT claim.</p>

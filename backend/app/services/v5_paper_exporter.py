@@ -131,31 +131,53 @@ def paper_result_analysis(group: dict, children: list[dict]) -> dict:
         else:
             accepted.append(child)
 
-    metrics = {
-        "end_to_end_tps": _metric_rows(accepted, "end_to_end_tps", "tps"),
-        "p95_finality_ms": _metric_rows(accepted, "p95_finality_ms", "ms"),
-        "p99_finality_ms": _metric_rows(accepted, "p99_finality_ms", "ms"),
-    }
-    observed_metrics = {
-        "end_to_end_tps": _observed_metric_rows(children, status_by_child, "end_to_end_tps", "tps"),
-        "p95_finality_ms": _observed_metric_rows(children, status_by_child, "p95_finality_ms", "ms"),
-        "p99_finality_ms": _observed_metric_rows(children, status_by_child, "p99_finality_ms", "ms"),
-    }
+    plan_suites = ((group.get("plan") or {}).get("suites") or []) if isinstance(group.get("plan"), dict) else []
+    sensitivity_mode = "workload_sensitivity" in plan_suites or any(item.get("suite_type") == "workload_sensitivity" for item in children)
+    if sensitivity_mode:
+        # theta values are different experimental conditions, not repeats.
+        # Per-theta truth remains in sensitivity_summary.csv.
+        metrics = {}
+        observed_metrics = {}
+    else:
+        metrics = {
+            "end_to_end_tps": _metric_rows(accepted, "end_to_end_tps", "tps"),
+            "p95_finality_ms": _metric_rows(accepted, "p95_finality_ms", "ms"),
+            "p99_finality_ms": _metric_rows(accepted, "p99_finality_ms", "ms"),
+        }
+        observed_metrics = {
+            "end_to_end_tps": _observed_metric_rows(children, status_by_child, "end_to_end_tps", "tps"),
+            "p95_finality_ms": _observed_metric_rows(children, status_by_child, "p95_finality_ms", "ms"),
+            "p99_finality_ms": _observed_metric_rows(children, status_by_child, "p99_finality_ms", "ms"),
+        }
     status_counts = {
         name: sum(1 for item in sample_statuses if item["status"] == name)
         for name in ("execution_failed", "blocked_incompatible", "completed_invalid", "comparison_excluded", "paper_eligible")
     }
     performance_valid = _performance_comparison_valid(group, children)
-    status = "complete" if fairness == "passed" and performance_valid and any(metrics.values()) and not excluded else "incomplete"
-    if fairness == "passed" and not performance_valid:
-        status = "incomparable"
+    planned_child_count = int(group.get("total_child_runs") or len(children))
+    persisted_child_count = len(children)
+    partial_run_group = persisted_child_count < planned_child_count or any(item.get("status") != "completed" for item in children)
+    if sensitivity_mode:
+        status = "partial" if partial_run_group or excluded else "complete"
+    else:
+        status = "complete" if fairness == "passed" and performance_valid and any(metrics.values()) and not excluded else "incomplete"
+        if fairness == "passed" and not performance_valid:
+            status = "incomparable"
     return {
         "schema_version": "mbe_paper_result_analysis_v2",
+        "analysis_mode": "workload_sensitivity_by_scan_point" if sensitivity_mode else "method_aggregate",
+        "planned_child_count": planned_child_count,
+        "persisted_child_count": persisted_child_count,
+        "partial_run_group": partial_run_group,
         "run_group_id": group.get("run_group_id"),
         "analysis_status": status,
         "fairness_status": fairness,
         "performance_comparison_valid": performance_valid,
-        "comparison_note": "" if performance_valid else "execution semantics, fairness, or cross-method logical-state equivalence differs; direct performance uplift is prohibited",
+        "comparison_note": (
+            "workload sensitivity is reported per scan point; cross-theta method means/CI are intentionally suppressed"
+            if sensitivity_mode
+            else ("" if performance_valid else "execution semantics, fairness, or cross-method logical-state equivalence differs; direct performance uplift is prohibited")
+        ),
         "metrics": metrics,
         "observed_metrics": observed_metrics,
         "sample_statuses": sample_statuses,

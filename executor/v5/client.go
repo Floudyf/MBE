@@ -81,8 +81,8 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	batch := []WorkloadRecord{}
 	lastWriterOrdinal := map[string]uint64{}
 	statelessDirect := usesStatelessDirectExecution(plugins.Routing)
-	isMetaTrackRouting := plugins.Routing != nil && plugins.Routing.ID() == "metatrack_coaccess_routing"
-	bindExecutionRouting := plugins.Routing != nil && (isMetaTrackRouting || plugins.Routing.ID() == "stateless_hash_routing")
+	bindExecutionRouting := routingBindsExecutionMetadata(plugins.Routing)
+	bindBatchProjectionMetadata := routingBindsBatchProjectionMetadata(plugins.Routing)
 	submitRecord := func(record WorkloadRecord, route RoutingDecision) error {
 		executionShard := route.ShardID
 		shardID := workloadIngressShard(record, route, statelessDirect)
@@ -201,7 +201,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &placementScoreRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
 			for _, placement := range routePlan.TransactionPlacements {
 				placements[placement.TxIndex] = placement
-				if isMetaTrackRouting {
+				if bindBatchProjectionMetadata {
 					routeBatchShardCounts[placement.ExecutionShard]++
 				}
 			}
@@ -217,7 +217,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				if bindExecutionRouting {
 					record.RoutePlanDigest = routePlanDigest
 				}
-				if isMetaTrackRouting {
+				if bindBatchProjectionMetadata {
 					record.RouteBatchSequence = uint64(batchIndex + 1)
 					record.RouteBatchTransactionCount = len(records)
 					record.RouteBatchShardTransactionCount = routeBatchShardCounts[placement.ExecutionShard]
@@ -364,18 +364,6 @@ func stateVersionDependenciesForRecord(record WorkloadRecord, ordinal uint64, la
 		}
 	}
 	return out
-}
-
-func usesStatelessDirectExecution(routing RoutingPlugin) bool {
-	if routing == nil {
-		return false
-	}
-	switch routing.ID() {
-	case "metatrack_coaccess_routing", "stateless_hash_routing":
-		return true
-	default:
-		return false
-	}
 }
 
 func workloadIngressShard(record WorkloadRecord, route RoutingDecision, statelessDirect bool) string {

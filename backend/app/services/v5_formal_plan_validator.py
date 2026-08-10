@@ -95,7 +95,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         },
         plugin_config_overrides={
             "block_producer": {
-                "candidate_scan_multiplier": 4,
+                "candidate_scan_multiplier": 1,
                 "reordering": True,
                 "read_only_optimization": True,
                 "retry_nonce_gaps": True,
@@ -160,6 +160,25 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
 }
 
+LITERATURE_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+    "hash_cg": V5FormalMethod(
+        method_id="hash_cg", display_name="Conflict Graph (CG)", role="baseline",
+        plugin_overrides={"routing":"hash_routing_baseline","execution":"cg_execution","scheduler":"cg_scheduler","block_executor":"cg_block_executor","commit":"normal_commit"},
+        plugin_config_overrides={"block_executor":{"worker_count":4}},
+    ),
+    "hash_acg": V5FormalMethod(
+        method_id="hash_acg", display_name="Address Conflict Graph (ACG/Nezha)", role="baseline",
+        plugin_overrides={"routing":"hash_routing_baseline","execution":"acg_execution","scheduler":"acg_scheduler","block_executor":"acg_block_executor","commit":"normal_commit"},
+        plugin_config_overrides={"block_executor":{"worker_count":4}},
+    ),
+    "hash_bsx": V5FormalMethod(
+        method_id="hash_bsx", display_name="Batch-Schedule-Execute (BSX)", role="baseline",
+        plugin_overrides={"routing":"hash_routing_baseline","execution":"bsx_execution","scheduler":"bsx_scheduler","block_executor":"bsx_block_executor","commit":"normal_commit"},
+        plugin_config_overrides={"block_executor":{"worker_count":4}},
+    ),
+}
+
+
 BATCH_SI_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     "hash_batch_si": _batch_si_method(
         "hash_batch_si", "Batch-SI", role="main"
@@ -208,7 +227,7 @@ STATELESS_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
 }
 
-ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS}
+ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS}
 
 
 

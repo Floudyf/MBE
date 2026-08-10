@@ -331,19 +331,7 @@ func runV5(planPath, dataDir string) error {
 }
 
 func planUsesStatelessDirectExecution(plan v5.Plan) bool {
-	if len(plan.NodeConfigs) == 0 {
-		return false
-	}
-	routing, ok := plan.NodeConfigs[0].PluginProfile["routing"]
-	if !ok {
-		return false
-	}
-	switch routing.PluginID {
-	case "metatrack_coaccess_routing", "stateless_hash_routing":
-		return true
-	default:
-		return false
-	}
+	return v5.PlanUsesStatelessDirectExecution(plan)
 }
 
 func drainV5(plan v5.Plan, dataDir string) error {
@@ -394,10 +382,11 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			if value := fmt.Sprint(status["fatal_execution_error"]); value != "" && value != "<nil>" {
 				fatalExecution = value
 			}
-			for _, key := range []string{"reserved_tx_count", "pending_commit_count", "pending_future_block_count", "pending_cross_shard_count", "pending_state_delta_count", "pending_state_delta_key_count", "ready_state_delta_count"} {
-				if number(status[key]) != 0 {
-					allEmpty = false
-				}
+			// Reservations are checked below against the logical terminal set.
+			// A terminal-only final proposal may keep a reservation until shutdown;
+			// that reservation alone must not cause a no-progress timeout.
+			if hasPendingInfrastructureWork(status) {
+				allEmpty = false
 			}
 			shard := fmt.Sprint(status["shard_id"])
 			if heights[shard] == nil {
@@ -672,6 +661,15 @@ func stringSlice(value any) []string {
 		}
 	}
 	return items
+}
+
+func hasPendingInfrastructureWork(status map[string]any) bool {
+	for _, key := range []string{"pending_commit_count", "pending_future_block_count", "pending_cross_shard_count", "pending_state_delta_count", "pending_state_delta_key_count", "ready_state_delta_count"} {
+		if number(status[key]) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func hasNonTerminalMempool(statuses []map[string]any, terminal map[string]bool) bool {

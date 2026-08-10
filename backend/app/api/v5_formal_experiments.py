@@ -13,6 +13,7 @@ from backend.app.services.v5_formal_scheduler import finalize_cancelled, start, 
 from backend.app.services.v5_formal_artifact_catalog import read_catalog, safe_artifact_name
 from backend.app.services.v5_formal_dto import V5FormalChildResponse, V5FormalRunGroupDetailResponse, child_detail as child_detail_dto, child_summary, group_detail, group_summary
 from backend.app.services.v5_formal_plan_validator import FormalPlanValidationError, validate_request
+from backend.app.services.v5_reproducibility_bundle import build as build_reproducibility_bundle
 from backend.app.services import v5_cleanup_service
 
 
@@ -205,6 +206,38 @@ def bundle(group_id: str):
     except ValueError as exc: raise HTTPException(404, "unknown formal run group") from exc
     if not path.is_file(): raise HTTPException(404, "bundle not ready")
     return FileResponse(path, filename="artifacts.zip")
+
+
+@router.post("/run-groups/{group_id}/bundle/rebuild")
+def rebuild_bundle(group_id: str) -> dict:
+    try:
+        group = read_group(group_id)
+        directory = group_dir(group_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    if group.get("status") not in {"completed", "completed_with_failures", "failed", "cancelled"}:
+        raise HTTPException(409, "bundle can only be rebuilt for a terminal RunGroup")
+    output = directory / "artifacts.zip"
+    try:
+        output.unlink(missing_ok=True)
+    except OSError:
+        pass
+    group["bundle_status"] = "ready"
+    group["bundle_path"] = str(output)
+    group.pop("bundle_error", None)
+    write_group(group)
+    try:
+        path = build_reproducibility_bundle(directory, group)
+    except Exception as exc:
+        try:
+            output.unlink(missing_ok=True)
+        except OSError:
+            pass
+        group["bundle_status"] = "failed"
+        group["bundle_error"] = str(exc)
+        write_group(group)
+        raise HTTPException(507, f"bundle rebuild failed: {exc}") from exc
+    return {"run_group_id": group_id, "bundle_status": "ready", "bundle_path": path.name}
 
 
 @router.get("/run-groups/{group_id}/artifacts/{artifact_path:path}")

@@ -85,10 +85,22 @@ func (e *SerialExecutor) ExecuteBlock(b block.Block, base map[string]string) Res
 	result := Result{BlockHash: b.BlockHash, Height: b.Height, StateRootBefore: before, Deterministic: true, EVMExecution: false, FabricExecution: false, StateUpdates: map[string]string{}, BlockExecutorID: SerialBlockExecutorID, ExecutorVersion: SerialBlockExecutorVersion, WorkerCount: 1}
 	declared := declaredAccessSet(b.TxList)
 	for index, item := range b.TxList {
-		overlay := newTxOverlay(b.ShardID, working)
-		receipt := e.executeTx(b, overlay, item)
-		working = overlay.snapshot()
-		delta := TxDelta{TxID: item.TxID, OriginalIndex: index, ReadSet: overlay.reads, WriteSet: overlay.logicalWrites(), Receipt: receipt, Success: receipt.Success, Error: receipt.Error}
+		// Sequential execution needs one mutable block working state plus a
+		// transaction-local write overlay.  This Serial-only overlay avoids a
+		// full-state copy per transaction without changing the shared speculative
+		// transaction primitive used by Block-STM, Aria, or other executors.
+		overlay := newSerialBlockTxOverlay(b.ShardID, working)
+		receipt := e.executeTxWithoutStateRoot(b, overlay, item)
+		keys := make([]string, 0, len(overlay.writes))
+		for key := range overlay.writes {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			working[overlay.key(key)] = overlay.writes[key]
+		}
+		receipt.StateRootAfterTx = state.RootOfSnapshot(working)
+		delta := TxDelta{TxID: item.TxID, OriginalIndex: index, ReadSet: append([]ReadObservation(nil), overlay.reads...), WriteSet: overlay.logicalWrites(), Receipt: receipt, Success: receipt.Success, Error: receipt.Error}
 		result.TxDeltas = append(result.TxDeltas, delta)
 		result.Receipts = append(result.Receipts, receipt)
 		if receipt.Success {
@@ -221,6 +233,92 @@ func applyDeclaredSemanticReads(overlay txExecutionOverlay, accesses []tx.Access
 		case "category_metadata":
 			overlay.get(access.Key)
 		}
+	}
+}
+
+// serialBlockTxOverlay is intentionally private to SerialExecutor.ExecuteBlock.
+// The existing txOverlay/newTxOverlay path is left byte-for-byte unchanged so
+// speculative executors retain their reviewed snapshot-isolation behavior.
+type serialBlockTxOverlay struct {
+	shardID string
+	base    map[string]string
+	reads   []ReadObservation
+	writes  map[string]string
+}
+
+func newSerialBlockTxOverlay(shardID string, base map[string]string) *serialBlockTxOverlay {
+	return &serialBlockTxOverlay{shardID: shardID, base: base, writes: map[string]string{}}
+}
+
+func (o *serialBlockTxOverlay) key(key string) string {
+	if strings.Contains(key, "::") {
+		return key
+	}
+	return o.shardID + "::" + key
+}
+
+func (o *serialBlockTxOverlay) get(key string) string {
+	if value, ok := o.writes[key]; ok {
+		o.reads = append(o.reads, ReadObservation{Key: key, Value: value, ValueDigest: digestValue(value), Source: "state_snapshot_overlay"})
+		return value
+	}
+	value := o.base[o.key(key)]
+	o.reads = append(o.reads, ReadObservation{Key: key, Value: value, ValueDigest: digestValue(value), Source: "state_snapshot_overlay"})
+	return value
+}
+
+func (o *serialBlockTxOverlay) set(key, value string) { o.writes[key] = value }
+
+func (o *serialBlockTxOverlay) snapshot() map[string]string {
+	out := copySnapshot(o.base)
+	for key, value := range o.writes {
+		out[o.key(key)] = value
+	}
+	return out
+}
+
+func (o *serialBlockTxOverlay) logicalWrites() map[string]string {
+	out := make(map[string]string, len(o.writes))
+	for key, value := range o.writes {
+		out[key] = value
+	}
+	return out
+}
+
+func (o *serialBlockTxOverlay) ensureAccount(account string, balance int64) {
+	if o.get("balance:"+account) == "" {
+		o.setBalance(account, balance)
+	}
+	if o.get("nonce:"+account) == "" {
+		o.setNonce(account, 0)
+	}
+}
+
+func (o *serialBlockTxOverlay) balance(account string) int64 {
+	value, _ := strconv.ParseInt(o.get("balance:"+account), 10, 64)
+	return value
+}
+
+func (o *serialBlockTxOverlay) setBalance(account string, balance int64) {
+	o.set("balance:"+account, strconv.FormatInt(balance, 10))
+}
+
+func (o *serialBlockTxOverlay) nonce(account string) uint64 {
+	value, _ := strconv.ParseUint(o.get("nonce:"+account), 10, 64)
+	return value
+}
+
+func (o *serialBlockTxOverlay) setNonce(account string, nonce uint64) {
+	o.set("nonce:"+account, strconv.FormatUint(nonce, 10))
+}
+
+func (o *serialBlockTxOverlay) applyCommutativeDeltas(accesses []tx.AccessItem) {
+	for _, access := range accesses {
+		if access.Mode != tx.AccessCommutativeDelta || access.Key == "" {
+			continue
+		}
+		current, _ := strconv.ParseInt(o.get(access.Key), 10, 64)
+		o.set(access.Key, strconv.FormatInt(current+access.Delta, 10))
 	}
 }
 

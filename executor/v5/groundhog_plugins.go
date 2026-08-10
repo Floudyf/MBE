@@ -18,7 +18,10 @@ const (
 type groundhogCandidateSelectionEvidence struct {
 	ShardID            string                                `json:"shard_id"`
 	Height             uint64                                `json:"height"`
+	PoolDepthBefore    int                                   `json:"pool_depth_before"`
 	CandidateCount     int                                   `json:"candidate_count"`
+	SelectedCount      int                                   `json:"selected_count"`
+	DeferredCount      int                                   `json:"deferred_count"`
 	ScanLimit          int                                   `json:"scan_limit"`
 	SelectedTxIDs      []string                              `json:"selected_tx_ids"`
 	SelectedLogicalIDs []string                              `json:"selected_logical_ids"`
@@ -45,6 +48,13 @@ func (p groundhogBlockProducer) Interval() time.Duration {
 	return 75 * time.Millisecond
 }
 
+func groundhogPaperScanLimit(depth, blockSize int) int {
+	if depth <= 0 {
+		return 0
+	}
+	return depth
+}
+
 func (p groundhogBlockProducer) ShouldProduce(input BlockProductionInput) bool {
 	return (input.Pool != nil && input.Pool.Len() > 0) || input.SystemDeltaReady
 }
@@ -60,19 +70,12 @@ func (p groundhogBlockProducer) BuildCandidate(input BlockProductionInput) (real
 	if limit < 1 {
 		return realblock.Block{}, fmt.Errorf("groundhog block producer requires positive block size")
 	}
-	multiplier := intValue(p.config["candidate_scan_multiplier"])
-	if multiplier < 1 {
-		multiplier = 4
-	}
 	depth := input.Pool.Len()
-	maxIntValue := int(^uint(0) >> 1)
-	scanLimit := depth
-	if limit <= maxIntValue/multiplier {
-		scanLimit = limit * multiplier
-		if scanLimit > depth {
-			scanLimit = depth
-		}
-	}
+	// Groundhog Algorithm 2 draws candidates from the available transaction
+	// stream until the block is large enough.  For MBE's finite ready-pool
+	// snapshot the faithful boundary is therefore the entire currently ready
+	// pool, not an arbitrary block_size*multiplier prefix.
+	scanLimit := groundhogPaperScanLimit(depth, limit)
 	candidates := input.Pool.ReserveReady(scanLimit)
 	if len(candidates) == 0 {
 		return realblock.Block{}, fmt.Errorf("empty_mempool")
@@ -120,7 +123,10 @@ func (p groundhogBlockProducer) BuildCandidate(input BlockProductionInput) (real
 	evidence := groundhogCandidateSelectionEvidence{
 		ShardID:            candidate.ShardID,
 		Height:             candidate.Height,
+		PoolDepthBefore:    depth,
 		CandidateCount:     len(candidates),
+		SelectedCount:      len(selection.Selected),
+		DeferredCount:      len(selection.Deferred),
 		ScanLimit:          scanLimit,
 		SelectedTxIDs:      transactionIDs(selection.Selected),
 		SelectedLogicalIDs: logicalTransactionIDs(selection.Selected),

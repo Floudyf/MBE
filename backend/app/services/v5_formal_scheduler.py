@@ -147,7 +147,13 @@ def _execution_semantics(snapshot: dict[str, str]) -> dict[str, object]:
             "measurement_boundary": "client_submit_to_groundhog_terminal",
         }
     routing = snapshot.get("routing", "")
-    if routing == "hash_routing_baseline":
+    routing_capabilities: set[str] = set()
+    if routing:
+        try:
+            routing_capabilities = set(STORE.get(routing).capabilities or [])
+        except ValueError:
+            routing_capabilities = set()
+    if "stateful_local_execution" in routing_capabilities:
         return {
             "comparison_semantics_class": "stateful_local_legacy_v1",
             "state_access_semantics": "stateful_local",
@@ -158,7 +164,7 @@ def _execution_semantics(snapshot: dict[str, str]) -> dict[str, object]:
             "legacy_cross_shard_protocol": True,
             "measurement_boundary": "client_submit_to_legacy_terminal",
         }
-    if routing in {"stateless_hash_routing", "metatrack_coaccess_routing"}:
+    if "stateless_direct_execution" in routing_capabilities:
         return {
             "comparison_semantics_class": "stateless_remote_home_v1",
             "state_access_semantics": "stateless_remote_home",
@@ -306,11 +312,18 @@ def _worker(group_id: str) -> None:
             write_group(group)
             finalize_cancelled(group_id)
             return
+        items = children(group_id)
         group["status"] = "failed"
         group["group_error"] = str(exc)
         group["finished_at"] = datetime.now(UTC).isoformat()
-        _refresh_child_counts(group, children(group_id))
+        _refresh_child_counts(group, items)
+        try:
+            group["aggregate"] = export_paper(group_dir(group_id), group, items)
+        except Exception as export_exc:
+            group["partial_export_error"] = str(export_exc)
+        group["bundle_path"] = str(group_dir(group_id) / "artifacts.zip")
         write_group(group)
+        _try_build_bundle(group_dir(group_id), group)
 
 
 def _run_worker(group_id: str) -> None:
@@ -354,6 +367,7 @@ def _run_worker(group_id: str) -> None:
         _refresh_child_counts(group, children(group_id))
         write_group(group)
         write_attempt(group_id, child_id, {"attempt_number": attempt_number, "status": "running", "started_at": datetime.now(UTC).isoformat()})
+        stop_after_child = False
         try:
             if row.get("blockers"):
                 child.update({"status": "blocked", "error": "; ".join(row["blockers"]), "paper_candidate": False})
@@ -404,6 +418,34 @@ def _run_worker(group_id: str) -> None:
                 "error": str(exc),
                 "paper_candidate": False,
             })
+        except v5_real_cluster_runner.V5ResourcePressureError as exc:
+            child.update({
+                "status": "failed",
+                "execution_status": "blocked_resource_disk_pressure",
+                "artifact_status": "incomplete",
+                "formal_eligibility": False,
+                "error": str(exc),
+                "resource_pressure": exc.evidence,
+                "result": {
+                    "run_id": exc.run_id,
+                    "status": "failed",
+                    "output_dir": exc.output_dir,
+                    "summary": {
+                        "execution_status": "blocked_resource_disk_pressure",
+                        "artifact_status": "incomplete",
+                        "formal_eligibility": False,
+                        "resource_pressure": exc.evidence,
+                    },
+                    "error": str(exc),
+                    "no_fallback": True,
+                },
+                "paper_candidate": False,
+            })
+            group = read_group(group_id)
+            group["resource_pressure_stop"] = exc.evidence
+            group["resource_pressure_stop_child_id"] = child_id
+            write_group(group)
+            stop_after_child = True
         except Exception as exc:  # preserve failure evidence for result center and retry policy
             child.update({"status": "failed", "error": str(exc), "paper_candidate": False})
         write_child(group_id, child)
@@ -411,7 +453,37 @@ def _run_worker(group_id: str) -> None:
         if child.get("status") == "cancelled":
             finalize_cancelled(group_id)
             return
+        if stop_after_child:
+            break
     finalize(group_id)
+
+
+def _try_build_bundle(directory: Path, group: dict) -> bool:
+    # Persist the state that a successful ZIP should contain before creating it.
+    # Remove a prior/partial ZIP first so catalog.bundle_ready can never mistake
+    # a corrupt archive for a completed reproducibility bundle.
+    output = directory / "artifacts.zip"
+    try:
+        output.unlink(missing_ok=True)
+    except OSError:
+        pass
+    group["bundle_status"] = "ready"
+    group.pop("bundle_error", None)
+    group.pop("bundle_failed_at", None)
+    write_group(group)
+    try:
+        build_bundle(directory, group)
+    except Exception as exc:
+        try:
+            output.unlink(missing_ok=True)
+        except OSError:
+            pass
+        group["bundle_status"] = "failed"
+        group["bundle_error"] = str(exc)
+        group["bundle_failed_at"] = datetime.now(UTC).isoformat()
+        write_group(group)
+        return False
+    return True
 
 
 def finalize_cancelled(group_id: str) -> dict:
@@ -438,14 +510,7 @@ def finalize_cancelled(group_id: str) -> dict:
     group["paper_candidate"] = False
     group["bundle_path"] = str(directory / "artifacts.zip")
     write_group(group)
-    try:
-        build_bundle(directory, group)
-    except Exception as exc:
-        # Cancellation truth must not be overwritten by an optional diagnostic
-        # bundle failure. The already-persisted child/runtime artifacts remain
-        # individually available for later inspection.
-        group["bundle_error"] = str(exc)
-        write_group(group)
+    _try_build_bundle(directory, group)
     return group
 
 
@@ -496,7 +561,7 @@ def finalize(group_id: str) -> dict:
     write_group(group)
 
     # 此时目录中已经包含最终 run_group.json 和论文汇总文件。
-    build_bundle(directory, group)
+    _try_build_bundle(directory, group)
 
     return group
 
