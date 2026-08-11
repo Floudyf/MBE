@@ -28,8 +28,10 @@ import { backendLabel, blockerLabel, faultModeLabel, statusLabel, suiteLabel } f
 import { BATCH_SI_ABLATION_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
 import { V5_BUILTIN_METHODS, V5_DEFAULT_METHOD_IDS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
 import { buildThetaSweepPoints, compactCount, thetaOptionsForDataset, type SkewExperimentPreset } from "../v5SkewExperiment"; // V5_SKEW_MAIN_PRESET_V1
+import "../v5UiPolish.css";
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
+const formalRunDraftKey = "mbe.v5FormalRunDraft.v1";
 const groundhogMethodId = "hash_groundhog";
 const alphaValues = [0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4];
 
@@ -51,7 +53,7 @@ function topologyWithShards(current: Topology, shards: number): Topology {
 type WorkloadPoint = { tx_count: number; cross_shard_ratio?: number; timeout_every?: number; target_alpha?: number; target_theta?: number };
 type FaultMode = "disabled" | "delay_only" | "network_drop";
 type FaultPoint = { mode: FaultMode; delay_ms?: number; drop_rate?: number; drop_message_types?: string[] };
-type Props = { onOpenResults?: (groupId: string) => void; onPreferredMethodUnavailable?: (methodId: string) => void; preferredMethodId?: string };
+type Props = { onOpenResults?: (groupId: string) => void; onPreferredMethodConsumed?: () => void; onPreferredMethodUnavailable?: (methodId: string) => void; preferredMethodId?: string };
 
 const defaultWorkload: WorkloadEditorState = {
   mode: "synthetic",
@@ -68,20 +70,160 @@ const defaultWorkload: WorkloadEditorState = {
   skewAxis: "contract",
 };
 
-export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavailable, preferredMethodId = "" }: Props) {
+const defaultTopology: Topology = { nodes: 8, shards: 2, validators_per_shard: 4 };
+const defaultBlockProduction: BlockProduction = { block_size: 100, block_interval_ms: 75 };
+
+type FormalRunDraftV1 = {
+  schema_version: "mbe_v5_formal_run_draft_v1";
+  saved_at: string;
+  selectedMethods: string[];
+  selectedSuite: V5FormalSuite;
+  workerCount: number;
+  topology: Topology;
+  blockProduction: BlockProduction;
+  workload: WorkloadEditorState;
+  skewPreset: SkewExperimentPreset;
+  repeats: number;
+  workloadPoints: WorkloadPoint[];
+  topologyPoints: TopologyPoint[];
+  faultPoints: FaultPoint[];
+};
+
+function cloneDefaultWorkload(): WorkloadEditorState {
+  return { ...defaultWorkload, variantParameters: {} };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function positiveInteger(value: unknown, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
+  const number = finiteNumber(value, fallback);
+  return Number.isInteger(number) && number > 0 ? Math.min(number, maximum) : fallback;
+}
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readWorkloadPoints(value: unknown): WorkloadPoint[] {
+  if (!Array.isArray(value)) return [];
+  const out: WorkloadPoint[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.tx_count !== "number" || !Number.isInteger(item.tx_count) || item.tx_count < 1) continue;
+    const point: WorkloadPoint = { tx_count: item.tx_count };
+    const crossShard = optionalFiniteNumber(item.cross_shard_ratio); if (crossShard !== undefined) point.cross_shard_ratio = crossShard;
+    const timeout = optionalFiniteNumber(item.timeout_every); if (timeout !== undefined) point.timeout_every = Math.max(0, Math.trunc(timeout));
+    const alpha = optionalFiniteNumber(item.target_alpha); if (alpha !== undefined) point.target_alpha = alpha;
+    const theta = optionalFiniteNumber(item.target_theta); if (theta !== undefined) point.target_theta = theta;
+    out.push(point);
+  }
+  return out;
+}
+
+function readTopologyPoints(value: unknown): TopologyPoint[] {
+  if (!Array.isArray(value)) return [];
+  const out: TopologyPoint[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    if (![item.nodes, item.shards, item.validators_per_shard].every((entry) => typeof entry === "number" && Number.isInteger(entry) && entry > 0)) continue;
+    const point: TopologyPoint = { nodes: item.nodes as number, shards: item.shards as number, validators_per_shard: item.validators_per_shard as number };
+    if (typeof item.worker_count === "number" && Number.isInteger(item.worker_count) && item.worker_count > 0) point.worker_count = item.worker_count;
+    out.push(point);
+  }
+  return out;
+}
+
+function readFaultPoints(value: unknown): FaultPoint[] {
+  if (!Array.isArray(value)) return [];
+  const out: FaultPoint[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || !["disabled", "delay_only", "network_drop"].includes(String(item.mode))) continue;
+    const point: FaultPoint = { mode: item.mode as FaultMode };
+    const delay = optionalFiniteNumber(item.delay_ms); if (delay !== undefined) point.delay_ms = delay;
+    const drop = optionalFiniteNumber(item.drop_rate); if (drop !== undefined) point.drop_rate = drop;
+    if (Array.isArray(item.drop_message_types)) point.drop_message_types = item.drop_message_types.filter((entry): entry is string => typeof entry === "string");
+    out.push(point);
+  }
+  return out;
+}
+
+function readFormalRunDraft(): FormalRunDraftV1 | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(formalRunDraftKey);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || parsed.schema_version !== "mbe_v5_formal_run_draft_v1") return null;
+    const suite = FORMAL_SUITE_DEFINITIONS.some((item) => item.id === parsed.selectedSuite) ? parsed.selectedSuite as V5FormalSuite : "comparison_experiment";
+    const methods = Array.isArray(parsed.selectedMethods) ? parsed.selectedMethods.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+    const topologyRaw = isRecord(parsed.topology) ? parsed.topology : {};
+    const blockRaw = isRecord(parsed.blockProduction) ? parsed.blockProduction : {};
+    const workloadRaw = isRecord(parsed.workload) ? parsed.workload : {};
+    const variantParameters = isRecord(workloadRaw.variantParameters)
+      ? Object.fromEntries(Object.entries(workloadRaw.variantParameters).filter(([, value]) => ["string", "number", "boolean"].includes(typeof value))) as Record<string, string | number | boolean>
+      : {};
+    const mode = ["synthetic", "dataset_original", "dataset_derived"].includes(String(workloadRaw.mode)) ? workloadRaw.mode as WorkloadEditorState["mode"] : defaultWorkload.mode;
+    const skewPreset = parsed.skewPreset === "theta_main" ? "theta_main" : "single_theta";
+    return {
+      schema_version: "mbe_v5_formal_run_draft_v1",
+      saved_at: typeof parsed.saved_at === "string" ? parsed.saved_at : "",
+      selectedMethods: methods.length ? methods : [...V5_DEFAULT_METHOD_IDS],
+      selectedSuite: suite,
+      workerCount: positiveInteger(parsed.workerCount, 4, 8),
+      topology: {
+        nodes: positiveInteger(topologyRaw.nodes, defaultTopology.nodes, 128),
+        shards: positiveInteger(topologyRaw.shards, defaultTopology.shards, 64),
+        validators_per_shard: positiveInteger(topologyRaw.validators_per_shard, defaultTopology.validators_per_shard, 128),
+      },
+      blockProduction: {
+        block_size: positiveInteger(blockRaw.block_size, defaultBlockProduction.block_size, 5000),
+        block_interval_ms: positiveInteger(blockRaw.block_interval_ms, defaultBlockProduction.block_interval_ms, 5000),
+      },
+      workload: {
+        mode,
+        datasetId: typeof workloadRaw.datasetId === "string" ? workloadRaw.datasetId : "",
+        variantMode: typeof workloadRaw.variantMode === "string" ? workloadRaw.variantMode : "",
+        variantParameters,
+        txCount: positiveInteger(workloadRaw.txCount, defaultWorkload.txCount, 10_000_000),
+        useFullDataset: workloadRaw.useFullDataset === true,
+        seedText: typeof workloadRaw.seedText === "string" ? workloadRaw.seedText : defaultWorkload.seedText,
+        targetAlpha: finiteNumber(workloadRaw.targetAlpha, defaultWorkload.targetAlpha),
+        crossShardRatio: finiteNumber(workloadRaw.crossShardRatio, defaultWorkload.crossShardRatio),
+        timeoutEvery: Math.max(0, Math.trunc(finiteNumber(workloadRaw.timeoutEvery, defaultWorkload.timeoutEvery))),
+        timeoutEnabled: workloadRaw.timeoutEnabled === true,
+        skewAxis: typeof workloadRaw.skewAxis === "string" ? workloadRaw.skewAxis : defaultWorkload.skewAxis,
+      },
+      skewPreset,
+      repeats: positiveInteger(parsed.repeats, 1, 20),
+      workloadPoints: readWorkloadPoints(parsed.workloadPoints),
+      topologyPoints: readTopologyPoints(parsed.topologyPoints),
+      faultPoints: readFaultPoints(parsed.faultPoints),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsumed, onPreferredMethodUnavailable, preferredMethodId = "" }: Props) {
+  const restoredDraft = useMemo(() => readFormalRunDraft(), []);
   const [catalog, setCatalog] = useState<V5PluginManifest[]>([]);
   const [datasets, setDatasets] = useState<V5WorkloadDatasetSummary[]>([]);
-  const [selectedMethods, setSelectedMethods] = useState<string[]>([...V5_DEFAULT_METHOD_IDS]);
-  const [selectedSuite, setSelectedSuite] = useState<V5FormalSuite>("comparison_experiment");
-  const [workerCount, setWorkerCount] = useState(4);
-  const [topology, setTopology] = useState<Topology>({ nodes: 8, shards: 2, validators_per_shard: 4 });
-  const [blockProduction, setBlockProduction] = useState<BlockProduction>({ block_size: 100, block_interval_ms: 75 });
-  const [workload, setWorkload] = useState<WorkloadEditorState>(defaultWorkload);
-  const [skewPreset, setSkewPreset] = useState<SkewExperimentPreset>("single_theta");
-  const [repeats, setRepeats] = useState(1);
-  const [workloadPoints, setWorkloadPoints] = useState<WorkloadPoint[]>([]);
-  const [topologyPoints, setTopologyPoints] = useState<TopologyPoint[]>([]);
-  const [faultPoints, setFaultPoints] = useState<FaultPoint[]>([]);
+  const [selectedMethods, setSelectedMethods] = useState<string[]>(() => restoredDraft?.selectedMethods ?? [...V5_DEFAULT_METHOD_IDS]);
+  const [selectedSuite, setSelectedSuite] = useState<V5FormalSuite>(() => restoredDraft?.selectedSuite ?? "comparison_experiment");
+  const [workerCount, setWorkerCount] = useState(() => restoredDraft?.workerCount ?? 4);
+  const [topology, setTopology] = useState<Topology>(() => restoredDraft?.topology ?? { ...defaultTopology });
+  const [blockProduction, setBlockProduction] = useState<BlockProduction>(() => restoredDraft?.blockProduction ?? { ...defaultBlockProduction });
+  const [workload, setWorkload] = useState<WorkloadEditorState>(() => restoredDraft?.workload ?? cloneDefaultWorkload());
+  const [skewPreset, setSkewPreset] = useState<SkewExperimentPreset>(() => restoredDraft?.skewPreset ?? "single_theta");
+  const [repeats, setRepeats] = useState(() => restoredDraft?.repeats ?? 1);
+  const [workloadPoints, setWorkloadPoints] = useState<WorkloadPoint[]>(() => restoredDraft?.workloadPoints ?? []);
+  const [topologyPoints, setTopologyPoints] = useState<TopologyPoint[]>(() => restoredDraft?.topologyPoints ?? []);
+  const [faultPoints, setFaultPoints] = useState<FaultPoint[]>(() => restoredDraft?.faultPoints ?? []);
   const [workloadPreview, setWorkloadPreview] = useState<V5WorkloadPreview | null>(null);
   const [workloadPreviewDirty, setWorkloadPreviewDirty] = useState(true);
   const [workloadPreviewError, setWorkloadPreviewError] = useState("");
@@ -95,6 +237,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   const [catalogError, setCatalogError] = useState("");
   const [busy, setBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [draftStatus, setDraftStatus] = useState(restoredDraft ? `已恢复上次实验配置${restoredDraft.saved_at ? `（${restoredDraft.saved_at.replace("T", " ").slice(0, 19)}）` : ""}。` : "实验配置会自动保存在本机浏览器。");
   const pollTimer = useRef<number | null>(null);
   const formRevision = useRef(0);
   const preferredConsumed = useRef(false);
@@ -141,6 +284,18 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   useEffect(() => { void loadCatalog(); const stored = window.localStorage.getItem(recentGroupKey); if (stored) void queryGroup(stored, true); return stopPolling; }, []);
   useEffect(() => { if (datasets.length && !workload.datasetId) setWorkload((current) => ({ ...current, datasetId: datasets[0].dataset_id })); }, [datasets.length, workload.datasetId]);
   useEffect(() => { if (groupId && groupDetail && !terminal(groupDetail.group.status)) schedulePolling(groupId); else stopPolling(); return stopPolling; }, [groupId, groupDetail?.group.status]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const draft: FormalRunDraftV1 = {
+        schema_version: "mbe_v5_formal_run_draft_v1",
+        saved_at: new Date().toISOString(),
+        selectedMethods, selectedSuite, workerCount, topology, blockProduction, workload, skewPreset, repeats, workloadPoints, topologyPoints, faultPoints,
+      };
+      window.localStorage.setItem(formalRunDraftKey, JSON.stringify(draft));
+      setDraftStatus("当前实验配置已自动保存。");
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [selectedMethods, selectedSuite, workerCount, topology, blockProduction, workload, skewPreset, repeats, workloadPoints, topologyPoints, faultPoints]);
 
   async function loadCatalog() {
     setBusy(true);
@@ -151,14 +306,39 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
       const categories = new Set(pluginResponse.map((item) => item.category));
       setCatalogError(pluginResponse.length > 0 && defaultV5PluginSelections(pluginResponse).length === categories.size ? "" : "真实集群插件目录不完整。");
       const available = V5_BUILTIN_METHODS.map((item) => item.method_id);
-      if (preferredMethodId && available.includes(preferredMethodId)) { setSelectedMethods([preferredMethodId]); preferredConsumed.current = true; }
-      else { setSelectedMethods(V5_DEFAULT_METHOD_IDS.filter((methodId) => available.includes(methodId))); if (preferredMethodId && !preferredConsumed.current) { preferredConsumed.current = true; onPreferredMethodUnavailable?.(preferredMethodId); } }
+      if (preferredMethodId && available.includes(preferredMethodId)) { setSelectedMethods([preferredMethodId]); preferredConsumed.current = true; onPreferredMethodConsumed?.(); }
+      else {
+        setSelectedMethods((current) => {
+          const filtered = current.filter((methodId) => available.includes(methodId));
+          return filtered.length ? filtered : V5_DEFAULT_METHOD_IDS.filter((methodId) => available.includes(methodId));
+        });
+        if (preferredMethodId && !preferredConsumed.current) { preferredConsumed.current = true; onPreferredMethodUnavailable?.(preferredMethodId); }
+      }
     } catch (caught) {
       setCatalogError(errorMessage(caught));
-      setSelectedMethods([...V5_DEFAULT_METHOD_IDS]);
+      setSelectedMethods((current) => current.length ? current : [...V5_DEFAULT_METHOD_IDS]);
     } finally {
       setBusy(false);
     }
+  }
+
+  function resetFormalRunDraft() {
+    window.localStorage.removeItem(formalRunDraftKey);
+    setSelectedMethods([...V5_DEFAULT_METHOD_IDS]);
+    setSelectedSuite("comparison_experiment");
+    setWorkerCount(4);
+    setTopology({ ...defaultTopology });
+    setBlockProduction({ ...defaultBlockProduction });
+    setWorkload({ ...cloneDefaultWorkload(), datasetId: datasets[0]?.dataset_id ?? "" });
+    setSkewPreset("single_theta");
+    setRepeats(1);
+    setWorkloadPoints([]);
+    setTopologyPoints([]);
+    setFaultPoints([]);
+    invalidateAll();
+    setDraftStatus("已恢复系统默认配置；后续修改仍会自动保存。");
+    setMessage("");
+    setError("");
   }
 
   function invalidateAll() {
@@ -472,11 +652,15 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
   function schedulePolling(id: string) { stopPolling(); pollTimer.current = window.setTimeout(() => { void queryGroup(id, true); }, 1500); }
   function stopPolling() { if (pollTimer.current !== null) { window.clearTimeout(pollTimer.current); pollTimer.current = null; } }
 
-  return <section className="page-grid" data-testid="v5-formal-run-page">
+  return <section className="page-grid v5-formal-run-page" data-testid="v5-formal-run-page">
     <article className="overview-hero wide">
       <p className="eyebrow">V5 Formal RunGroup</p>
       <h2>运行正式实验</h2>
       <p>负载来源进入 immutable Child ExperimentSpec。数据集 preview 和 Formal Matrix preview 都必须随配置变化重新生成。</p>
+      <div className="button-row">
+        <span className="muted" data-testid="v5-run-draft-status">{draftStatus}</span>
+        <button type="button" className="ghost-button" data-testid="v5-reset-run-draft" onClick={resetFormalRunDraft}>恢复系统默认配置</button>
+      </div>
       {catalogError && <p className="file-error">{catalogError}</p>}
       {message && <p className="notice">{message}</p>}
       {error && <p className="file-error">{error}</p>}
@@ -616,9 +800,10 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodUnavai
 }
 
 function PreviewTable({ preview, source, datasets }: { preview: V5FormalPreviewResponse; source: V5WorkloadSourceSpec | null; datasets: V5WorkloadDatasetSummary[] }) {
-  return <div className="table-wrap">
+  return <div className="table-wrap formal-matrix-wrap">
     <p data-testid="v5-formal-preview-summary"><strong>执行后端：</strong>{preview.execution_backend}；<strong>矩阵行数：</strong>{preview.rows.length}</p>
-    <table>
+    <p className="muted table-scroll-hint">矩阵列较多，保持字段横向可读；可在表格内左右滚动查看完整内容。</p>
+    <table className="v5-formal-preview-table">
       <thead>
         <tr>
           <th>实验类型</th>
@@ -642,10 +827,10 @@ function PreviewTable({ preview, source, datasets }: { preview: V5FormalPreviewR
       </thead>
       <tbody>{preview.rows.map((row) => <tr key={row.child_run_id} data-method-config-id={row.method_config_id}>
         <td>{suiteLabel(row.suite_type)}</td>
-        <td>{row.method.display_name}</td>
+        <td className="matrix-method-cell">{row.method.display_name}</td>
         <td>{source?.source_type ?? "synthetic"}</td>
-        <td>{source?.dataset_id ?? "synthetic"}</td>
-        <td>{source?.variant_mode ?? "synthetic"}</td>
+        <td className="matrix-dataset-cell">{source?.dataset_id ?? "synthetic"}</td>
+        <td className="matrix-variant-cell">{source?.variant_mode ?? "synthetic"}</td>
         <td>{row.estimated_transactions}</td>
         <td>{row.seed}</td>
         <td>{stringValue(source?.skew_axis ?? source?.variant_parameters?.skew_axis ?? source?.variant_parameters?.access_profile)}</td>
@@ -655,9 +840,9 @@ function PreviewTable({ preview, source, datasets }: { preview: V5FormalPreviewR
         <td>{stringValue(row.estimated_block_count)}</td>
         <td>{stringValue(row.topology_point.nodes)}</td>
         <td>{stringValue(row.topology_point.worker_count ?? row.method.plugin_config_overrides?.block_executor?.worker_count)}</td>
-        <td>{source?.source_type === "dataset" ? (datasets.find((item) => item.dataset_id === source.dataset_id)?.truth_label ?? "dataset_truth_label_unavailable") : "synthetic_generated"}</td>
-        <td>{source?.source_type === "dataset" ? "child_start_before_materialization" : "not_required"}</td>
-        <td>{row.runnable ? "可运行" : row.blockers.map(blockerLabel).join("；") || "已阻止"}</td>
+        <td className="matrix-truth-cell">{source?.source_type === "dataset" ? (datasets.find((item) => item.dataset_id === source.dataset_id)?.truth_label ?? "dataset_truth_label_unavailable") : "synthetic_generated"}</td>
+        <td className="matrix-materialization-cell">{source?.source_type === "dataset" ? "child_start_before_materialization" : "not_required"}</td>
+        <td className="matrix-compatibility-cell">{row.runnable ? "可运行" : row.blockers.map(blockerLabel).join("；") || "已阻止"}</td>
       </tr>)}</tbody>
     </table>
   </div>;

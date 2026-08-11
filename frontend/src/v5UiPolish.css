@@ -1,0 +1,321 @@
+/* V5 formal-run/results readability polish.
+ * Layout-only rules: no scheduler/runtime/algorithm semantics are changed.
+ */
+
+.v5-formal-run-page,
+.v5-results-page,
+.v5-formal-run-page > *,
+.v5-results-page > * {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Workload Preview: keep the common view concise, readable and bounded. */
+.workload-preview-panel .section-heading {
+  align-items: start;
+  flex-wrap: wrap;
+}
+
+.workload-preview-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+}
+
+.workload-preview-kpis > div {
+  align-content: start;
+  min-height: 86px;
+  overflow: hidden;
+}
+
+.workload-preview-kpis dt,
+.v5-results-page .stage-flow-kpis dt {
+  line-height: 1.25;
+}
+
+.workload-preview-kpis dd,
+.v5-results-page .stage-flow-kpis dd {
+  line-height: 1.42;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.workload-metric-wide {
+  grid-column: span 2;
+}
+
+.workload-metric-compact dd {
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workload-raw-details {
+  border-top: 1px dashed var(--line);
+  margin-top: 0.55rem;
+  padding-top: 0.45rem;
+}
+
+.workload-raw-details summary {
+  color: var(--blue);
+  cursor: pointer;
+  font-size: 0.74rem;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+.workload-raw-details pre {
+  background: #f5f8fd;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  margin: 0.45rem 0 0;
+  max-height: 220px;
+  max-width: 100%;
+  overflow: auto;
+  padding: 0.6rem;
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Formal matrix: preserve readable column widths and scroll the table itself
+ * instead of crushing method/dataset names into one-character lines. */
+.formal-matrix-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.table-scroll-hint {
+  margin-top: -0.15rem;
+}
+
+.v5-formal-preview-table {
+  min-width: 1720px;
+  table-layout: auto;
+  width: max-content;
+}
+
+.v5-formal-preview-table th,
+.v5-formal-preview-table td {
+  max-width: none;
+  min-width: 76px;
+  overflow-wrap: normal;
+  vertical-align: top;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.v5-formal-preview-table .matrix-method-cell {
+  font-weight: 750;
+  min-width: 150px;
+}
+
+.v5-formal-preview-table .matrix-dataset-cell {
+  min-width: 240px;
+}
+
+.v5-formal-preview-table .matrix-variant-cell {
+  min-width: 150px;
+}
+
+.v5-formal-preview-table .matrix-truth-cell,
+.v5-formal-preview-table .matrix-materialization-cell,
+.v5-formal-preview-table .matrix-compatibility-cell {
+  min-width: 190px;
+  max-width: 300px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+/* Results page: keep the new RunGroup selector inside the content column. */
+.v5-results-page {
+  overflow-x: clip;
+}
+
+.run-group-picker-card {
+  overflow: hidden;
+}
+
+.run-group-picker-card .section-heading {
+  align-items: start;
+  flex-wrap: wrap;
+}
+
+.run-group-picker-field {
+  display: grid;
+  gap: 0.4rem;
+  max-width: 760px;
+  min-width: 0;
+  width: 100%;
+}
+
+.run-group-picker-select {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.run-group-picker-current {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.run-group-picker-current code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.run-group-method-preview {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.run-group-method-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.run-group-method-chips > span {
+  background: #eef4ff;
+  border: 1px solid #c9d8f4;
+  border-radius: 999px;
+  color: #234a8c;
+  font-size: 0.76rem;
+  font-weight: 750;
+  line-height: 1.2;
+  max-width: 100%;
+  padding: 0.3rem 0.5rem;
+  white-space: nowrap;
+}
+
+/* Results KPI cards should have enough width for identifiers and technical
+ * values; on narrow screens they collapse to one or two columns naturally. */
+.v5-results-page .stage-flow-kpis,
+.v5-results-page .result-summary-grid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.v5-results-page .stage-flow-kpis > div,
+.v5-results-page .result-summary-grid > div {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.v5-results-page code,
+.v5-results-page dd,
+.v5-results-page p,
+.v5-results-page span,
+.v5-results-page small {
+  max-width: 100%;
+}
+
+/* Wide result tables stay readable inside their own horizontal scroller. */
+.v5-results-page .table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+}
+
+.v5-results-page .table-wrap table {
+  min-width: 100%;
+  table-layout: auto;
+  width: max-content;
+}
+
+.v5-results-page .table-wrap th,
+.v5-results-page .table-wrap td {
+  max-width: none;
+  overflow-wrap: normal;
+  vertical-align: top;
+  white-space: nowrap;
+  word-break: normal;
+}
+
+.v5-results-child-table {
+  min-width: 1540px !important;
+}
+
+.v5-results-child-table td:nth-child(1) {
+  min-width: 190px;
+}
+
+.v5-results-child-table td:nth-child(2) {
+  min-width: 105px;
+}
+
+.v5-results-child-table td:nth-child(3) {
+  min-width: 130px;
+}
+
+.v5-results-child-table td:nth-child(8) {
+  min-width: 82px;
+}
+
+.v5-results-child-table td:nth-child(12) {
+  max-width: 360px;
+  min-width: 240px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.v5-results-history-table {
+  min-width: 1160px !important;
+}
+
+.v5-results-history-table td:nth-child(2) {
+  min-width: 220px;
+}
+
+.v5-results-history-table td:nth-child(9),
+.v5-results-history-table td:nth-child(10) {
+  max-width: 300px;
+  min-width: 180px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.v5-results-page .artifact-table {
+  min-width: 980px;
+}
+
+.v5-results-page .artifact-table td:nth-child(1),
+.v5-results-page .artifact-table td:nth-child(2),
+.v5-results-page .artifact-table td:nth-child(3),
+.v5-results-page .artifact-table td:nth-child(4),
+.v5-results-page .artifact-table td:nth-child(5) {
+  max-width: 300px;
+  min-width: 145px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+@media (max-width: 900px) {
+  .workload-metric-wide {
+    grid-column: auto;
+  }
+
+  .workload-preview-kpis,
+  .v5-results-page .stage-flow-kpis,
+  .v5-results-page .result-summary-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
+  }
+
+  .run-group-picker-field {
+    max-width: 100%;
+  }
+}

@@ -31,12 +31,14 @@ import V5ArtifactCatalog from "../components/v5/V5ArtifactCatalog";
 import V5ChildDetail from "../components/v5/V5ChildDetail";
 import V5GroupSummary from "../components/v5/V5GroupSummary";
 import { backendLabel, booleanLabel, statusLabel, suiteLabel } from "../v5Labels";
+import "../v5UiPolish.css";
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
 const terminalStatuses = ["completed", "completed_with_failures", "failed", "cancelled"];
 
 export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGroupId?: string }) {
   const [groups, setGroups] = useState<V5FormalRunGroupSummary[]>([]);
+  const [selectorGroups, setSelectorGroups] = useState<V5FormalRunGroupSummary[]>([]);
   const [detail, setDetail] = useState<V5FormalRunGroupDetail | null>(null);
   const [aggregate, setAggregate] = useState<V5FormalAggregate | null>(null);
   const [catalog, setCatalog] = useState<V5FormalArtifactCatalog | null>(null);
@@ -49,6 +51,8 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   const [childError, setChildError] = useState("");
   const [busy, setBusy] = useState(false);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [selectorBusy, setSelectorBusy] = useState(false);
+  const [selectorError, setSelectorError] = useState("");
   const [historyError, setHistoryError] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
@@ -74,6 +78,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
+    void refreshSelectorGroups();
     void initializeCurrentGroup();
     return () => {
       stopPolling();
@@ -89,7 +94,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
 
   async function initializeCurrentGroup() {
     const revision = ++initializationRevision.current;
-    const requested = preferredGroupId || window.localStorage.getItem(recentGroupKey) || "";
+    const requested = window.localStorage.getItem(recentGroupKey) || preferredGroupId || "";
     if (requested) {
       setNotice("");
       const loaded = await loadGroup(requested);
@@ -106,6 +111,19 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       else clearSelection();
     } catch (caught) {
       setError(message(caught));
+    }
+  }
+
+  async function refreshSelectorGroups() {
+    setSelectorBusy(true);
+    try {
+      const page = await listV5FormalRunGroupSummaries({ limit: 100, offset: 0, include_tests: false });
+      setSelectorGroups(page.items);
+      setSelectorError("");
+    } catch (caught) {
+      setSelectorError(message(caught));
+    } finally {
+      setSelectorBusy(false);
     }
   }
 
@@ -140,7 +158,14 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     const switched = selectedGroupRef.current !== groupId;
     selectedGroupRef.current = groupId;
     setSelectedGroupId(groupId);
-    if (switched) clearChildSelection();
+    if (switched) {
+      detailRef.current = null;
+      setDetail(null);
+      setAggregate(null);
+      setCatalog(null);
+      setAnalysis(null);
+      clearChildSelection();
+    }
     setBusy(true);
     try {
       const [groupDetail, groupAggregate, artifactCatalog, groupAnalysis] = await Promise.all([
@@ -155,6 +180,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       setAggregate(groupAggregate);
       setCatalog(artifactCatalog);
       setAnalysis(groupAnalysis);
+      window.localStorage.setItem(recentGroupKey, groupId);
       setGroups((current) => current.map((item) => item.run_group_id === groupId ? {
         ...item,
         status: groupDetail.group.status,
@@ -251,7 +277,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       setOrphanScan(null);
       setLegacyScan(null);
       setNotice(dryRun ? "当前 RunGroup 清理 dry-run 已完成。" : "当前 RunGroup 清理已完成。");
-      if (!dryRun) { clearSelection(); await refreshHistory(); }
+      if (!dryRun) { clearSelection(); await Promise.all([refreshHistory(), refreshSelectorGroups()]); }
     } catch (caught) {
       setHistoryError(message(caught));
     } finally {
@@ -269,7 +295,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       setOrphanScan(null);
       setLegacyScan(null);
       setNotice(dryRun ? "批量清理 dry-run 已完成。" : "批量清理已完成。");
-      if (!dryRun) { setSelectedCleanupIds([]); clearSelection(); await refreshHistory(); }
+      if (!dryRun) { setSelectedCleanupIds([]); clearSelection(); await Promise.all([refreshHistory(), refreshSelectorGroups()]); }
     } catch (caught) {
       setHistoryError(message(caught));
     } finally {
@@ -367,7 +393,11 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   }
 
   const selectedGroup = detail?.group;
-  return <section className="page-grid" data-testid="v5-results-page">
+  const selectedSelectorGroup = selectorGroups.find((group) => group.run_group_id === selectedGroupId);
+  const selectedMethodNames = selectedSelectorGroup?.method_names
+    ?? selectedGroup?.plan?.methods.map((method) => method.display_name)
+    ?? [];
+  return <section className="page-grid v5-results-page" data-testid="v5-results-page">
     <article className="final-card wide page-hero">
       <p className="eyebrow">V5 正式实验结果</p>
       <h2>结果与产物</h2>
@@ -380,6 +410,30 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
         <button type="button" onClick={() => void cleanupCurrentGroup(false)} disabled={cleanupBusy}>删除当前组</button>
       </div>}
     </article>
+    <article className="final-card wide run-group-picker-card" data-testid="v5-run-group-picker">
+      <div className="section-heading">
+        <div>
+          <h3>运行记录</h3>
+          <p className="muted">选择一条 RunGroup 后，摘要、图表、子实验、分析和产物包都会切换到该记录。最近选择会保存在本机浏览器。</p>
+        </div>
+        <button type="button" onClick={() => void refreshSelectorGroups()} disabled={selectorBusy}>{selectorBusy ? "刷新中…" : "刷新记录"}</button>
+      </div>
+      <label className="run-group-picker-field">
+        <span>选择运行记录</span>
+        <select className="run-group-picker-select" data-testid="v5-run-group-picker-select" aria-label="运行记录" value={selectedGroupId} onChange={(event) => { const next = event.target.value; if (next) void loadGroup(next); }} disabled={selectorBusy && !selectorGroups.length}>
+          {!selectedGroupId && <option value="">暂无已选择记录</option>}
+          {selectedGroupId && !selectorGroups.some((group) => group.run_group_id === selectedGroupId) && <option value={selectedGroupId}>{selectedGroupId}（当前）</option>}
+          {selectorGroups.map((group) => <option key={group.run_group_id} value={group.run_group_id} title={runGroupOptionTitle(group)}>{runGroupOptionLabel(group)}</option>)}
+        </select>
+      </label>
+      {selectedMethodNames.length > 0 && <div className="run-group-method-preview" data-testid="v5-run-group-picker-methods">
+        <span className="muted">本记录方法（{selectedMethodNames.length}）</span>
+        <div className="run-group-method-chips">{selectedMethodNames.map((name) => <span key={name} title={name}>{compactMethodName(name)}</span>)}</div>
+      </div>}
+      {selectedGroupId && <p className="muted run-group-picker-current"><span>当前 RunGroup：</span><code>{selectedGroupId}</code></p>}
+      {busy && !selectedGroup && <p className="muted">正在加载所选运行记录…</p>}
+      {selectorError && <p className="file-error">运行记录列表错误：{selectorError}</p>}
+    </article>
     {selectedGroup && <V5GroupSummary group={selectedGroup} aggregate={aggregate} children={detail?.children ?? []} />}
     <V5AnalysisPanel analysis={analysis} />
     <V5SkewTpsChart
@@ -390,7 +444,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     />
     {detail && <article className="final-card wide">
       <h2>子实验</h2>
-      <div className="table-wrap"><table data-testid="v5-child-table">
+      <div className="table-wrap"><table className="v5-results-child-table" data-testid="v5-child-table">
         <thead><tr><th>子实验</th><th>实验类型</th><th>方法</th><th>种子</th><th>重复</th><th>拓扑</th><th>交易</th><th>执行状态</th><th>产物状态</th><th>正式结果</th><th>无回退</th><th>阻断原因</th><th>TPS</th><th>P99</th><th>终态</th><th>未完成</th><th>论文候选</th></tr></thead>
         <tbody>{detail.children.map((child) => <ChildRow key={child.child_run_id} child={child} selected={child.child_run_id === selectedChildId} onSelect={() => void loadChild(detail.group.run_group_id, child.child_run_id)} />)}</tbody>
       </table></div>
@@ -420,7 +474,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
         <button type="button" onClick={() => void cleanupLegacySavedConfigs(false)} disabled={cleanupBusy}>删除旧方案</button>
       <CleanupEvidence report={cleanupReport} scan={orphanScan} legacyScan={legacyScan} />
       {historyError && <p className="file-error">历史列表错误：{historyError}</p>}
-      {groups.length ? <div className="table-wrap"><table><thead><tr><th>清理</th><th>ID</th><th>状态</th><th>计划</th><th>后端</th><th>更新时间</th><th>子实验</th><th>失败</th><th>实验类型</th><th>方法</th></tr></thead><tbody>
+      {groups.length ? <div className="table-wrap"><table className="v5-results-history-table"><thead><tr><th>清理</th><th>ID</th><th>状态</th><th>计划</th><th>后端</th><th>更新时间</th><th>子实验</th><th>失败</th><th>实验类型</th><th>方法</th></tr></thead><tbody>
         {groups.map((group) => <tr key={group.run_group_id} className={group.run_group_id === selectedGroupId ? "selected-row" : ""}>
           <td><input aria-label={`选择 ${group.run_group_id} 清理`} type="checkbox" checked={selectedCleanupIds.includes(group.run_group_id)} onChange={(event) => toggleCleanupSelection(group.run_group_id, event.target.checked)} /></td>
           <td><button type="button" data-testid="v5-run-group-select" onClick={() => void loadGroup(group.run_group_id)}>{group.run_group_id}</button></td>
@@ -478,16 +532,44 @@ function ChildRow({ child, selected, onSelect }: { child: V5FormalChildRun; sele
   const artifact = child.artifact_status ?? child.result?.summary?.artifact_status;
   const eligible = child.formal_eligibility ?? child.result?.summary?.formal_eligibility;
   const blockers = [...(child.execution_gate?.blockers ?? child.result?.summary?.execution_gate?.blockers ?? []), ...(child.artifact_gate?.blockers ?? child.result?.summary?.artifact_gate?.blockers ?? [])];
-  const executionLabel = execution === "completed" ? "已完成" : execution === "failed" ? "失败" : String(execution ?? "未提供");
+  const executionLabel = execution ? statusLabel(String(execution)) : "未提供";
   const artifactLabel = artifact === "complete" ? "完整" : artifact === "incomplete" ? "不完整" : String(artifact ?? "未提供");
   return <tr className={selected ? "selected-row" : ""}>
     <td><button type="button" onClick={onSelect}>{child.child_run_id}</button></td>
-    <td><span>{suiteLabel(child.suite_type)}</span><small>{child.suite_type}</small></td>
+    <td>{suiteLabel(child.suite_type)}</td>
     <td>{child.method.display_name}</td><td>{child.seed}</td><td>{child.repeat_index + 1}</td>
     <td>{child.topology_point.nodes}/{child.topology_point.shards}/{child.topology_point.validators_per_shard}</td><td>{child.estimated_transactions}</td>
-    <td><span>{executionLabel}</span><small>{execution}</small></td><td>{artifactLabel}</td><td>{eligible === true ? "可用" : eligible === false ? "不可用" : "未提供"}</td><td>{child.result?.summary?.no_fallback === undefined ? "未提供" : String(child.result.summary.no_fallback)}</td><td>{blockers.length ? blockers.join("; ") : (child.error ?? "无")}</td>
+    <td>{executionLabel}</td><td>{artifactLabel}</td><td>{eligible === true ? "可用" : eligible === false ? "不可用" : "未提供"}</td><td>{child.result?.summary?.no_fallback === undefined ? "未提供" : String(child.result.summary.no_fallback)}</td><td>{blockers.length ? blockers.join("; ") : (child.error ?? "无")}</td>
     <td>{metric(child.metrics?.end_to_end_tps ?? finality?.end_to_end_tps ?? child.metrics?.throughput_tps)}</td><td>{metric(child.metrics?.p99_finality_ms ?? finality?.p99_finality_ms ?? child.metrics?.p99_latency_ms)}</td><td>{metric(finality?.terminal_unique_tx_count)}</td><td>{metric(finality?.incomplete_unique_tx_count)}</td><td>{booleanLabel(child.paper_candidate)}</td>
   </tr>;
+}
+
+function runGroupOptionLabel(group: V5FormalRunGroupSummary): string {
+  const time = group.updated_at ? group.updated_at.replace("T", " ").slice(5, 16) : "时间未知";
+  const suffix = group.run_group_id.split("_").pop() ?? group.run_group_id;
+  const suite = group.suite_names.length ? suiteLabel(group.suite_names[0]) : (group.plan_name || "实验");
+  const methods = group.method_names.length
+    ? group.method_names.map(compactMethodName).join(" / ")
+    : "方法未知";
+  return `${time} · ${statusLabel(group.status)} · ${suite} · ${suffix} · ${methods}`;
+}
+
+function runGroupOptionTitle(group: V5FormalRunGroupSummary): string {
+  const methods = group.method_names.length ? group.method_names.join(" / ") : "方法未知";
+  return `${group.run_group_id}\n${statusLabel(group.status)} · ${group.suite_names.map(suiteLabel).join(" / ") || group.plan_name || "实验"}\n${methods}`;
+}
+
+function compactMethodName(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.includes("block-stm")) return "Block-STM";
+  if (lower.includes("groundhog")) return "Groundhog";
+  if (lower.includes("batch-si")) return "Batch-SI";
+  if (lower.includes("aria")) return "Aria";
+  if (lower.includes("block shredding") || lower.includes("bsx")) return "BSX";
+  if ((lower.includes("address") && lower.includes("conflict graph")) || lower.includes("acg")) return "ACG";
+  if (lower.includes("conflict graph") || /(^|\W)cg(\W|$)/i.test(name)) return "CG";
+  if (lower.includes("serial")) return "Serial";
+  return name;
 }
 
 function metric(value: unknown): string { return value === undefined || value === null ? "—" : String(value); }
