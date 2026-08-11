@@ -1108,7 +1108,10 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 			return Result{}, err
 		}
 		snapshotStarted := time.Now()
-		snapshot := batchSICopySnapshot(working)
+		// The current working state is immutable until executeBatch returns, so
+		// it is the logical BS_k directly. Snapshot creation is O(1); private
+		// transaction writes cannot mutate it.
+		snapshot := working
 		snapshotMS += time.Since(snapshotStarted).Milliseconds()
 		transactions := make([]tx.SignedTransaction, 0, len(batch.OrderedTransactionIDs))
 		for _, id := range batch.OrderedTransactionIDs {
@@ -1420,24 +1423,31 @@ func batchSITransferAccounts(item tx.SignedTransaction) (string, string) {
 
 type batchSIOverlay struct {
 	shardID string
-	values  map[string]string
+	base    map[string]string
 	reads   []ReadObservation
 	writes  map[string]string
 }
 
 func newBatchSIOverlay(shardID string, base map[string]string) *batchSIOverlay {
-	return &batchSIOverlay{shardID: shardID, values: batchSICopySnapshot(base), writes: map[string]string{}}
+	// Batch-SI creates one immutable BS_k per batch.  Every transaction reads
+	// that shared batch snapshot and keeps only its own private writes here; a
+	// second whole-state copy per transaction is not part of Batch-SI semantics.
+	return &batchSIOverlay{shardID: shardID, base: base, writes: map[string]string{}}
 }
 
 func (o *batchSIOverlay) key(key string) string {
 	return batchSIQualifiedKey(o.shardID, key)
 }
 func (o *batchSIOverlay) get(key string) string {
-	value := o.values[o.key(key)]
+	if value, ok := o.writes[key]; ok {
+		o.reads = append(o.reads, ReadObservation{Key: key, Value: value, ValueDigest: batchSIDigestValue(value), Source: "batch_si_private_write"})
+		return value
+	}
+	value := o.base[o.key(key)]
 	o.reads = append(o.reads, ReadObservation{Key: key, Value: value, ValueDigest: batchSIDigestValue(value), Source: "batch_si_batch_snapshot"})
 	return value
 }
-func (o *batchSIOverlay) set(key, value string) { o.values[o.key(key)] = value; o.writes[key] = value }
+func (o *batchSIOverlay) set(key, value string) { o.writes[key] = value }
 func (o *batchSIOverlay) logicalWrites() map[string]string {
 	out := map[string]string{}
 	for key, value := range o.writes {

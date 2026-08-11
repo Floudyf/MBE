@@ -237,8 +237,8 @@ func applyDeclaredSemanticReads(overlay txExecutionOverlay, accesses []tx.Access
 }
 
 // serialBlockTxOverlay is intentionally private to SerialExecutor.ExecuteBlock.
-// The existing txOverlay/newTxOverlay path is left byte-for-byte unchanged so
-// speculative executors retain their reviewed snapshot-isolation behavior.
+// Speculative executors use a separate immutable-base/local-write overlay below;
+// Serial keeps its mutable block working state private to this executor.
 type serialBlockTxOverlay struct {
 	shardID string
 	base    map[string]string
@@ -324,13 +324,16 @@ func (o *serialBlockTxOverlay) applyCommutativeDeltas(accesses []tx.AccessItem) 
 
 type txOverlay struct {
 	shardID string
-	values  map[string]string
+	base    map[string]string
 	reads   []ReadObservation
 	writes  map[string]string
 }
 
 func newTxOverlay(shardID string, base map[string]string) *txOverlay {
-	return &txOverlay{shardID: shardID, values: copySnapshot(base), writes: map[string]string{}}
+	// The caller owns an immutable speculative snapshot.  Sharing it avoids an
+	// O(|state|) copy for every tentative transaction while each transaction
+	// keeps all writes private in o.writes.
+	return &txOverlay{shardID: shardID, base: base, writes: map[string]string{}}
 }
 
 func (o *txOverlay) key(key string) string {
@@ -341,18 +344,25 @@ func (o *txOverlay) key(key string) string {
 }
 
 func (o *txOverlay) get(key string) string {
-	value := o.values[o.key(key)]
+	if value, ok := o.writes[key]; ok {
+		o.reads = append(o.reads, ReadObservation{Key: key, Value: value, ValueDigest: digestValue(value), Source: "state_snapshot_overlay_local_write"})
+		return value
+	}
+	value := o.base[o.key(key)]
 	o.reads = append(o.reads, ReadObservation{Key: key, Value: value, ValueDigest: digestValue(value), Source: "state_snapshot_overlay"})
 	return value
 }
 
 func (o *txOverlay) set(key, value string) {
-	o.values[o.key(key)] = value
 	o.writes[key] = value
 }
 
 func (o *txOverlay) snapshot() map[string]string {
-	return copySnapshot(o.values)
+	out := copySnapshot(o.base)
+	for key, value := range o.writes {
+		out[o.key(key)] = value
+	}
+	return out
 }
 
 func (o *txOverlay) logicalWrites() map[string]string {

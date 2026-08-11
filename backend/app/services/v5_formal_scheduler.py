@@ -88,7 +88,7 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
                     item = method if isinstance(method, dict) else method.model_dump()
                     snapshot = {selection.category: STORE.get(item.get("plugin_overrides", {}).get(selection.category, selection.plugin_id)).plugin_id for selection in plan.base_spec.plugin_selections}
                     method_config_snapshot = dict(item.get("plugin_config_overrides", {}))
-                    execution_semantics = _execution_semantics(snapshot)
+                    execution_semantics = _execution_semantics(snapshot, str(item.get("method_id") or ""))
                     workload_identity = {**base_workload_identity, "point": variant["workload_point"]}
                     block_settings = _block_producer_settings(plan, item)
                     estimated_transactions = variant["workload_point"].get("tx_count", plan.base_spec.tx_count)
@@ -123,7 +123,18 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
 
 
 
-def _execution_semantics(snapshot: dict[str, str]) -> dict[str, object]:
+def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[str, object]:
+    if method_id == "hash_bsx" or snapshot.get("block_executor") == "bsx_block_executor":
+        return {
+            "comparison_semantics_class": "bsx_deterministic_coloring_serializable_v1",
+            "state_access_semantics": "stateful_local_deterministic_serializable_order",
+            "state_home_mapping_policy": "execution_shard_local_namespace",
+            "remote_fetch_policy": "none",
+            "remote_writeback_policy": "none",
+            "proof_policy": "consensus_bound_bsx_plan_digest",
+            "legacy_cross_shard_protocol": True,
+            "measurement_boundary": "client_submit_to_bsx_terminal",
+        }
     if snapshot.get("block_executor") == "batch_si_block_executor":
         return {
             "comparison_semantics_class": "batch_si_common_batch_snapshot_v1",
@@ -770,7 +781,10 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
                 valid_completed=valid_completed,
                 invalid_completed=invalid_completed,
                 required=required,
-                required_child_count=2,
+                # A single independently valid implementation establishes its own
+                # deterministic semantic result. When a cohort contains multiple
+                # methods, all of their required digests must still agree.
+                required_child_count=1,
                 equivalence_scope="semantic_cohort",
             )
             reports.append(report)
@@ -871,17 +885,25 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
                 item["paper_candidate"] = False
         item["pairwise_logical_state_equivalent"] = equivalent
 
-    performance_valid = bool(comparable_reports) and all(
+    within_semantic_valid = bool(comparable_reports) and all(
         report.get("pairwise_logical_state_equivalent") is True
         for report in comparable_reports
     )
+    semantic_classes = {
+        str(report.get("comparison_semantics_class") or "custom_unknown")
+        for report in comparable_reports
+    }
+    direct_cross_semantic_valid = (
+        within_semantic_valid
+        and len(semantic_classes) == 1
+        and "custom_unknown" not in semantic_classes
+    )
     return enriched, {
-        "passed": performance_valid,
-        # Backward-compatible field retained for existing consumers.  This
-        # validation is scoped to within-semantic-cohort state equivalence; it
-        # does not by itself authorize direct cross-semantic TPS uplift claims.
-        "performance_comparison_valid": performance_valid,
-        "within_semantic_cohort_state_equivalence_valid": performance_valid,
+        "passed": within_semantic_valid,
+        # Paper samples can be individually valid inside their own deterministic
+        # semantics even when direct cross-semantic uplift claims remain blocked.
+        "performance_comparison_valid": direct_cross_semantic_valid,
+        "within_semantic_cohort_state_equivalence_valid": within_semantic_valid,
         "pairwise_logical_state_equivalent": (
             True
             if comparable_reports

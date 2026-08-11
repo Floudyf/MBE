@@ -152,7 +152,9 @@ func (e *AriaExecutor) SelectCandidateTransactions(ctx context.Context, shardID 
 	for index := range pending {
 		pending[index] = index
 	}
-	attempts, maximumParallel, err := e.executeEpoch(ctx, blockValue, copySnapshot(base), pending, workerCount)
+	// The producer/validator supplies an immutable block-start snapshot; Aria
+	// attempts keep private writes, so no physical state copy is needed here.
+	attempts, maximumParallel, err := e.executeEpoch(ctx, blockValue, base, pending, workerCount)
 	if err != nil {
 		return selection, err
 	}
@@ -258,7 +260,7 @@ func (e *AriaExecutor) MaterializeCandidateSelection(b block.Block, base map[str
 		return Result{}, fmt.Errorf("aria selected materialization size mismatch: block=%d selected=%d deltas=%d", len(b.TxList), len(selection.Selected), len(selection.SelectedDeltas))
 	}
 	working := copySnapshot(base)
-	before := state.RootOfSnapshot(copySnapshot(base))
+	before := state.RootOfSnapshot(base)
 	result := Result{
 		BlockHash:        b.BlockHash,
 		Height:           b.Height,
@@ -377,7 +379,9 @@ func (e *AriaExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map
 			return Result{}, err
 		}
 
-		epochSnapshot := copySnapshot(working)
+		// working is immutable while this epoch executes; tentative writes stay
+		// transaction-local and are applied only after the epoch barrier.
+		epochSnapshot := working
 		attempts, maximumParallel, err := e.executeEpoch(ctx, b, epochSnapshot, pending, workerCount)
 		if err != nil {
 			return Result{}, err
@@ -508,7 +512,7 @@ func (e *AriaExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map
 	result := Result{
 		BlockHash:        b.BlockHash,
 		Height:           b.Height,
-		StateRootBefore:  state.RootOfSnapshot(copySnapshot(base)),
+		StateRootBefore:  state.RootOfSnapshot(base),
 		StateRootAfter:   state.RootOfSnapshot(working),
 		Deterministic:    true,
 		EVMExecution:     false,
@@ -572,7 +576,10 @@ func (e *AriaExecutor) executeEpoch(ctx context.Context, b block.Block, snapshot
 				index := pending[position]
 				item := b.TxList[index]
 				overlay := newTxOverlay(b.ShardID, snapshot)
-				receipt := e.serialSemantics.executeTx(b, overlay, item)
+				// Tentative Aria attempts need read/write evidence, not a durable
+				// per-attempt state root. Final committed receipt roots are rebuilt
+				// during deterministic materialization below.
+				receipt := e.serialSemantics.executeTxWithoutStateRoot(b, overlay, item)
 				delta := TxDelta{
 					TxID:          item.TxID,
 					OriginalIndex: index,

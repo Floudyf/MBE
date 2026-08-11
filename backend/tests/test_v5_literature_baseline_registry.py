@@ -87,4 +87,9 @@ def test_literature_baselines_validate_as_independent_real_cluster_methods():
     checked = validate_request(V5FormalRunRequest(execution_backend="real_cluster", plan=plan))
     assert [row["method_config_id"] for row in checked.rows] == list(EXPECTED)
     assert all(row["runnable"] for row in checked.rows)
-    assert all(row["comparison_semantics_class"] == "stateful_local_legacy_v1" for row in checked.rows)
+    semantics = {row["method_config_id"]: row["comparison_semantics_class"] for row in checked.rows}
+    assert semantics["hash_cg"] == "stateful_local_legacy_v1"
+    assert semantics["hash_acg"] == "stateful_local_legacy_v1"
+    # BSX may realize a different deterministic serializable order than the
+    # consensus input order, so its correctness oracle is its own bound plan.
+    assert semantics["hash_bsx"] == "bsx_deterministic_coloring_serializable_v1"

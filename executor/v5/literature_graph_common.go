@@ -299,7 +299,9 @@ func executeLiteratureGraphPlan(ctx context.Context, block realblock.Block, base
 		if err := ctx.Err(); err != nil {
 			return BlockExecutionResult{}, err
 		}
-		snapshot := literatureCopyStringMap(working)
+		// No transaction in a wave mutates working directly. Share the current
+		// immutable wave state and keep writes transaction-local until the barrier.
+		snapshot := working
 		started := time.Now()
 		waveResults, observed, err := executeLiteratureWave(ctx, block, wave, byID, indexByID, snapshot, workerCount)
 		executionMS += time.Since(started).Milliseconds()

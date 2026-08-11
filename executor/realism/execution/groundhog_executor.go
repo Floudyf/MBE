@@ -162,8 +162,10 @@ func newGroundhogReservationTable(shardID string, base map[string]string, ordere
 		orderedSetLimit = GroundhogOrderedSetInitialLimit
 	}
 	return &groundhogReservationTable{
-		ShardID:         shardID,
-		Base:            copySnapshot(base),
+		ShardID: shardID,
+		// The block-start snapshot is caller-owned and immutable during
+		// reservation. Objects contain all private reservation state.
+		Base:            base,
 		OrderedSetLimit: orderedSetLimit,
 		Objects:         map[string]*groundhogObject{},
 		keyLocks:        map[string]*sync.Mutex{},
@@ -296,7 +298,7 @@ func (e *GroundhogExecutor) ExecuteBlock(ctx context.Context, b block.Block, bas
 	metrics.CommittedTransactionCount = len(b.TxList) - metrics.ApplicationFailureCount
 	e.Metrics = metrics
 
-	beforeRoot := state.RootOfSnapshot(copySnapshot(base))
+	beforeRoot := state.RootOfSnapshot(base)
 	afterRoot := state.RootOfSnapshot(working)
 	result := Result{
 		BlockHash:        b.BlockHash,

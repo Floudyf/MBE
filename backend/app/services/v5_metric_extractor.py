@@ -70,6 +70,18 @@ BATCH_SI_REQUIRED_METRICS = [
     "batch_snapshot_create_ms",
 ]
 
+LITERATURE_GRAPH_REQUIRED_METRICS = [
+    "worker_count",
+    "maximum_parallel_width",
+    "wave_count",
+    "maximum_wave_width",
+    "dependency_edge_count",
+    "pairwise_conflict_check_count",
+    "graph_color_count",
+    "transaction_execution_ms",
+    "deterministic_materialization_ms",
+]
+
 
 def extract(run_dir: Path, method_id: str | None = None) -> dict:
     summary_path = run_dir / "real_cluster_summary.json"
@@ -204,6 +216,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
 
     _apply_block_stm_metrics(metrics, run_dir)
     _apply_batch_si_metrics(metrics, run_dir)
+    _apply_literature_graph_metrics(metrics, run_dir)
     _apply_metatrack_artifacts(metrics, run_dir)
     _apply_mechanism_metrics(metrics, run_dir)
 
@@ -410,6 +423,47 @@ def _apply_batch_si_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         if path.is_file()
     )
 
+def _apply_literature_graph_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
+    summaries = [
+        item for item in summaries
+        if item.get("block_executor_id") in {"cg_block_executor", "acg_block_executor", "bsx_block_executor"}
+    ]
+    if not summaries:
+        return
+    blocks = [
+        block
+        for summary in summaries
+        for block in (summary.get("blocks") if isinstance(summary.get("blocks"), list) else [])
+        if isinstance(block, dict)
+    ]
+    if not blocks:
+        return
+
+    def total(name: str) -> int:
+        return sum(_int(block.get(name)) for block in blocks)
+
+    executor_ids = sorted({str(item.get("block_executor_id") or "") for item in summaries if item.get("block_executor_id")})
+    metrics.update({
+        "literature_graph_metrics_available": True,
+        "literature_graph_block_executor_ids": executor_ids,
+        "worker_count": max((_int(block.get("configured_worker_count") or block.get("worker_count")) for block in blocks), default=0),
+        "maximum_parallel_width": max((_int(block.get("maximum_parallel_width")) for block in blocks), default=0),
+        "wave_count": total("wave_count"),
+        "maximum_wave_width": max((_int(block.get("maximum_wave_width")) for block in blocks), default=0),
+        "dependency_edge_count": total("dependency_edge_count"),
+        "pairwise_conflict_check_count": total("pairwise_conflict_check_count"),
+        "graph_color_count": total("graph_color_count"),
+        "transaction_execution_ms": total("transaction_execution_ms"),
+        "deterministic_materialization_ms": total("deterministic_materialization_ms"),
+    })
+    metrics["source_artifacts"].extend(
+        str(path.relative_to(run_dir)).replace("\\", "/")
+        for path in _batch_si_leader_summary_paths(run_dir)
+        if path.is_file()
+    )
+
+
 def _apply_metatrack_artifacts(metrics: dict[str, Any], run_dir: Path) -> None:
     for name, key in {
         "metatrack_batch_plan.jsonl": "metatrack_batch_plan_available",
@@ -470,8 +524,29 @@ def _apply_mechanism_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         metrics.update(remote_state)
 
 
+def _literature_graph_required_metrics(method_id: str | None) -> list[str]:
+    normalized = str(method_id or "").lower()
+    if normalized not in {"hash_cg", "hash_acg", "hash_bsx"}:
+        return []
+    required = [
+        "worker_count",
+        "maximum_parallel_width",
+        "wave_count",
+        "maximum_wave_width",
+        "dependency_edge_count",
+        "transaction_execution_ms",
+        "deterministic_materialization_ms",
+    ]
+    if normalized == "hash_cg":
+        required.append("pairwise_conflict_check_count")
+    if normalized == "hash_bsx":
+        required.append("graph_color_count")
+    return required
+
+
 def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None) -> None:
     uses_block_stm, uses_metatrack, uses_batch_si = _method_traits(metrics, method_id)
+    literature_graph_required = _literature_graph_required_metrics(method_id)
     required = list(COMMON_REQUIRED_METRICS)
     if uses_block_stm:
         required.extend(BLOCK_STM_REQUIRED_METRICS)
@@ -479,17 +554,24 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         required.extend(METATRACK_REQUIRED_METRICS)
     if uses_batch_si:
         required.extend(BATCH_SI_REQUIRED_METRICS)
+    required.extend(literature_graph_required)
 
-    statuses: dict[str, str] = {}
+    # Metric names overlap across methods (for example worker_count and
+    # maximum_parallel_width).  Compute requiredness from the union once so a
+    # later optional family cannot overwrite an earlier required status.
+    required_names = set(required)
+    status_names = list(dict.fromkeys(
+        COMMON_REQUIRED_METRICS
+        + BLOCK_STM_REQUIRED_METRICS
+        + METATRACK_REQUIRED_METRICS
+        + BATCH_SI_REQUIRED_METRICS
+        + LITERATURE_GRAPH_REQUIRED_METRICS
+    ))
+    statuses: dict[str, str] = {
+        name: _metric_state(metrics.get(name), required=name in required_names)
+        for name in status_names
+    }
     metric_missing: list[str] = []
-    for name in COMMON_REQUIRED_METRICS:
-        statuses[name] = _metric_state(metrics.get(name), required=True)
-    for name in BLOCK_STM_REQUIRED_METRICS:
-        statuses[name] = _metric_state(metrics.get(name), required=uses_block_stm)
-    for name in METATRACK_REQUIRED_METRICS:
-        statuses[name] = _metric_state(metrics.get(name), required=uses_metatrack)
-    for name in BATCH_SI_REQUIRED_METRICS:
-        statuses[name] = _metric_state(metrics.get(name), required=uses_batch_si)
     for name in required:
         if statuses.get(name) == "missing":
             metric_missing.append(f"metric:{name}")
