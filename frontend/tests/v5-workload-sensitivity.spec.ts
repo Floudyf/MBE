@@ -7,8 +7,7 @@ test("workload sensitivity keeps every selected method for every workload point"
     await selectOnlySuite(page, "workload_sensitivity");
     await page.getByLabel("nodes").fill("8"); await page.getByLabel("shards").fill("2"); await page.getByLabel("validators per shard").fill("4");
     const editor = page.getByTestId("v5-point-editor-负载扫描点");
-    await editor.getByRole("button", { name: "添加扫描点" }).click();
-    await editor.getByRole("button", { name: "添加扫描点" }).click();
+
     const fields = editor.locator('input[type="number"]');
     await fields.nth(0).fill("20"); await fields.nth(1).fill("0"); await fields.nth(2).fill("0");
     await fields.nth(3).fill("80"); await fields.nth(4).fill("0.25"); await fields.nth(5).fill("0");

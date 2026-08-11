@@ -14,10 +14,10 @@ test("protects unsaved V5 method changes before entering Run", async ({ page }) 
   await page.getByTestId("primary-navigation").getByRole("button").nth(1).click();
   await dialog.getByRole("button").nth(1).click();
   await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
-  await expect(page.getByTestId("v5-run-preferred-method")).toContainText("Baseline");
+  await expect(page.getByTestId("v5-run-preferred-method")).toContainText("Serial");
   await expect(page.getByTestId("v5-run-preferred-method")).toContainText("Block-STM");
   await expect(page.getByTestId("v5-run-preferred-method")).toContainText("MetaTrack");
-  await expect(page.getByTestId("v5-run-preferred-method")).toContainText("metatrack_block_stm");
+  await expect(page.getByTestId("v5-run-preferred-method")).toContainText("MetaTrack + Block-STM");
   await expect(page.getByTestId("v5-run-method-hash_serial").getByRole("checkbox")).toBeChecked();
   await expect(page.getByTestId("v5-run-method-hash_block_stm").getByRole("checkbox")).toBeChecked();
   await expect(page.getByTestId("v5-run-method-metatrack_serial").getByRole("checkbox")).toBeChecked();

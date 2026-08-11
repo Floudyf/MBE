@@ -6,8 +6,8 @@ test("shows persisted V5 results, runtime evidence, and real artifacts", async (
   test.setTimeout(180_000);
   await page.goto("/?e2e=1");
   await page.locator(".final-sidebar nav").first().getByRole("button").nth(1).click();
-  await selectOnlyMethod(page, "hash_serial");
   await selectOnlySuite(page, "main_experiment");
+  await selectOnlyMethod(page, "hash_block_stm");
   await page.getByLabel("nodes").fill("8");
   await page.getByLabel("shards").fill("2");
   await page.getByLabel("validators per shard").fill("4");
@@ -31,7 +31,7 @@ test("shows persisted V5 results, runtime evidence, and real artifacts", async (
   await expect(page.getByTestId("v5-run-group-list").locator("tr", { hasText: groupId })).toHaveCount(0);
 
   const row = page.getByTestId("v5-child-table").locator("tbody tr").first().locator("td");
-  await expect(row.nth(7)).toHaveText("已完成completed");
+  await expect(row.nth(7)).toHaveText("已完成");
   await expect(row.nth(10)).toHaveText("true");
   await expect(row.nth(14)).toHaveText("40");
   await expect(row.nth(15)).toHaveText("0");

@@ -82,7 +82,8 @@ test("V5 method design page exposes workflow information architecture", async ({
 
   const routingSelect = page.getByTestId("v5-method-category-routing").locator("select");
   const options = await routingSelect.locator("option").evaluateAll((items) => items.map((item) => (item as HTMLOptionElement).value));
-  const alternate = options.find((value) => value !== options[0]);
+  const currentRouting = await routingSelect.inputValue();
+  const alternate = options.find((value) => value !== currentRouting);
   if (alternate) {
     await routingSelect.selectOption(alternate);
     await expect(page.getByTestId("v5-summary-overrides-count")).not.toHaveText(initialOverrides);

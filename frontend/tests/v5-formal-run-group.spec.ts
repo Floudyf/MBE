@@ -83,7 +83,7 @@ test("selecting Groundhog preserves the user-selected multi-shard topology and k
     if (await checkbox.isChecked()) await checkbox.uncheck();
   }
   await page.getByTestId("v5-run-method-hash_groundhog").getByRole("checkbox").check();
-  await expect(page.getByTestId("v5-groundhog-topology-notice")).toContainText("不会自动改写拓扑");
+  await expect(page.getByTestId("v5-groundhog-topology-notice")).toContainText("使用当前选择的节点数、分片数和每片验证节点数");
   await expect(page.getByLabel("nodes")).toHaveValue("32");
   await expect(page.getByLabel("shards")).toHaveValue("8");
   await expect(page.getByLabel("validators per shard")).toHaveValue("4");

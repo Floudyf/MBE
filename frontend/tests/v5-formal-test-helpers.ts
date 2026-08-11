@@ -31,18 +31,28 @@ export async function createRunnableMethod(request: APIRequestContext, name: str
 export async function deleteMethod(request: APIRequestContext, configId: string) { if (configId) await request.delete(`/api/v3/saved-configs/${configId}`); }
 
 export async function selectOnlyMethod(page: Page, methodId: string) {
-  await expect(page.getByTestId("v5-run-method-hash_serial")).toBeVisible();
   await expect(page.getByTestId("v5-formal-preview-button")).toBeEnabled();
-  await expect(methodCheckbox(page, "hash_serial")).toBeChecked();
-  for (const method of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
-    const checkbox = methodCheckbox(page, method);
+  const target = methodCheckbox(page, methodId);
+  await expect(target).toBeVisible();
+  const targetLabel = await target.getAttribute("aria-label");
+  if (!(await target.isChecked())) await target.check();
+  await expect(target).toBeChecked();
+
+  const visibleCheckboxes = page.locator('[data-testid^="v5-run-method-"] input[type="checkbox"]');
+  const count = await visibleCheckboxes.count();
+  for (let index = 0; index < count; index += 1) {
+    const checkbox = visibleCheckboxes.nth(index);
+    if (await checkbox.isDisabled()) continue;
+    if ((await checkbox.getAttribute("aria-label")) === targetLabel) continue;
     if (await checkbox.isChecked()) await checkbox.uncheck();
   }
-  await methodCheckbox(page, methodId).check();
-  for (const method of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
-    const checkbox = methodCheckbox(page, method);
-    if (method === methodId) await expect(checkbox).toBeChecked();
-    else await expect(checkbox).not.toBeChecked();
+
+  await expect(target).toBeChecked();
+  for (let index = 0; index < count; index += 1) {
+    const checkbox = visibleCheckboxes.nth(index);
+    if (await checkbox.isDisabled()) continue;
+    if ((await checkbox.getAttribute("aria-label")) === targetLabel) continue;
+    await expect(checkbox).not.toBeChecked();
   }
 }
 

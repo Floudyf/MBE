@@ -8,8 +8,7 @@ test("fault matrix only exposes runtime-supported modes and blocks cross-shard p
   await selectOnlySuite(page, "fault_recovery_experiment");
   await page.getByLabel("tx_count").fill("20");
   const editor = page.getByTestId("v5-point-editor-故障扫描点");
-  await editor.getByRole("button", { name: "添加扫描点" }).click();
-  await editor.getByRole("button", { name: "添加扫描点" }).click();
+
   const modes = editor.locator("select");
   await modes.nth(0).selectOption("disabled");
   await modes.nth(1).selectOption("network_drop");
