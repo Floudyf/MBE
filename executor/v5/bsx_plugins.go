@@ -62,7 +62,7 @@ func (p bsxBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecution
 	if err := literatureVerifyPlan(input.Block, plan, bsxPlanAlgorithmID, buildBSXPlan); err != nil {
 		return BlockExecutionResult{}, err
 	}
-	return executeLiteratureGraphPlan(ctx, input.Block, input.BaseStateSnapshot, plan, configuredWorkerCount(p.config, input.WorkerCount), bsxBlockExecutorID)
+	return executeBSXPlanWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, configuredWorkerCount(p.config, input.WorkerCount))
 }
 
 func buildBSXPlan(block realblock.Block) (literatureGraphPlan, error) {

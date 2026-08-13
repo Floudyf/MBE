@@ -205,6 +205,15 @@ type StateStoragePlugin interface {
 	PersistDelta(*state.DB, state.DeltaMetadata, []state.StateKV, state.PersistenceOptions) (state.PersistenceMetrics, error)
 	SnapshotIfDue(*state.DB, uint64, state.PersistenceOptions) (state.PersistenceMetrics, error)
 }
+
+// AuthenticatedStateSnapshotter is an optional state-storage extension used by
+// the single-shard execution path to capture a KV snapshot and the exact
+// matching authenticated commitment atomically. Other storage plugins keep the
+// existing Snapshot contract and use the executor full-build fallback.
+type AuthenticatedStateSnapshotter interface {
+	SnapshotWithCommitment(*state.DB) (map[string]string, *state.Commitment)
+}
+
 type CrossShardPlugin interface {
 	Plugin
 	IsCrossShard(tx.SignedTransaction) bool
@@ -356,6 +365,7 @@ type StateVersionPublishFunc func(context.Context, tx.SignedTransaction, executi
 type BlockExecutionInput struct {
 	Block                realblock.Block
 	BaseStateSnapshot    map[string]string
+	BaseStateCommitment  *state.Commitment
 	NodeID               string
 	ShardID              string
 	WorkerCount          int
@@ -374,6 +384,8 @@ type BlockExecutionResult struct {
 	BlockExecutionMS       int64            `json:"block_execution_ms"`
 	TransactionExecutionMS int64            `json:"transaction_execution_ms"`
 	DeterministicApplyMS   int64            `json:"deterministic_apply_ms"`
+	StateCommitmentMS      int64            `json:"state_commitment_ms"`
+	StateRootVersion       string           `json:"state_root_version"`
 	PersistenceMetrics     map[string]any   `json:"persistence_metrics,omitempty"`
 	ScheduleEvents         []ScheduleEvent  `json:"schedule_events,omitempty"`
 	ActualMetrics          map[string]any   `json:"actual_metrics,omitempty"`
@@ -447,6 +459,12 @@ type WorkloadReplaySummary struct {
 	ExpectedCrossShardRatio  float64        `json:"expected_cross_shard_ratio"`
 	ActualCrossShardRatio    float64        `json:"actual_cross_shard_ratio"`
 	ReplayMode               string         `json:"replay_mode"`
+	TargetSubmissionTPS      int            `json:"target_submission_tps,omitempty"`
+	ObservedSubmissionTPS    float64        `json:"observed_submission_tps,omitempty"`
+	SubmissionDurationMS     int64          `json:"submission_duration_ms,omitempty"`
+	PacingSchedule           string         `json:"pacing_schedule,omitempty"`
+	PacingLateReleaseCount   uint64         `json:"pacing_late_release_count,omitempty"`
+	PacingMaxScheduleLagMS   int64          `json:"pacing_max_schedule_lag_ms,omitempty"`
 	NoFallback               bool           `json:"no_fallback"`
 	ShardLoadDistribution    map[string]int `json:"shard_load_distribution,omitempty"`
 	MaxAverageShardLoadRatio float64        `json:"max_average_shard_load_ratio,omitempty"`
@@ -2005,12 +2023,12 @@ func (p serialBlockExecutor) ExecuteBlock(_ context.Context, input BlockExecutio
 		workerCount = 1
 	}
 	executor := execution.NewSerialExecutor()
-	result := executor.ExecuteBlock(input.Block, input.BaseStateSnapshot)
+	result := executor.ExecuteBlockWithCommitment(input.Block, input.BaseStateSnapshot, input.BaseStateCommitment)
 	delta := make([]state.StateKV, 0, len(result.StateDelta))
 	for _, item := range result.StateDelta {
 		delta = append(delta, state.StateKV{Key: item.Key, Value: item.Value})
 	}
-	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: workerCount}, nil
+	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: workerCount, TransactionExecutionMS: result.TransactionExecutionMS, DeterministicApplyMS: result.DeterministicMaterializationMS, StateCommitmentMS: result.StateCommitmentMS, StateRootVersion: result.StateRootVersion}, nil
 }
 
 type ariaBlockExecutor struct{ basicPlugin }
@@ -2027,11 +2045,11 @@ func (p ariaBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutio
 	// selected subset is applied to the block state.
 	applyExecutor := execution.NewAriaExecutor(workerCount)
 	applyAriaExecutionConfig(applyExecutor, p.config)
-	result, err := applyExecutor.MaterializeCandidateSelection(input.Block, input.BaseStateSnapshot, selection)
+	result, err := applyExecutor.MaterializeCandidateSelectionWithCommitment(input.Block, input.BaseStateSnapshot, selection, input.BaseStateCommitment)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
-	metrics := selection.Metrics
+	metrics := applyExecutor.Metrics
 	actualMetrics := map[string]any{
 		"aria_metrics":                                   metrics,
 		"aria_epoch_trace_digest":                        stableJSONDigest(selection.Trace),
@@ -2058,6 +2076,10 @@ func (p ariaBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutio
 		"aria_selected_materialized_without_reexecution": true,
 		"aria_selected_apply_execution_attempts":         0,
 		"maximum_parallel_width":                         metrics.MaximumParallelWidth,
+		"transaction_execution_ms":                       result.TransactionExecutionMS,
+		"deterministic_materialization_ms":               result.DeterministicMaterializationMS,
+		"state_commitment_ms":                            result.StateCommitmentMS,
+		"state_root_version":                             result.StateRootVersion,
 		"abort_count":                                    metrics.ConflictAbortCount,
 		"reexecution_count":                              metrics.ReexecutionCount,
 		"serializable":                                   true,
@@ -2070,12 +2092,16 @@ func (p ariaBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutio
 	candidateBlock.TxIDs = append([]string(nil), evidence.CandidateTxIDs...)
 	events := ariaScheduleEvents(candidateBlock, []execution.AriaEpochTrace{selection.Trace})
 	return BlockExecutionResult{
-		ExecutionResult: result,
-		StateDelta:      stateKVsFromExecutionDelta(result.StateDelta),
-		PlanDigest:      result.PlanDigest,
-		WorkerCount:     result.WorkerCount,
-		ScheduleEvents:  events,
-		ActualMetrics:   actualMetrics,
+		ExecutionResult:        result,
+		StateDelta:             stateKVsFromExecutionDelta(result.StateDelta),
+		PlanDigest:             result.PlanDigest,
+		WorkerCount:            result.WorkerCount,
+		TransactionExecutionMS: result.TransactionExecutionMS,
+		DeterministicApplyMS:   result.DeterministicMaterializationMS,
+		StateCommitmentMS:      result.StateCommitmentMS,
+		StateRootVersion:       result.StateRootVersion,
+		ScheduleEvents:         events,
+		ActualMetrics:          actualMetrics,
 	}, nil
 }
 
@@ -2135,7 +2161,7 @@ func (p blockSTMBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExec
 	if action := strings.TrimSpace(fmt.Sprint(p.config["incarnation_limit_action"])); action == "fail" || action == "serial_fallback" {
 		executor.IncarnationLimitAction = action
 	}
-	result, err := executor.ExecuteBlock(ctx, input.Block, input.BaseStateSnapshot)
+	result, err := executor.ExecuteBlockWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
@@ -2153,7 +2179,7 @@ func (p blockSTMBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExec
 	for _, item := range result.StateDelta {
 		delta = append(delta, state.StateKV{Key: item.Key, Value: item.Value})
 	}
-	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: result.WorkerCount, ActualMetrics: actualMetrics}, nil
+	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: result.WorkerCount, TransactionExecutionMS: result.TransactionExecutionMS, DeterministicApplyMS: result.DeterministicMaterializationMS, StateCommitmentMS: result.StateCommitmentMS, StateRootVersion: result.StateRootVersion, ActualMetrics: actualMetrics}, nil
 }
 
 const metaTrackBlockExecutorID = "metatrack_block_executor"
@@ -3290,6 +3316,13 @@ func (p builtinStateStorage) Snapshot(db *state.DB) map[string]string {
 		return map[string]string{}
 	}
 	return db.Snapshot()
+}
+
+func (p builtinStateStorage) SnapshotWithCommitment(db *state.DB) (map[string]string, *state.Commitment) {
+	if db == nil {
+		return map[string]string{}, state.NewCommitment(nil)
+	}
+	return db.SnapshotWithCommitment()
 }
 
 func (p builtinStateStorage) Root(db *state.DB) string {

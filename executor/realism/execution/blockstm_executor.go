@@ -43,7 +43,9 @@ type BlockSTMMetrics struct {
 	SchedulerQueuePeak              int         `json:"scheduler_queue_peak"`
 	StaleTaskCount                  int         `json:"stale_task_count"`
 	SerialOracleMS                  int64       `json:"serial_oracle_ms"`
+	TransactionExecutionMS          int64       `json:"transaction_execution_ms"`
 	MaterializationMS               int64       `json:"materialization_ms"`
+	StateCommitmentMS               int64       `json:"state_commitment_ms"`
 	IncarnationLimitHitCount        int         `json:"incarnation_limit_hit_count"`
 	SerialFallbackCount             int         `json:"serial_fallback_count"`
 	BusinessExecutionCount          int         `json:"business_execution_invocation_count"`
@@ -86,6 +88,10 @@ func NewBlockSTMExecutor(workerCount int) *BlockSTMExecutor {
 }
 
 func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
+	return e.ExecuteBlockWithCommitment(ctx, b, base, nil)
+}
+
+func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b block.Block, base map[string]string, baseCommitment *state.Commitment) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -102,6 +108,7 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 	incarnations := make([]int, len(b.TxList))
 	validationGeneration := make([]uint64, len(b.TxList))
 	metrics := BlockSTMMetrics{WorkerCount: workerCount, IncarnationHistogram: map[int]int{}}
+	executionStarted := time.Now()
 	scheduler := blockstm.NewScheduler(len(b.TxList))
 	dependencies := blockstm.NewDependencyRegistry()
 	validated := make([]bool, len(b.TxList))
@@ -467,21 +474,39 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 		metrics.MaximumParallelWidth = metrics.MaximumConcurrentExecutions
 	}
 
+	metrics.TransactionExecutionMS = time.Since(executionStarted).Milliseconds()
 	serialWorking := copySnapshot(base)
-	materializeStarted := time.Now()
-	result := Result{BlockHash: b.BlockHash, Height: b.Height, StateRootBefore: state.RootOfSnapshot(copySnapshot(base)), Deterministic: true, EVMExecution: false, FabricExecution: false, StateUpdates: map[string]string{}, BlockExecutorID: BlockSTMExecutorID, ExecutorVersion: BlockSTMExecutorVersion, WorkerCount: workerCount}
+	commitmentStarted := time.Now()
+	commitment := state.CloneOrBuild(baseCommitment, serialWorking)
+	beforeRoot := commitment.Root()
+	var stateCommitmentDuration time.Duration
+	stateCommitmentDuration += time.Since(commitmentStarted)
+	var materializationDuration time.Duration
+	result := Result{BlockHash: b.BlockHash, Height: b.Height, StateRootBefore: beforeRoot, Deterministic: true, EVMExecution: false, FabricExecution: false, StateUpdates: map[string]string{}, BlockExecutorID: BlockSTMExecutorID, ExecutorVersion: BlockSTMExecutorVersion, WorkerCount: workerCount, StateRootVersion: state.CommitmentVersion}
 	for index, item := range b.TxList {
 		if !validated[index] {
 			return Result{}, fmt.Errorf("block-stm missing validated incarnation for tx %s", item.TxID)
 		}
-		for key, value := range writeSets[index] {
-			serialWorking[qualifyKey(b.ShardID, key)] = value
+		keys := make([]string, 0, len(writeSets[index]))
+		for key := range writeSets[index] {
+			keys = append(keys, key)
 		}
+		sort.Strings(keys)
+		materializeStarted := time.Now()
+		for _, key := range keys {
+			serialWorking[qualifyKey(b.ShardID, key)] = writeSets[index][key]
+		}
+		materializationDuration += time.Since(materializeStarted)
 		receipt := receipts[index]
 		if receipt.TxID == "" {
 			return Result{}, fmt.Errorf("block-stm missing materialized receipt for tx %s", item.TxID)
 		}
-		receipt.StateRootAfterTx = state.RootOfSnapshot(serialWorking)
+		commitmentStarted = time.Now()
+		for _, key := range keys {
+			commitment.Set(qualifyKey(b.ShardID, key), writeSets[index][key])
+		}
+		receipt.StateRootAfterTx = commitment.Root()
+		stateCommitmentDuration += time.Since(commitmentStarted)
 		delta := TxDelta{TxID: item.TxID, OriginalIndex: index, ReadSet: readSets[index], WriteSet: writeSets[index], Receipt: receipt, Success: receipt.Success, Error: receipt.Error}
 		result.TxDeltas = append(result.TxDeltas, delta)
 		result.Receipts = append(result.Receipts, receipt)
@@ -496,13 +521,17 @@ func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base
 			metrics.MaximumIncarnation = incarnations[index]
 		}
 	}
-	result.StateRootAfter = state.RootOfSnapshot(serialWorking)
+	result.StateRootAfter = commitment.Root()
 	result.ReceiptRoot = ReceiptRoot(result.Receipts)
 	for key, value := range serialWorking {
 		result.StateUpdates[key] = value
 	}
 	result.StateDelta = stateDelta(base, serialWorking)
-	metrics.MaterializationMS = time.Since(materializeStarted).Milliseconds()
+	metrics.MaterializationMS = materializationDuration.Milliseconds()
+	metrics.StateCommitmentMS = stateCommitmentDuration.Milliseconds()
+	result.TransactionExecutionMS = metrics.TransactionExecutionMS
+	result.DeterministicMaterializationMS = metrics.MaterializationMS
+	result.StateCommitmentMS = metrics.StateCommitmentMS
 
 	if e.shouldRunSerialOracle() {
 		oracleStarted := time.Now()

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/state"
@@ -21,26 +22,29 @@ const GroundhogOrderedSetInitialLimit = 64
 const GroundhogOrderedSetMaximumLimit = 65_535
 
 type GroundhogMetrics struct {
-	WorkerCount                int    `json:"worker_count"`
-	MaximumParallelWidth       int    `json:"maximum_parallel_width"`
-	ReservationParallelWidth   int    `json:"reservation_parallel_width"`
-	ReservationEngine          string `json:"reservation_engine"`
-	ExecutionAttemptCount      int    `json:"execution_attempt_count"`
-	ReservationCount           int    `json:"reservation_count"`
-	ConstraintConflictCount    int    `json:"constraint_conflict_count"`
-	ReservationRollbackCount   int    `json:"reservation_rollback_count"`
-	IntegerMergeCount          int    `json:"integer_merge_count"`
-	BytesMergeCount            int    `json:"bytes_merge_count"`
-	OrderedSetMergeCount       int    `json:"ordered_set_merge_count"`
-	ModifiedKeyCount           int    `json:"modified_key_count"`
-	ApplicationFailureCount    int    `json:"application_failure_count"`
-	CommittedTransactionCount  int    `json:"committed_transaction_count"`
-	DeferredTransactionCount   int    `json:"deferred_transaction_count"`
-	CandidateTransactionCount  int    `json:"candidate_transaction_count"`
-	SelectedTransactionCount   int    `json:"selected_transaction_count"`
-	FallbackMode               string `json:"fallback_mode"`
-	SnapshotSemantics          string `json:"snapshot_semantics"`
-	TypedModificationSemantics string `json:"typed_modification_semantics"`
+	WorkerCount                    int    `json:"worker_count"`
+	MaximumParallelWidth           int    `json:"maximum_parallel_width"`
+	ReservationParallelWidth       int    `json:"reservation_parallel_width"`
+	ReservationEngine              string `json:"reservation_engine"`
+	ExecutionAttemptCount          int    `json:"execution_attempt_count"`
+	ReservationCount               int    `json:"reservation_count"`
+	ConstraintConflictCount        int    `json:"constraint_conflict_count"`
+	ReservationRollbackCount       int    `json:"reservation_rollback_count"`
+	IntegerMergeCount              int    `json:"integer_merge_count"`
+	BytesMergeCount                int    `json:"bytes_merge_count"`
+	OrderedSetMergeCount           int    `json:"ordered_set_merge_count"`
+	ModifiedKeyCount               int    `json:"modified_key_count"`
+	ApplicationFailureCount        int    `json:"application_failure_count"`
+	CommittedTransactionCount      int    `json:"committed_transaction_count"`
+	DeferredTransactionCount       int    `json:"deferred_transaction_count"`
+	CandidateTransactionCount      int    `json:"candidate_transaction_count"`
+	SelectedTransactionCount       int    `json:"selected_transaction_count"`
+	FallbackMode                   string `json:"fallback_mode"`
+	SnapshotSemantics              string `json:"snapshot_semantics"`
+	TypedModificationSemantics     string `json:"typed_modification_semantics"`
+	TransactionExecutionMS         int64  `json:"transaction_execution_ms"`
+	DeterministicMaterializationMS int64  `json:"deterministic_materialization_ms"`
+	StateCommitmentMS              int64  `json:"state_commitment_ms"`
 }
 
 type GroundhogTransactionTrace struct {
@@ -187,57 +191,84 @@ func (e *GroundhogExecutor) SelectCandidateTransactions(
 		limit = len(candidates)
 	}
 	workerCount := e.workerCountFor(len(candidates))
-	attempts, maximumParallel, err := e.executeAttempts(ctx, block.Block{ShardID: shardID, Height: height}, base, candidates, workerCount)
-	if err != nil {
-		return GroundhogCandidateSelection{}, err
-	}
 	table := newGroundhogReservationTable(shardID, base, e.OrderedSetLimit)
 	selection := GroundhogCandidateSelection{DeferredReasons: map[string]string{}}
 	metrics := newGroundhogMetrics(workerCount)
-	metrics.MaximumParallelWidth = maximumParallel
-	metrics.ExecutionAttemptCount = len(attempts)
 	metrics.CandidateTransactionCount = len(candidates)
+	metrics.ReservationEngine = "object_key_parallel_streaming_proposal_reserve_revert_commit"
 
-	for _, attempt := range attempts {
+	// Groundhog Algorithm 2 consumes a transaction stream until the proposed
+	// block is large enough. Its main loop is parallelizable. Execute and reserve
+	// only a bounded set of in-flight candidates at a time; if conflicts leave
+	// free block slots, continue drawing from the stream. This avoids executing
+	// the entire ready pool after the block is already full while preserving the
+	// paper's ability to search beyond an arbitrary fixed prefix.
+	cursor := 0
+	for cursor < len(candidates) && len(selection.Selected) < limit {
 		if err := ctx.Err(); err != nil {
 			return GroundhogCandidateSelection{}, err
 		}
-		trace := traceFromGroundhogAttempt(attempt)
-		if len(selection.Selected) >= limit {
-			selection.Deferred = append(selection.Deferred, attempt.Tx)
-			selection.DeferredReasons[attempt.Tx.TxID] = "groundhog_candidate_limit"
-			trace.Status = "deferred"
-			trace.Reason = "groundhog_candidate_limit"
-			selection.Trace = append(selection.Trace, trace)
-			continue
+		remaining := limit - len(selection.Selected)
+		chunkSize := workerCount
+		if chunkSize > remaining {
+			chunkSize = remaining
 		}
-		if attempt.TerminalError != "" {
-			// MBE requires a terminal receipt for every admitted logical
-			// transaction.  Application-invalid transactions are included as
-			// failed no-op outcomes; Groundhog constraint conflicts are the only
-			// candidates deferred to another block.
+		if chunkSize > len(candidates)-cursor {
+			chunkSize = len(candidates) - cursor
+		}
+		chunk := candidates[cursor : cursor+chunkSize]
+		attempts, executionParallel, err := e.executeAttempts(ctx, block.Block{ShardID: shardID, Height: height}, base, chunk, e.workerCountFor(len(chunk)))
+		if err != nil {
+			return GroundhogCandidateSelection{}, err
+		}
+		for index := range attempts {
+			attempts[index].Index += cursor
+		}
+		if executionParallel > metrics.MaximumParallelWidth {
+			metrics.MaximumParallelWidth = executionParallel
+		}
+		metrics.ExecutionAttemptCount += len(attempts)
+		stats, reservationErrors, reservationParallel, err := reserveGroundhogProposalAttemptsConcurrent(ctx, table, attempts, e.workerCountFor(len(attempts)))
+		if err != nil {
+			return GroundhogCandidateSelection{}, err
+		}
+		if reservationParallel > metrics.ReservationParallelWidth {
+			metrics.ReservationParallelWidth = reservationParallel
+		}
+		for index, attempt := range attempts {
+			trace := traceFromGroundhogAttempt(attempt)
+			if attempt.TerminalError != "" {
+				selection.Selected = append(selection.Selected, attempt.Tx)
+				metrics.ApplicationFailureCount++
+				trace.Status = "selected_terminal_failure"
+				trace.Reason = attempt.TerminalError
+				selection.Trace = append(selection.Trace, trace)
+				continue
+			}
+			if reservationErrors[index] != nil {
+				selection.Deferred = append(selection.Deferred, attempt.Tx)
+				selection.DeferredReasons[attempt.Tx.TxID] = reservationErrors[index].Error()
+				metrics.ConstraintConflictCount++
+				metrics.ReservationRollbackCount++
+				trace.Status = "deferred"
+				trace.Reason = reservationErrors[index].Error()
+				selection.Trace = append(selection.Trace, trace)
+				continue
+			}
 			selection.Selected = append(selection.Selected, attempt.Tx)
-			metrics.ApplicationFailureCount++
-			trace.Status = "selected_terminal_failure"
-			trace.Reason = attempt.TerminalError
+			addGroundhogReservationStats(&metrics, stats[index])
+			trace.Status = "selected"
 			selection.Trace = append(selection.Trace, trace)
-			continue
 		}
-		stats, reserveErr := table.reserveTransaction(attempt.Modifications)
-		if reserveErr != nil {
-			selection.Deferred = append(selection.Deferred, attempt.Tx)
-			selection.DeferredReasons[attempt.Tx.TxID] = reserveErr.Error()
-			metrics.ConstraintConflictCount++
-			metrics.ReservationRollbackCount++
-			trace.Status = "deferred"
-			trace.Reason = reserveErr.Error()
-			selection.Trace = append(selection.Trace, trace)
-			continue
-		}
-		selection.Selected = append(selection.Selected, attempt.Tx)
-		addGroundhogReservationStats(&metrics, stats)
-		trace.Status = "selected"
-		selection.Trace = append(selection.Trace, trace)
+		cursor += chunkSize
+	}
+	// Candidates not drawn after B reached its limit remain in the mempool. They
+	// were reserved by MBE's pool API only to provide a stable finite stream view.
+	for ; cursor < len(candidates); cursor++ {
+		item := candidates[cursor]
+		selection.Deferred = append(selection.Deferred, item)
+		selection.DeferredReasons[item.TxID] = "groundhog_candidate_limit"
+		selection.Trace = append(selection.Trace, GroundhogTransactionTrace{Index: cursor, TxID: item.TxID, Status: "deferred", Reason: "groundhog_candidate_limit"})
 	}
 	metrics.SelectedTransactionCount = len(selection.Selected)
 	metrics.DeferredTransactionCount = len(selection.Deferred)
@@ -248,9 +279,14 @@ func (e *GroundhogExecutor) SelectCandidateTransactions(
 }
 
 func (e *GroundhogExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
+	return e.ExecuteBlockWithCommitment(ctx, b, base, nil)
+}
+
+func (e *GroundhogExecutor) ExecuteBlockWithCommitment(ctx context.Context, b block.Block, base map[string]string, baseCommitment *state.Commitment) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	executionStarted := time.Now()
 	workerCount := e.workerCountFor(len(b.TxList))
 	attempts, maximumParallel, err := e.executeAttempts(ctx, b, base, b.TxList, workerCount)
 	if err != nil {
@@ -290,7 +326,9 @@ func (e *GroundhogExecutor) ExecuteBlock(ctx context.Context, b block.Block, bas
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	materializeStarted := time.Now()
 	working, err := table.materialize()
+	materializationDuration := time.Since(materializeStarted)
 	if err != nil {
 		return Result{}, err
 	}
@@ -298,21 +336,36 @@ func (e *GroundhogExecutor) ExecuteBlock(ctx context.Context, b block.Block, bas
 	metrics.CommittedTransactionCount = len(b.TxList) - metrics.ApplicationFailureCount
 	e.Metrics = metrics
 
-	beforeRoot := state.RootOfSnapshot(base)
-	afterRoot := state.RootOfSnapshot(working)
+	transactionExecutionDuration := time.Since(executionStarted) - materializationDuration
+	commitmentStarted := time.Now()
+	commitment := state.CloneOrBuild(baseCommitment, base)
+	beforeRoot := commitment.Root()
+	for _, update := range stateDelta(base, working) {
+		commitment.Set(update.Key, update.Value)
+	}
+	afterRoot := commitment.Root()
+	stateCommitmentDuration := time.Since(commitmentStarted)
+	metrics.TransactionExecutionMS = transactionExecutionDuration.Milliseconds()
+	metrics.DeterministicMaterializationMS = materializationDuration.Milliseconds()
+	metrics.StateCommitmentMS = stateCommitmentDuration.Milliseconds()
+	e.Metrics = metrics
 	result := Result{
-		BlockHash:        b.BlockHash,
-		Height:           b.Height,
-		StateRootBefore:  beforeRoot,
-		StateRootAfter:   afterRoot,
-		Deterministic:    true,
-		EVMExecution:     false,
-		FabricExecution:  false,
-		StateUpdates:     copySnapshot(working),
-		BlockExecutorID:  GroundhogBlockExecutorID,
-		ExecutorVersion:  GroundhogBlockExecutorVersion,
-		WorkerCount:      workerCount,
-		SerialEquivalent: false,
+		BlockHash:                      b.BlockHash,
+		Height:                         b.Height,
+		StateRootBefore:                beforeRoot,
+		StateRootAfter:                 afterRoot,
+		Deterministic:                  true,
+		EVMExecution:                   false,
+		FabricExecution:                false,
+		StateUpdates:                   copySnapshot(working),
+		BlockExecutorID:                GroundhogBlockExecutorID,
+		ExecutorVersion:                GroundhogBlockExecutorVersion,
+		WorkerCount:                    workerCount,
+		SerialEquivalent:               false,
+		TransactionExecutionMS:         metrics.TransactionExecutionMS,
+		DeterministicMaterializationMS: metrics.DeterministicMaterializationMS,
+		StateCommitmentMS:              metrics.StateCommitmentMS,
+		StateRootVersion:               state.CommitmentVersion,
 	}
 	for _, attempt := range attempts {
 		receipt := Receipt{
@@ -720,6 +773,61 @@ type groundhogReservationResult struct {
 	Index int
 	Stats groundhogReservationStats
 	Err   error
+}
+
+// reserveGroundhogProposalAttemptsConcurrent is the leader-side Algorithm 2
+// reserve/rollback phase. Individual conflicts reject only that candidate;
+// successful reservations remain committed to the in-progress proposal.
+func reserveGroundhogProposalAttemptsConcurrent(ctx context.Context, table *groundhogReservationTable, attempts []groundhogAttempt, workerCount int) ([]groundhogReservationStats, []error, int, error) {
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	jobs := make(chan int, len(attempts))
+	results := make(chan groundhogReservationResult, len(attempts))
+	var wg sync.WaitGroup
+	var inflight int64
+	var maximum int64
+	for worker := 0; worker < workerCount; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+				attempt := attempts[index]
+				if attempt.TerminalError != "" {
+					results <- groundhogReservationResult{Index: index}
+					continue
+				}
+				current := atomic.AddInt64(&inflight, 1)
+				for {
+					observed := atomic.LoadInt64(&maximum)
+					if current <= observed || atomic.CompareAndSwapInt64(&maximum, observed, current) {
+						break
+					}
+				}
+				stats, err := table.reserveTransaction(attempt.Modifications)
+				atomic.AddInt64(&inflight, -1)
+				results <- groundhogReservationResult{Index: index, Stats: stats, Err: err}
+			}
+		}()
+	}
+	for index := range attempts {
+		jobs <- index
+	}
+	close(jobs)
+	go func() { wg.Wait(); close(results) }()
+	stats := make([]groundhogReservationStats, len(attempts))
+	errs := make([]error, len(attempts))
+	for result := range results {
+		stats[result.Index] = result.Stats
+		errs[result.Index] = result.Err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, int(maximum), err
+	}
+	return stats, errs, int(maximum), nil
 }
 
 func reserveGroundhogAttemptsConcurrent(ctx context.Context, table *groundhogReservationTable, attempts []groundhogAttempt, workerCount int) ([]groundhogReservationStats, int, error) {

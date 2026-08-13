@@ -63,6 +63,8 @@ const defaultWorkload: WorkloadEditorState = {
   txCount: 10_000,
   useFullDataset: false,
   seedText: "11",
+  replayMode: "max_throughput",
+  targetSubmissionTPS: 500,
   targetAlpha: 1,
   crossShardRatio: 0,
   timeoutEvery: 0,
@@ -192,6 +194,8 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
         txCount: positiveInteger(workloadRaw.txCount, defaultWorkload.txCount, 10_000_000),
         useFullDataset: workloadRaw.useFullDataset === true,
         seedText: typeof workloadRaw.seedText === "string" ? workloadRaw.seedText : defaultWorkload.seedText,
+        replayMode: workloadRaw.replayMode === "fixed_rate" ? "fixed_rate" : "max_throughput",
+        targetSubmissionTPS: positiveInteger(workloadRaw.targetSubmissionTPS, defaultWorkload.targetSubmissionTPS, 1_000_000),
         targetAlpha: finiteNumber(workloadRaw.targetAlpha, defaultWorkload.targetAlpha),
         crossShardRatio: finiteNumber(workloadRaw.crossShardRatio, defaultWorkload.crossShardRatio),
         timeoutEvery: Math.max(0, Math.trunc(finiteNumber(workloadRaw.timeoutEvery, defaultWorkload.timeoutEvery))),
@@ -434,8 +438,10 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   function currentWorkloadSource(): V5WorkloadSourceSpec | null {
     const seed = seeds[0];
     if (!globalThis.Number.isInteger(seed)) return null;
+    if (workload.replayMode === "fixed_rate" && (!globalThis.Number.isInteger(workload.targetSubmissionTPS) || workload.targetSubmissionTPS < 1 || workload.targetSubmissionTPS > 1_000_000)) return null;
+    const targetSubmissionTPS = workload.replayMode === "fixed_rate" ? workload.targetSubmissionTPS : null;
     if (workload.mode === "synthetic") {
-      return { source_type: "synthetic", plugin_id: "deterministic_signed_synthetic", requested_tx_count: workload.txCount, seed, selection_mode: "contiguous_window", replay_mode: "max_throughput" };
+      return { source_type: "synthetic", plugin_id: "deterministic_signed_synthetic", requested_tx_count: workload.txCount, seed, selection_mode: "contiguous_window", replay_mode: workload.replayMode, target_submission_tps: targetSubmissionTPS };
     }
     const dataset = datasets.find((item) => item.dataset_id === workload.datasetId);
     if (!dataset?.selectable) return null;
@@ -455,7 +461,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       use_full_dataset: workload.useFullDataset,
       seed,
       selection_mode: definition.selection_mode ?? "contiguous_window",
-      replay_mode: "max_throughput",
+      replay_mode: workload.replayMode,
+      target_submission_tps: targetSubmissionTPS,
       skew_axis: skewAxis,
       target_alpha: targetAlpha,
       variant_parameters: variantParameters,

@@ -39,6 +39,7 @@ type WorkloadPlan struct {
 	SelectionMode            string         `json:"selection_mode"`
 	VariantParameters        map[string]any `json:"variant_parameters"`
 	ReplayMode               string         `json:"replay_mode"`
+	TargetSubmissionTPS      int            `json:"target_submission_tps,omitempty"`
 	SkewAxis                 string         `json:"skew_axis"`
 	TargetAlpha              *float64       `json:"target_alpha"`
 	GeneratorVersion         string         `json:"generator_version"`

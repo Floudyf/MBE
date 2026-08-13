@@ -151,7 +151,7 @@ func (p groundhogBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	if orderedSetLimit := intValue(p.config["ordered_set_limit"]); orderedSetLimit > 0 {
 		executor.OrderedSetLimit = orderedSetLimit
 	}
-	result, err := executor.ExecuteBlock(ctx, input.Block, input.BaseStateSnapshot)
+	result, err := executor.ExecuteBlockWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
@@ -170,6 +170,10 @@ func (p groundhogBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		"groundhog_reservation_parallel_width":   metrics.ReservationParallelWidth,
 		"groundhog_reservation_engine":           metrics.ReservationEngine,
 		"maximum_parallel_width":                 metrics.MaximumParallelWidth,
+		"transaction_execution_ms":               result.TransactionExecutionMS,
+		"deterministic_materialization_ms":       result.DeterministicMaterializationMS,
+		"state_commitment_ms":                    result.StateCommitmentMS,
+		"state_root_version":                     result.StateRootVersion,
 		"abort_count":                            metrics.ConstraintConflictCount,
 		"reexecution_count":                      0,
 		"serializable":                           true,
@@ -180,12 +184,16 @@ func (p groundhogBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		"groundhog_typed_modification_semantics": metrics.TypedModificationSemantics,
 	}
 	return BlockExecutionResult{
-		ExecutionResult: result,
-		StateDelta:      stateKVsFromExecutionDelta(result.StateDelta),
-		PlanDigest:      result.PlanDigest,
-		WorkerCount:     result.WorkerCount,
-		ScheduleEvents:  groundhogScheduleEvents(executor.Trace),
-		ActualMetrics:   actualMetrics,
+		ExecutionResult:        result,
+		StateDelta:             stateKVsFromExecutionDelta(result.StateDelta),
+		PlanDigest:             result.PlanDigest,
+		WorkerCount:            result.WorkerCount,
+		TransactionExecutionMS: result.TransactionExecutionMS,
+		DeterministicApplyMS:   result.DeterministicMaterializationMS,
+		StateCommitmentMS:      result.StateCommitmentMS,
+		StateRootVersion:       result.StateRootVersion,
+		ScheduleEvents:         groundhogScheduleEvents(executor.Trace),
+		ActualMetrics:          actualMetrics,
 	}, nil
 }
 

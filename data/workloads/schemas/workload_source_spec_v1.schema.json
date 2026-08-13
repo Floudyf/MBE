@@ -15,7 +15,8 @@
     "use_full_dataset": {"type": "boolean"},
     "seed": {"type": "integer"},
     "selection_mode": {"enum": ["contiguous_window", "validated_prefix"]},
-    "replay_mode": {"const": "max_throughput"},
+    "replay_mode": {"enum": ["max_throughput", "fixed_rate"]},
+    "target_submission_tps": {"type": ["integer", "null"], "minimum": 1, "maximum": 1000000},
     "skew_axis": {"type": ["string", "null"]},
     "target_alpha": {"type": ["number", "null"]},
     "variant_parameters": {

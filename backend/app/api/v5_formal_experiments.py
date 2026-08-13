@@ -350,6 +350,7 @@ def _formal_experiment_profile(plan: dict, rows: list[dict]) -> dict:
             "seed": workload.get("seed", base_spec.get("seed")),
             "selection_mode": workload.get("selection_mode"),
             "replay_mode": workload.get("replay_mode"),
+            "target_submission_tps": workload.get("target_submission_tps"),
             "skew_axis": workload.get("skew_axis"),
             "target_alpha": workload.get("target_alpha"),
         },

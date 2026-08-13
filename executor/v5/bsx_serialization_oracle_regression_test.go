@@ -22,7 +22,7 @@ func TestBSXFinalStateMatchesItsOwnDeterministicSerializationOrder(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := executeLiteratureGraphPlan(context.Background(), b, base, plan, 4, bsxBlockExecutorID)
+	got, err := executeBSXPlan(context.Background(), b, base, plan, 4)
 	if err != nil {
 		t.Fatal(err)
 	}

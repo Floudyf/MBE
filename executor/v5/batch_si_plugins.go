@@ -167,7 +167,7 @@ func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 		return BlockExecutionResult{}, err
 	}
 	executor := execution.NewBatchSIExecutor(config)
-	result, err := executor.ExecuteBlock(ctx, input.Block, input.BaseStateSnapshot)
+	result, err := executor.ExecuteBlockWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
@@ -201,6 +201,8 @@ func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 		"batch_snapshot_create_ms":                metrics.BatchSnapshotCreateMS,
 		"transaction_execution_ms":                metrics.TransactionExecutionMS,
 		"deterministic_materialization_ms":        metrics.DeterministicMaterializationMS,
+		"state_commitment_ms":                     metrics.StateCommitmentMS,
+		"state_root_version":                      result.StateRootVersion,
 		"batch_si_partition_mode":                 metrics.PartitionMode,
 		"batch_si_ordering_mode":                  metrics.OrderingMode,
 		"batch_si_priority_mode":                  metrics.PriorityMode,
@@ -217,6 +219,8 @@ func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 		WorkerCount:            result.WorkerCount,
 		TransactionExecutionMS: metrics.TransactionExecutionMS,
 		DeterministicApplyMS:   metrics.DeterministicMaterializationMS,
+		StateCommitmentMS:      metrics.StateCommitmentMS,
+		StateRootVersion:       result.StateRootVersion,
 		ActualMetrics:          actual,
 	}, nil
 }

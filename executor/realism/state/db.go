@@ -20,6 +20,7 @@ type DB struct {
 	namespace     string
 	dataDir       string
 	values        map[string]string
+	commitment    *Commitment
 	walSinceSync  int
 	walGeneration int
 	lastHeight    uint64
@@ -86,6 +87,7 @@ type SnapshotMetadata struct {
 	IncludedHeight    uint64 `json:"included_height"`
 	IncludedBlockHash string `json:"included_block_hash"`
 	StateRoot         string `json:"state_root"`
+	StateRootVersion  string `json:"state_root_version,omitempty"`
 	WALGeneration     int    `json:"wal_generation"`
 }
 
@@ -114,23 +116,24 @@ type PersistenceMetrics struct {
 }
 
 type walRecord struct {
-	Version         string    `json:"version"`
-	Namespace       string    `json:"namespace"`
-	BlockHeight     uint64    `json:"block_height"`
-	BlockHash       string    `json:"block_hash"`
-	ParentHash      string    `json:"parent_hash"`
-	DeltaID         string    `json:"delta_id"`
-	StateUpdates    []StateKV `json:"state_updates"`
-	StateRootBefore string    `json:"state_root_before"`
-	StateRootAfter  string    `json:"state_root_after"`
-	Checksum        string    `json:"checksum"`
+	Version          string    `json:"version"`
+	Namespace        string    `json:"namespace"`
+	BlockHeight      uint64    `json:"block_height"`
+	BlockHash        string    `json:"block_hash"`
+	ParentHash       string    `json:"parent_hash"`
+	DeltaID          string    `json:"delta_id"`
+	StateUpdates     []StateKV `json:"state_updates"`
+	StateRootBefore  string    `json:"state_root_before"`
+	StateRootAfter   string    `json:"state_root_after"`
+	StateRootVersion string    `json:"state_root_version,omitempty"`
+	Checksum         string    `json:"checksum"`
 }
 
 func NewDB(dataDir, namespace string) *DB {
 	if namespace == "" {
 		namespace = "s0"
 	}
-	return &DB{dataDir: dataDir, namespace: namespace, values: map[string]string{}, walGeneration: 1}
+	return &DB{dataDir: dataDir, namespace: namespace, values: map[string]string{}, commitment: NewCommitment(nil), walGeneration: 1}
 }
 
 func Open(dataDir, namespace string) (*DB, error) {
@@ -154,14 +157,18 @@ func (db *DB) Get(key string) string {
 func (db *DB) Set(key, value string) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	db.values[db.key(key)] = value
+	qualified := db.key(key)
+	db.values[qualified] = value
+	db.commitment.Set(qualified, value)
 }
 
 func (db *DB) ApplyBatch(updates map[string]string) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	for key, value := range updates {
-		db.values[db.key(key)] = value
+		qualified := db.key(key)
+		db.values[qualified] = value
+		db.commitment.Set(qualified, value)
 	}
 }
 
@@ -173,6 +180,7 @@ func (db *DB) ApplyDeterministicBatch(updates []StateKV) error {
 		if err := applyStateKV(db.values, key, item); err != nil {
 			return err
 		}
+		db.commitment.Set(key, db.values[key])
 	}
 	return nil
 }
@@ -192,6 +200,34 @@ func (db *DB) Snapshot() map[string]string {
 	return out
 }
 
+// SnapshotWithCommitment captures the logical key/value snapshot and its
+// authenticated commitment under one DB lock. This prevents a concurrent DB
+// mutation from pairing a snapshot with a root from a different state version.
+func (db *DB) SnapshotWithCommitment() (map[string]string, *Commitment) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	out := make(map[string]string, len(db.values))
+	for key, value := range db.values {
+		out[key] = value
+	}
+	if db.commitment == nil {
+		db.commitment = NewCommitment(db.values)
+	}
+	return out, db.commitment.Clone()
+}
+
+// CommitmentSnapshot returns the authenticated state at the same logical DB
+// version without rebuilding the full tree. Clone is O(1) and future Set calls
+// are isolated by the commitment's persistent path-copy implementation.
+func (db *DB) CommitmentSnapshot() *Commitment {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.commitment == nil {
+		db.commitment = NewCommitment(db.values)
+	}
+	return db.commitment.Clone()
+}
+
 func (db *DB) Restore(snapshot map[string]string) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -199,10 +235,16 @@ func (db *DB) Restore(snapshot map[string]string) {
 	for key, value := range snapshot {
 		db.values[key] = value
 	}
+	db.commitment = NewCommitment(db.values)
 }
 
 func (db *DB) Root() string {
-	return Root(db.Snapshot())
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.commitment == nil {
+		db.commitment = NewCommitment(db.values)
+	}
+	return db.commitment.Root()
 }
 
 func RootOfSnapshot(snapshot map[string]string) string {
@@ -225,15 +267,16 @@ func (db *DB) PersistDelta(meta DeltaMetadata, updates []StateKV, opts Persisten
 		meta.DeltaID = fmt.Sprintf("%s:%d:%s", db.namespace, meta.BlockHeight, meta.BlockHash)
 	}
 	record := walRecord{
-		Version:         "state_delta_wal_v1",
-		Namespace:       db.namespace,
-		BlockHeight:     meta.BlockHeight,
-		BlockHash:       meta.BlockHash,
-		ParentHash:      meta.ParentHash,
-		DeltaID:         meta.DeltaID,
-		StateUpdates:    canonicalStateUpdates(updates),
-		StateRootBefore: meta.StateRootBefore,
-		StateRootAfter:  meta.StateRootAfter,
+		Version:          "state_delta_wal_v1",
+		Namespace:        db.namespace,
+		BlockHeight:      meta.BlockHeight,
+		BlockHash:        meta.BlockHash,
+		ParentHash:       meta.ParentHash,
+		DeltaID:          meta.DeltaID,
+		StateUpdates:     canonicalStateUpdates(updates),
+		StateRootBefore:  meta.StateRootBefore,
+		StateRootAfter:   meta.StateRootAfter,
+		StateRootVersion: CommitmentVersion,
 	}
 	record.Checksum = walChecksum(record)
 	started := timeNowMS()
@@ -264,7 +307,7 @@ func (db *DB) SnapshotIfDue(blockHeight uint64, opts PersistenceOptions) (Persis
 	db.mu.Lock()
 	includedHash := db.lastBlockHash
 	db.mu.Unlock()
-	meta := SnapshotMetadata{Version: "state_snapshot_metadata_v1", Namespace: db.namespace, IncludedHeight: blockHeight, IncludedBlockHash: includedHash, StateRoot: db.Root(), WALGeneration: db.walGeneration}
+	meta := SnapshotMetadata{Version: "state_snapshot_metadata_v1", Namespace: db.namespace, IncludedHeight: blockHeight, IncludedBlockHash: includedHash, StateRoot: db.Root(), StateRootVersion: CommitmentVersion, WALGeneration: db.walGeneration}
 	if err := db.writeSnapshotMetadata(meta); err != nil {
 		return pm, err
 	}
@@ -545,7 +588,15 @@ func (db *DB) Load() error {
 			return fmt.Errorf("decode state snapshot: %w", err)
 		}
 		if snapshotMeta.Version != "" {
-			if got := Root(values); snapshotMeta.StateRoot != "" && got != snapshotMeta.StateRoot {
+			rootVersion := snapshotMeta.StateRootVersion
+			if rootVersion == "" {
+				rootVersion = LegacyCommitmentVersion
+			}
+			got := RootForVersion(values, rootVersion)
+			if got == "" {
+				return fmt.Errorf("snapshot metadata unsupported state root version %q", rootVersion)
+			}
+			if snapshotMeta.StateRoot != "" && got != snapshotMeta.StateRoot {
 				return fmt.Errorf("snapshot metadata state root mismatch: got %s want %s", got, snapshotMeta.StateRoot)
 			}
 			db.walGeneration = snapshotMeta.WALGeneration
@@ -562,6 +613,7 @@ func (db *DB) Load() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.values = values
+	db.commitment = NewCommitment(values)
 	return nil
 }
 
@@ -632,14 +684,23 @@ func (db *DB) replayWAL(values map[string]string, snapshotMeta SnapshotMetadata)
 			if lastHash != "" && record.ParentHash != lastHash {
 				return fmt.Errorf("state wal parent mismatch at height %d: got %s want %s", record.BlockHeight, record.ParentHash, lastHash)
 			}
-			if got := Root(values); record.StateRootBefore != "" && got != record.StateRootBefore {
-				return fmt.Errorf("state wal root-before mismatch at height %d: got %s want %s", record.BlockHeight, got, record.StateRootBefore)
+			rootVersion := record.StateRootVersion
+			if rootVersion == "" {
+				rootVersion = LegacyCommitmentVersion
+			}
+			gotBefore := RootForVersion(values, rootVersion)
+			if gotBefore == "" {
+				return fmt.Errorf("state wal unsupported root version %q at height %d", rootVersion, record.BlockHeight)
+			}
+			if record.StateRootBefore != "" && gotBefore != record.StateRootBefore {
+				return fmt.Errorf("state wal root-before mismatch at height %d: got %s want %s", record.BlockHeight, gotBefore, record.StateRootBefore)
 			}
 			if err := applyStateKVs(values, record.StateUpdates, db.namespace); err != nil {
 				return fmt.Errorf("apply state wal at height %d: %w", record.BlockHeight, err)
 			}
-			if got := Root(values); record.StateRootAfter != "" && got != record.StateRootAfter {
-				return fmt.Errorf("state wal root-after mismatch at height %d: got %s want %s", record.BlockHeight, got, record.StateRootAfter)
+			gotAfter := RootForVersion(values, rootVersion)
+			if record.StateRootAfter != "" && gotAfter != record.StateRootAfter {
+				return fmt.Errorf("state wal root-after mismatch at height %d: got %s want %s", record.BlockHeight, gotAfter, record.StateRootAfter)
 			}
 			applied[record.DeltaID] = true
 			lastHeight = record.BlockHeight

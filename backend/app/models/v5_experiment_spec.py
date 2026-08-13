@@ -31,7 +31,8 @@ class V5WorkloadSourceSpec(BaseModel):
     use_full_dataset: bool = False
     seed: int
     selection_mode: Literal["contiguous_window", "validated_prefix"] = "contiguous_window"
-    replay_mode: Literal["max_throughput"] = "max_throughput"
+    replay_mode: Literal["max_throughput", "fixed_rate"] = "max_throughput"
+    target_submission_tps: int | None = Field(default=None, ge=1, le=1_000_000)
     skew_axis: str | None = None
     target_alpha: float | None = None
     materialized_id: str | None = None
@@ -40,6 +41,10 @@ class V5WorkloadSourceSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate_dataset_shape(self) -> "V5WorkloadSourceSpec":
+        if self.replay_mode == "fixed_rate" and self.target_submission_tps is None:
+            raise ValueError("fixed_rate workload_source requires target_submission_tps")
+        if self.replay_mode == "max_throughput" and self.target_submission_tps is not None:
+            raise ValueError("max_throughput workload_source must not carry target_submission_tps")
         if self.source_type == "synthetic":
             if self.plugin_id != "deterministic_signed_synthetic":
                 raise ValueError("synthetic workload_source requires deterministic_signed_synthetic")
