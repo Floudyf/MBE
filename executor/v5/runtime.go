@@ -3025,7 +3025,22 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	}
 	r.mu.Unlock()
 	r.setCommitPhase("state_checkpoint", block)
-	stateBefore := r.plugins.StateStorage.Snapshot(r.db)
+	// The built-in durable store can atomically capture the KV snapshot and the
+	// exact matching authenticated root. This removes cross-block full-tree
+	// reconstruction without ever pairing a snapshot with a different DB version.
+	// Other storage plugins and multi-shard remote overlays retain the full-build
+	// executor fallback.
+	var stateBefore map[string]string
+	var baseStateCommitment *state.Commitment
+	if len(r.shardIDs()) == 1 {
+		if snapshotter, ok := r.plugins.StateStorage.(AuthenticatedStateSnapshotter); ok {
+			stateBefore, baseStateCommitment = snapshotter.SnapshotWithCommitment(r.db)
+		} else {
+			stateBefore = r.plugins.StateStorage.Snapshot(r.db)
+		}
+	} else {
+		stateBefore = r.plugins.StateStorage.Snapshot(r.db)
+	}
 	stateCheckpoint, err := r.plugins.StateStorage.Checkpoint(r.db)
 	if err != nil {
 		r.setCommitPhase("state_checkpoint_error", block)
@@ -3040,6 +3055,9 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	r.publishSystemStateDeltaVersions(block.SystemStateDeltas)
 	remoteDeltas := r.materializableRemoteStateDeltas(block, r.node.ShardID)
 	executionSnapshot, err := applyStateDeltaToSnapshot(stateBefore, remoteDeltas, r.node.ShardID, block.Height)
+	if len(remoteDeltas) > 0 {
+		baseStateCommitment = nil
+	}
 	if err != nil {
 		r.setCommitPhase("remote_state_cas_rejected", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
@@ -3070,7 +3088,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	if versionedWaveExecution {
 		executed, err = r.executeVersionedRemoteBlock(ctx, block, executionSnapshot)
 	} else {
-		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, StateVersionPublish: r.stateVersionPublisher(block)})
+		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, StateVersionPublish: r.stateVersionPublisher(block)})
 	}
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
@@ -3117,7 +3135,21 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	}
 
 	executed.BlockExecutionMS = time.Since(executeStarted).Milliseconds()
-	executed.TransactionExecutionMS = executed.BlockExecutionMS
+	// Preserve executor-owned phase timing. BlockExecutionMS is the common wall
+	// clock envelope; TransactionExecutionMS/DeterministicApplyMS/StateCommitmentMS
+	// are measured by the executor and must never be overwritten by that envelope.
+	if executed.TransactionExecutionMS == 0 && executed.ExecutionResult.TransactionExecutionMS > 0 {
+		executed.TransactionExecutionMS = executed.ExecutionResult.TransactionExecutionMS
+	}
+	if executed.DeterministicApplyMS == 0 && executed.ExecutionResult.DeterministicMaterializationMS > 0 {
+		executed.DeterministicApplyMS = executed.ExecutionResult.DeterministicMaterializationMS
+	}
+	if executed.StateCommitmentMS == 0 && executed.ExecutionResult.StateCommitmentMS > 0 {
+		executed.StateCommitmentMS = executed.ExecutionResult.StateCommitmentMS
+	}
+	if executed.StateRootVersion == "" {
+		executed.StateRootVersion = executed.ExecutionResult.StateRootVersion
+	}
 	r.recordScheduleEvents(block, executed.ScheduleEvents, false)
 	r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionFinished", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"block_execution_ms": executed.BlockExecutionMS}})
 	r.setCommitPhase("build_commit_plan", block)
@@ -6414,6 +6446,8 @@ func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result B
 		"block_execution_ms":             result.BlockExecutionMS,
 		"transaction_execution_ms":       result.TransactionExecutionMS,
 		"deterministic_apply_ms":         result.DeterministicApplyMS,
+		"state_commitment_ms":            result.StateCommitmentMS,
+		"state_root_version":             result.StateRootVersion,
 		"executed_transaction_count":     len(block.TxList),
 		"successful_transaction_count":   executed.SuccessfulTxs,
 		"failed_transaction_count":       executed.FailedTxs,

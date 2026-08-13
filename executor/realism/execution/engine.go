@@ -13,27 +13,31 @@ type Engine struct {
 }
 
 type Result struct {
-	BlockHash        string            `json:"block_hash"`
-	Height           uint64            `json:"height"`
-	StateRootBefore  string            `json:"state_root_before"`
-	StateRootAfter   string            `json:"state_root_after"`
-	ReceiptRoot      string            `json:"receipt_root"`
-	Receipts         []Receipt         `json:"receipts"`
-	StateUpdates     map[string]string `json:"state_updates"`
-	StateDelta       []StateUpdate     `json:"state_delta,omitempty"`
-	Deterministic    bool              `json:"deterministic_execution"`
-	EVMExecution     bool              `json:"evm_execution"`
-	FabricExecution  bool              `json:"fabric_execution"`
-	SuccessfulTxs    int               `json:"successful_txs"`
-	FailedTxs        int               `json:"failed_txs"`
-	BlockExecutorID  string            `json:"block_executor_id,omitempty"`
-	ExecutorVersion  string            `json:"block_executor_version,omitempty"`
-	WorkerCount      int               `json:"worker_count,omitempty"`
-	Plan             ExecutionPlan     `json:"execution_plan,omitempty"`
-	PlanDigest       string            `json:"execution_plan_digest,omitempty"`
-	TxDeltas         []TxDelta         `json:"tx_deltas,omitempty"`
-	BlockSTMMetrics  BlockSTMMetrics   `json:"block_stm_metrics,omitempty"`
-	SerialEquivalent bool              `json:"serial_equivalent,omitempty"`
+	BlockHash                      string            `json:"block_hash"`
+	Height                         uint64            `json:"height"`
+	StateRootBefore                string            `json:"state_root_before"`
+	StateRootAfter                 string            `json:"state_root_after"`
+	ReceiptRoot                    string            `json:"receipt_root"`
+	Receipts                       []Receipt         `json:"receipts"`
+	StateUpdates                   map[string]string `json:"state_updates"`
+	StateDelta                     []StateUpdate     `json:"state_delta,omitempty"`
+	Deterministic                  bool              `json:"deterministic_execution"`
+	EVMExecution                   bool              `json:"evm_execution"`
+	FabricExecution                bool              `json:"fabric_execution"`
+	SuccessfulTxs                  int               `json:"successful_txs"`
+	FailedTxs                      int               `json:"failed_txs"`
+	BlockExecutorID                string            `json:"block_executor_id,omitempty"`
+	ExecutorVersion                string            `json:"block_executor_version,omitempty"`
+	WorkerCount                    int               `json:"worker_count,omitempty"`
+	Plan                           ExecutionPlan     `json:"execution_plan,omitempty"`
+	PlanDigest                     string            `json:"execution_plan_digest,omitempty"`
+	TxDeltas                       []TxDelta         `json:"tx_deltas,omitempty"`
+	BlockSTMMetrics                BlockSTMMetrics   `json:"block_stm_metrics,omitempty"`
+	SerialEquivalent               bool              `json:"serial_equivalent,omitempty"`
+	TransactionExecutionMS         int64             `json:"transaction_execution_ms,omitempty"`
+	DeterministicMaterializationMS int64             `json:"deterministic_materialization_ms,omitempty"`
+	StateCommitmentMS              int64             `json:"state_commitment_ms,omitempty"`
+	StateRootVersion               string            `json:"state_root_version,omitempty"`
 }
 
 func NewEngine() *Engine {

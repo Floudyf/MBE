@@ -10,6 +10,8 @@ export type WorkloadEditorState = {
   txCount: number;
   useFullDataset: boolean;
   seedText: string;
+  replayMode: "max_throughput" | "fixed_rate";
+  targetSubmissionTPS: number;
   targetAlpha: number;
   crossShardRatio: number;
   timeoutEvery: number;
@@ -128,7 +130,6 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
       })}
       <label><span>truth label</span><input value={dataset?.truth_label ?? "未提供"} readOnly /></label>
       <label><span>selection_mode</span><input value={selectedDefinition?.selection_mode ?? "contiguous_window"} readOnly /></label>
-      <label><span>replay_mode</span><input value="max_throughput" readOnly /></label>
     </div>}
 
     {state.mode === "synthetic" && <div className="experiment-condition-grid">
@@ -138,6 +139,10 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
       <label><input type="checkbox" checked={state.timeoutEnabled} onChange={(event) => patch({ timeoutEnabled: event.target.checked })} /> 启用 timeout_every</label>
       {state.timeoutEnabled && <label><span>timeout_every</span><input aria-label="timeout_every" type="number" min={0} value={state.timeoutEvery} onChange={(event) => patch({ timeoutEvery: globalThis.Number(event.target.value) })} /></label>}
     </div>}
+    <div className="experiment-condition-grid" data-testid="workload-replay-settings">
+      <label><span>交易注入模式</span><select aria-label="replay_mode" value={state.replayMode} onChange={(event) => patch({ replayMode: event.target.value as WorkloadEditorState["replayMode"] })}><option value="max_throughput">最大吞吐</option><option value="fixed_rate">固定速率</option></select></label>
+      {state.replayMode === "fixed_rate" && <label><span>目标注入速率 (tx/s)</span><input aria-label="target_submission_tps" type="number" min={1} max={1_000_000} value={state.targetSubmissionTPS} onChange={(event) => patch({ targetSubmissionTPS: globalThis.Number(event.target.value) })} /></label>}
+    </div>
     {datasetDisabled && <p className="file-error" data-testid="workload-selection-blocked">所选数据集或变体不可用，不能启动 RunGroup。</p>}
   </article>;
 }

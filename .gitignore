@@ -71,3 +71,5 @@ frontend/playwright-report/
 .venv.broken-*/
 
 /dataset/
+.mbe_fix_backups/
+.mbe_evidence_runs/

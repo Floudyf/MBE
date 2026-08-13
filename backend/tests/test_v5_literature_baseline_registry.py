@@ -25,7 +25,7 @@ def test_cg_acg_bsx_builtins_and_manifests_are_registered():
 
 def test_truth_boundaries_disclose_reimplementation_scope():
     assert STORE.get("cg_scheduler").truth_boundary == "cg_original_order_conflict_dag_v1"
-    assert STORE.get("acg_scheduler").truth_boundary == "nezha_acg_hs_paper_description_v1"
+    assert STORE.get("acg_scheduler").truth_boundary == "nezha_acg_hs_official_reference_v1"
     assert STORE.get("bsx_scheduler").truth_boundary == "bsx_homogeneous_conflict_graph_coloring_dsatur_v1"
 
 
@@ -89,7 +89,7 @@ def test_literature_baselines_validate_as_independent_real_cluster_methods():
     assert all(row["runnable"] for row in checked.rows)
     semantics = {row["method_config_id"]: row["comparison_semantics_class"] for row in checked.rows}
     assert semantics["hash_cg"] == "stateful_local_legacy_v1"
-    assert semantics["hash_acg"] == "stateful_local_legacy_v1"
+    assert semantics["hash_acg"] == "nezha_acg_hs_abortable_v1"
     # BSX may realize a different deterministic serializable order than the
     # consensus input order, so its correctness oracle is its own bound plan.
     assert semantics["hash_bsx"] == "bsx_deterministic_coloring_serializable_v1"

@@ -178,6 +178,7 @@ type BatchSIMetrics struct {
 	BatchSnapshotCreateMS                int64  `json:"batch_snapshot_create_ms"`
 	TransactionExecutionMS               int64  `json:"transaction_execution_ms"`
 	DeterministicMaterializationMS       int64  `json:"deterministic_materialization_ms"`
+	StateCommitmentMS                    int64  `json:"state_commitment_ms"`
 }
 
 type batchSITxDescriptor struct {
@@ -1064,6 +1065,10 @@ func NewBatchSIExecutor(config BatchSIConfig) *BatchSIExecutor {
 }
 
 func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
+	return e.ExecuteBlockWithCommitment(ctx, b, base, nil)
+}
+
+func (e *BatchSIExecutor) ExecuteBlockWithCommitment(ctx context.Context, b block.Block, base map[string]string, baseCommitment *state.Commitment) (Result, error) {
 	e.Config = e.Config.Normalized()
 	if err := e.Config.Validate(); err != nil {
 		return Result{}, err
@@ -1082,16 +1087,21 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 		return Result{}, err
 	}
 	working := batchSICopySnapshot(base)
-	before := state.RootOfSnapshot(working)
+	commitmentStarted := time.Now()
+	commitment := state.CloneOrBuild(baseCommitment, working)
+	before := commitment.Root()
+	var stateCommitmentDuration time.Duration
+	stateCommitmentDuration += time.Since(commitmentStarted)
 	result := Result{
-		BlockHash:       b.BlockHash,
-		Height:          b.Height,
-		StateRootBefore: before,
-		Deterministic:   true,
-		StateUpdates:    map[string]string{},
-		BlockExecutorID: BatchSIBlockExecutorID,
-		ExecutorVersion: BatchSIBlockExecutorVersion,
-		WorkerCount:     e.Config.WorkerCount,
+		BlockHash:        b.BlockHash,
+		Height:           b.Height,
+		StateRootBefore:  before,
+		Deterministic:    true,
+		StateUpdates:     map[string]string{},
+		BlockExecutorID:  BatchSIBlockExecutorID,
+		ExecutorVersion:  BatchSIBlockExecutorVersion,
+		WorkerCount:      e.Config.WorkerCount,
+		StateRootVersion: state.CommitmentVersion,
 	}
 	byID := make(map[string]tx.SignedTransaction, len(b.TxList))
 	blockIndex := make(map[string]int, len(b.TxList))
@@ -1102,7 +1112,7 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 	allDeltas := make([]TxDelta, 0, len(b.TxList))
 	allReceipts := make([]Receipt, 0, len(b.TxList))
 	maximumObserved := 0
-	var snapshotMS, executionMS, materializationMS int64
+	var snapshotDuration, executionDuration, materializationDuration time.Duration
 	for _, batch := range plan.Batches {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
@@ -1112,7 +1122,7 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 		// it is the logical BS_k directly. Snapshot creation is O(1); private
 		// transaction writes cannot mutate it.
 		snapshot := working
-		snapshotMS += time.Since(snapshotStarted).Milliseconds()
+		snapshotDuration += time.Since(snapshotStarted)
 		transactions := make([]tx.SignedTransaction, 0, len(batch.OrderedTransactionIDs))
 		for _, id := range batch.OrderedTransactionIDs {
 			item, ok := byID[id]
@@ -1123,23 +1133,30 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 		}
 		executionStarted := time.Now()
 		batchResults, observed, err := e.executeBatch(ctx, b, transactions, snapshot, blockIndex)
-		executionMS += time.Since(executionStarted).Milliseconds()
+		executionDuration += time.Since(executionStarted)
 		if err != nil {
 			return Result{}, err
 		}
 		if observed > maximumObserved {
 			maximumObserved = observed
 		}
-		materializeStarted := time.Now()
 		for _, txResult := range batchResults {
 			if err := batchSIValidateDeclaredWrites(txResult.Item, txResult.Delta.WriteSet, b.ShardID); err != nil {
 				return Result{}, err
 			}
-			for _, key := range batchSISortedWriteKeys(txResult.Delta.WriteSet) {
+			keys := batchSISortedWriteKeys(txResult.Delta.WriteSet)
+			materializeStarted := time.Now()
+			for _, key := range keys {
 				working[batchSIQualifiedKey(b.ShardID, key)] = txResult.Delta.WriteSet[key]
 			}
+			materializationDuration += time.Since(materializeStarted)
+			commitmentStarted = time.Now()
+			for _, key := range keys {
+				commitment.Set(batchSIQualifiedKey(b.ShardID, key), txResult.Delta.WriteSet[key])
+			}
 			receipt := txResult.Receipt
-			receipt.StateRootAfterTx = state.RootOfSnapshot(working)
+			receipt.StateRootAfterTx = commitment.Root()
+			stateCommitmentDuration += time.Since(commitmentStarted)
 			delta := txResult.Delta
 			delta.Receipt = receipt
 			allDeltas = append(allDeltas, delta)
@@ -1150,11 +1167,10 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 				result.FailedTxs++
 			}
 		}
-		materializationMS += time.Since(materializeStarted).Milliseconds()
 	}
 	result.Receipts = allReceipts
 	result.TxDeltas = allDeltas
-	result.StateRootAfter = state.RootOfSnapshot(working)
+	result.StateRootAfter = commitment.Root()
 	result.ReceiptRoot = ReceiptRoot(result.Receipts)
 	for key, value := range working {
 		result.StateUpdates[key] = value
@@ -1208,10 +1224,14 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 		SnapshotCount:                        len(plan.Batches),
 		ExecutionTaskCount:                   len(b.TxList),
 		MaximumObservedParallelWidth:         maximumObserved,
-		BatchSnapshotCreateMS:                snapshotMS,
-		TransactionExecutionMS:               executionMS,
-		DeterministicMaterializationMS:       materializationMS,
+		BatchSnapshotCreateMS:                snapshotDuration.Milliseconds(),
+		TransactionExecutionMS:               executionDuration.Milliseconds(),
+		DeterministicMaterializationMS:       materializationDuration.Milliseconds(),
+		StateCommitmentMS:                    stateCommitmentDuration.Milliseconds(),
 	}
+	result.TransactionExecutionMS = e.Metrics.TransactionExecutionMS
+	result.DeterministicMaterializationMS = e.Metrics.DeterministicMaterializationMS
+	result.StateCommitmentMS = e.Metrics.StateCommitmentMS
 	return result, nil
 }
 

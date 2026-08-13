@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/state"
@@ -80,26 +81,45 @@ func NewSerialExecutor() *SerialExecutor {
 }
 
 func (e *SerialExecutor) ExecuteBlock(b block.Block, base map[string]string) Result {
+	return e.ExecuteBlockWithCommitment(b, base, nil)
+}
+
+func (e *SerialExecutor) ExecuteBlockWithCommitment(b block.Block, base map[string]string, baseCommitment *state.Commitment) Result {
 	working := copySnapshot(base)
-	before := state.RootOfSnapshot(working)
-	result := Result{BlockHash: b.BlockHash, Height: b.Height, StateRootBefore: before, Deterministic: true, EVMExecution: false, FabricExecution: false, StateUpdates: map[string]string{}, BlockExecutorID: SerialBlockExecutorID, ExecutorVersion: SerialBlockExecutorVersion, WorkerCount: 1}
+	commitmentStarted := time.Now()
+	commitment := state.CloneOrBuild(baseCommitment, working)
+	before := commitment.Root()
+	var stateCommitmentDuration time.Duration
+	stateCommitmentDuration += time.Since(commitmentStarted)
+	var transactionExecutionDuration time.Duration
+	var materializationDuration time.Duration
+	result := Result{BlockHash: b.BlockHash, Height: b.Height, StateRootBefore: before, Deterministic: true, EVMExecution: false, FabricExecution: false, StateUpdates: map[string]string{}, BlockExecutorID: SerialBlockExecutorID, ExecutorVersion: SerialBlockExecutorVersion, WorkerCount: 1, StateRootVersion: state.CommitmentVersion}
 	declared := declaredAccessSet(b.TxList)
 	for index, item := range b.TxList {
 		// Sequential execution needs one mutable block working state plus a
-		// transaction-local write overlay.  This Serial-only overlay avoids a
-		// full-state copy per transaction without changing the shared speculative
-		// transaction primitive used by Block-STM, Aria, or other executors.
+		// transaction-local write overlay. Serial keeps all writes private until
+		// the transaction completes, then updates both working state and the
+		// authenticated commitment in the same deterministic key order.
 		overlay := newSerialBlockTxOverlay(b.ShardID, working)
+		executionStarted := time.Now()
 		receipt := e.executeTxWithoutStateRoot(b, overlay, item)
+		transactionExecutionDuration += time.Since(executionStarted)
 		keys := make([]string, 0, len(overlay.writes))
 		for key := range overlay.writes {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
+		materializeStarted := time.Now()
 		for _, key := range keys {
 			working[overlay.key(key)] = overlay.writes[key]
 		}
-		receipt.StateRootAfterTx = state.RootOfSnapshot(working)
+		materializationDuration += time.Since(materializeStarted)
+		commitmentStarted = time.Now()
+		for _, key := range keys {
+			commitment.Set(overlay.key(key), overlay.writes[key])
+		}
+		receipt.StateRootAfterTx = commitment.Root()
+		stateCommitmentDuration += time.Since(commitmentStarted)
 		delta := TxDelta{TxID: item.TxID, OriginalIndex: index, ReadSet: append([]ReadObservation(nil), overlay.reads...), WriteSet: overlay.logicalWrites(), Receipt: receipt, Success: receipt.Success, Error: receipt.Error}
 		result.TxDeltas = append(result.TxDeltas, delta)
 		result.Receipts = append(result.Receipts, receipt)
@@ -109,7 +129,7 @@ func (e *SerialExecutor) ExecuteBlock(b block.Block, base map[string]string) Res
 			result.FailedTxs++
 		}
 	}
-	result.StateRootAfter = state.RootOfSnapshot(working)
+	result.StateRootAfter = commitment.Root()
 	result.ReceiptRoot = ReceiptRoot(result.Receipts)
 	for key, value := range working {
 		result.StateUpdates[key] = value
@@ -118,6 +138,9 @@ func (e *SerialExecutor) ExecuteBlock(b block.Block, base map[string]string) Res
 	plan := buildSerialPlan(b, declared)
 	result.Plan = plan
 	result.PlanDigest = plan.PlanDigest
+	result.TransactionExecutionMS = transactionExecutionDuration.Milliseconds()
+	result.DeterministicMaterializationMS = materializationDuration.Milliseconds()
+	result.StateCommitmentMS = stateCommitmentDuration.Milliseconds()
 	return result
 }
 

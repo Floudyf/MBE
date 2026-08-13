@@ -23,9 +23,87 @@ import (
 	"metaverse-chainlab/executor/realism/tx"
 )
 
+type submissionPacer struct {
+	mode             string
+	interval         time.Duration
+	startedAt        time.Time
+	nextOrdinal      uint64
+	lateReleaseCount uint64
+	maxScheduleLag   time.Duration
+}
+
+func newSubmissionPacer(plan WorkloadPlan) (*submissionPacer, error) {
+	mode := strings.TrimSpace(plan.ReplayMode)
+	if mode == "" {
+		mode = "max_throughput"
+	}
+	switch mode {
+	case "max_throughput":
+		if plan.TargetSubmissionTPS != 0 {
+			return nil, fmt.Errorf("max_throughput replay must not set target_submission_tps")
+		}
+		return &submissionPacer{mode: mode}, nil
+	case "fixed_rate":
+		if plan.TargetSubmissionTPS <= 0 {
+			return nil, fmt.Errorf("fixed_rate replay requires positive target_submission_tps")
+		}
+		interval := time.Second / time.Duration(plan.TargetSubmissionTPS)
+		if interval <= 0 {
+			return nil, fmt.Errorf("target_submission_tps %d exceeds timer resolution", plan.TargetSubmissionTPS)
+		}
+		return &submissionPacer{mode: mode, interval: interval}, nil
+	default:
+		return nil, fmt.Errorf("unsupported replay_mode %q", mode)
+	}
+}
+
+// Wait releases fixed-rate transactions on an absolute offered-load timeline.
+// For target N, transaction ordinal i is eligible at start+i/N, so normal
+// socket-write cost is absorbed inside the interval instead of being added to
+// it. If one release becomes genuinely late, emit that transaction once, record
+// the lag, and rebase the following slot to now+interval. Rebasing prevents a
+// delayed sender from producing a catch-up burst into the transaction pool.
+func (p *submissionPacer) Wait(ctx context.Context) error {
+	if p == nil || p.mode != "fixed_rate" {
+		return nil
+	}
+	now := time.Now()
+	if p.startedAt.IsZero() {
+		p.startedAt = now
+		p.nextOrdinal = 1
+		return nil
+	}
+	due := p.startedAt.Add(time.Duration(p.nextOrdinal) * p.interval)
+	if delay := time.Until(due); delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+		p.nextOrdinal++
+		return nil
+	}
+	lag := now.Sub(due)
+	p.lateReleaseCount++
+	if lag > p.maxScheduleLag {
+		p.maxScheduleLag = lag
+	}
+	// Keep the current late release, but never replay missed slots back-to-back.
+	// The next transaction becomes eligible one full interval after this release.
+	p.startedAt = now
+	p.nextOrdinal = 1
+	return nil
+}
+
 func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if len(plan.NodeConfigs) == 0 {
 		return fmt.Errorf("plan contains no nodes")
+	}
+	pacer, err := newSubmissionPacer(plan.WorkloadPlan)
+	if err != nil {
+		return err
 	}
 	plugins, err := InstantiatePlugins(plan.NodeConfigs[0].PluginProfile)
 	if err != nil {
@@ -52,6 +130,8 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	resolvedAccessRows := []resolvedAccessEntry{}
 	connections := map[string]net.Conn{}
 	generatedCrossShardCount := 0
+	var firstSubmissionTime time.Time
+	var lastSubmissionTime time.Time
 	defer func() {
 		for _, conn := range connections {
 			_ = conn.Close()
@@ -157,8 +237,15 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if err != nil {
 			return err
 		}
+		if err := pacer.Wait(ctx); err != nil {
+			return err
+		}
 		start := time.Now()
+		if firstSubmissionTime.IsZero() {
+			firstSubmissionTime = start
+		}
 		err = sendPersistent(ctx, connections, leader.ListenAddr, envelope)
+		lastSubmissionTime = time.Now()
 		rows = append(rows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, sender, leader.NodeID, shardID, payload, fmt.Sprint(isCrossShard), logicalSourceShard, targetShard, fmt.Sprint(err == nil), fmt.Sprint(time.Since(start).Milliseconds()), errorString(err)})
 		lifecycleRows = append(lifecycleRows, lifecycleRow(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "submitted", NodeID: "mbe-client", ShardID: shardID, Success: err == nil, Error: errorString(err)}))
 		reason := firstNonEmpty(record.RoutingReason, route.Reason)
@@ -256,6 +343,18 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	replaySummary := iterator.Summary()
 	replaySummary.SubmittedCount = len(rows)
+	replaySummary.ReplayMode = pacer.mode
+	replaySummary.TargetSubmissionTPS = plan.WorkloadPlan.TargetSubmissionTPS
+	replaySummary.PacingSchedule = "absolute_release_timeline_v1"
+	replaySummary.PacingLateReleaseCount = pacer.lateReleaseCount
+	replaySummary.PacingMaxScheduleLagMS = pacer.maxScheduleLag.Milliseconds()
+	if !firstSubmissionTime.IsZero() && !lastSubmissionTime.IsZero() {
+		duration := lastSubmissionTime.Sub(firstSubmissionTime)
+		replaySummary.SubmissionDurationMS = duration.Milliseconds()
+		if duration > 0 && len(rows) > 1 {
+			replaySummary.ObservedSubmissionTPS = float64(len(rows)-1) / duration.Seconds()
+		}
+	}
 	if err := metrics.WriteCSV(filepath.Join(outDir, "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, rows); err != nil {
 		return err
 	}
@@ -322,7 +421,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if err := SaveJSON(filepath.Join(outDir, "workload_identity_mapping_summary.json"), map[string]any{"identity_count": replaySummary.IdentityCount, "mapping_digest": replaySummary.MappingDigest, "nonce_continuity": replaySummary.NonceContinuity, "signature_pass_count": replaySummary.SignaturePassCount, "identity_mapping_version": replaySummary.IdentityMappingVersion}); err != nil {
 		return err
 	}
-	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows)), "cross_shard_execution_mode": map[bool]string{true: "stateless_direct_execution", false: "legacy_lock_relay_finalize"}[statelessDirect]})
+	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "replay_mode": replaySummary.ReplayMode, "target_submission_tps": replaySummary.TargetSubmissionTPS, "observed_submission_tps": replaySummary.ObservedSubmissionTPS, "submission_duration_ms": replaySummary.SubmissionDurationMS, "pacing_schedule": replaySummary.PacingSchedule, "pacing_late_release_count": replaySummary.PacingLateReleaseCount, "pacing_max_schedule_lag_ms": replaySummary.PacingMaxScheduleLagMS, "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows)), "cross_shard_execution_mode": map[bool]string{true: "stateless_direct_execution", false: "legacy_lock_relay_finalize"}[statelessDirect]})
 }
 
 func stateVersionDependenciesForRecord(record WorkloadRecord, ordinal uint64, lastWriter map[string]uint64) []tx.StateVersionDependency {

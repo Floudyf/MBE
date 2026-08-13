@@ -32,7 +32,7 @@ type SyntheticIterator struct {
 func NewSyntheticIterator(plugin builtinWorkload, plan WorkloadPlan, shards int) *SyntheticIterator {
 	expected := requestedCrossShardCount(plan.TxCount, plan.CrossShardRatio)
 	digest := sha256.Sum256([]byte(fmt.Sprintf("synthetic:v2:%s:%d:%d:%d:%0.12f:%d", plan.PluginID, plan.TxCount, plan.Seed, plan.TimeoutEvery, plan.CrossShardRatio, shards)))
-	return &SyntheticIterator{plugin: plugin, plan: plan, shards: shards, summary: WorkloadReplaySummary{MaterializedSHA256: hex.EncodeToString(digest[:]), ExpectedCount: plan.TxCount, ExpectedCrossShardCount: expected, ExpectedCrossShardRatio: plan.CrossShardRatio, ReplayMode: "max_throughput", NoFallback: true, NonceContinuity: true}}
+	return &SyntheticIterator{plugin: plugin, plan: plan, shards: shards, summary: WorkloadReplaySummary{MaterializedSHA256: hex.EncodeToString(digest[:]), ExpectedCount: plan.TxCount, ExpectedCrossShardCount: expected, ExpectedCrossShardRatio: plan.CrossShardRatio, ReplayMode: firstNonEmpty(plan.ReplayMode, "max_throughput"), TargetSubmissionTPS: plan.TargetSubmissionTPS, NoFallback: true, NonceContinuity: true}}
 }
 
 func (it *SyntheticIterator) Next(context.Context) (WorkloadRecord, error) {
@@ -137,7 +137,7 @@ func NewCanonicalTraceIteratorWithSharding(plan WorkloadPlan, shards int, dataDi
 	return &CanonicalTraceIterator{
 		plan: plan, shards: shards, sharding: sharding, file: file, gzip: gz, scanner: scanner,
 		identities: map[string]string{}, nonces: map[string]uint64{}, hash: hash,
-		summary: WorkloadReplaySummary{DatasetID: plan.DatasetID, VariantID: plan.VariantID, TruthLabel: plan.TruthLabel, SourceSHA256: plan.SourceSHA256, SourceFileSHA256: plan.SourceFileSHA256, SelectionMode: plan.SelectionMode, VariantParameters: cloneAnyMap(plan.VariantParameters), MaterializedSHA256: plan.MaterializedSHA256, ExpectedCount: expected, ExpectedCrossShardCount: plan.ExpectedCrossShardCount, ExpectedCrossShardRatio: plan.ExpectedCrossShardRatio, ReplayMode: plan.ReplayMode, NoFallback: true, NonceContinuity: true, ShardLoadDistribution: map[string]int{}, IdentityMappingVersion: firstNonEmpty(plan.IdentityMappingVersion, "mbe_dataset_identity_v1")},
+		summary: WorkloadReplaySummary{DatasetID: plan.DatasetID, VariantID: plan.VariantID, TruthLabel: plan.TruthLabel, SourceSHA256: plan.SourceSHA256, SourceFileSHA256: plan.SourceFileSHA256, SelectionMode: plan.SelectionMode, VariantParameters: cloneAnyMap(plan.VariantParameters), MaterializedSHA256: plan.MaterializedSHA256, ExpectedCount: expected, ExpectedCrossShardCount: plan.ExpectedCrossShardCount, ExpectedCrossShardRatio: plan.ExpectedCrossShardRatio, ReplayMode: firstNonEmpty(plan.ReplayMode, "max_throughput"), TargetSubmissionTPS: plan.TargetSubmissionTPS, NoFallback: true, NonceContinuity: true, ShardLoadDistribution: map[string]int{}, IdentityMappingVersion: firstNonEmpty(plan.IdentityMappingVersion, "mbe_dataset_identity_v1")},
 	}, nil
 }
 

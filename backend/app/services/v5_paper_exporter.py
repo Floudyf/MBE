@@ -12,13 +12,13 @@ from backend.app.services.v5_statistics_service import summarize
 GROUP_FIELDS = [
     "suite_type", "method_config_id", "method_name", "method_role", "scan_variable", "scan_value",
     "topology_nodes", "topology_shards", "validators_per_shard", "tx_count", "cross_shard_ratio",
-    "timeout_every", "fault_mode", "block_size", "block_interval_ms", "sample_count", "completed_count", "observed_completed_count", "completed_invalid_count", "blocked_count", "failed_count", "missing_count",
+    "timeout_every", "fault_mode", "block_size", "block_interval_ms", "replay_mode", "target_submission_tps", "mean_observed_submission_tps", "mean_submission_duration_ms", "mean_observed_mempool_admission_tps", "mean_mempool_admission_duration_ms", "pacing_schedule", "sample_count", "completed_count", "observed_completed_count", "completed_invalid_count", "blocked_count", "failed_count", "missing_count",
     "mean_tps", "median_tps", "std_tps", "min_tps", "max_tps", "ci95_low_tps", "ci95_high_tps",
     "mean_p50_ms", "mean_p95_ms", "mean_p99_ms", "submitted", "terminal", "incomplete",
     "cross_requested", "cross_finalized", "cross_refunded", "cross_failed", "changed_plugin_categories",
 ]
 
-PAPER_TABLE_FIELDS = ["suite_type", "method_id", "method_name", "method_role", "scan_variable", "scan_value", "nodes", "shards", "validators_per_shard", "tx_count", "cross_shard_ratio", "timeout_every", "fault_mode", "block_size", "block_interval_ms", "sample_count", "success_sample_count", "failed_sample_count", "tps_mean", "tps_std", "tps_min", "tps_max", "latency_p50_mean", "latency_p95_mean", "latency_p99_mean", "terminal_mean", "incomplete_mean", "orphan_mean", "cross_shard_requested_mean", "cross_shard_finalized_mean", "no_fallback_all", "state_root_consistent_all"]
+PAPER_TABLE_FIELDS = ["suite_type", "method_id", "method_name", "method_role", "scan_variable", "scan_value", "nodes", "shards", "validators_per_shard", "tx_count", "cross_shard_ratio", "timeout_every", "fault_mode", "block_size", "block_interval_ms", "replay_mode", "target_submission_tps", "observed_submission_tps_mean", "submission_duration_ms_mean", "observed_mempool_admission_tps_mean", "mempool_admission_duration_ms_mean", "pacing_schedule", "sample_count", "success_sample_count", "failed_sample_count", "tps_mean", "tps_std", "tps_min", "tps_max", "latency_p50_mean", "latency_p95_mean", "latency_p99_mean", "terminal_mean", "incomplete_mean", "orphan_mean", "cross_shard_requested_mean", "cross_shard_finalized_mean", "no_fallback_all", "state_root_consistent_all"]
 
 PAPER_ANALYSIS_FIELDS = [
     "view", "metric", "metric_unit", "method_id", "method_name", "sample_status",
@@ -26,16 +26,30 @@ PAPER_ANALYSIS_FIELDS = [
     "mean", "median", "std", "min", "max", "ci95_low", "ci95_high", "statistical_note", "source_child_ids",
 ]
 
+_RAW_IDENTITY_FIELDS = [
+    "child_run_id", "suite_type", "method_config_id", "method_name", "method_role", "seed", "repeat_index",
+    "scan_variable", "scan_value", "status", "sample_status", "individual_result_valid", "paper_candidate",
+    "comparison_eligibility_status", "direct_cross_semantic_performance_comparable",
+]
+
+def _stable_raw_fields(rows: list[dict]) -> list[str]:
+    keys = {str(key) for row in rows for key in row}
+    if not keys:
+        return ["child_run_id", "status"]
+    preferred = [name for name in _RAW_IDENTITY_FIELDS if name in keys]
+    return preferred + sorted(keys - set(preferred))
+
 
 def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     raw_rows = [_raw_row(child) for child in children]
+    raw_fields = _stable_raw_fields(raw_rows)
     grouped = _group_rows(group, children)
     paper = paper_result_analysis(group, children)
     overall = _overall(
         children,
         cross_method_statistics_valid=paper.get("performance_comparison_valid") is True,
     )
-    _write(group_dir / "raw_summary.csv", raw_rows, list(raw_rows[0]) if raw_rows else ["child_run_id", "status"])
+    _write(group_dir / "raw_summary.csv", raw_rows, raw_fields)
     _write(group_dir / "aggregate_summary.csv", [_overall_row(overall)], list(_overall_row(overall)))
     _write(group_dir / "confidence_interval.csv", grouped, GROUP_FIELDS)
     _write(group_dir / "comparison_summary.csv", _suite(grouped, "comparison_experiment"), GROUP_FIELDS)
@@ -56,9 +70,9 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     _write(group_dir / "blocked_children.csv", [_classification_row(item, "blocked_incompatible") for item in blocked], ["child_run_id", "method_config_id", "method_name", "sample_status", "status", "reasons", "observed_tps", "error"])
     comparison_excluded = [item for item, status in classified if status == "comparison_excluded"]
     _write(group_dir / "comparison_excluded_children.csv", [_classification_row(item, "comparison_excluded") for item in comparison_excluded], ["child_run_id", "method_config_id", "method_name", "sample_status", "status", "reasons", "observed_tps", "error"])
-    _write(group_dir / "observed_results.csv", [_raw_row(item) for item in children], list(raw_rows[0]) if raw_rows else ["child_run_id", "status"])
+    _write(group_dir / "observed_results.csv", raw_rows, raw_fields)
     valid_rows = [_raw_row(item) for item in paper_valid]
-    _write(group_dir / "paper_valid_results.csv", valid_rows, list(valid_rows[0]) if valid_rows else (list(raw_rows[0]) if raw_rows else ["child_run_id", "status"]))
+    _write(group_dir / "paper_valid_results.csv", valid_rows, raw_fields)
     effective = [(item, _effective_metrics(item)) for item in children]
     (group_dir / "missing_metrics.csv").write_text(
         "child_run_id,missing\n"
@@ -235,10 +249,21 @@ def _individual_result_reasons(child: dict) -> list[str]:
     incomplete = _first_number(metrics, finality, name="incomplete_unique_tx_count")
     cross_failed = _first_number(metrics, finality, name="cross_shard_failed_unique_count")
     lifecycle_complete = _first_bool(metrics, summary, finality, name="lifecycle_complete")
+    terminal_abort_semantics = str(child.get("comparison_semantics_class") or "") == "nezha_acg_hs_abortable_v1"
+    abort_count = _first_number(metrics, summary, name="abort_count")
+    nezha_hs_abort_count = _first_number(metrics, summary, name="nezha_hs_abort_count")
 
     if submitted is None or terminal is None or submitted != terminal:
         reasons.append("terminal_not_equal_submitted")
-    if submitted is None or finalized is None or submitted != finalized:
+    if terminal_abort_semantics:
+        if finalized is None or abort_count is None or nezha_hs_abort_count is None:
+            reasons.append("nezha_abort_accounting_missing")
+        else:
+            if terminal is None or finalized + abort_count != terminal:
+                reasons.append("finalized_plus_abort_not_equal_terminal")
+            if abort_count != nezha_hs_abort_count:
+                reasons.append("nezha_hs_abort_count_mismatch")
+    elif submitted is None or finalized is None or submitted != finalized:
         reasons.append("finalized_not_equal_submitted")
     if incomplete is None or incomplete != 0:
         reasons.append("incomplete_not_zero")
@@ -486,6 +511,10 @@ _BATCH_SI_REQUIRED_METRICS = (
     "deferred_transaction_count",
     "batch_snapshot_create_ms",
 )
+_NEZHA_ACG_REQUIRED_METRICS = (
+    "abort_count",
+    "nezha_hs_abort_count",
+)
 _STALE_PATH_ONLY_MISSING = {"real_cluster_summary.json", "finality_summary.json"}
 
 
@@ -597,6 +626,13 @@ def _effective_metrics(child: dict) -> dict[str, Any]:
         "workload_mapping_digest": "mapping_digest",
         "workload_truth_label": "truth_label",
         "workload_variant_id": "variant_id",
+        "replay_mode": "replay_mode",
+        "target_submission_tps": "target_submission_tps",
+        "observed_submission_tps": "observed_submission_tps",
+        "submission_duration_ms": "submission_duration_ms",
+        "pacing_schedule": "pacing_schedule",
+        "pacing_late_release_count": "pacing_late_release_count",
+        "pacing_max_schedule_lag_ms": "pacing_max_schedule_lag_ms",
     }.items():
         if metrics.get(target) is None and replay.get(source) is not None:
             metrics[target] = replay[source]
@@ -612,6 +648,8 @@ def _effective_metrics(child: dict) -> dict[str, Any]:
         required.extend(_METATRACK_REQUIRED_METRICS)
     if _requires_batch_si(child):
         required.extend(_BATCH_SI_REQUIRED_METRICS)
+    if _requires_nezha_acg(child):
+        required.extend(_NEZHA_ACG_REQUIRED_METRICS)
     metric_missing = [f"metric:{name}" for name in required if metrics.get(name) is None]
     missing = list(dict.fromkeys(stale + metric_missing))
     metrics["missing"] = missing
@@ -642,6 +680,16 @@ def _requires_block_stm(child: dict) -> bool:
     return "block_stm" in method_id or executor == "block_stm_block_executor"
 
 
+def _requires_nezha_acg(child: dict) -> bool:
+    if str(child.get("comparison_semantics_class") or "") == "nezha_acg_hs_abortable_v1":
+        return True
+    method_id = str(child.get("method_config_id") or "")
+    method = child.get("method") or {}
+    overrides = method.get("plugin_overrides") if isinstance(method, dict) else {}
+    executor = overrides.get("block_executor") if isinstance(overrides, dict) else ""
+    return method_id == "hash_acg" or executor == "acg_block_executor"
+
+
 def _group_rows(group: dict, children: list[dict]) -> list[dict]:
     base_workload = _base_workload(group)
     buckets: dict[tuple, list[dict]] = defaultdict(list)
@@ -670,7 +718,9 @@ def _group_key(child: dict, base_workload: dict) -> tuple:
         child.get("method_role", method.get("role", "custom")), child.get("scan_variable", ""), child.get("scan_value", ""),
         topology.get("nodes"), topology.get("shards"), topology.get("validators_per_shard"), topology.get("worker_count", metrics.get("configured_worker_count", metrics.get("worker_count"))),
         workload.get("tx_count", child.get("estimated_transactions")), cross_shard_ratio, workload.get("timeout_every"),
-        fault.get("mode", "disabled"), block_size, block_interval_ms, tuple(child.get("changed_plugin_categories") or []),
+        fault.get("mode", "disabled"), block_size, block_interval_ms,
+        metrics.get("replay_mode"), metrics.get("target_submission_tps"), metrics.get("pacing_schedule"),
+        tuple(child.get("changed_plugin_categories") or []),
     )
 
 
@@ -693,7 +743,7 @@ def _eligible_for_within_method_sensitivity(child: dict) -> bool:
 
 
 def _aggregate(key: tuple, entries: list[dict]) -> dict:
-    suite, method_id, method_name, role, scan_variable, scan_value, nodes, shards, validators, worker_count, tx_count, ratio, timeout, fault, block_size, block_interval_ms, changed = key
+    suite, method_id, method_name, role, scan_variable, scan_value, nodes, shards, validators, worker_count, tx_count, ratio, timeout, fault, block_size, block_interval_ms, replay_mode, target_submission_tps, pacing_schedule, changed = key
     observed_completed = [entry for entry in entries if entry.get("status") == "completed"]
     if suite == "workload_sensitivity":
         completed = [entry for entry in entries if _eligible_for_within_method_sensitivity(entry)]
@@ -715,7 +765,10 @@ def _aggregate(key: tuple, entries: list[dict]) -> dict:
         "suite_type": suite, "method_config_id": method_id, "method_name": method_name, "method_role": role,
         "scan_variable": scan_variable, "scan_value": scan_value, "topology_nodes": nodes, "topology_shards": shards,
         "validators_per_shard": validators, "worker_count": worker_count, "tx_count": tx_count, "cross_shard_ratio": ratio, "timeout_every": timeout,
-        "fault_mode": fault, "block_size": block_size, "block_interval_ms": block_interval_ms, "sample_count": stats["count"], "completed_count": stats["completed_count"], "observed_completed_count": len(observed_completed), "completed_invalid_count": len(completed_invalid), "blocked_count": len(blocked), "failed_count": stats["failed_count"], "missing_count": stats["missing_count"],
+        "fault_mode": fault, "block_size": block_size, "block_interval_ms": block_interval_ms,
+        "replay_mode": replay_mode, "target_submission_tps": target_submission_tps,
+        "mean_observed_submission_tps": mean("observed_submission_tps"), "mean_submission_duration_ms": mean("submission_duration_ms"), "mean_observed_mempool_admission_tps": mean("observed_mempool_admission_tps"), "mean_mempool_admission_duration_ms": mean("mempool_admission_duration_ms"), "pacing_schedule": pacing_schedule,
+        "sample_count": stats["count"], "completed_count": stats["completed_count"], "observed_completed_count": len(observed_completed), "completed_invalid_count": len(completed_invalid), "blocked_count": len(blocked), "failed_count": stats["failed_count"], "missing_count": stats["missing_count"],
         "mean_tps": stats["mean"], "median_tps": stats["median"], "std_tps": stats["std"], "min_tps": stats["min"], "max_tps": stats["max"], "ci95_low_tps": stats["ci95_low"], "ci95_high_tps": stats["ci95_high"],
         "mean_p50_ms": mean("p50_finality_ms") or mean("p50_latency_ms"),
         "mean_p95_ms": mean("p95_finality_ms") or mean("p95_latency_ms"),
@@ -804,7 +857,7 @@ def _figure_rows(groups: list[dict]) -> list[dict]:
 def _paper_table_rows(groups: list[dict]) -> list[dict]:
     rows = []
     for row in groups:
-        rows.append({"suite_type": row["suite_type"], "method_id": row["method_config_id"], "method_name": row["method_name"], "method_role": row["method_role"], "scan_variable": row["scan_variable"], "scan_value": row["scan_value"], "nodes": row["topology_nodes"], "shards": row["topology_shards"], "validators_per_shard": row["validators_per_shard"], "tx_count": row["tx_count"], "cross_shard_ratio": row["cross_shard_ratio"], "timeout_every": row["timeout_every"], "fault_mode": row["fault_mode"], "block_size": row["block_size"], "block_interval_ms": row["block_interval_ms"], "sample_count": row["sample_count"], "success_sample_count": row["completed_count"], "failed_sample_count": row["failed_count"], "tps_mean": row["mean_tps"], "tps_std": row["std_tps"], "tps_min": row["min_tps"], "tps_max": row["max_tps"], "latency_p50_mean": row["mean_p50_ms"], "latency_p95_mean": row["mean_p95_ms"], "latency_p99_mean": row["mean_p99_ms"], "terminal_mean": row["terminal"], "incomplete_mean": row["incomplete"], "orphan_mean": row.get("orphan"), "cross_shard_requested_mean": row["cross_requested"], "cross_shard_finalized_mean": row["cross_finalized"], "no_fallback_all": row.get("no_fallback_all"), "state_root_consistent_all": row.get("state_root_consistent_all")})
+        rows.append({"suite_type": row["suite_type"], "method_id": row["method_config_id"], "method_name": row["method_name"], "method_role": row["method_role"], "scan_variable": row["scan_variable"], "scan_value": row["scan_value"], "nodes": row["topology_nodes"], "shards": row["topology_shards"], "validators_per_shard": row["validators_per_shard"], "tx_count": row["tx_count"], "cross_shard_ratio": row["cross_shard_ratio"], "timeout_every": row["timeout_every"], "fault_mode": row["fault_mode"], "block_size": row["block_size"], "block_interval_ms": row["block_interval_ms"], "replay_mode": row.get("replay_mode"), "target_submission_tps": row.get("target_submission_tps"), "observed_submission_tps_mean": row.get("mean_observed_submission_tps"), "submission_duration_ms_mean": row.get("mean_submission_duration_ms"), "observed_mempool_admission_tps_mean": row.get("mean_observed_mempool_admission_tps"), "mempool_admission_duration_ms_mean": row.get("mean_mempool_admission_duration_ms"), "pacing_schedule": row.get("pacing_schedule"), "sample_count": row["sample_count"], "success_sample_count": row["completed_count"], "failed_sample_count": row["failed_count"], "tps_mean": row["mean_tps"], "tps_std": row["std_tps"], "tps_min": row["min_tps"], "tps_max": row["max_tps"], "latency_p50_mean": row["mean_p50_ms"], "latency_p95_mean": row["mean_p95_ms"], "latency_p99_mean": row["mean_p99_ms"], "terminal_mean": row["terminal"], "incomplete_mean": row["incomplete"], "orphan_mean": row.get("orphan"), "cross_shard_requested_mean": row["cross_requested"], "cross_shard_finalized_mean": row["cross_finalized"], "no_fallback_all": row.get("no_fallback_all"), "state_root_consistent_all": row.get("state_root_consistent_all")})
     return rows
 
 

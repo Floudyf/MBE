@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/state"
@@ -20,31 +21,34 @@ const AriaBlockExecutorVersion = "0.2.0"
 // Counts refer to real execution attempts inside Aria epochs; no serial replay is
 // included in the timed execution path.
 type AriaMetrics struct {
-	WorkerCount               int    `json:"worker_count"`
-	EpochCount                int    `json:"epoch_count"`
-	MaximumEpochWidth         int    `json:"maximum_epoch_width"`
-	MaximumParallelWidth      int    `json:"maximum_parallel_width"`
-	ExecutionAttemptCount     int    `json:"execution_attempt_count"`
-	CommittedTransactionCount int    `json:"committed_transaction_count"`
-	FinalizedTransactionCount int    `json:"finalized_transaction_count"`
-	ConflictAbortCount        int    `json:"conflict_abort_count"`
-	ReexecutionCount          int    `json:"reexecution_count"`
-	RetryableNonceCount       int    `json:"retryable_nonce_count"`
-	WAWDependencyCount        int    `json:"waw_dependency_count"`
-	RAWDependencyCount        int    `json:"raw_dependency_count"`
-	WARDependencyCount        int    `json:"war_dependency_count"`
-	ReadReservationCount      int    `json:"read_reservation_count"`
-	WriteReservationCount     int    `json:"write_reservation_count"`
-	ReadOnlyFastCommitCount   int    `json:"read_only_fast_commit_count"`
-	ApplicationFailureCount   int    `json:"application_failure_count"`
-	CandidateTransactionCount int    `json:"candidate_transaction_count"`
-	SelectedTransactionCount  int    `json:"selected_transaction_count"`
-	DeferredTransactionCount  int    `json:"deferred_transaction_count"`
-	ReorderingEnabled         bool   `json:"reordering_enabled"`
-	ReadOnlyOptimization      bool   `json:"read_only_optimization"`
-	BatchLifecycle            string `json:"batch_lifecycle"`
-	FallbackMode              string `json:"fallback_mode"`
-	EpochWidths               []int  `json:"epoch_widths"`
+	WorkerCount                    int    `json:"worker_count"`
+	EpochCount                     int    `json:"epoch_count"`
+	MaximumEpochWidth              int    `json:"maximum_epoch_width"`
+	MaximumParallelWidth           int    `json:"maximum_parallel_width"`
+	ExecutionAttemptCount          int    `json:"execution_attempt_count"`
+	CommittedTransactionCount      int    `json:"committed_transaction_count"`
+	FinalizedTransactionCount      int    `json:"finalized_transaction_count"`
+	ConflictAbortCount             int    `json:"conflict_abort_count"`
+	ReexecutionCount               int    `json:"reexecution_count"`
+	RetryableNonceCount            int    `json:"retryable_nonce_count"`
+	WAWDependencyCount             int    `json:"waw_dependency_count"`
+	RAWDependencyCount             int    `json:"raw_dependency_count"`
+	WARDependencyCount             int    `json:"war_dependency_count"`
+	ReadReservationCount           int    `json:"read_reservation_count"`
+	WriteReservationCount          int    `json:"write_reservation_count"`
+	ReadOnlyFastCommitCount        int    `json:"read_only_fast_commit_count"`
+	ApplicationFailureCount        int    `json:"application_failure_count"`
+	CandidateTransactionCount      int    `json:"candidate_transaction_count"`
+	SelectedTransactionCount       int    `json:"selected_transaction_count"`
+	DeferredTransactionCount       int    `json:"deferred_transaction_count"`
+	ReorderingEnabled              bool   `json:"reordering_enabled"`
+	ReadOnlyOptimization           bool   `json:"read_only_optimization"`
+	BatchLifecycle                 string `json:"batch_lifecycle"`
+	FallbackMode                   string `json:"fallback_mode"`
+	EpochWidths                    []int  `json:"epoch_widths"`
+	TransactionExecutionMS         int64  `json:"transaction_execution_ms"`
+	DeterministicMaterializationMS int64  `json:"deterministic_materialization_ms"`
+	StateCommitmentMS              int64  `json:"state_commitment_ms"`
 }
 
 // AriaEpochTrace is deterministic evidence of one execution/commit barrier pair.
@@ -154,7 +158,9 @@ func (e *AriaExecutor) SelectCandidateTransactions(ctx context.Context, shardID 
 	}
 	// The producer/validator supplies an immutable block-start snapshot; Aria
 	// attempts keep private writes, so no physical state copy is needed here.
+	executionStarted := time.Now()
 	attempts, maximumParallel, err := e.executeEpoch(ctx, blockValue, base, pending, workerCount)
+	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return selection, err
 	}
@@ -170,6 +176,7 @@ func (e *AriaExecutor) SelectCandidateTransactions(ctx context.Context, shardID 
 		BatchLifecycle:            "one_consensus_block_per_aria_batch",
 		FallbackMode:              "disabled",
 		EpochWidths:               []int{len(candidates)},
+		TransactionExecutionMS:    executionDuration.Milliseconds(),
 	}
 	reservations := buildAriaReservations(attempts, &metrics)
 	committedIndexes := make([]int, 0, limit)
@@ -252,6 +259,10 @@ func (e *AriaExecutor) SelectCandidateTransactions(ctx context.Context, shardID 
 // transactions are not executed a second time: validators commit the exact
 // deltas they independently recomputed from the common block-start snapshot.
 func (e *AriaExecutor) MaterializeCandidateSelection(b block.Block, base map[string]string, selection AriaCandidateSelection) (Result, error) {
+	return e.MaterializeCandidateSelectionWithCommitment(b, base, selection, nil)
+}
+
+func (e *AriaExecutor) MaterializeCandidateSelectionWithCommitment(b block.Block, base map[string]string, selection AriaCandidateSelection, baseCommitment *state.Commitment) (Result, error) {
 	workerCount := e.WorkerCount
 	if workerCount < 1 {
 		workerCount = 1
@@ -260,7 +271,12 @@ func (e *AriaExecutor) MaterializeCandidateSelection(b block.Block, base map[str
 		return Result{}, fmt.Errorf("aria selected materialization size mismatch: block=%d selected=%d deltas=%d", len(b.TxList), len(selection.Selected), len(selection.SelectedDeltas))
 	}
 	working := copySnapshot(base)
-	before := state.RootOfSnapshot(base)
+	commitmentStarted := time.Now()
+	commitment := state.CloneOrBuild(baseCommitment, working)
+	before := commitment.Root()
+	var stateCommitmentDuration time.Duration
+	stateCommitmentDuration += time.Since(commitmentStarted)
+	var materializationDuration time.Duration
 	result := Result{
 		BlockHash:        b.BlockHash,
 		Height:           b.Height,
@@ -273,6 +289,7 @@ func (e *AriaExecutor) MaterializeCandidateSelection(b block.Block, base map[str
 		ExecutorVersion:  AriaBlockExecutorVersion,
 		WorkerCount:      workerCount,
 		SerialEquivalent: false,
+		StateRootVersion: state.CommitmentVersion,
 	}
 	commitOrder := make([]int, 0, len(b.TxList))
 	trace := AriaEpochTrace{Epoch: 1, DeferredReasonByIndex: map[int]string{}}
@@ -288,10 +305,18 @@ func (e *AriaExecutor) MaterializeCandidateSelection(b block.Block, base map[str
 		delta.OriginalIndex = index
 		delta.Receipt.BlockHash = b.BlockHash
 		delta.Receipt.Height = b.Height
-		for _, key := range sortedAriaWriteKeys(delta.WriteSet) {
+		keys := sortedAriaWriteKeys(delta.WriteSet)
+		materializeStarted := time.Now()
+		for _, key := range keys {
 			working[ariaQualifiedKey(b.ShardID, key)] = delta.WriteSet[key]
 		}
-		delta.Receipt.StateRootAfterTx = state.RootOfSnapshot(working)
+		materializationDuration += time.Since(materializeStarted)
+		commitmentStarted = time.Now()
+		for _, key := range keys {
+			commitment.Set(ariaQualifiedKey(b.ShardID, key), delta.WriteSet[key])
+		}
+		delta.Receipt.StateRootAfterTx = commitment.Root()
+		stateCommitmentDuration += time.Since(commitmentStarted)
 		delta.Success = delta.Receipt.Success
 		delta.Error = delta.Receipt.Error
 		result.TxDeltas = append(result.TxDeltas, delta)
@@ -305,15 +330,21 @@ func (e *AriaExecutor) MaterializeCandidateSelection(b block.Block, base map[str
 		trace.CandidateIndexes = append(trace.CandidateIndexes, index)
 		trace.CommittedIndexes = append(trace.CommittedIndexes, index)
 	}
-	result.StateRootAfter = state.RootOfSnapshot(working)
+	result.StateRootAfter = commitment.Root()
 	result.ReceiptRoot = ReceiptRoot(result.Receipts)
 	result.StateUpdates = copySnapshot(working)
 	result.StateDelta = stateDelta(base, working)
 	planEpoch := ariaPlanEpochFromTrace(b, trace)
 	result.Plan = buildAriaPlan(b, declaredAccessSet(b.TxList), workerCount, e, commitOrder, []ariaPlanEpoch{planEpoch})
 	result.PlanDigest = result.Plan.PlanDigest
-	e.Metrics = selection.Metrics
+	metrics := selection.Metrics
+	metrics.DeterministicMaterializationMS = materializationDuration.Milliseconds()
+	metrics.StateCommitmentMS = stateCommitmentDuration.Milliseconds()
+	e.Metrics = metrics
 	e.Trace = []AriaEpochTrace{selection.Trace}
+	result.TransactionExecutionMS = metrics.TransactionExecutionMS
+	result.DeterministicMaterializationMS = metrics.DeterministicMaterializationMS
+	result.StateCommitmentMS = metrics.StateCommitmentMS
 	return result, nil
 }
 
@@ -329,6 +360,10 @@ func cloneTxDelta(input TxDelta) TxDelta {
 }
 
 func (e *AriaExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
+	return e.ExecuteBlockWithCommitment(ctx, b, base, nil)
+}
+
+func (e *AriaExecutor) ExecuteBlockWithCommitment(ctx context.Context, b block.Block, base map[string]string, baseCommitment *state.Commitment) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -342,6 +377,13 @@ func (e *AriaExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map
 	e.serialSemantics.DefaultInitialBalance = e.DefaultInitialBalance
 
 	working := copySnapshot(base)
+	commitmentStarted := time.Now()
+	commitment := state.CloneOrBuild(baseCommitment, working)
+	beforeRoot := commitment.Root()
+	var stateCommitmentDuration time.Duration
+	stateCommitmentDuration += time.Since(commitmentStarted)
+	var transactionExecutionDuration time.Duration
+	var materializationDuration time.Duration
 	pending := make([]int, len(b.TxList))
 	for index := range b.TxList {
 		pending[index] = index
@@ -382,7 +424,9 @@ func (e *AriaExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map
 		// working is immutable while this epoch executes; tentative writes stay
 		// transaction-local and are applied only after the epoch barrier.
 		epochSnapshot := working
+		executionStarted := time.Now()
 		attempts, maximumParallel, err := e.executeEpoch(ctx, b, epochSnapshot, pending, workerCount)
+		transactionExecutionDuration += time.Since(executionStarted)
 		if err != nil {
 			return Result{}, err
 		}
@@ -468,10 +512,17 @@ func (e *AriaExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map
 				writeKeys = append(writeKeys, key)
 			}
 			sort.Strings(writeKeys)
+			materializeStarted := time.Now()
 			for _, key := range writeKeys {
 				working[ariaQualifiedKey(b.ShardID, key)] = attempt.Delta.WriteSet[key]
 			}
-			attempt.Delta.Receipt.StateRootAfterTx = state.RootOfSnapshot(working)
+			materializationDuration += time.Since(materializeStarted)
+			commitmentStarted = time.Now()
+			for _, key := range writeKeys {
+				commitment.Set(ariaQualifiedKey(b.ShardID, key), attempt.Delta.WriteSet[key])
+			}
+			attempt.Delta.Receipt.StateRootAfterTx = commitment.Root()
+			stateCommitmentDuration += time.Since(commitmentStarted)
 			attempt.Delta.Success = attempt.Delta.Receipt.Success
 			attempt.Delta.Error = attempt.Delta.Receipt.Error
 			finalDeltas[index] = attempt.Delta
@@ -507,21 +558,28 @@ func (e *AriaExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map
 	if metrics.ReexecutionCount < 0 {
 		metrics.ReexecutionCount = 0
 	}
+	metrics.TransactionExecutionMS = transactionExecutionDuration.Milliseconds()
+	metrics.DeterministicMaterializationMS = materializationDuration.Milliseconds()
+	metrics.StateCommitmentMS = stateCommitmentDuration.Milliseconds()
 	e.Metrics = metrics
 
 	result := Result{
-		BlockHash:        b.BlockHash,
-		Height:           b.Height,
-		StateRootBefore:  state.RootOfSnapshot(base),
-		StateRootAfter:   state.RootOfSnapshot(working),
-		Deterministic:    true,
-		EVMExecution:     false,
-		FabricExecution:  false,
-		StateUpdates:     copySnapshot(working),
-		BlockExecutorID:  AriaBlockExecutorID,
-		ExecutorVersion:  AriaBlockExecutorVersion,
-		WorkerCount:      workerCount,
-		SerialEquivalent: false,
+		BlockHash:                      b.BlockHash,
+		Height:                         b.Height,
+		StateRootBefore:                beforeRoot,
+		StateRootAfter:                 commitment.Root(),
+		Deterministic:                  true,
+		EVMExecution:                   false,
+		FabricExecution:                false,
+		StateUpdates:                   copySnapshot(working),
+		BlockExecutorID:                AriaBlockExecutorID,
+		ExecutorVersion:                AriaBlockExecutorVersion,
+		WorkerCount:                    workerCount,
+		SerialEquivalent:               false,
+		TransactionExecutionMS:         metrics.TransactionExecutionMS,
+		DeterministicMaterializationMS: metrics.DeterministicMaterializationMS,
+		StateCommitmentMS:              metrics.StateCommitmentMS,
+		StateRootVersion:               state.CommitmentVersion,
 	}
 	result.TxDeltas = make([]TxDelta, 0, len(finalDeltas))
 	result.Receipts = make([]Receipt, 0, len(finalDeltas))

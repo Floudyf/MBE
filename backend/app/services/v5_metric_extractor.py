@@ -82,6 +82,23 @@ LITERATURE_GRAPH_REQUIRED_METRICS = [
     "deterministic_materialization_ms",
 ]
 
+GROUNDHOG_REQUIRED_METRICS = [
+    "groundhog_metrics_available",
+    "groundhog_execution_attempt_count",
+    "groundhog_reservation_count",
+    "groundhog_constraint_conflict_count",
+    "groundhog_reservation_rollback_count",
+    "groundhog_reservation_parallel_width",
+    "groundhog_reservation_engine",
+    "groundhog_snapshot_semantics",
+    "groundhog_typed_modification_semantics",
+    "groundhog_proposal_evidence_available",
+    "groundhog_proposal_candidate_count",
+    "groundhog_proposal_selected_count",
+    "groundhog_proposal_deferred_event_count",
+    "groundhog_proposal_constraint_conflict_count",
+]
+
 
 def extract(run_dir: Path, method_id: str | None = None) -> dict:
     summary_path = run_dir / "real_cluster_summary.json"
@@ -156,7 +173,14 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "actual_max_tx_per_block": cluster.get("actual_max_tx_per_block"),
         "actual_block_interval_mean_ms": cluster.get("actual_block_interval_mean_ms"),
         "actual_block_interval_p95_ms": cluster.get("actual_block_interval_p95_ms"),
-        "lifecycle_complete": finality.get("logical_transaction_count") == finality.get("finalized_unique_logical_tx_count"),
+        # Lifecycle completion is about every admitted logical transaction reaching
+        # a terminal outcome.  Nezha/ACG HS may legitimately terminate a
+        # transaction as `nezha_hs_aborted`; those terminal failed no-ops are not
+        # committed/finalized state updates, but they still close the lifecycle.
+        "lifecycle_complete": (
+            finality.get("logical_transaction_count") == terminal
+            and finality.get("incomplete_unique_tx_count") == 0
+        ),
         "fast_track_count": cluster.get("fast_track_count"),
         "conservative_track_count": cluster.get("conservative_track_count"),
         "aggregation_group_count": cluster.get("aggregation_group_count"),
@@ -213,10 +237,14 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "missing": missing,
     }
     _apply_artifact_contract(metrics, cluster)
+    _apply_workload_replay_metrics(metrics, run_dir)
+    _apply_mempool_admission_metrics(metrics, run_dir)
+    _apply_common_block_execution_timing(metrics, run_dir)
 
     _apply_block_stm_metrics(metrics, run_dir)
     _apply_batch_si_metrics(metrics, run_dir)
     _apply_literature_graph_metrics(metrics, run_dir)
+    _apply_groundhog_metrics(metrics, run_dir)
     _apply_metatrack_artifacts(metrics, run_dir)
     _apply_mechanism_metrics(metrics, run_dir)
 
@@ -281,6 +309,121 @@ def _apply_artifact_contract(metrics: dict[str, Any], cluster: dict[str, Any]) -
         marker = f"artifact_contract:missing:{item}"
         if marker not in metrics["missing"]:
             metrics["missing"].append(marker)
+
+
+def _apply_workload_replay_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    replay = _read_json(run_dir / "workload_replay_summary.json")
+    completion = _read_json(run_dir / "client_submission_complete.json")
+    if not replay and not completion:
+        return
+
+    def first(name: str, default: object = None) -> object:
+        if replay.get(name) is not None:
+            return replay.get(name)
+        if completion.get(name) is not None:
+            return completion.get(name)
+        return default
+
+    metrics.update({
+        "replay_mode": first("replay_mode"),
+        "target_submission_tps": first("target_submission_tps"),
+        "observed_submission_tps": first("observed_submission_tps"),
+        "submission_duration_ms": first("submission_duration_ms"),
+        "pacing_schedule": first("pacing_schedule"),
+        "pacing_late_release_count": first("pacing_late_release_count", 0),
+        "pacing_max_schedule_lag_ms": first("pacing_max_schedule_lag_ms", 0),
+    })
+    for name in ("workload_replay_summary.json", "client_submission_complete.json"):
+        if (run_dir / name).is_file() and name not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(name)
+
+
+def _apply_mempool_admission_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    # Server-side truth for the offered-load experiment: use the first successful
+    # mempool admission observed for each logical transaction across replicas.
+    # Replica gossip duplicates therefore cannot inflate the admitted rate.
+    first_admitted_by_logical_id: dict[str, int] = {}
+    lifecycle_paths = sorted((run_dir / "nodes").glob("*/transaction_lifecycle.jsonl"))
+    for path in lifecycle_paths:
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(event, dict) or event.get("stage") != "admitted" or event.get("success") is not True:
+                        continue
+                    logical_id = str(event.get("logical_tx_id") or event.get("tx_id") or "")
+                    timestamp_ms = event.get("timestamp_ms")
+                    if not logical_id or isinstance(timestamp_ms, bool) or not isinstance(timestamp_ms, (int, float)):
+                        continue
+                    timestamp = int(timestamp_ms)
+                    previous = first_admitted_by_logical_id.get(logical_id)
+                    if previous is None or timestamp < previous:
+                        first_admitted_by_logical_id[logical_id] = timestamp
+        except OSError:
+            continue
+    if not first_admitted_by_logical_id:
+        return
+    timestamps = sorted(first_admitted_by_logical_id.values())
+    duration_ms = max(0, timestamps[-1] - timestamps[0])
+    metrics["mempool_admitted_unique_tx_count"] = len(timestamps)
+    metrics["mempool_first_admitted_at_ms"] = timestamps[0]
+    metrics["mempool_last_admitted_at_ms"] = timestamps[-1]
+    metrics["mempool_admission_duration_ms"] = duration_ms
+    if duration_ms > 0 and len(timestamps) > 1:
+        metrics["observed_mempool_admission_tps"] = (len(timestamps) - 1) / (duration_ms / 1000.0)
+    target = metrics.get("target_submission_tps")
+    observed = metrics.get("observed_mempool_admission_tps")
+    if isinstance(target, (int, float)) and not isinstance(target, bool) and target > 0 and isinstance(observed, (int, float)) and not isinstance(observed, bool):
+        metrics["mempool_admission_target_ratio"] = float(observed) / float(target)
+    metrics["mempool_admission_evidence_available"] = True
+    # Keep the artifact list compact while still naming the exact evidence family.
+    if "nodes/*/transaction_lifecycle.jsonl" not in metrics["source_artifacts"]:
+        metrics["source_artifacts"].append("nodes/*/transaction_lifecycle.jsonl")
+
+
+def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path) -> None:
+    summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
+    summaries = [item for item in summaries if item]
+    blocks = [
+        block
+        for summary in summaries
+        for block in (summary.get("blocks") if isinstance(summary.get("blocks"), list) else [])
+        if isinstance(block, dict)
+    ]
+    if not blocks:
+        return
+
+    def total(name: str) -> int:
+        return sum(_int(block.get(name)) for block in blocks)
+
+    # block_execution_ms is the common runtime wall-clock envelope. The three
+    # phase metrics remain separate and are never derived from that envelope.
+    metrics["block_execution_ms"] = total("block_execution_ms")
+    metrics["transaction_execution_ms"] = total("transaction_execution_ms")
+    metrics["deterministic_materialization_ms"] = sum(
+        _int(block.get("deterministic_materialization_ms") if block.get("deterministic_materialization_ms") is not None else block.get("deterministic_apply_ms"))
+        for block in blocks
+    )
+    metrics["state_commitment_ms"] = total("state_commitment_ms")
+    metrics["common_timing_block_count"] = len(blocks)
+    root_versions = sorted({str(block.get("state_root_version")) for block in blocks if block.get("state_root_version")})
+    if len(root_versions) == 1:
+        metrics["state_root_version"] = root_versions[0]
+    executor_ids = sorted({str(summary.get("block_executor_id")) for summary in summaries if summary.get("block_executor_id")})
+    if executor_ids:
+        metrics["timing_block_executor_ids"] = executor_ids
+    metrics["common_block_execution_timing_available"] = True
+    for path in _batch_si_leader_summary_paths(run_dir):
+        if path.is_file():
+            rel = str(path.relative_to(run_dir)).replace("\\", "/")
+            if rel not in metrics["source_artifacts"]:
+                metrics["source_artifacts"].append(rel)
 
 
 def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
@@ -415,6 +558,7 @@ def _apply_batch_si_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "batch_snapshot_create_ms": total("batch_snapshot_create_ms"),
         "transaction_execution_ms": total("transaction_execution_ms"),
         "deterministic_materialization_ms": total("deterministic_materialization_ms"),
+        "state_commitment_ms": total("state_commitment_ms"),
         "batch_si_cross_scheme_algorithm_reuse": False,
     })
     metrics["source_artifacts"].extend(
@@ -456,13 +600,140 @@ def _apply_literature_graph_metrics(metrics: dict[str, Any], run_dir: Path) -> N
         "graph_color_count": total("graph_color_count"),
         "transaction_execution_ms": total("transaction_execution_ms"),
         "deterministic_materialization_ms": total("deterministic_materialization_ms"),
+        "state_commitment_ms": total("state_commitment_ms"),
+        "cg_planning_worker_count": max((_int(block.get("cg_planning_worker_count")) for block in blocks), default=0),
     })
+    if executor_ids == ["acg_block_executor"]:
+        # Nezha HS aborts are part of the authors' algorithm semantics. Keep the
+        # successful-finalization throughput numerator unchanged, but export the
+        # explicit abort evidence so a lower finalized count is explainable.
+        metrics["abort_count"] = total("abort_count")
+        metrics["nezha_hs_abort_count"] = total("nezha_hs_abort_count")
+
+    validator_modes = sorted({str(block.get("cg_validator_mode")) for block in blocks if block.get("cg_validator_mode")})
+    if len(validator_modes) == 1:
+        metrics["cg_validator_mode"] = validator_modes[0]
     metrics["source_artifacts"].extend(
         str(path.relative_to(run_dir)).replace("\\", "/")
         for path in _batch_si_leader_summary_paths(run_dir)
         if path.is_file()
     )
 
+
+
+def _apply_groundhog_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    leader_summary_paths = _batch_si_leader_summary_paths(run_dir)
+    summaries = [_read_json(path) for path in leader_summary_paths]
+    summaries = [item for item in summaries if item.get("block_executor_id") == "groundhog_block_executor"]
+    if not summaries:
+        return
+    blocks = [
+        block
+        for summary in summaries
+        for block in (summary.get("blocks") if isinstance(summary.get("blocks"), list) else [])
+        if isinstance(block, dict)
+    ]
+    if not blocks:
+        return
+
+    def total(name: str) -> int:
+        return sum(_int(block.get(name)) for block in blocks)
+
+    metrics.update({
+        "groundhog_metrics_available": True,
+        "worker_count": max((_int(block.get("worker_count")) for block in blocks), default=0),
+        "maximum_parallel_width": max((_int(block.get("maximum_parallel_width")) for block in blocks), default=0),
+        "groundhog_execution_attempt_count": total("groundhog_execution_attempt_count"),
+        "groundhog_reservation_count": total("groundhog_reservation_count"),
+        "groundhog_constraint_conflict_count": total("groundhog_constraint_conflict_count"),
+        "groundhog_reservation_rollback_count": total("groundhog_reservation_rollback_count"),
+        "groundhog_integer_merge_count": total("groundhog_integer_merge_count"),
+        "groundhog_bytes_merge_count": total("groundhog_bytes_merge_count"),
+        "groundhog_ordered_set_merge_count": total("groundhog_ordered_set_merge_count"),
+        "groundhog_modified_key_count": total("groundhog_modified_key_count"),
+        "groundhog_reservation_parallel_width": max((_int(block.get("groundhog_reservation_parallel_width")) for block in blocks), default=0),
+        "transaction_execution_ms": total("transaction_execution_ms"),
+        "deterministic_materialization_ms": total("deterministic_materialization_ms"),
+        "state_commitment_ms": total("state_commitment_ms"),
+    })
+    for name in (
+        "groundhog_reservation_engine",
+        "groundhog_fallback_mode",
+        "groundhog_snapshot_semantics",
+        "groundhog_typed_modification_semantics",
+    ):
+        values = sorted({str(block.get(name)) for block in blocks if block.get(name) not in (None, "")})
+        if len(values) == 1:
+            metrics[name] = values[0]
+
+    proposal_paths = [path.parent / "proposal_selection_evidence.jsonl" for path in leader_summary_paths]
+    proposal_rows: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for path in proposal_paths:
+        if not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(row, dict) or row.get("algorithm_id") != "groundhog_candidate_selection_v1":
+                        continue
+                    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                    shard_id = str(payload.get("shard_id") or row.get("shard_id") or "")
+                    height = _int(payload.get("height") or row.get("height"))
+                    digest = str(row.get("payload_digest") or "")
+                    proposal_rows[(shard_id, height, digest)] = payload
+        except OSError:
+            continue
+
+    if proposal_rows:
+        proposal_candidate_count = 0
+        proposal_selected_count = 0
+        proposal_deferred_event_count = 0
+        proposal_reservation_count = 0
+        proposal_constraint_conflict_count = 0
+        proposal_reservation_rollback_count = 0
+        unique_deferred: set[str] = set()
+        for payload in proposal_rows.values():
+            proposal_candidate_count += _int(payload.get("candidate_count"))
+            proposal_selected_count += _int(payload.get("selected_count"))
+            proposal_deferred_event_count += _int(payload.get("deferred_count"))
+            unique_deferred.update(
+                str(item)
+                for item in (payload.get("deferred_logical_ids") or payload.get("deferred_tx_ids") or [])
+                if str(item)
+            )
+            proposal_metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+            proposal_reservation_count += _int(proposal_metrics.get("reservation_count"))
+            proposal_constraint_conflict_count += _int(proposal_metrics.get("constraint_conflict_count"))
+            proposal_reservation_rollback_count += _int(proposal_metrics.get("reservation_rollback_count"))
+        metrics.update({
+            "groundhog_proposal_evidence_available": True,
+            "groundhog_proposal_block_count": len(proposal_rows),
+            "groundhog_proposal_candidate_count": proposal_candidate_count,
+            "groundhog_proposal_selected_count": proposal_selected_count,
+            "groundhog_proposal_deferred_event_count": proposal_deferred_event_count,
+            "groundhog_proposal_unique_deferred_tx_count": len(unique_deferred),
+            "groundhog_proposal_reservation_count": proposal_reservation_count,
+            "groundhog_proposal_constraint_conflict_count": proposal_constraint_conflict_count,
+            "groundhog_proposal_reservation_rollback_count": proposal_reservation_rollback_count,
+        })
+        for path in proposal_paths:
+            if path.is_file():
+                relative = str(path.relative_to(run_dir)).replace("\\", "/")
+                if relative not in metrics["source_artifacts"]:
+                    metrics["source_artifacts"].append(relative)
+
+    for path in leader_summary_paths:
+        if path.is_file():
+            relative = str(path.relative_to(run_dir)).replace("\\", "/")
+            if relative not in metrics["source_artifacts"]:
+                metrics["source_artifacts"].append(relative)
 
 def _apply_metatrack_artifacts(metrics: dict[str, Any], run_dir: Path) -> None:
     for name, key in {
@@ -539,6 +810,8 @@ def _literature_graph_required_metrics(method_id: str | None) -> list[str]:
     ]
     if normalized == "hash_cg":
         required.append("pairwise_conflict_check_count")
+    if normalized == "hash_acg":
+        required.extend(["abort_count", "nezha_hs_abort_count"])
     if normalized == "hash_bsx":
         required.append("graph_color_count")
     return required
@@ -546,6 +819,12 @@ def _literature_graph_required_metrics(method_id: str | None) -> list[str]:
 
 def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None) -> None:
     uses_block_stm, uses_metatrack, uses_batch_si = _method_traits(metrics, method_id)
+    normalized_method_id = str(method_id or "").lower()
+    uses_groundhog = (
+        normalized_method_id == "hash_groundhog"
+        or metrics.get("block_executor_id") == "groundhog_block_executor"
+        or metrics.get("groundhog_metrics_available") is True
+    )
     literature_graph_required = _literature_graph_required_metrics(method_id)
     required = list(COMMON_REQUIRED_METRICS)
     if uses_block_stm:
@@ -554,6 +833,8 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         required.extend(METATRACK_REQUIRED_METRICS)
     if uses_batch_si:
         required.extend(BATCH_SI_REQUIRED_METRICS)
+    if uses_groundhog:
+        required.extend(GROUNDHOG_REQUIRED_METRICS)
     required.extend(literature_graph_required)
 
     # Metric names overlap across methods (for example worker_count and
@@ -566,6 +847,8 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         + METATRACK_REQUIRED_METRICS
         + BATCH_SI_REQUIRED_METRICS
         + LITERATURE_GRAPH_REQUIRED_METRICS
+        + GROUNDHOG_REQUIRED_METRICS
+        + literature_graph_required
     ))
     statuses: dict[str, str] = {
         name: _metric_state(metrics.get(name), required=name in required_names)

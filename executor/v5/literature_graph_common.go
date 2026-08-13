@@ -1,17 +1,13 @@
 package v5
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
-	"time"
 
 	realblock "metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/execution"
-	"metaverse-chainlab/executor/realism/state"
 	"metaverse-chainlab/executor/realism/tx"
 )
 
@@ -26,12 +22,19 @@ type literatureTxAccess struct {
 }
 
 type literatureGraphMetrics struct {
-	TransactionCount int `json:"transaction_count"`
-	EdgeCount        int `json:"edge_count"`
-	WaveCount        int `json:"wave_count"`
-	MaximumWaveWidth int `json:"maximum_wave_width"`
-	ColorCount       int `json:"color_count,omitempty"`
-	PairChecks       int `json:"pair_checks,omitempty"`
+	TransactionCount    int `json:"transaction_count"`
+	EdgeCount           int `json:"edge_count"`
+	WaveCount           int `json:"wave_count"`
+	MaximumWaveWidth    int `json:"maximum_wave_width"`
+	ColorCount          int `json:"color_count,omitempty"`
+	PairChecks          int `json:"pair_checks,omitempty"`
+	PlanningWorkerCount int `json:"planning_worker_count,omitempty"`
+	AbortCount          int `json:"abort_count,omitempty"`
+}
+
+type literatureGraphEdge struct {
+	From int `json:"from"`
+	To   int `json:"to"`
 }
 
 type literatureGraphPlan struct {
@@ -41,24 +44,14 @@ type literatureGraphPlan struct {
 	CandidateTransactionIDs []string               `json:"candidate_transaction_ids"`
 	Waves                   [][]string             `json:"waves"`
 	SerializationOrder      []string               `json:"serialization_order"`
+	AbortedTransactionIDs   []string               `json:"aborted_transaction_ids,omitempty"`
 	DeclaredAccessSetDigest string                 `json:"declared_access_set_digest"`
 	DeclaredReadKeyCount    int                    `json:"declared_read_key_count"`
 	DeclaredWriteKeyCount   int                    `json:"declared_write_key_count"`
+	Edges                   []literatureGraphEdge  `json:"edges,omitempty"`
+	ValidatorMode           string                 `json:"validator_mode,omitempty"`
 	Metrics                 literatureGraphMetrics `json:"metrics"`
 	PlanDigest              string                 `json:"plan_digest"`
-}
-
-type literatureGraphExecutorMetrics struct {
-	AlgorithmID             string `json:"algorithm_id"`
-	WorkerCount             int    `json:"worker_count"`
-	WaveCount               int    `json:"wave_count"`
-	MaximumWaveWidth        int    `json:"maximum_wave_width"`
-	MaximumObservedParallel int    `json:"maximum_observed_parallel_width"`
-	GraphEdgeCount          int    `json:"graph_edge_count"`
-	GraphPairCheckCount     int    `json:"graph_pair_check_count"`
-	GraphColorCount         int    `json:"graph_color_count"`
-	TransactionExecutionMS  int64  `json:"transaction_execution_ms"`
-	DeterministicApplyMS    int64  `json:"deterministic_materialization_ms"`
 }
 
 func literaturePlanDigest(plan literatureGraphPlan) string {
@@ -266,188 +259,6 @@ func literatureVerifyPlan(block realblock.Block, plan literatureGraphPlan, algor
 		return fmt.Errorf("%s deterministic plan mismatch", algorithmID)
 	}
 	return nil
-}
-
-type literatureWaveResult struct {
-	Item    tx.SignedTransaction
-	Receipt execution.Receipt
-	Delta   execution.TxDelta
-}
-
-func executeLiteratureGraphPlan(ctx context.Context, block realblock.Block, base map[string]string, plan literatureGraphPlan, workerCount int, executorID string) (BlockExecutionResult, error) {
-	if workerCount < 1 {
-		workerCount = 1
-	}
-	working := literatureCopyStringMap(base)
-	before := state.RootOfSnapshot(working)
-	byID := make(map[string]tx.SignedTransaction, len(block.TxList))
-	indexByID := make(map[string]int, len(block.TxList))
-	for index, item := range block.TxList {
-		byID[item.TxID] = item
-		indexByID[item.TxID] = index
-	}
-	result := execution.Result{
-		BlockHash: block.BlockHash, Height: block.Height, StateRootBefore: before,
-		Deterministic: true, StateUpdates: map[string]string{}, BlockExecutorID: executorID,
-		ExecutorVersion: "1.0.0", WorkerCount: workerCount,
-	}
-	allDeltas := make([]execution.TxDelta, 0, len(block.TxList))
-	allReceipts := make([]execution.Receipt, 0, len(block.TxList))
-	maximumObserved := 0
-	var executionMS, applyMS int64
-	for _, wave := range plan.Waves {
-		if err := ctx.Err(); err != nil {
-			return BlockExecutionResult{}, err
-		}
-		// No transaction in a wave mutates working directly. Share the current
-		// immutable wave state and keep writes transaction-local until the barrier.
-		snapshot := working
-		started := time.Now()
-		waveResults, observed, err := executeLiteratureWave(ctx, block, wave, byID, indexByID, snapshot, workerCount)
-		executionMS += time.Since(started).Milliseconds()
-		if err != nil {
-			return BlockExecutionResult{}, err
-		}
-		if observed > maximumObserved {
-			maximumObserved = observed
-		}
-		started = time.Now()
-		for _, txResult := range waveResults {
-			keys := make([]string, 0, len(txResult.Delta.WriteSet))
-			for key := range txResult.Delta.WriteSet {
-				keys = append(keys, key)
-			}
-			sort.Strings(keys)
-			for _, key := range keys {
-				working[literatureQualifiedKey(block.ShardID, key)] = txResult.Delta.WriteSet[key]
-			}
-			receipt := txResult.Receipt
-			receipt.StateRootAfterTx = state.RootOfSnapshot(working)
-			delta := txResult.Delta
-			delta.Receipt = receipt
-			allReceipts = append(allReceipts, receipt)
-			allDeltas = append(allDeltas, delta)
-			if receipt.Success {
-				result.SuccessfulTxs++
-			} else {
-				result.FailedTxs++
-			}
-		}
-		applyMS += time.Since(started).Milliseconds()
-	}
-	result.Receipts = allReceipts
-	result.TxDeltas = allDeltas
-	result.StateRootAfter = state.RootOfSnapshot(working)
-	result.ReceiptRoot = execution.ReceiptRoot(result.Receipts)
-	for key, value := range working {
-		result.StateUpdates[key] = value
-	}
-	result.StateDelta = literatureStateDelta(base, working)
-	result.Plan = execution.ExecutionPlan{
-		EngineID: executorID, EngineVersion: "1.0.0", BlockHash: block.BlockHash, BlockHeight: block.Height,
-		OrderedTransactionIDs:   append([]string(nil), plan.SerializationOrder...),
-		DeclaredAccessSetDigest: plan.DeclaredAccessSetDigest,
-		DeclaredReadKeyCount:    plan.DeclaredReadKeyCount,
-		DeclaredWriteKeyCount:   plan.DeclaredWriteKeyCount,
-		WorkerCount:             workerCount, PlanDigest: plan.PlanDigest,
-	}
-	for _, id := range plan.SerializationOrder {
-		result.Plan.OriginalTransactionIdxs = append(result.Plan.OriginalTransactionIdxs, indexByID[id])
-	}
-	result.PlanDigest = plan.PlanDigest
-	metrics := literatureGraphExecutorMetrics{
-		AlgorithmID: plan.AlgorithmID, WorkerCount: workerCount, WaveCount: plan.Metrics.WaveCount,
-		MaximumWaveWidth: plan.Metrics.MaximumWaveWidth, MaximumObservedParallel: maximumObserved,
-		GraphEdgeCount: plan.Metrics.EdgeCount, GraphPairCheckCount: plan.Metrics.PairChecks,
-		GraphColorCount: plan.Metrics.ColorCount, TransactionExecutionMS: executionMS,
-		DeterministicApplyMS: applyMS,
-	}
-	actual := map[string]any{
-		"literature_graph_metrics":        metrics,
-		"maximum_parallel_width":          maximumObserved,
-		"dependency_edge_count":           plan.Metrics.EdgeCount,
-		"wave_count":                      plan.Metrics.WaveCount,
-		"maximum_wave_width":              plan.Metrics.MaximumWaveWidth,
-		"graph_color_count":               plan.Metrics.ColorCount,
-		"pairwise_conflict_check_count":   plan.Metrics.PairChecks,
-		"abort_count":                     0,
-		"reexecution_count":               0,
-		"serializable":                    true,
-		"literature_plan_algorithm_id":    plan.AlgorithmID,
-		"literature_plan_digest_verified": true,
-	}
-	businessAttempts := make([]BusinessExecutionAttempt, 0, len(allDeltas))
-	for _, delta := range allDeltas {
-		businessAttempts = append(businessAttempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: delta.TxID, Track: executorID, Attempt: 1, Reason: "literature_graph_wave_execution", Success: delta.Success, FinalCompletion: true})
-	}
-	return BlockExecutionResult{
-		ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: plan.PlanDigest,
-		WorkerCount: workerCount, BlockExecutionMS: executionMS + applyMS, TransactionExecutionMS: executionMS, DeterministicApplyMS: applyMS,
-		ActualMetrics: actual, BusinessAttempts: businessAttempts,
-	}, nil
-}
-
-func executeLiteratureWave(ctx context.Context, block realblock.Block, wave []string, byID map[string]tx.SignedTransaction, indexByID map[string]int, snapshot map[string]string, workers int) ([]literatureWaveResult, int, error) {
-	results := make([]literatureWaveResult, len(wave))
-	if len(wave) == 0 {
-		return results, 0, nil
-	}
-	if workers > len(wave) {
-		workers = len(wave)
-	}
-	type job struct{ index int }
-	jobs := make(chan job)
-	var wg sync.WaitGroup
-	var active, maximum int
-	var mu sync.Mutex
-	var firstErr error
-	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			serial := execution.NewSerialExecutor()
-			for task := range jobs {
-				if ctx.Err() != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = ctx.Err()
-					}
-					mu.Unlock()
-					continue
-				}
-				id := wave[task.index]
-				item, ok := byID[id]
-				if !ok {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = fmt.Errorf("plan references unknown transaction %s", id)
-					}
-					mu.Unlock()
-					continue
-				}
-				mu.Lock()
-				active++
-				if active > maximum {
-					maximum = active
-				}
-				mu.Unlock()
-				receipt, delta := serial.ExecuteTransaction(block, item, snapshot, indexByID[id])
-				results[task.index] = literatureWaveResult{Item: item, Receipt: receipt, Delta: delta}
-				mu.Lock()
-				active--
-				mu.Unlock()
-			}
-		}()
-	}
-	for index := range wave {
-		jobs <- job{index: index}
-	}
-	close(jobs)
-	wg.Wait()
-	if firstErr != nil {
-		return nil, maximum, firstErr
-	}
-	return results, maximum, nil
 }
 
 func literatureCopyStringMap(input map[string]string) map[string]string {

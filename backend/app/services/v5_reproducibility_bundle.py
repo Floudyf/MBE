@@ -13,6 +13,24 @@ _MAX_DIAGNOSTIC_FILE_BYTES = 128 * 1024 * 1024
 _MAX_DIAGNOSTIC_TOTAL_BYTES = 512 * 1024 * 1024
 
 
+def _experiment_conditions(group: dict) -> dict:
+    plan = group.get("plan") if isinstance(group.get("plan"), dict) else {}
+    base_spec = plan.get("base_spec") if isinstance(plan.get("base_spec"), dict) else {}
+    workload_source = base_spec.get("workload_source") if isinstance(base_spec.get("workload_source"), dict) else {}
+    source_fields = (
+        "source_type", "plugin_id", "dataset_id", "variant_mode", "variant_id", "requested_tx_count",
+        "use_full_dataset", "seed", "selection_mode", "replay_mode", "target_submission_tps", "skew_axis",
+        "target_alpha", "materialized_id", "source_sha256", "variant_parameters",
+    )
+    return {
+        "execution_backend": group.get("execution_backend"),
+        "worker_count": plan.get("worker_count"),
+        "tx_count": base_spec.get("tx_count"),
+        "topology": base_spec.get("topology"),
+        "workload_source": {name: workload_source.get(name) for name in source_fields if workload_source.get(name) is not None},
+    }
+
+
 def build(group_dir: Path, group: dict) -> Path:
     group_files = [path for path in group_dir.rglob("*") if path.is_file() and path.name not in {"artifacts.zip", "reproducibility_manifest.json", "artifact_manifest.json"}]
     archive_entries: list[tuple[Path, str, str]] = [
@@ -21,6 +39,7 @@ def build(group_dir: Path, group: dict) -> Path:
     archive_entries.extend(_failed_runtime_diagnostics(group_dir, group))
     manifest = {
         "run_group_id": group["run_group_id"],
+        "experiment_conditions": _experiment_conditions(group),
         "file_count": len(archive_entries),
         "files": [
             {

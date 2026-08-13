@@ -220,6 +220,8 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
             "requested_cross_shard_ratio": ratio,
             "requested_cross_shard_count": requested_cross_shard_count(source.requested_tx_count, ratio),
             "truth_label": "synthetic_generated",
+            "replay_mode": source.replay_mode,
+            "target_submission_tps": source.target_submission_tps,
             "no_fallback": True,
         }
     if profile["workload"]["plugin_id"] != "canonical_trace_replay":
@@ -233,6 +235,8 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         seed=source.seed,
         variant_mode=source.variant_mode,
         selection_mode=source.selection_mode,
+        replay_mode=source.replay_mode,
+        target_submission_tps=source.target_submission_tps,
         target_alpha=source.target_alpha,
         skew_axis=source.skew_axis,
         variant_parameters=source.variant_parameters,
@@ -284,6 +288,7 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         "variant_parameters": materialized.variant_parameters,
         "source_file_sha256": materialized.source_file_sha256,
         "replay_mode": source.replay_mode,
+        "target_submission_tps": source.target_submission_tps,
         "skew_axis": materialized.summary.get("skew_axis") or source.skew_axis,
         "target_alpha": materialized.target_alpha,
         "realized_skew": {

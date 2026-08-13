@@ -17,7 +17,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Iterator
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend.app.core.paths import ROOT, WORKLOAD_CACHE_ROOT
 from backend.app.services.workload_adapters.base import SourceValidationSummary
@@ -105,11 +105,22 @@ class WorkloadPreviewRequest(BaseModel):
     seed: int
     variant_mode: str | None = None
     selection_mode: Literal["contiguous_window", "validated_prefix"] = "contiguous_window"
+    replay_mode: Literal["max_throughput", "fixed_rate"] = "max_throughput"
+    target_submission_tps: int | None = Field(default=None, ge=1, le=1_000_000)
     target_alpha: float | None = None
     skew_axis: str | None = None
     variant_parameters: dict[str, str | int | float | bool] = Field(default_factory=dict)
     use_full_dataset: bool = False
     source_sha256: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_replay_pacing(self) -> "WorkloadPreviewRequest":
+        if self.replay_mode == "fixed_rate" and self.target_submission_tps is None:
+            raise ValueError("fixed_rate workload preview requires target_submission_tps")
+        if self.replay_mode == "max_throughput" and self.target_submission_tps is not None:
+            raise ValueError("max_throughput workload preview must not carry target_submission_tps")
+        return self
+
 
 class WorkloadPreviewDTO(BaseModel):
     schema_version: Literal["mbe_workload_preview_v1"] = "mbe_workload_preview_v1"

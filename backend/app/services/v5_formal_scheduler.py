@@ -124,6 +124,17 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
 
 
 def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[str, object]:
+    if method_id == "hash_acg" or snapshot.get("block_executor") == "acg_block_executor":
+        return {
+            "comparison_semantics_class": "nezha_acg_hs_abortable_v1",
+            "state_access_semantics": "stateful_local_nezha_hs_abortable",
+            "state_home_mapping_policy": "execution_shard_local_namespace",
+            "remote_fetch_policy": "none",
+            "remote_writeback_policy": "none",
+            "proof_policy": "consensus_bound_nezha_hs_plan_digest",
+            "legacy_cross_shard_protocol": True,
+            "measurement_boundary": "client_submit_to_nezha_terminal",
+        }
     if method_id == "hash_bsx" or snapshot.get("block_executor") == "bsx_block_executor":
         return {
             "comparison_semantics_class": "bsx_deterministic_coloring_serializable_v1",
@@ -229,6 +240,7 @@ def _workload_identity(plan: V5FormalExperimentPlan) -> dict:
             "seed",
             "selection_mode",
             "replay_mode",
+            "target_submission_tps",
             "skew_axis",
             "target_alpha",
             "variant_parameters",
@@ -606,9 +618,24 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
     finalized = number("finalized_unique_logical_tx_count")
     incomplete = number("incomplete_unique_tx_count")
     cross_failed = number("cross_shard_failed_unique_count")
+    abort_count = number("abort_count")
+    nezha_hs_abort_count = number("nezha_hs_abort_count")
+    semantic_class = str(item.get("comparison_semantics_class") or "")
+    terminal_abort_semantics = semantic_class == "nezha_acg_hs_abortable_v1"
     if submitted is None or terminal != submitted:
         reasons.append("terminal_not_equal_submitted")
-    if submitted is None or finalized != submitted:
+    # Nezha's HS may abort transactions as explicit terminal failed no-ops.
+    # For that semantic cohort, successful finalization plus HS aborts must
+    # account exactly for every terminal transaction.
+    if terminal_abort_semantics:
+        if finalized is None or abort_count is None or nezha_hs_abort_count is None:
+            reasons.append("nezha_abort_accounting_missing")
+        else:
+            if terminal is None or finalized + abort_count != terminal:
+                reasons.append("finalized_plus_abort_not_equal_terminal")
+            if abort_count != nezha_hs_abort_count:
+                reasons.append("nezha_hs_abort_count_mismatch")
+    elif submitted is None or finalized != submitted:
         reasons.append("finalized_not_equal_submitted")
     if incomplete != 0:
         reasons.append("incomplete_not_zero")

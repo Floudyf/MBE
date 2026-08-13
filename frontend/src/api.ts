@@ -1294,7 +1294,8 @@ export type V5WorkloadSourceSpec = {
   use_full_dataset?: boolean;
   seed: number;
   selection_mode?: "contiguous_window" | "validated_prefix";
-  replay_mode?: "max_throughput";
+  replay_mode?: "max_throughput" | "fixed_rate";
+  target_submission_tps?: number | null;
   skew_axis?: string | null;
   target_alpha?: number | null;
   materialized_id?: string | null;
