@@ -22,6 +22,7 @@ const (
 	BatchSIBlockExecutorVersion = "1.0.0"
 	BatchSIPlanAlgorithmID      = "batch_si_execution_plan_v1"
 	BatchSIPlanVersion          = "1.2.0"
+	BatchSIConsensusWireVersion = "batch_si_consensus_wire_v1"
 
 	BatchSIPartitionWRBP       = "wrbp"
 	BatchSIPartitionSequential = "sequential"
@@ -148,6 +149,34 @@ type BatchSIPlan struct {
 	PlanDigest              string                 `json:"plan_digest"`
 }
 
+// batchSIConsensusWire is the compact consensus representation of a Batch-SI
+// plan. TransactionOrdinals and OrderEvidence are rich deterministic evidence
+// used by the in-memory verifier and audit path. For the normal ordering path,
+// paper T.id is exactly the candidate position (1..n), so that map is omitted
+// from the wire and reconstructed on receipt. Non-canonical explicit ordinals
+// remain serializable for tests/recovery by using the optional map.
+// OrderEvidence is always derivable from ordinals + Batches and is therefore
+// never duplicated in the consensus payload.
+//
+// PlanDigest is still computed over the full rich BatchSIPlan. Thus compacting
+// the wire does not weaken semantic binding: receivers reconstruct the exact
+// rich plan, verify its digest, and backups still re-run AWRT -> WRBP -> OFAS.
+type batchSIConsensusWire struct {
+	AlgorithmID             string                 `json:"algorithm_id"`
+	Version                 string                 `json:"version"`
+	WireVersion             string                 `json:"wire_version"`
+	BlockHeight             uint64                 `json:"block_height"`
+	PartitionMode           string                 `json:"partition_mode"`
+	OrderingMode            string                 `json:"ordering_mode"`
+	PriorityMode            string                 `json:"priority_mode"`
+	CandidateTransactionIDs []string               `json:"candidate_transaction_ids"`
+	DeferredTransactions    []tx.SignedTransaction `json:"deferred_transactions,omitempty"`
+	TransactionOrdinals     map[string]int         `json:"transaction_ordinals,omitempty"`
+	Batches                 []BatchSIBatch         `json:"batches"`
+	Metrics                 BatchSIPlanMetrics     `json:"metrics"`
+	PlanDigest              string                 `json:"plan_digest"`
+}
+
 type BatchSIPlanningResult struct {
 	Plan     BatchSIPlan
 	Ordered  []tx.SignedTransaction
@@ -179,6 +208,11 @@ type BatchSIMetrics struct {
 	TransactionExecutionMS               int64  `json:"transaction_execution_ms"`
 	DeterministicMaterializationMS       int64  `json:"deterministic_materialization_ms"`
 	StateCommitmentMS                    int64  `json:"state_commitment_ms"`
+	PlanVerificationMode                 string `json:"plan_verification_mode"`
+	PlanVerificationMS                   int64  `json:"plan_verification_ms"`
+	PlanPayloadBytes                     int    `json:"plan_payload_bytes"`
+	WorkerPoolSetupMS                    int64  `json:"worker_pool_setup_ms"`
+	WorkerPoolWaitMS                     int64  `json:"worker_pool_wait_ms"`
 }
 
 type batchSITxDescriptor struct {
@@ -331,13 +365,86 @@ func BuildBatchSIPlanWithOrdinals(b block.Block, config BatchSIConfig, ordinals 
 }
 
 func MarshalBatchSIPlan(plan BatchSIPlan) ([]byte, error) {
-	return json.Marshal(plan)
+	if plan.AlgorithmID != BatchSIPlanAlgorithmID || plan.Version != BatchSIPlanVersion {
+		return nil, fmt.Errorf("unsupported batch-si plan %s/%s", plan.AlgorithmID, plan.Version)
+	}
+	if plan.PlanDigest == "" || plan.PlanDigest != batchSIPlanDigest(plan) {
+		return nil, fmt.Errorf("batch-si plan digest mismatch before marshal")
+	}
+	derivedEvidence := batchSIOrderEvidence(plan.TransactionOrdinals, plan.Batches)
+	normalized := plan
+	normalized.OrderEvidence = derivedEvidence
+	if batchSIPlanDigest(normalized) != plan.PlanDigest {
+		return nil, fmt.Errorf("batch-si order evidence is not derivable from ordinals and batches")
+	}
+
+	wire := batchSIConsensusWire{
+		AlgorithmID:             plan.AlgorithmID,
+		Version:                 plan.Version,
+		WireVersion:             BatchSIConsensusWireVersion,
+		BlockHeight:             plan.BlockHeight,
+		PartitionMode:           plan.PartitionMode,
+		OrderingMode:            plan.OrderingMode,
+		PriorityMode:            plan.PriorityMode,
+		CandidateTransactionIDs: append([]string(nil), plan.CandidateTransactionIDs...),
+		DeferredTransactions:    append([]tx.SignedTransaction(nil), plan.DeferredTransactions...),
+		Batches:                 append([]BatchSIBatch(nil), plan.Batches...),
+		Metrics:                 plan.Metrics,
+		PlanDigest:              plan.PlanDigest,
+	}
+	if !batchSIOrdinalsAreCanonical(plan.CandidateTransactionIDs, plan.TransactionOrdinals) {
+		wire.TransactionOrdinals = batchSICloneOrdinals(plan.TransactionOrdinals)
+	}
+	return json.Marshal(wire)
 }
 
 func ParseBatchSIPlan(raw []byte) (BatchSIPlan, error) {
+	// Decode new payloads once. Legacy rich payloads share these fields, so an
+	// absent wire marker is sufficient to select the compatibility decoder.
+	var wire batchSIConsensusWire
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return BatchSIPlan{}, fmt.Errorf("decode batch-si plan: %w", err)
+	}
+	if wire.WireVersion == "" {
+		// Durable blocks written before the compact-wire closure contain the
+		// full rich plan. Keep that format readable for replay/recovery.
+		return parseLegacyRichBatchSIPlan(raw)
+	}
+	if wire.WireVersion != BatchSIConsensusWireVersion {
+		return BatchSIPlan{}, fmt.Errorf("unsupported batch-si consensus wire %q", wire.WireVersion)
+	}
+	if wire.AlgorithmID != BatchSIPlanAlgorithmID || wire.Version != BatchSIPlanVersion {
+		return BatchSIPlan{}, fmt.Errorf("unsupported batch-si plan %s/%s", wire.AlgorithmID, wire.Version)
+	}
+	ordinals, err := batchSIWireOrdinals(wire.CandidateTransactionIDs, wire.TransactionOrdinals)
+	if err != nil {
+		return BatchSIPlan{}, err
+	}
+	plan := BatchSIPlan{
+		AlgorithmID:             wire.AlgorithmID,
+		Version:                 wire.Version,
+		BlockHeight:             wire.BlockHeight,
+		PartitionMode:           wire.PartitionMode,
+		OrderingMode:            wire.OrderingMode,
+		PriorityMode:            wire.PriorityMode,
+		CandidateTransactionIDs: append([]string(nil), wire.CandidateTransactionIDs...),
+		DeferredTransactions:    append([]tx.SignedTransaction(nil), wire.DeferredTransactions...),
+		TransactionOrdinals:     ordinals,
+		Batches:                 append([]BatchSIBatch(nil), wire.Batches...),
+		Metrics:                 wire.Metrics,
+		PlanDigest:              wire.PlanDigest,
+	}
+	plan.OrderEvidence = batchSIOrderEvidence(plan.TransactionOrdinals, plan.Batches)
+	if plan.PlanDigest == "" || plan.PlanDigest != batchSIPlanDigest(plan) {
+		return BatchSIPlan{}, fmt.Errorf("batch-si plan digest mismatch")
+	}
+	return plan, nil
+}
+
+func parseLegacyRichBatchSIPlan(raw []byte) (BatchSIPlan, error) {
 	var plan BatchSIPlan
 	if err := json.Unmarshal(raw, &plan); err != nil {
-		return plan, fmt.Errorf("decode batch-si plan: %w", err)
+		return plan, fmt.Errorf("decode batch-si legacy plan: %w", err)
 	}
 	if plan.AlgorithmID != BatchSIPlanAlgorithmID || plan.Version != BatchSIPlanVersion {
 		return plan, fmt.Errorf("unsupported batch-si plan %s/%s", plan.AlgorithmID, plan.Version)
@@ -346,6 +453,46 @@ func ParseBatchSIPlan(raw []byte) (BatchSIPlan, error) {
 		return plan, fmt.Errorf("batch-si plan digest mismatch")
 	}
 	return plan, nil
+}
+
+func batchSIWireOrdinals(candidateIDs []string, explicit map[string]int) (map[string]int, error) {
+	if len(explicit) > 0 {
+		if len(explicit) != len(candidateIDs) {
+			return nil, fmt.Errorf("batch-si compact ordinal count mismatch")
+		}
+		return batchSICloneOrdinals(explicit), nil
+	}
+	ordinals := make(map[string]int, len(candidateIDs))
+	for index, txID := range candidateIDs {
+		if strings.TrimSpace(txID) == "" {
+			return nil, fmt.Errorf("batch-si compact candidate transaction id is empty")
+		}
+		if _, exists := ordinals[txID]; exists {
+			return nil, fmt.Errorf("batch-si compact candidate transaction id is duplicated: %s", txID)
+		}
+		ordinals[txID] = index + 1
+	}
+	return ordinals, nil
+}
+
+func batchSIOrdinalsAreCanonical(candidateIDs []string, ordinals map[string]int) bool {
+	if len(candidateIDs) != len(ordinals) {
+		return false
+	}
+	for index, txID := range candidateIDs {
+		if txID == "" || ordinals[txID] != index+1 {
+			return false
+		}
+	}
+	return true
+}
+
+func batchSICloneOrdinals(input map[string]int) map[string]int {
+	out := make(map[string]int, len(input))
+	for txID, ordinal := range input {
+		out[txID] = ordinal
+	}
+	return out
 }
 
 // VerifyBatchSIPlan recomputes the original fixed candidate plan from consensus-bound
@@ -439,6 +586,57 @@ func VerifyBatchSIPlan(b block.Block, plan BatchSIPlan, config BatchSIConfig) er
 		if plan.DeferredTransactions[index].TxID != item.TxID {
 			return fmt.Errorf("batch-si deferred transaction evidence mismatch at index %d", index)
 		}
+	}
+	return nil
+}
+
+// ValidateBatchSIPlanProjection is the O(n) execution-side guard used only after
+// the normal consensus path has already run VerifyBatchSIPlan. It binds the
+// parsed payload to the exact accepted block order and batch projection without
+// re-running AWRT, WRBP or OFAS.
+func ValidateBatchSIPlanProjection(b block.Block, plan BatchSIPlan, config BatchSIConfig) error {
+	config = config.Normalized()
+	if plan.AlgorithmID != BatchSIPlanAlgorithmID || plan.Version != BatchSIPlanVersion {
+		return fmt.Errorf("unsupported batch-si plan %s/%s", plan.AlgorithmID, plan.Version)
+	}
+	if plan.BlockHeight != b.Height {
+		return fmt.Errorf("batch-si plan height mismatch")
+	}
+	if plan.PartitionMode != config.PartitionMode || plan.OrderingMode != config.OrderingMode || plan.PriorityMode != config.PriorityMode {
+		return fmt.Errorf("batch-si plan config mismatch")
+	}
+	if plan.PlanDigest == "" || plan.PlanDigest != batchSIPlanDigest(plan) {
+		return fmt.Errorf("batch-si plan digest mismatch")
+	}
+	if plan.Metrics.AcceptedTransactionCount != len(b.TxList) {
+		return fmt.Errorf("batch-si accepted transaction count mismatch")
+	}
+	if len(plan.OrderEvidence) != len(b.TxList) {
+		return fmt.Errorf("batch-si order evidence count mismatch")
+	}
+	seen := make(map[string]bool, len(b.TxList))
+	position := 0
+	for _, batch := range plan.Batches {
+		if batch.BatchNumber < 1 {
+			return fmt.Errorf("batch-si invalid batch number")
+		}
+		for _, txID := range batch.OrderedTransactionIDs {
+			if position >= len(b.TxList) || txID == "" || seen[txID] {
+				return fmt.Errorf("batch-si invalid accepted batch projection")
+			}
+			if b.TxList[position].TxID != txID {
+				return fmt.Errorf("batch-si accepted order mismatch at index %d", position)
+			}
+			evidence := plan.OrderEvidence[position]
+			if evidence.TxID != txID || evidence.BatchNumber != batch.BatchNumber || evidence.SerializationPosition != position+1 || evidence.TransactionOrdinal != plan.TransactionOrdinals[txID] {
+				return fmt.Errorf("batch-si order evidence mismatch at index %d", position)
+			}
+			seen[txID] = true
+			position++
+		}
+	}
+	if position != len(b.TxList) {
+		return fmt.Errorf("batch-si accepted projection does not cover the block")
 	}
 	return nil
 }
@@ -1055,9 +1253,14 @@ func batchSISortedKeys(values map[string]bool) []string {
 // BatchSIExecutor implements transaction evaluation, snapshot execution, and
 // deterministic materialization independently from the other MBE methods.
 type BatchSIExecutor struct {
-	Config                BatchSIConfig
-	DefaultInitialBalance int64
-	Metrics               BatchSIMetrics
+	Config                   BatchSIConfig
+	DefaultInitialBalance    int64
+	Metrics                  BatchSIMetrics
+	planVerificationMode     string
+	planVerificationDuration time.Duration
+	planPayloadBytes         int
+	workerPoolSetupDuration  time.Duration
+	workerPoolWaitDuration   time.Duration
 }
 
 func NewBatchSIExecutor(config BatchSIConfig) *BatchSIExecutor {
@@ -1069,10 +1272,6 @@ func (e *BatchSIExecutor) ExecuteBlock(ctx context.Context, b block.Block, base 
 }
 
 func (e *BatchSIExecutor) ExecuteBlockWithCommitment(ctx context.Context, b block.Block, base map[string]string, baseCommitment *state.Commitment) (Result, error) {
-	e.Config = e.Config.Normalized()
-	if err := e.Config.Validate(); err != nil {
-		return Result{}, err
-	}
 	if b.ExecutionPlan == nil || b.ExecutionPlan.AlgorithmID != BatchSIPlanAlgorithmID {
 		return Result{}, fmt.Errorf("batch-si requires %s execution plan", BatchSIPlanAlgorithmID)
 	}
@@ -1080,12 +1279,50 @@ func (e *BatchSIExecutor) ExecuteBlockWithCommitment(ctx context.Context, b bloc
 	if err != nil {
 		return Result{}, err
 	}
+	return e.ExecuteConsensusPlanWithCommitment(ctx, b, base, baseCommitment, plan, false)
+}
+
+// ExecuteConsensusPlanWithCommitment executes the exact consensus-bound Batch-SI
+// schedule. preverified may be true only when the V5 runtime has already fully
+// verified this exact plan on the normal consensus path. Recovery, catch-up and
+// direct callers keep preverified=false and retain the full AWRT/WRBP/OFAS
+// recomputation oracle.
+func (e *BatchSIExecutor) ExecuteConsensusPlanWithCommitment(ctx context.Context, b block.Block, base map[string]string, baseCommitment *state.Commitment, plan BatchSIPlan, preverified bool) (Result, error) {
+	e.Config = e.Config.Normalized()
+	if err := e.Config.Validate(); err != nil {
+		return Result{}, err
+	}
+	e.planVerificationMode = ""
+	e.planVerificationDuration = 0
+	e.planPayloadBytes = 0
+	e.workerPoolSetupDuration = 0
+	e.workerPoolWaitDuration = 0
+	if b.ExecutionPlan == nil || b.ExecutionPlan.AlgorithmID != BatchSIPlanAlgorithmID {
+		return Result{}, fmt.Errorf("batch-si requires %s execution plan", BatchSIPlanAlgorithmID)
+	}
 	if b.ExecutionPlan.PayloadDigest != batchSITextDigest(string(b.ExecutionPlan.Payload)) || b.ExecutionPlan.PlanDigest != plan.PlanDigest {
 		return Result{}, fmt.Errorf("batch-si execution plan envelope mismatch")
 	}
-	if err := VerifyBatchSIPlan(b, plan, e.Config); err != nil {
-		return Result{}, err
+	verificationStarted := time.Now()
+	if preverified {
+		e.planVerificationMode = "preverified_projection"
+		if err := ValidateBatchSIPlanProjection(b, plan, e.Config); err != nil {
+			e.planVerificationDuration += time.Since(verificationStarted)
+			return Result{}, err
+		}
+	} else {
+		e.planVerificationMode = "full_recompute"
+		if err := VerifyBatchSIPlan(b, plan, e.Config); err != nil {
+			e.planVerificationDuration += time.Since(verificationStarted)
+			return Result{}, err
+		}
 	}
+	e.planVerificationDuration += time.Since(verificationStarted)
+	e.planPayloadBytes = len(b.ExecutionPlan.Payload)
+	return e.executeConsensusPlanWithCommitment(ctx, b, base, baseCommitment, plan)
+}
+
+func (e *BatchSIExecutor) executeConsensusPlanWithCommitment(ctx context.Context, b block.Block, base map[string]string, baseCommitment *state.Commitment, plan BatchSIPlan) (Result, error) {
 	working := batchSICopySnapshot(base)
 	commitmentStarted := time.Now()
 	commitment := state.CloneOrBuild(baseCommitment, working)
@@ -1228,6 +1465,11 @@ func (e *BatchSIExecutor) ExecuteBlockWithCommitment(ctx context.Context, b bloc
 		TransactionExecutionMS:               executionDuration.Milliseconds(),
 		DeterministicMaterializationMS:       materializationDuration.Milliseconds(),
 		StateCommitmentMS:                    stateCommitmentDuration.Milliseconds(),
+		PlanVerificationMode:                 e.planVerificationMode,
+		PlanVerificationMS:                   e.planVerificationDuration.Milliseconds(),
+		PlanPayloadBytes:                     e.planPayloadBytes,
+		WorkerPoolSetupMS:                    e.workerPoolSetupDuration.Milliseconds(),
+		WorkerPoolWaitMS:                     e.workerPoolWaitDuration.Milliseconds(),
 	}
 	result.TransactionExecutionMS = e.Metrics.TransactionExecutionMS
 	result.DeterministicMaterializationMS = e.Metrics.DeterministicMaterializationMS
@@ -1257,6 +1499,7 @@ func (e *BatchSIExecutor) executeBatch(ctx context.Context, b block.Block, items
 		workerCount = 1
 	}
 	type job struct{ index int }
+	setupStarted := time.Now()
 	jobs := make(chan job)
 	var wg sync.WaitGroup
 	var active int
@@ -1292,17 +1535,22 @@ func (e *BatchSIExecutor) executeBatch(ctx context.Context, b block.Block, items
 			}
 		}()
 	}
+	e.workerPoolSetupDuration += time.Since(setupStarted)
 	for index := range items {
 		select {
 		case jobs <- job{index: index}:
 		case <-ctx.Done():
 			close(jobs)
+			waitStarted := time.Now()
 			wg.Wait()
+			e.workerPoolWaitDuration += time.Since(waitStarted)
 			return nil, maximum, ctx.Err()
 		}
 	}
 	close(jobs)
+	waitStarted := time.Now()
 	wg.Wait()
+	e.workerPoolWaitDuration += time.Since(waitStarted)
 	if firstErr != nil {
 		return nil, maximum, firstErr
 	}

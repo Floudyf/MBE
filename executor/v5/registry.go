@@ -363,18 +363,19 @@ type RemoteStateFetchFunc func(context.Context, tx.SignedTransaction, tx.AccessI
 type StateVersionPublishFunc func(context.Context, tx.SignedTransaction, execution.TxDelta, map[string]string) error
 
 type BlockExecutionInput struct {
-	Block                realblock.Block
-	BaseStateSnapshot    map[string]string
-	BaseStateCommitment  *state.Commitment
-	NodeID               string
-	ShardID              string
-	WorkerCount          int
-	Execution            ExecutionPlugin
-	Scheduler            SchedulerPlugin
-	Progress             func(execution.BlockSTMProgress)
-	RemoteStateReadiness map[string]bool
-	RemoteStateFetch     RemoteStateFetchFunc
-	StateVersionPublish  StateVersionPublishFunc
+	Block                 realblock.Block
+	BaseStateSnapshot     map[string]string
+	BaseStateCommitment   *state.Commitment
+	NodeID                string
+	ShardID               string
+	WorkerCount           int
+	Execution             ExecutionPlugin
+	Scheduler             SchedulerPlugin
+	ExecutionPlanVerified bool
+	Progress              func(execution.BlockSTMProgress)
+	RemoteStateReadiness  map[string]bool
+	RemoteStateFetch      RemoteStateFetchFunc
+	StateVersionPublish   StateVersionPublishFunc
 }
 type BlockExecutionResult struct {
 	ExecutionResult        execution.Result `json:"execution_result"`

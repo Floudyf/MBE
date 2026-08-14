@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	realblock "metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/execution"
@@ -162,12 +163,14 @@ func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 	if input.Block.ExecutionPlan == nil || input.Block.ExecutionPlan.AlgorithmID != execution.BatchSIPlanAlgorithmID {
 		return BlockExecutionResult{}, fmt.Errorf("batch-si execution plan is missing before execution")
 	}
+	parseStarted := time.Now()
 	consensusPlan, err := execution.ParseBatchSIPlan(input.Block.ExecutionPlan.Payload)
+	planParseMS := time.Since(parseStarted).Milliseconds()
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
 	executor := execution.NewBatchSIExecutor(config)
-	result, err := executor.ExecuteBlockWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment)
+	result, err := executor.ExecuteConsensusPlanWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, consensusPlan, input.ExecutionPlanVerified)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
@@ -178,39 +181,48 @@ func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 	}
 	acceptedTxIDs := transactionIDs(input.Block.TxList)
 	actual := map[string]any{
-		"batch_si_metrics":                        metrics,
-		"configured_worker_count":                 metrics.WorkerCount,
-		"maximum_parallel_width":                  metrics.MaximumObservedParallelWidth,
-		"batch_count":                             metrics.BatchCount,
-		"maximum_batch_width":                     metrics.MaximumBatchWidth,
-		"average_batch_width_milli":               metrics.AverageBatchWidthMilli,
-		"awrt_address_count":                      metrics.AWRTAddressCount,
-		"awrt_write_reference_count":              metrics.AWRTWriteReferenceCount,
-		"write_opportunity_reuse_count":           metrics.WriteOpportunityReuseCount,
-		"dependency_edge_count":                   metrics.DependencyEdgeCount,
-		"abort_count":                             0,
-		"deferred_transaction_count":              metrics.OFASAbortedTransactionCount,
-		"batch_si_first_pass_candidate_count":     metrics.CandidateTransactionCount,
-		"batch_si_first_pass_accepted_count":      metrics.AcceptedTransactionCount,
-		"batch_si_first_pass_ofas_abort_count":    metrics.FirstPassOFASAbortedTransactionCount,
-		"batch_si_first_pass_ofas_abort_rate":     batchSIRatio(metrics.FirstPassOFASAbortedTransactionCount, metrics.CandidateTransactionCount),
-		"batch_si_deferred_tx_ids":                deferredTxIDs,
-		"batch_si_accepted_tx_ids":                acceptedTxIDs,
-		"planning_iteration_count":                metrics.PlanningIterationCount,
-		"batch_snapshot_count":                    metrics.SnapshotCount,
-		"batch_snapshot_create_ms":                metrics.BatchSnapshotCreateMS,
-		"transaction_execution_ms":                metrics.TransactionExecutionMS,
-		"deterministic_materialization_ms":        metrics.DeterministicMaterializationMS,
-		"state_commitment_ms":                     metrics.StateCommitmentMS,
-		"state_root_version":                      result.StateRootVersion,
-		"batch_si_partition_mode":                 metrics.PartitionMode,
-		"batch_si_ordering_mode":                  metrics.OrderingMode,
-		"batch_si_priority_mode":                  metrics.PriorityMode,
-		"batch_si_execution_mode":                 metrics.ExecutionMode,
-		"serializable":                            true,
-		"batch_si_cross_scheme_algorithm_reuse":   false,
-		"batch_si_execution_plan_algorithm_id":    execution.BatchSIPlanAlgorithmID,
-		"batch_si_execution_plan_digest_verified": true,
+		"batch_si_metrics":                         metrics,
+		"configured_worker_count":                  metrics.WorkerCount,
+		"maximum_parallel_width":                   metrics.MaximumObservedParallelWidth,
+		"batch_count":                              metrics.BatchCount,
+		"maximum_batch_width":                      metrics.MaximumBatchWidth,
+		"average_batch_width_milli":                metrics.AverageBatchWidthMilli,
+		"awrt_address_count":                       metrics.AWRTAddressCount,
+		"awrt_write_reference_count":               metrics.AWRTWriteReferenceCount,
+		"write_opportunity_reuse_count":            metrics.WriteOpportunityReuseCount,
+		"dependency_edge_count":                    metrics.DependencyEdgeCount,
+		"abort_count":                              0,
+		"deferred_transaction_count":               metrics.OFASAbortedTransactionCount,
+		"batch_si_first_pass_candidate_count":      metrics.CandidateTransactionCount,
+		"batch_si_first_pass_accepted_count":       metrics.AcceptedTransactionCount,
+		"batch_si_first_pass_ofas_abort_count":     metrics.FirstPassOFASAbortedTransactionCount,
+		"batch_si_first_pass_ofas_abort_rate":      batchSIRatio(metrics.FirstPassOFASAbortedTransactionCount, metrics.CandidateTransactionCount),
+		"batch_si_deferred_tx_ids":                 deferredTxIDs,
+		"batch_si_accepted_tx_ids":                 acceptedTxIDs,
+		"planning_iteration_count":                 metrics.PlanningIterationCount,
+		"batch_snapshot_count":                     metrics.SnapshotCount,
+		"batch_snapshot_create_ms":                 metrics.BatchSnapshotCreateMS,
+		"transaction_execution_ms":                 metrics.TransactionExecutionMS,
+		"deterministic_materialization_ms":         metrics.DeterministicMaterializationMS,
+		"state_commitment_ms":                      metrics.StateCommitmentMS,
+		"batch_si_executor_plan_parse_ms":          planParseMS,
+		"batch_si_executor_plan_verify_ms":         metrics.PlanVerificationMS,
+		"batch_si_executor_plan_verify_mode":       metrics.PlanVerificationMode,
+		"batch_si_plan_payload_bytes":              metrics.PlanPayloadBytes,
+		"batch_si_worker_pool_setup_ms":            metrics.WorkerPoolSetupMS,
+		"batch_si_worker_pool_wait_ms":             metrics.WorkerPoolWaitMS,
+		"batch_si_execution_plan_preverified":      input.ExecutionPlanVerified,
+		"batch_si_executor_full_verify_count":      boolToInt(!input.ExecutionPlanVerified),
+		"batch_si_executor_full_verify_skip_count": boolToInt(input.ExecutionPlanVerified),
+		"state_root_version":                       result.StateRootVersion,
+		"batch_si_partition_mode":                  metrics.PartitionMode,
+		"batch_si_ordering_mode":                   metrics.OrderingMode,
+		"batch_si_priority_mode":                   metrics.PriorityMode,
+		"batch_si_execution_mode":                  metrics.ExecutionMode,
+		"serializable":                             true,
+		"batch_si_cross_scheme_algorithm_reuse":    false,
+		"batch_si_execution_plan_algorithm_id":     execution.BatchSIPlanAlgorithmID,
+		"batch_si_execution_plan_digest_verified":  true,
 	}
 	return BlockExecutionResult{
 		ExecutionResult:        result,

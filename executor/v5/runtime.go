@@ -242,10 +242,11 @@ type commitTask struct {
 }
 
 type deferredPrePrepare struct {
-	FromNode string
-	View     uint64
-	Sequence uint64
-	Block    realblock.Block
+	FromNode  string
+	View      uint64
+	Sequence  uint64
+	Block     realblock.Block
+	Signature string
 }
 
 // proposalValidationWorkEstimator is an optional, algorithm-neutral runtime
@@ -253,6 +254,12 @@ type deferredPrePrepare struct {
 // The PBFT messages, quorum, vote rules, and commit path remain unchanged.
 type proposalValidationWorkEstimator interface {
 	EstimateProposalValidationWork(realblock.Block) int
+}
+
+type verifiedExecutionPlanRecord struct {
+	AlgorithmID   string
+	PayloadDigest string
+	PlanDigest    string
 }
 
 type prePrepareDeferralDisposition uint8
@@ -319,6 +326,7 @@ type NodeRuntime struct {
 	proposalLastBroadcastAt         time.Time
 	proposalRetransmitCount         int
 	proposalWorkUnits               atomic.Int64
+	verifiedExecutionPlans          map[string]verifiedExecutionPlanRecord
 	viewChangeStartedAt             time.Time
 	viewChangeLastBroadcast         time.Time
 	viewChangeRetransmits           int
@@ -401,6 +409,14 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 	r, err := newNodeRuntime(plan, *selected)
 	if err != nil {
 		return err
+	}
+	if r.pbftAuthenticationRequired() {
+		if err := ValidatePBFTIdentityPlan(plan); err != nil {
+			return fmt.Errorf("pbft identity plan validation: %w", err)
+		}
+		if _, err := r.pbftSigningPrivateKey(); err != nil {
+			return fmt.Errorf("pbft local identity validation: %w", err)
+		}
 	}
 	if err := r.Start(ctx); err != nil {
 		return err
@@ -1084,7 +1100,7 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 	policy := mempool.DefaultPolicy()
 	policy.Capacity = plugins.TxPool.Capacity()
 	pool := plugins.TxPool.CreatePool(TxPoolInput{NodeID: node.NodeID, ShardID: node.ShardID, Policy: policy})
-	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, consensus: pbft.NewState(node.NodeID, node.ShardID, initialLeaderID(plan, node.ShardID), node.Validators), proposals: map[string]realblock.Block{}, deferredPrePrepares: map[uint64]deferredPrePrepare{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, queuedCommitTasks: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, pendingOutboundRelays: map[string]Relay{}, pendingFinalizeMessages: map[string]Finalize{}, outboundRelaySendErrors: map[string]string{}, finalizeSendErrors: map[string]string{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, pendingStateFetches: map[string]StateFetchDiagnostic{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateFetchSnapshotRoots: map[string]string{}, stateVersionInitial: map[string]string{}, stateVersionValues: map[string]map[uint64]string{}, stateVersionMaterialized: map[string]uint64{}, stateVersionSignals: map[string]chan struct{}{}, stateVersionRemoteSubscriptions: map[string]map[string]stateVersionRemoteSubscription{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
+	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, consensus: pbft.NewState(node.NodeID, node.ShardID, initialLeaderID(plan, node.ShardID), node.Validators), proposals: map[string]realblock.Block{}, verifiedExecutionPlans: map[string]verifiedExecutionPlanRecord{}, deferredPrePrepares: map[uint64]deferredPrePrepare{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, queuedCommitTasks: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, pendingOutboundRelays: map[string]Relay{}, pendingFinalizeMessages: map[string]Finalize{}, outboundRelaySendErrors: map[string]string{}, finalizeSendErrors: map[string]string{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, pendingStateFetches: map[string]StateFetchDiagnostic{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateFetchSnapshotRoots: map[string]string{}, stateVersionInitial: map[string]string{}, stateVersionValues: map[string]map[uint64]string{}, stateVersionMaterialized: map[string]uint64{}, stateVersionSignals: map[string]chan struct{}{}, stateVersionRemoteSubscriptions: map[string]map[string]stateVersionRemoteSubscription{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
 	for qualifiedKey, value := range plugins.StateStorage.Snapshot(db) {
 		if key, ok := unqualifiedLocalKey(qualifiedKey, node.ShardID); ok {
 			r.stateVersionInitial[key] = value
@@ -1898,6 +1914,10 @@ func (r *NodeRuntime) scheduleBlock(block realblock.Block) (realblock.Block, err
 		r.recordScheduleEvents(block, planned.Events, true)
 		block.SystemStateDeltas = r.readyRemoteStateDeltasForConsensus(block.Height)
 		realblock.AssignHash(&block)
+		// The primary has just produced this exact consensus-bound schedule.
+		// Record the immutable block/plan identity so execution does not need
+		// to rebuild the same deterministic planner output after PBFT.
+		r.rememberVerifiedExecutionPlan(block)
 		return block, nil
 	}
 	if r.shouldAttachMetaTrackExecutionPlan() {
@@ -1995,7 +2015,44 @@ func (r *NodeRuntime) verifyExecutionPlanEnvelope(block realblock.Block) error {
 	if block.BlockHash != expected {
 		return fmt.Errorf("block hash mismatch after execution plan verification")
 	}
+	if requiresConsensusPlan {
+		// A backup reaches here only after the scheduler's semantic verifier has
+		// fully rebuilt and accepted the exact consensus-bound plan. Keep that
+		// provenance locally and reuse it only for this exact immutable block.
+		r.rememberVerifiedExecutionPlan(block)
+	}
 	return nil
+}
+
+func verifiedExecutionPlanRecordForBlock(block realblock.Block) (verifiedExecutionPlanRecord, bool) {
+	if block.BlockHash == "" || block.ExecutionPlan == nil || block.ExecutionPlan.AlgorithmID == "" || block.ExecutionPlan.PayloadDigest == "" || block.ExecutionPlan.PlanDigest == "" {
+		return verifiedExecutionPlanRecord{}, false
+	}
+	return verifiedExecutionPlanRecord{AlgorithmID: block.ExecutionPlan.AlgorithmID, PayloadDigest: block.ExecutionPlan.PayloadDigest, PlanDigest: block.ExecutionPlan.PlanDigest}, true
+}
+
+func (r *NodeRuntime) rememberVerifiedExecutionPlan(block realblock.Block) {
+	record, ok := verifiedExecutionPlanRecordForBlock(block)
+	if !ok {
+		return
+	}
+	r.mu.Lock()
+	if r.verifiedExecutionPlans == nil {
+		r.verifiedExecutionPlans = map[string]verifiedExecutionPlanRecord{}
+	}
+	r.verifiedExecutionPlans[block.BlockHash] = record
+	r.mu.Unlock()
+}
+
+func (r *NodeRuntime) hasVerifiedExecutionPlan(block realblock.Block) bool {
+	record, ok := verifiedExecutionPlanRecordForBlock(block)
+	if !ok {
+		return false
+	}
+	r.mu.Lock()
+	stored, exists := r.verifiedExecutionPlans[block.BlockHash]
+	r.mu.Unlock()
+	return exists && stored == record
 }
 
 func (r *NodeRuntime) verifyProposalEvidenceEnvelope(block realblock.Block) error {
@@ -3080,6 +3137,11 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	if err := r.validateMetaTrackPlanDrivesExecution(block); err != nil {
 		return r.rejectDeterministicExecution(block, "execution_plan_shard_mismatch", err)
 	}
+	// Only an exact block/plan identity that was produced locally by PlanBlock
+	// or fully verified by the scheduler before PBFT may use the lightweight
+	// execution-side projection guard. Catch-up/recovery/direct paths stay
+	// fail-closed and retain full planner recomputation.
+	executionPlanVerified := origin == CommitOriginConsensus && r.hasVerifiedExecutionPlan(block)
 	r.setCommitPhase("execute_block", block)
 	executeStarted := time.Now()
 	r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionStarted", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"tx_count": len(block.TxList)}})
@@ -3088,7 +3150,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	if versionedWaveExecution {
 		executed, err = r.executeVersionedRemoteBlock(ctx, block, executionSnapshot)
 	} else {
-		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, StateVersionPublish: r.stateVersionPublisher(block)})
+		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, StateVersionPublish: r.stateVersionPublisher(block)})
 	}
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
@@ -3244,6 +3306,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	// soon as durable commit has succeeded.
 	delete(r.proposals, block.BlockHash)
 	delete(r.votes, block.BlockHash)
+	delete(r.verifiedExecutionPlans, block.BlockHash)
 	r.blockCount++
 	r.chainRows = append(r.chainRows, []string{r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), fmt.Sprint(commitView), block.BlockHash, block.PreviousHash, fmt.Sprint(len(block.TxList)), block.TxRoot, block.StateRootBefore, result.StateRootAfter, result.ReceiptRoot, fmt.Sprint(time.Now().UnixMilli()), fmt.Sprint(time.Now().UnixMilli())})
 	r.mu.Unlock()

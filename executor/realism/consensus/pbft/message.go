@@ -9,6 +9,7 @@ type PrePrepare struct {
 	LeaderID  string      `json:"leader_id"`
 	BlockHash string      `json:"block_hash"`
 	Block     block.Block `json:"block"`
+	Signature string      `json:"signature,omitempty"`
 }
 
 type Prepare struct {
@@ -17,6 +18,7 @@ type Prepare struct {
 	Height    uint64 `json:"height"`
 	NodeID    string `json:"node_id"`
 	BlockHash string `json:"block_hash"`
+	Signature string `json:"signature,omitempty"`
 }
 
 type Commit struct {
@@ -25,6 +27,7 @@ type Commit struct {
 	Height    uint64 `json:"height"`
 	NodeID    string `json:"node_id"`
 	BlockHash string `json:"block_hash"`
+	Signature string `json:"signature,omitempty"`
 }
 
 // CommitCertificate proves that a block reached the PBFT commit quorum in a
@@ -38,11 +41,10 @@ type CommitCertificate struct {
 	Commits   []Commit `json:"commits"`
 }
 
-// PreparedCertificate is the authenticated-node proof that a proposal reached
-// the prepare quorum in one view/sequence. The current MBE transport does not
-// attach cryptographic signatures to PBFT messages, so the certificate carries
-// the complete validator identities/messages and is validated against the
-// configured validator set.
+// PreparedCertificate is the validator-authenticated proof that a proposal
+// reached the prepare quorum in one view/sequence. Each embedded PREPARE keeps
+// its Ed25519 validator signature so the proof remains independently verifiable
+// when carried by VIEW-CHANGE / NEW-VIEW or persisted beyond the live TCP hop.
 type PreparedCertificate struct {
 	View      uint64    `json:"view"`
 	Sequence  uint64    `json:"sequence"`
@@ -57,6 +59,7 @@ type Checkpoint struct {
 	NodeID    string `json:"node_id"`
 	BlockHash string `json:"block_hash"`
 	StateRoot string `json:"state_root"`
+	Signature string `json:"signature,omitempty"`
 }
 
 // CheckpointCertificate is a stable checkpoint proof.
@@ -79,6 +82,7 @@ type ViewChange struct {
 	StableCheckpoint *CheckpointCertificate `json:"stable_checkpoint,omitempty"`
 	Prepared         *PreparedCertificate   `json:"prepared,omitempty"`
 	PreparedBlock    *block.Block           `json:"prepared_block,omitempty"`
+	Signature        string                 `json:"signature,omitempty"`
 }
 
 // NewView contains the view-change quorum and the safe prepared proposal, when
@@ -91,4 +95,5 @@ type NewView struct {
 	ViewChanges      []ViewChange         `json:"view_changes"`
 	SelectedPrepared *PreparedCertificate `json:"selected_prepared,omitempty"`
 	SelectedBlock    *block.Block         `json:"selected_block,omitempty"`
+	Signature        string               `json:"signature,omitempty"`
 }

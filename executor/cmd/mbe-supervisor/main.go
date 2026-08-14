@@ -217,6 +217,10 @@ func runV5(planPath, dataDir string) error {
 		plan.NodeConfigs[index].ListenAddr = address
 		plan.NodeConfigs[index].DataDir = filepath.Join(dataDir, "nodes", plan.NodeConfigs[index].NodeID)
 	}
+	pbftPrivateKeys, err := preparePBFTIdentities(&plan)
+	if err != nil {
+		return err
+	}
 	if err := v5.SaveJSON(planPath, plan); err != nil {
 		return err
 	}
@@ -248,7 +252,13 @@ func runV5(planPath, dataDir string) error {
 		if err != nil {
 			return err
 		}
+		privateKey := pbftPrivateKeys[nodePlan.NodeID]
+		if privateKey == "" {
+			logFile.Close()
+			return fmt.Errorf("pbft private key missing for node %s", nodePlan.NodeID)
+		}
 		cmd := exec.Command(nodeBinary, "--run-mode", "v5-server", "--v5-node-config", configPath)
+		cmd.Env = nodePBFTEnvironment(privateKey)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		if err := cmd.Start(); err != nil {
@@ -531,6 +541,38 @@ func runtimePlanForNodes(plan v5.Plan) v5.Plan {
 		runtimePlan.DurationMS = runtimeMS
 	}
 	return runtimePlan
+}
+
+func preparePBFTIdentities(plan *v5.Plan) (map[string]string, error) {
+	if plan == nil {
+		return nil, fmt.Errorf("pbft identity plan is nil")
+	}
+	publicKeys, privateKeys, err := v5.GeneratePBFTIdentityMaterial(plan.NodeConfigs)
+	if err != nil {
+		return nil, err
+	}
+	plan.PBFTIdentityScheme = v5.PBFTIdentitySchemeEd25519V1
+	plan.PBFTPublicKeys = publicKeys
+	if err := v5.ValidatePBFTIdentityPlan(*plan); err != nil {
+		return nil, err
+	}
+	return privateKeys, nil
+}
+
+func nodePBFTEnvironment(privateKey string) []string {
+	prefix := v5.PBFTPrivateKeyEnv + "="
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, item := range os.Environ() {
+		name := item
+		if index := strings.IndexByte(item, '='); index >= 0 {
+			name = item[:index]
+		}
+		if strings.EqualFold(name, v5.PBFTPrivateKeyEnv) {
+			continue
+		}
+		environment = append(environment, item)
+	}
+	return append(environment, prefix+privateKey)
 }
 
 func drainBudget(plan v5.Plan) drainTimeoutBudget {

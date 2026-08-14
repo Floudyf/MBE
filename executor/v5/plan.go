@@ -76,6 +76,8 @@ type Plan struct {
 	RuntimeTruth            string                  `json:"runtime_truth"`
 	ExecutionBackend        string                  `json:"execution_backend"`
 	DurationMS              int                     `json:"duration_ms"`
+	PBFTIdentityScheme      string                  `json:"pbft_identity_scheme,omitempty"`
+	PBFTPublicKeys          map[string]string       `json:"pbft_public_keys,omitempty"`
 	NodeConfigs             []NodePlan              `json:"node_configs"`
 	WorkloadPlan            WorkloadPlan            `json:"workload_plan"`
 	FaultPlan               map[string]any          `json:"fault_plan"`

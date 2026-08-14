@@ -337,6 +337,32 @@ def _formal_experiment_profile(plan: dict, rows: list[dict]) -> dict:
         {},
     )
     block_config = block_producer.get("config") if isinstance(block_producer.get("config"), dict) else {}
+    requested_worker_count = int(plan.get("worker_count") or 1)
+    worker_execution_truth: dict[str, dict] = {}
+    for item in methods:
+        method_id = str(item.get("method_id", ""))
+        overrides = item.get("plugin_config_overrides") or {}
+        registered = dict(overrides.get("block_executor") or {})
+        executor_id = str((item.get("plugin_overrides") or {}).get("block_executor") or "")
+        counts: set[int] = set()
+        for row in rows:
+            row_method = row.get("method") if isinstance(row.get("method"), dict) else {}
+            row_method_id = str(row_method.get("method_id") or row.get("method_config_id") or "")
+            if row_method_id != method_id:
+                continue
+            topology_point = row.get("topology_point") if isinstance(row.get("topology_point"), dict) else {}
+            row_workers = topology_point.get("worker_count", requested_worker_count)
+            if isinstance(row_workers, int) and not isinstance(row_workers, bool) and row_workers > 0:
+                counts.add(1 if executor_id == "serial_block_executor" else row_workers)
+        if not counts:
+            counts.add(1 if executor_id == "serial_block_executor" else requested_worker_count)
+        effective_counts = sorted(counts)
+        worker_execution_truth[method_id] = {
+            "registered_default_worker_count": registered.get("worker_count"),
+            "requested_worker_count": requested_worker_count,
+            "effective_worker_count": effective_counts[0] if len(effective_counts) == 1 else None,
+            "effective_worker_counts": effective_counts,
+        }
     now = datetime.now().isoformat()
     return {
         "schema_version": "v5_formal_experiment_profile_v2",
@@ -365,6 +391,7 @@ def _formal_experiment_profile(plan: dict, rows: list[dict]) -> dict:
             str(item.get("method_id", "")): (item.get("plugin_config_overrides") or {}).get("block_executor", {})
             for item in methods
         },
+        "worker_execution_truth": worker_execution_truth,
         "repeat_settings": {
             "seeds": list(plan.get("seeds") or []),
             "repeats": plan.get("repeats", 1),
