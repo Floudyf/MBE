@@ -245,6 +245,8 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     _apply_batch_si_metrics(metrics, run_dir)
     _apply_literature_graph_metrics(metrics, run_dir)
     _apply_groundhog_metrics(metrics, run_dir)
+    _apply_aria_metrics(metrics, run_dir)
+    _apply_observability_metrics(metrics, run_dir)
     _apply_metatrack_artifacts(metrics, run_dir)
     _apply_mechanism_metrics(metrics, run_dir)
 
@@ -273,6 +275,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         metrics.update(consensus_deferral_evidence)
 
     _derive_update_metrics(metrics)
+    _derive_research_metrics(metrics)
     _apply_metric_completeness(metrics, method_id=method_id)
     return metrics
 
@@ -756,6 +759,108 @@ def _apply_groundhog_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             if relative not in metrics["source_artifacts"]:
                 metrics["source_artifacts"].append(relative)
 
+
+def _apply_aria_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    leader_summary_paths = _batch_si_leader_summary_paths(run_dir)
+    proposal_paths = [path.parent / "proposal_selection_evidence.jsonl" for path in leader_summary_paths]
+    proposal_rows: dict[tuple[str, int, str], dict[str, Any]] = {}
+    for path in proposal_paths:
+        if not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(row, dict) or row.get("algorithm_id") != "aria_candidate_selection_v2":
+                        continue
+                    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+                    shard_id = str(payload.get("shard_id") or row.get("shard_id") or "")
+                    height = _int(payload.get("height") or row.get("height"))
+                    digest = str(row.get("payload_digest") or "")
+                    proposal_rows[(shard_id, height, digest)] = payload
+        except OSError:
+            continue
+    if not proposal_rows:
+        return
+
+    raw_metrics = [payload.get("metrics") for payload in proposal_rows.values() if isinstance(payload.get("metrics"), dict)]
+    if not raw_metrics:
+        return
+
+    def total(name: str) -> int:
+        return sum(_int(item.get(name)) for item in raw_metrics)
+
+    metrics.update({
+        "aria_metrics_available": True,
+        "worker_count": max((_int(item.get("worker_count")) for item in raw_metrics), default=0),
+        "maximum_parallel_width": max((_int(item.get("maximum_parallel_width")) for item in raw_metrics), default=0),
+        "aria_epoch_count": total("epoch_count"),
+        "aria_maximum_epoch_width": max((_int(item.get("maximum_epoch_width")) for item in raw_metrics), default=0),
+        "aria_execution_attempt_count": total("execution_attempt_count"),
+        "aria_committed_transaction_count": total("committed_transaction_count"),
+        "aria_finalized_transaction_count": total("finalized_transaction_count"),
+        "aria_conflict_abort_count": total("conflict_abort_count"),
+        "aria_reexecution_count": total("reexecution_count"),
+        "aria_retryable_nonce_count": total("retryable_nonce_count"),
+        "aria_waw_dependency_count": total("waw_dependency_count"),
+        "aria_raw_dependency_count": total("raw_dependency_count"),
+        "aria_war_dependency_count": total("war_dependency_count"),
+        "aria_read_reservation_count": total("read_reservation_count"),
+        "aria_write_reservation_count": total("write_reservation_count"),
+        "aria_read_only_fast_commit_count": total("read_only_fast_commit_count"),
+        "aria_application_failure_count": total("application_failure_count"),
+        "aria_candidate_transaction_count": total("candidate_transaction_count"),
+        "aria_selected_transaction_count": total("selected_transaction_count"),
+        "aria_deferred_transaction_count": total("deferred_transaction_count"),
+        "aria_transaction_execution_ms": total("transaction_execution_ms"),
+        "aria_deterministic_materialization_ms": total("deterministic_materialization_ms"),
+        "aria_state_commitment_ms": total("state_commitment_ms"),
+        "aria_proposal_evidence_block_count": len(proposal_rows),
+    })
+    for name in ("fallback_mode", "batch_lifecycle"):
+        values = sorted({str(item.get(name)) for item in raw_metrics if item.get(name) not in (None, "")})
+        if len(values) == 1:
+            metrics[f"aria_{name}"] = values[0]
+    for path in proposal_paths:
+        if path.is_file():
+            relative = str(path.relative_to(run_dir)).replace("\\", "/")
+            if relative not in metrics["source_artifacts"]:
+                metrics["source_artifacts"].append(relative)
+
+
+def _apply_observability_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    resource = _read_json(run_dir / "resource_usage_summary.json")
+    network = _read_json(run_dir / "network_metrics_summary.json")
+    if resource:
+        values = resource.get("metrics") if isinstance(resource.get("metrics"), dict) else {}
+        metrics.update(values)
+        metrics["resource_sampling_available"] = resource.get("available") is True
+        metrics["resource_sampling"] = {
+            "available": resource.get("available"),
+            "scope": resource.get("scope"),
+            "measurement_boundary": resource.get("measurement_boundary"),
+            "sampling_error": resource.get("sampling_error"),
+        }
+        metrics["source_artifacts"].append("resource_usage_summary.json")
+        if (run_dir / "resource_usage_timeseries.csv").is_file():
+            metrics["source_artifacts"].append("resource_usage_timeseries.csv")
+    if network:
+        values = network.get("metrics") if isinstance(network.get("metrics"), dict) else {}
+        metrics.update(values)
+        metrics["network_metrics_available"] = network.get("available") is True
+        metrics["network_categories"] = network.get("categories") if isinstance(network.get("categories"), dict) else {}
+        metrics["network_message_types"] = network.get("message_types") if isinstance(network.get("message_types"), dict) else {}
+        metrics["source_artifacts"].append("network_metrics_summary.json")
+        if (run_dir / "network_message_summary.csv").is_file():
+            metrics["source_artifacts"].append("network_message_summary.csv")
+
+
 def _apply_metatrack_artifacts(metrics: dict[str, Any], run_dir: Path) -> None:
     for name, key in {
         "metatrack_batch_plan.jsonl": "metatrack_batch_plan_available",
@@ -895,6 +1000,65 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
     for item in metric_missing:
         if item not in metrics["missing"]:
             metrics["missing"].append(item)
+
+
+
+def _derive_research_metrics(metrics: dict[str, Any]) -> None:
+    def ratio(numerator: str, denominator: str, target: str) -> None:
+        if metrics.get(target) is not None:
+            return
+        n = metrics.get(numerator)
+        d = metrics.get(denominator)
+        if isinstance(n, (int, float)) and not isinstance(n, bool) and isinstance(d, (int, float)) and not isinstance(d, bool) and d:
+            metrics[target] = float(n) / float(d)
+
+    submitted = metrics.get("submitted_unique_tx_count")
+    if isinstance(submitted, (int, float)) and not isinstance(submitted, bool) and submitted:
+        denominator = float(submitted)
+        for source, target in (
+            ("abort_count", "block_stm_abort_events_per_tx"),
+            ("reexecution_count", "reexecution_events_per_tx"),
+            ("validation_failure_count", "validation_failures_per_tx"),
+            ("dependency_wait_count", "dependency_waits_per_tx"),
+            ("dependency_edge_count", "dependency_edges_per_tx"),
+            ("pairwise_conflict_check_count", "conflict_checks_per_tx"),
+            ("write_opportunity_reuse_count", "write_reuse_per_tx"),
+            ("groundhog_reservation_count", "groundhog_reservations_per_tx"),
+            ("groundhog_modified_key_count", "groundhog_modified_keys_per_tx"),
+        ):
+            value = metrics.get(source)
+            if metrics.get(target) is None and isinstance(value, (int, float)) and not isinstance(value, bool):
+                metrics[target] = float(value) / denominator
+        if metrics.get("nezha_hs_abort_count") is not None:
+            metrics["nezha_hs_abort_rate"] = float(metrics.get("nezha_hs_abort_count") or 0) / denominator
+
+    committed_blocks = metrics.get("actual_committed_block_count")
+    if isinstance(committed_blocks, (int, float)) and not isinstance(committed_blocks, bool) and committed_blocks:
+        for source, target in (("batch_count", "batch_count_per_block"), ("graph_color_count", "graph_colors_per_block"), ("batch_si_plan_payload_bytes", "batch_si_plan_bytes_per_block")):
+            value = metrics.get(source)
+            if metrics.get(target) is None and isinstance(value, (int, float)) and not isinstance(value, bool):
+                metrics[target] = float(value) / float(committed_blocks)
+
+    ratio("groundhog_constraint_conflict_count", "groundhog_execution_attempt_count", "groundhog_constraint_conflicts_per_attempt")
+    ratio("groundhog_reservation_rollback_count", "groundhog_reservation_count", "groundhog_reservation_rollback_rate")
+    ratio("groundhog_proposal_deferred_event_count", "groundhog_proposal_candidate_count", "groundhog_proposal_deferral_rate")
+    ratio("aria_conflict_abort_count", "aria_candidate_transaction_count", "aria_conflict_abort_rate")
+    ratio("aria_reexecution_count", "aria_candidate_transaction_count", "aria_reexecution_rate")
+
+    fast = metrics.get("fast_track_logical_tx_count")
+    conservative = metrics.get("conservative_track_logical_tx_count")
+    if isinstance(fast, (int, float)) and not isinstance(fast, bool) and isinstance(conservative, (int, float)) and not isinstance(conservative, bool) and float(fast) + float(conservative) > 0:
+        metrics["fast_track_ratio"] = float(fast) / (float(fast) + float(conservative))
+    logical = metrics.get("submitted_unique_tx_count")
+    if isinstance(logical, (int, float)) and not isinstance(logical, bool) and logical:
+        fetches = metrics.get("physical_remote_fetch_count")
+        writes = metrics.get("physical_remote_writeback_count")
+        if isinstance(fetches, (int, float)) and not isinstance(fetches, bool):
+            metrics["remote_fetches_per_logical_tx"] = float(fetches) / float(logical)
+        if isinstance(writes, (int, float)) and not isinstance(writes, bool):
+            metrics["remote_writebacks_per_logical_tx"] = float(writes) / float(logical)
+        if isinstance(fetches, (int, float)) and not isinstance(fetches, bool) and isinstance(writes, (int, float)) and not isinstance(writes, bool):
+            metrics["remote_operations_per_logical_tx"] = (float(fetches) + float(writes)) / float(logical)
 
 
 def _derive_update_metrics(metrics: dict[str, Any]) -> None:

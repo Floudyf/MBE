@@ -275,6 +275,11 @@ func runV5(planPath, dataDir string) error {
 		reap(commands)
 		return err
 	}
+	// Observer-only resource sampling starts after node readiness and remains
+	// outside node/runtime/algorithm code. Failures are recorded but never gate
+	// the experiment. Samples stay in supervisor memory until the window ends.
+	resourceSampler := startResourceSampler(processes, 500*time.Millisecond)
+	defer resourceSampler.StopAndWrite(dataDir)
 	clientOut := filepath.Join(dataDir, "client", "client_submission.marker")
 	if err := os.MkdirAll(filepath.Dir(clientOut), 0o755); err != nil {
 		reap(commands)
@@ -293,6 +298,8 @@ func runV5(planPath, dataDir string) error {
 		reap(commands)
 		return err
 	}
+	// Stop before shutdown so RSS/CPU describe workload+drain, not teardown.
+	resourceSampler.StopAndWrite(dataDir)
 	if err := writeRedactedV5PlanArtifacts(plan, dataDir, planPath); err != nil {
 		reap(commands)
 		return err

@@ -18,7 +18,7 @@ from backend.app.core.paths import ROOT, V5_REAL_CLUSTER_RUNS_ROOT
 from backend.app.models.v5_experiment_spec import V5ExperimentSpec
 from backend.app.services.v5_experiment_compiler import compile_plan
 from backend.app.services.v5_compatibility_engine import V5CompatibilityError
-from backend.app.services import v5_real_cluster_artifacts
+from backend.app.services import v5_real_cluster_artifacts, v5_observability_metrics
 from backend.app.services.v5_artifact_contract import evaluate_expected_artifacts, write_run_artifact_catalog
 
 
@@ -295,6 +295,23 @@ def run(spec: V5ExperimentSpec, *, cancel_check: Callable[[], bool] | None = Non
             "real-cluster child stopped because free disk crossed the emergency floor",
             evidence=guard, run_id=run_id, output_dir=_logical_output_dir(run_dir),
         )
+
+    # Research observability is post-run and failure-open. It must never turn a
+    # valid protocol execution into a failed formal child.
+    try:
+        v5_observability_metrics.write_observability_summaries(run_dir)
+    except Exception as observability_error:
+        try:
+            (run_dir / "observability_collection_error.json").write_text(
+                json.dumps({
+                    "schema_version": "mbe_v5_observability_error_v1",
+                    "error": str(observability_error),
+                    "formal_eligibility_affected": False,
+                }, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
 
     compatibility_prefix = "V5_COMPATIBILITY_BLOCKED:"
     combined_output = "\n".join([stdout or "", stderr or ""])

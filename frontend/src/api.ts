@@ -1,3 +1,4 @@
+// MBE_V5_RESULTS_UI_TRUTH_CN_FINAL_20260814_V5
 const configuredBaseURL = import.meta.env.VITE_API_BASE_URL;
 
 // In development, Vite proxies relative requests to this default local backend.
@@ -1390,6 +1391,9 @@ export type V5FormalChildRun = V5FormalMatrixRow & {
   artifact_contract_version?: number;
   missing_artifacts?: string[];
   unexpected_artifacts?: string[];
+  evidence_artifacts?: Array<V5RuntimeArtifact & { child_run_id?: string; method_id?: string; method_name?: string; run_id?: string }>;
+  runtime_artifact_count?: number;
+  runtime_artifact_bytes?: number;
   attempt?: number;
   paper_candidate?: boolean;
   error?: string;
@@ -1482,6 +1486,7 @@ export type V5LegacySavedConfigScan = {
 export type V5PaperMetricRow = {
   method_id: string;
   method_name: string;
+  seed?: number | string | null;
   metric: string;
   metric_unit: string;
   valid_sample_count: number;
@@ -1493,6 +1498,8 @@ export type V5PaperMetricRow = {
   mean: number | null;
   median: number | null;
   std: number | null;
+  cv?: number | null;
+  cv_percent?: number | null;
   min: number | null;
   max: number | null;
   ci95_low: number | null;
@@ -1507,6 +1514,7 @@ export type V5PaperResultAnalysis = {
   fairness_status: string;
   metrics: Record<string, V5PaperMetricRow[]>;
   observed_metrics?: Record<string, V5PaperMetricRow[]>;
+  runtime_repeat_metrics?: Record<string, V5PaperMetricRow[]>;
   sample_statuses?: Array<Record<string, unknown>>;
   status_counts?: { execution_failed: number; blocked_incompatible: number; completed_invalid: number; comparison_excluded: number; paper_eligible: number };
   performance_comparison_valid?: boolean;

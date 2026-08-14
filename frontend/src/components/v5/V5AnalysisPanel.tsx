@@ -1,3 +1,5 @@
+// MBE_V5_RESULTS_UI_TRUTH_CN_FINAL_20260814_V5
+// MBE_V5_RESULTS_UI_FINAL_CN_CLOSURE_20260814_V4
 import { useState, type ReactNode } from "react";
 
 import type { V5FormalAnalysis, V5PaperMetricRow, V5PaperResultAnalysis } from "../../api";
@@ -7,6 +9,9 @@ const height = 286;
 const chartPadding = { top: 30, right: 24, bottom: 88, left: 58 };
 const methodOrder = [
   "hash_serial",
+  "hash_cg",
+  "hash_acg",
+  "hash_bsx",
   "hash_block_stm",
   "hash_aria",
   "hash_groundhog",
@@ -18,6 +23,9 @@ const methodOrder = [
 ];
 const methodColors: Record<string, string> = {
   hash_serial: "#6382AA",
+  hash_cg: "#3E9AA5",
+  hash_acg: "#D1784A",
+  hash_bsx: "#56B76A",
   hash_block_stm: "#BE9A62",
   hash_aria: "#7C6BB0",
   hash_groundhog: "#A56B46",
@@ -28,13 +36,16 @@ const methodColors: Record<string, string> = {
   metatrack_block_stm: "#56B76A",
 };
 const methodLabels: Record<string, string[]> = {
-  hash_serial: ["Stateful Hash", "Serial"],
-  hash_block_stm: ["Stateful Hash", "Block-STM"],
-  hash_aria: ["Stateful Hash", "Aria"],
-  hash_groundhog: ["Stateful Hash", "Groundhog"],
-  hash_batch_si: ["Stateful Hash", "Batch-SI"],
-  stateless_hash_serial: ["Stateless Hash", "Serial"],
-  stateless_hash_block_stm: ["Stateless Hash", "Block-STM"],
+  hash_serial: ["Serial"],
+  hash_cg: ["CG"],
+  hash_acg: ["ACG/Nezha"],
+  hash_bsx: ["BSX"],
+  hash_block_stm: ["Block-STM"],
+  hash_aria: ["Aria"],
+  hash_groundhog: ["Groundhog"],
+  hash_batch_si: ["Batch-SI"],
+  stateless_hash_serial: ["无状态 Hash", "Serial"],
+  stateless_hash_block_stm: ["无状态 Hash", "Block-STM"],
   metatrack_serial: ["MetaTrack", "Serial"],
   metatrack_block_stm: ["MetaTrack", "Block-STM"],
 };
@@ -54,7 +65,7 @@ function SensitivityAnalysisNotice({ analysis }: { analysis: V5PaperResultAnalys
   const counts = analysis.status_counts;
   return <article className="final-card wide" data-testid="v5-sensitivity-analysis-notice">
     <h2>偏斜度敏感性实验分析</h2>
-    <p className="muted">不同 θ 是不同实验条件，不能合并成一个方法总平均或跨 θ 的 95% 置信区间。论文结果请使用下方 θ–TPS、θ–P99 曲线与 sensitivity_summary.csv；每个 θ 内仅对 repeats/seeds 聚合。</p>
+    <p className="muted">不同 θ 是不同实验条件，不能合并成一个方法总平均或跨 θ 的 95% 置信区间。论文结果请使用下方 θ–TPS、θ–P99 曲线与 sensitivity_summary.csv；每个 θ 内先按 seed 分层，只跨 repeat 统计 runtime 波动。</p>
     {counts && <div className="analysis-status-strip">
       <StatusCount label="执行失败" value={counts.execution_failed} tone="failed" />
       <StatusCount label="兼容性阻止" value={counts.blocked_incompatible} tone="blocked" />
@@ -72,11 +83,11 @@ function PaperAnalysisPanel({ analysis }: { analysis: V5PaperResultAnalysis }) {
   const p99 = sortedRows(source.p99_finality_ms ?? []);
   const [latencyMetric, setLatencyMetric] = useState<"p95_finality_ms" | "p99_finality_ms">("p99_finality_ms");
   const latencyRows = latencyMetric === "p95_finality_ms" ? p95 : p99;
-  const latencyTitle = latencyMetric === "p95_finality_ms" ? "P95 Finality Latency" : "P99 Finality Latency";
+  const latencyTitle = latencyMetric === "p95_finality_ms" ? "P95 终态延迟" : "P99 终态延迟";
   const counts = analysis.status_counts;
   return <article className="final-card wide" data-testid="v5-analysis-panel">
     <div className="section-heading">
-      <div><h2>Paper Result Analysis</h2><p className="muted">默认展示论文有效样本；“全部运行结果”保留兼容性阻止、完成但无效和执行失败的原始观察证据，并明确标注样本状态。</p></div>
+      <div><h2>论文结果分析</h2><p className="muted">默认展示论文有效样本；“全部运行结果”保留兼容性阻止、完成但无效和执行失败的原始观察证据，并明确标注样本状态。</p></div>
       <div className="segmented-control" data-testid="v5-analysis-view-toggle">
         <button type="button" className={view === "observed" ? "active" : ""} onClick={() => setView("observed")}>全部运行结果</button>
         <button type="button" className={view === "paper" ? "active" : ""} onClick={() => setView("paper")}>论文有效样本</button>
@@ -89,11 +100,11 @@ function PaperAnalysisPanel({ analysis }: { analysis: V5PaperResultAnalysis }) {
       <StatusCount label="有效但比较受限" value={counts.comparison_excluded} tone="excluded" />
       <StatusCount label="论文有效" value={counts.paper_eligible} tone="eligible" />
     </div>}
-    <div className="analysis-status-legend" aria-label="sample status legend">
+    <div className="analysis-status-legend" aria-label="样本状态图例">
       <span className="eligible">论文有效</span><span className="excluded">有效但比较受限</span><span className="invalid">完成但结果无效</span><span className="blocked">兼容性阻止</span><span className="failed">执行失败</span>
     </div>
     <div className="analysis-paper-grid">
-      <PaperBarChart title="End-to-End TPS" rows={tps} metric="end_to_end_tps" unit="TPS" higherBetter view={view} />
+      <PaperBarChart title="端到端 TPS" rows={tps} metric="end_to_end_tps" unit="TPS" higherBetter view={view} />
       <PaperBarChart title={latencyTitle} rows={latencyRows} metric={latencyMetric} unit="ms" view={view} controls={<div className="segmented-control" data-testid="v5-latency-percentile-toggle">
         <button type="button" className={latencyMetric === "p95_finality_ms" ? "active" : ""} onClick={() => setLatencyMetric("p95_finality_ms")}>P95</button>
         <button type="button" className={latencyMetric === "p99_finality_ms" ? "active" : ""} onClick={() => setLatencyMetric("p99_finality_ms")}>P99</button>
@@ -120,8 +131,8 @@ function PaperBarChart({ title, rows, metric, unit, higherBetter = false, contro
   const slot = rows.length ? innerWidth / rows.length : innerWidth;
   const svgId = `v5-paper-chart-${metric}`;
   return <section className="analysis-chart" data-testid={svgId}>
-    <div className="section-heading"><div><h3>{title}</h3><p className="muted">{higherBetter ? "Higher is better" : "Lower is better"} · unit: {unit} · {view === "observed" ? "observed runs" : "paper eligible"}</p></div>{controls}</div>
-    {!rows.length ? <p className="file-error">当前视图没有可绘制样本。</p> : <div className="analysis-chart-scroll"><svg id={svgId} data-testid={`${svgId}-svg`} role="img" aria-label={`${title} chart`} viewBox={`0 0 ${chartWidth} ${height}`} data-chart-width={chartWidth}>
+    <div className="section-heading"><div><h3>{title}</h3><p className="muted">{higherBetter ? "越高越好" : "越低越好"} · 单位：{unit} · {view === "observed" ? "全部已观测运行" : "论文有效样本"}</p></div>{controls}</div>
+    {!rows.length ? <p className="file-error">当前视图没有可绘制样本。</p> : <div className="analysis-chart-scroll"><svg id={svgId} data-testid={`${svgId}-svg`} role="img" aria-label={`${title}图表`} viewBox={`0 0 ${chartWidth} ${height}`} data-chart-width={chartWidth}>
       <title>{title}</title>
       <defs><pattern id={`${svgId}-invalid`} width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#F2F4F7" /><line x1="0" y1="0" x2="0" y2="8" stroke="#D92D20" strokeWidth="3" /></pattern></defs>
       <rect x="0" y="0" width={chartWidth} height={height} fill="#ffffff" />
@@ -136,8 +147,12 @@ function PaperBarChart({ title, rows, metric, unit, higherBetter = false, contro
         const y = chartPadding.top + innerHeight - barHeight;
         const color = methodColors[row.method_id] ?? "#6382AA";
         const labels = methodLabels[row.method_id] ?? [shortName(row.method_name)];
+        const ciLow = finiteNumber(row.ci95_low);
+        const ciHigh = finiteNumber(row.ci95_high);
+        const yFor = (candidate: number) => chartPadding.top + innerHeight - Math.max(0, Math.min(candidate, max)) / max * innerHeight;
         return <g key={row.method_id} data-sample-status={status}>
           {value !== null && <rect x={x} y={y} width={barWidth} height={Math.max(barHeight, 1)} rx="3" fill={status === "completed_invalid" ? `url(#${svgId}-invalid)` : color} fillOpacity={status === "comparison_excluded" ? 0.62 : 1} stroke={status === "comparison_excluded" ? "#B54708" : status === "completed_invalid" ? "#D92D20" : "none"} strokeWidth="2" />}
+          {value !== null && ciLow !== null && ciHigh !== null && <g className="v5-ci-error-bar"><line x1={center} y1={yFor(ciHigh)} x2={center} y2={yFor(ciLow)} stroke="#344054" strokeWidth="1.5" /><line x1={center - 6} y1={yFor(ciHigh)} x2={center + 6} y2={yFor(ciHigh)} stroke="#344054" strokeWidth="1.5" /><line x1={center - 6} y1={yFor(ciLow)} x2={center + 6} y2={yFor(ciLow)} stroke="#344054" strokeWidth="1.5" /></g>}
           {value === null && <><line x1={center - 10} y1={chartPadding.top + innerHeight - 22} x2={center + 10} y2={chartPadding.top + innerHeight - 2} stroke="#D92D20" strokeWidth="3" /><line x1={center + 10} y1={chartPadding.top + innerHeight - 22} x2={center - 10} y2={chartPadding.top + innerHeight - 2} stroke="#D92D20" strokeWidth="3" /></>}
           <text x={center} y={value === null ? chartPadding.top + innerHeight - 28 : Math.max(14, y - 7)} textAnchor="middle" fontSize="11" fill="#243044">{value === null ? "—" : format(value)}</text>
           <text x={center} y={height - 55} textAnchor="middle" fontSize="10" fill="#243044">{labels.map((label, labelIndex) => <tspan key={label} x={center} dy={labelIndex === 0 ? 0 : 13}>{label}</tspan>)}</text>
@@ -146,16 +161,16 @@ function PaperBarChart({ title, rows, metric, unit, higherBetter = false, contro
       })}
     </svg></div>}
     <div className="button-row">
-      <button type="button" className="ghost-button" onClick={() => downloadCSV(`${metric}.csv`, rows)}>Download CSV</button>
-      <button type="button" className="ghost-button" onClick={() => downloadSVG(`${metric}.svg`, svgId)}>Download SVG</button>
-      <button type="button" className="ghost-button" onClick={() => void downloadPNG(`${metric}.png`, svgId)}>Download PNG</button>
-      <button type="button" className="ghost-button" onClick={() => downloadPDF(`${metric}.pdf`, title, rows)}>Download PDF</button>
+      <button type="button" className="ghost-button" onClick={() => downloadCSV(`${metric}.csv`, rows)}>下载 CSV</button>
+      <button type="button" className="ghost-button" onClick={() => downloadSVG(`${metric}.svg`, svgId)}>下载 SVG</button>
+      <button type="button" className="ghost-button" onClick={() => void downloadPNG(`${metric}.png`, svgId)}>下载 PNG</button>
+      <button type="button" className="ghost-button" onClick={() => downloadPDF(`${metric}.pdf`, title, rows)}>下载 PDF</button>
     </div>
   </section>;
 }
 
 function PaperAnalysisTable({ rows }: { rows: V5PaperMetricRow[] }) {
-  return <div className="table-wrap"><table data-testid="v5-paper-analysis-table"><thead><tr><th>Metric</th><th>Method</th><th>Status</th><th>Observed</th><th>Paper valid</th><th>Mean</th><th>Median</th><th>Std</th><th>CI95</th><th>Note</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.metric}-${row.method_id}`}><td>{row.metric}</td><td>{row.method_name}</td><td>{statusLabel(rowStatus(row))}</td><td>{row.observed_sample_count ?? row.raw_values.length}</td><td>{row.valid_sample_count}</td><td>{format(row.mean)}</td><td>{format(row.median)}</td><td>{format(row.std)}</td><td>{format(row.ci95_low)} - {format(row.ci95_high)}</td><td>{row.statistical_note}</td></tr>)}</tbody></table></div>;
+  return <div className="table-wrap"><table data-testid="v5-paper-analysis-table"><thead><tr><th>指标</th><th>方法</th><th>状态</th><th>已观测</th><th>论文有效</th><th>均值</th><th>中位数</th><th>标准差</th><th>变异系数</th><th>95% 置信区间</th><th>说明</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.metric}-${row.method_id}`}><td>{row.metric}</td><td>{row.method_name}</td><td>{statusLabel(rowStatus(row))}</td><td>{row.observed_sample_count ?? row.raw_values.length}</td><td>{row.valid_sample_count}</td><td>{format(row.mean)}</td><td>{format(row.median)}</td><td>{format(row.std)}</td><td>{row.cv_percent == null ? "—" : `${format(row.cv_percent)}%`}</td><td>{format(row.ci95_low)} - {format(row.ci95_high)}</td><td>{statisticalNoteLabel(row.statistical_note)}</td></tr>)}</tbody></table></div>;
 }
 
 type AnalysisRow = Record<string, unknown>;
@@ -184,10 +199,19 @@ function format(value: unknown) { const number = finiteNumber(value); return num
 function shortName(value: string): string { return value.replace("MetaTrack with Block-STM backend", "MetaTrack + B-STM").replace("Block-STM", "B-STM"); }
 function rowStatus(row: V5PaperMetricRow): SampleStatus { return (row.sample_status ?? "paper_eligible") as SampleStatus; }
 function statusLabel(status: SampleStatus): string { return ({ paper_eligible: "有效", comparison_excluded: "比较受限", completed_invalid: "结果无效", blocked_incompatible: "兼容性阻止", execution_failed: "执行失败" } as Record<SampleStatus, string>)[status]; }
+function statisticalNoteLabel(value: string): string {
+  return ({
+    single_sample_no_variance_or_ci: "单样本：无法计算方差、变异系数和置信区间",
+    no_observed_samples: "没有可用观测样本",
+    multi_sample_ci95: "多样本：使用 Student-t 95% 置信区间",
+    same_seed_runtime_repeats: "同一随机种子下跨重复运行统计",
+  } as Record<string, string>)[value] ?? value;
+}
+
 function statusColor(status: SampleStatus): string { return ({ paper_eligible: "#027A48", comparison_excluded: "#B54708", completed_invalid: "#D92D20", blocked_incompatible: "#667085", execution_failed: "#D92D20" } as Record<SampleStatus, string>)[status]; }
 
 function downloadCSV(filename: string, rows: V5PaperMetricRow[]) {
-  const header = ["method_id", "method_name", "sample_status", "observed_sample_count", "valid_sample_count", "excluded_sample_count", "metric", "metric_unit", "mean", "median", "std", "min", "max", "ci95_low", "ci95_high", "statistical_note"];
+  const header = ["method_id", "method_name", "sample_status", "observed_sample_count", "valid_sample_count", "excluded_sample_count", "metric", "metric_unit", "mean", "median", "std", "cv", "cv_percent", "min", "max", "ci95_low", "ci95_high", "statistical_note"];
   const lines = [header.join(","), ...rows.map((row) => header.map((key) => csvCell((row as unknown as Record<string, unknown>)[key])).join(","))];
   downloadBlob(filename, "text/csv;charset=utf-8", `${lines.join("\n")}\n`);
 }

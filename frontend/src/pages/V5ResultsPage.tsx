@@ -1,3 +1,4 @@
+// MBE_V5_RESULTS_UI_FINAL_CN_CLOSURE_20260814_V4
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -30,6 +31,7 @@ import V5SkewTpsChart from "../components/v5/V5SkewTpsChart"; // V5_SKEW_TPS_CHA
 import V5ArtifactCatalog from "../components/v5/V5ArtifactCatalog";
 import V5ChildDetail from "../components/v5/V5ChildDetail";
 import V5GroupSummary from "../components/v5/V5GroupSummary";
+import V5ResultsDashboard from "../components/v5/V5ResultsDashboard";
 import { backendLabel, booleanLabel, statusLabel, suiteLabel } from "../v5Labels";
 import "../v5UiPolish.css";
 
@@ -269,14 +271,14 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
 
   async function cleanupCurrentGroup(dryRun: boolean) {
     if (!selectedGroupId) return;
-    if (!dryRun && !window.confirm(`删除当前 RunGroup ${selectedGroupId}？其独占 real-cluster 输出目录也会被清理。`)) return;
+    if (!dryRun && !window.confirm(`删除当前 RunGroup ${selectedGroupId}？其独占真实集群输出目录也会被清理。`)) return;
     setCleanupBusy(true);
     try {
       const report = await deleteV5FormalRunGroup(selectedGroupId, dryRun);
       setCleanupReport(report);
       setOrphanScan(null);
       setLegacyScan(null);
-      setNotice(dryRun ? "当前 RunGroup 清理 dry-run 已完成。" : "当前 RunGroup 清理已完成。");
+      setNotice(dryRun ? "当前实验组清理预演已完成。" : "当前 RunGroup 清理已完成。");
       if (!dryRun) { clearSelection(); await Promise.all([refreshHistory(), refreshSelectorGroups()]); }
     } catch (caught) {
       setHistoryError(message(caught));
@@ -287,14 +289,14 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
 
   async function cleanupSelectedGroups(dryRun: boolean) {
     if (!selectedCleanupIds.length) { setHistoryError("请先选择至少一个 RunGroup。"); return; }
-    if (!dryRun && !window.confirm(`删除 ${selectedCleanupIds.length} 个已选择 RunGroup？其独占 real-cluster 输出目录也可能被清理。`)) return;
+    if (!dryRun && !window.confirm(`删除 ${selectedCleanupIds.length} 个已选择 RunGroup？其独占真实集群输出目录也可能被清理。`)) return;
     setCleanupBusy(true);
     try {
       const report = await deleteSelectedV5FormalRunGroups(selectedCleanupIds, dryRun);
       setCleanupReport(report);
       setOrphanScan(null);
       setLegacyScan(null);
-      setNotice(dryRun ? "批量清理 dry-run 已完成。" : "批量清理已完成。");
+      setNotice(dryRun ? "批量清理预演已完成。" : "批量清理已完成。");
       if (!dryRun) { setSelectedCleanupIds([]); clearSelection(); await Promise.all([refreshHistory(), refreshSelectorGroups()]); }
     } catch (caught) {
       setHistoryError(message(caught));
@@ -309,7 +311,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       setCleanupReport(await deleteFailedV5FormalRunGroups(true));
       setOrphanScan(null);
       setLegacyScan(null);
-      setNotice("失败 RunGroup 清理 dry-run 已完成。");
+      setNotice("失败实验组清理预演已完成。");
     } catch (caught) {
       setHistoryError(message(caught));
     } finally {
@@ -323,7 +325,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       setOrphanScan(await scanV5OrphanRealClusterDirs(24));
       setCleanupReport(null);
       setLegacyScan(null);
-      setNotice("孤儿 real-cluster 目录扫描已完成。");
+      setNotice("孤儿真实集群目录扫描已完成。");
     } catch (caught) {
       setHistoryError(message(caught));
     } finally {
@@ -332,14 +334,14 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   }
 
   async function cleanupOrphans(dryRun: boolean) {
-    if (!dryRun && !window.confirm("删除超过 24 小时且无 RunGroup 引用的孤儿 real-cluster 目录？")) return;
+    if (!dryRun && !window.confirm("删除超过 24 小时且无实验组引用的孤儿真实集群目录？")) return;
     setCleanupBusy(true);
     try {
       const report = await cleanupV5OrphanRealClusterDirs(dryRun, 24);
       setCleanupReport(report);
       setOrphanScan(null);
       setLegacyScan(null);
-      setNotice(dryRun ? "孤儿目录清理 dry-run 已完成。" : "孤儿目录清理已完成。");
+      setNotice(dryRun ? "孤儿目录清理预演已完成。" : "孤儿目录清理已完成。");
       if (!dryRun) await refreshHistory();
     } catch (caught) {
       setHistoryError(message(caught));
@@ -370,7 +372,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       setCleanupReport(report);
       setOrphanScan(null);
       setLegacyScan(null);
-      setNotice(dryRun ? "旧方案清理 dry-run 已完成。" : "旧方案清理已完成。");
+      setNotice(dryRun ? "旧方案清理预演已完成。" : "旧方案清理已完成。");
     } catch (caught) {
       setHistoryError(message(caught));
     } finally {
@@ -406,7 +408,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       {error && <p className="file-error">{error}</p>}
       {childError && <p className="file-error">子实验详情错误：{childError}</p>}
       {selectedGroup && <div className="button-row">
-        <button type="button" onClick={() => void cleanupCurrentGroup(true)} disabled={cleanupBusy}>当前组 dry-run</button>
+        <button type="button" onClick={() => void cleanupCurrentGroup(true)} disabled={cleanupBusy}>当前组清理预演</button>
         <button type="button" onClick={() => void cleanupCurrentGroup(false)} disabled={cleanupBusy}>删除当前组</button>
       </div>}
     </article>
@@ -434,6 +436,20 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       {busy && !selectedGroup && <p className="muted">正在加载所选运行记录…</p>}
       {selectorError && <p className="file-error">运行记录列表错误：{selectorError}</p>}
     </article>
+    {selectedGroup && <V5ResultsDashboard
+      group={selectedGroup}
+      aggregate={aggregate}
+      children={detail?.children ?? []}
+      analysis={analysis}
+      catalog={catalog}
+      selectedChild={selectedChild}
+      selectedChildId={selectedChildId}
+      onSelectChild={(childId) => { if (detail) void loadChild(detail.group.run_group_id, childId); }}
+      onRebuild={() => void rebuildBundle()}
+      rebuilding={bundleBusy}
+    />}
+    <details className="v5-legacy-results-details">
+      <summary>高级 / 旧版完整详细视图</summary>
     {selectedGroup && <V5GroupSummary group={selectedGroup} aggregate={aggregate} children={detail?.children ?? []} />}
     <V5AnalysisPanel analysis={analysis} />
     <V5SkewTpsChart
@@ -451,6 +467,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     </article>}
     <V5ChildDetail child={selectedChild} />
     {selectedGroup && <V5ArtifactCatalog groupId={selectedGroup.run_group_id} catalog={catalog} onRebuild={() => void rebuildBundle()} rebuilding={bundleBusy} />}
+    </details>
     <details className="final-card wide" data-testid="v5-run-group-list" open={historyOpen} onToggle={(event) => setHistoryOpen((event.currentTarget as HTMLDetailsElement).open)}>
       <summary>实验组历史</summary>
       <div className="section-heading">
@@ -462,15 +479,15 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
         <button type="button" onClick={() => void refreshHistory()} disabled={historyBusy}>刷新实验组</button>
       </div>
       <div className="button-row">
-        <button type="button" onClick={() => void cleanupSelectedGroups(true)} disabled={cleanupBusy || !selectedCleanupIds.length}>选中 dry-run</button>
+        <button type="button" onClick={() => void cleanupSelectedGroups(true)} disabled={cleanupBusy || !selectedCleanupIds.length}>选中项清理预演</button>
         <button type="button" onClick={() => void cleanupSelectedGroups(false)} disabled={cleanupBusy || !selectedCleanupIds.length}>删除选中</button>
-        <button type="button" onClick={() => void dryRunFailedGroups()} disabled={cleanupBusy}>失败实验 dry-run</button>
+        <button type="button" onClick={() => void dryRunFailedGroups()} disabled={cleanupBusy}>失败实验清理预演</button>
         <button type="button" onClick={() => void scanOrphans()} disabled={cleanupBusy}>扫描孤儿目录</button>
-        <button type="button" onClick={() => void cleanupOrphans(true)} disabled={cleanupBusy}>孤儿目录 dry-run</button>
+        <button type="button" onClick={() => void cleanupOrphans(true)} disabled={cleanupBusy}>孤儿目录清理预演</button>
         <button type="button" onClick={() => void cleanupOrphans(false)} disabled={cleanupBusy}>删除孤儿目录</button>
       </div>
         <button type="button" onClick={() => void scanLegacySavedConfigs()} disabled={cleanupBusy}>扫描旧方案</button>
-        <button type="button" onClick={() => void cleanupLegacySavedConfigs(true)} disabled={cleanupBusy}>旧方案 dry-run</button>
+        <button type="button" onClick={() => void cleanupLegacySavedConfigs(true)} disabled={cleanupBusy}>旧方案清理预演</button>
         <button type="button" onClick={() => void cleanupLegacySavedConfigs(false)} disabled={cleanupBusy}>删除旧方案</button>
       <CleanupEvidence report={cleanupReport} scan={orphanScan} legacyScan={legacyScan} />
       {historyError && <p className="file-error">历史列表错误：{historyError}</p>}
@@ -504,7 +521,7 @@ function CleanupEvidence({ report, scan, legacyScan }: { report: V5CleanupReport
   }
   if (legacyScan) {
     return <div className="notice" data-testid="v5-cleanup-evidence">
-      <strong>Legacy saved-config scan</strong>
+      <strong>旧方案扫描</strong>
       <span>候选方案：{legacyScan.candidate_count}</span>
       <span>保留：{legacyScan.preserved_configs.length}</span>
       {legacyScan.candidate_configs.length > 0 && <span>候选：{legacyScan.candidate_configs.slice(0, 3).map((item) => item.config_id).join(", ")}</span>}
@@ -514,7 +531,7 @@ function CleanupEvidence({ report, scan, legacyScan }: { report: V5CleanupReport
   const deletedOutputs = (report?.deleted_output_dirs.length ?? 0) + (report?.deleted_orphan_dirs.length ?? 0);
   const deletedSavedConfigs = report?.deleted_saved_config_ids?.length ?? 0;
   return <div className="notice" data-testid="v5-cleanup-evidence">
-    <strong>{report?.dry_run ? "清理 dry-run" : "清理结果"}</strong>
+    <strong>{report?.dry_run ? "清理预演" : "清理结果"}</strong>
     <span>RunGroup：{deletedGroups}</span>
     <span>输出目录：{deletedOutputs}</span>
     {deletedSavedConfigs > 0 && <span>旧方案：{deletedSavedConfigs}</span>}
@@ -522,7 +539,7 @@ function CleanupEvidence({ report, scan, legacyScan }: { report: V5CleanupReport
     {(report?.preserved_run_group_ids.length ?? 0) > 0 && <span>保留：{report?.preserved_run_group_ids.join(", ")}</span>}
     {(report?.skipped_active_runs.length ?? 0) > 0 && <span>运行中跳过：{report?.skipped_active_runs.join(", ")}</span>}
     {(report?.errors.length ?? 0) > 0 && <span>原因：{report?.errors.slice(0, 3).join("; ")}</span>}
-    {report?.cleanup_report && <span>cleanup_report: {report.cleanup_report.json} / {report.cleanup_report.csv}</span>}
+    {report?.cleanup_report && <span>清理报告：{report.cleanup_report.json} / {report.cleanup_report.csv}</span>}
   </div>;
 }
 

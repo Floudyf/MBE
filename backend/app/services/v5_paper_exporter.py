@@ -10,20 +10,20 @@ from backend.app.services.v5_statistics_service import summarize
 
 
 GROUP_FIELDS = [
-    "suite_type", "method_config_id", "method_name", "method_role", "scan_variable", "scan_value",
+    "suite_type", "method_config_id", "method_name", "method_role", "seed", "scan_variable", "scan_value",
     "topology_nodes", "topology_shards", "validators_per_shard", "tx_count", "cross_shard_ratio",
     "timeout_every", "fault_mode", "block_size", "block_interval_ms", "replay_mode", "target_submission_tps", "mean_observed_submission_tps", "mean_submission_duration_ms", "mean_observed_mempool_admission_tps", "mean_mempool_admission_duration_ms", "pacing_schedule", "sample_count", "completed_count", "observed_completed_count", "completed_invalid_count", "blocked_count", "failed_count", "missing_count",
-    "mean_tps", "median_tps", "std_tps", "min_tps", "max_tps", "ci95_low_tps", "ci95_high_tps",
+    "mean_tps", "median_tps", "std_tps", "cv_tps", "cv_percent_tps", "min_tps", "max_tps", "ci95_low_tps", "ci95_high_tps",
     "mean_p50_ms", "mean_p95_ms", "mean_p99_ms", "submitted", "terminal", "incomplete",
     "cross_requested", "cross_finalized", "cross_refunded", "cross_failed", "changed_plugin_categories",
 ]
 
-PAPER_TABLE_FIELDS = ["suite_type", "method_id", "method_name", "method_role", "scan_variable", "scan_value", "nodes", "shards", "validators_per_shard", "tx_count", "cross_shard_ratio", "timeout_every", "fault_mode", "block_size", "block_interval_ms", "replay_mode", "target_submission_tps", "observed_submission_tps_mean", "submission_duration_ms_mean", "observed_mempool_admission_tps_mean", "mempool_admission_duration_ms_mean", "pacing_schedule", "sample_count", "success_sample_count", "failed_sample_count", "tps_mean", "tps_std", "tps_min", "tps_max", "latency_p50_mean", "latency_p95_mean", "latency_p99_mean", "terminal_mean", "incomplete_mean", "orphan_mean", "cross_shard_requested_mean", "cross_shard_finalized_mean", "no_fallback_all", "state_root_consistent_all"]
+PAPER_TABLE_FIELDS = ["suite_type", "method_id", "method_name", "method_role", "seed", "scan_variable", "scan_value", "nodes", "shards", "validators_per_shard", "tx_count", "cross_shard_ratio", "timeout_every", "fault_mode", "block_size", "block_interval_ms", "replay_mode", "target_submission_tps", "observed_submission_tps_mean", "submission_duration_ms_mean", "observed_mempool_admission_tps_mean", "mempool_admission_duration_ms_mean", "pacing_schedule", "sample_count", "success_sample_count", "failed_sample_count", "tps_mean", "tps_std", "tps_cv_percent", "tps_min", "tps_max", "latency_p50_mean", "latency_p95_mean", "latency_p99_mean", "completion_duration_ms_mean", "terminal_mean", "incomplete_mean", "orphan_mean", "cross_shard_requested_mean", "cross_shard_finalized_mean", "no_fallback_all", "state_root_consistent_all"]
 
 PAPER_ANALYSIS_FIELDS = [
     "view", "metric", "metric_unit", "method_id", "method_name", "sample_status",
     "observed_sample_count", "valid_sample_count", "excluded_sample_count", "sample_status_counts",
-    "mean", "median", "std", "min", "max", "ci95_low", "ci95_high", "statistical_note", "source_child_ids",
+    "mean", "median", "std", "cv", "cv_percent", "min", "max", "ci95_low", "ci95_high", "statistical_note", "source_child_ids",
 ]
 
 _RAW_IDENTITY_FIELDS = [
@@ -147,6 +147,7 @@ def paper_result_analysis(group: dict, children: list[dict]) -> dict:
 
     plan_suites = ((group.get("plan") or {}).get("suites") or []) if isinstance(group.get("plan"), dict) else []
     sensitivity_mode = "workload_sensitivity" in plan_suites or any(item.get("suite_type") == "workload_sensitivity" for item in children)
+    runtime_repeat_metrics = {}
     if sensitivity_mode:
         # theta values are different experimental conditions, not repeats.
         # Per-theta truth remains in sensitivity_summary.csv.
@@ -162,6 +163,11 @@ def paper_result_analysis(group: dict, children: list[dict]) -> dict:
             "end_to_end_tps": _observed_metric_rows(children, status_by_child, "end_to_end_tps", "tps"),
             "p95_finality_ms": _observed_metric_rows(children, status_by_child, "p95_finality_ms", "ms"),
             "p99_finality_ms": _observed_metric_rows(children, status_by_child, "p99_finality_ms", "ms"),
+        }
+        runtime_repeat_metrics = {
+            "end_to_end_tps": _metric_rows_by_seed(accepted, "end_to_end_tps", "tps"),
+            "p95_finality_ms": _metric_rows_by_seed(accepted, "p95_finality_ms", "ms"),
+            "p99_finality_ms": _metric_rows_by_seed(accepted, "p99_finality_ms", "ms"),
         }
     status_counts = {
         name: sum(1 for item in sample_statuses if item["status"] == name)
@@ -194,6 +200,7 @@ def paper_result_analysis(group: dict, children: list[dict]) -> dict:
         ),
         "metrics": metrics,
         "observed_metrics": observed_metrics,
+        "runtime_repeat_metrics": runtime_repeat_metrics,
         "sample_statuses": sample_statuses,
         "status_counts": status_counts,
         "excluded_samples": excluded,
@@ -338,7 +345,37 @@ def _classification_row(child: dict, fallback_status: str) -> dict:
     }
 
 
+
+def _metric_rows_by_seed(accepted: list[dict], metric: str, unit: str) -> list[dict]:
+    buckets: dict[tuple[str, str, int | str], list[tuple[dict, float]]] = defaultdict(list)
+    for child in accepted:
+        value = _metric_value(child, metric)
+        if value is None:
+            continue
+        key = (
+            str(child.get("method_config_id") or ""),
+            str((child.get("method") or {}).get("display_name") or child.get("method_config_id") or ""),
+            child.get("seed", ""),
+        )
+        buckets[key].append((child, value))
+    rows = []
+    for key in sorted(buckets, key=lambda item: (item[0], str(item[2]))):
+        entries = buckets[key]
+        values = [value for _, value in entries]
+        stats = summarize(values, completed_count=len(values), failed_count=0, missing_count=0)
+        row = _metric_row_payload((key[0], key[1]), metric, unit, entries, stats, "paper_eligible", {"paper_eligible": len(entries)})
+        row["seed"] = key[2]
+        row["aggregation_scope"] = "same_seed_runtime_repeats"
+        rows.append(row)
+    return rows
+
+
 def _metric_rows(accepted: list[dict], metric: str, unit: str) -> list[dict]:
+    # Paper method-level statistics are hierarchical. With one seed, repeat
+    # values are the samples. With multiple seeds, each seed is first reduced
+    # to its repeat mean and the seed means become the statistical samples.
+    # This keeps workload-realization variation distinct from runtime-repeat
+    # variation instead of mixing both levels in one IID bucket.
     buckets: dict[tuple[str, str], list[tuple[dict, float]]] = defaultdict(list)
     for child in accepted:
         value = _metric_value(child, metric)
@@ -349,9 +386,26 @@ def _metric_rows(accepted: list[dict], metric: str, unit: str) -> list[dict]:
     rows = []
     for key in sorted(buckets, key=lambda item: item[0]):
         entries = buckets[key]
-        values = [value for _, value in entries]
+        by_seed: dict[str, list[float]] = defaultdict(list)
+        for child, value in entries:
+            by_seed[str(child.get("seed", ""))].append(value)
+        if len(by_seed) <= 1:
+            values = [value for _, value in entries]
+            aggregation_scope = "same_seed_runtime_repeats"
+        else:
+            values = [sum(seed_values) / len(seed_values) for _, seed_values in sorted(by_seed.items()) if seed_values]
+            aggregation_scope = "seed_realization_repeat_means"
         stats = summarize(values, completed_count=len(values), failed_count=0, missing_count=0)
-        rows.append(_metric_row_payload(key, metric, unit, entries, stats, "paper_eligible", {"paper_eligible": len(entries)}))
+        row = _metric_row_payload(key, metric, unit, entries, stats, "paper_eligible", {"paper_eligible": len(entries)})
+        row["aggregation_scope"] = aggregation_scope
+        row["seed_count"] = len(by_seed)
+        row["statistical_sample_count"] = len(values)
+        row["statistical_note"] = (
+            "single_sample_no_variance_or_ci"
+            if stats["count"] == 1
+            else ("seed_realization_student_t_ci95" if len(by_seed) > 1 else "runtime_repeat_student_t_ci95")
+        )
+        rows.append(row)
     return rows
 
 
@@ -394,6 +448,8 @@ def _metric_row_payload(key: tuple[str, str], metric: str, unit: str, entries: l
         "mean": stats["mean"],
         "median": stats["median"],
         "std": stats["std"],
+        "cv": stats.get("cv"),
+        "cv_percent": stats.get("cv_percent"),
         "min": stats["min"],
         "max": stats["max"],
         "ci95_low": stats["ci95_low"],
@@ -423,6 +479,8 @@ def _paper_analysis_csv_rows(paper: dict) -> list[dict]:
                     "mean": item.get("mean"),
                     "median": item.get("median"),
                     "std": item.get("std"),
+                    "cv": item.get("cv"),
+                    "cv_percent": item.get("cv_percent"),
                     "min": item.get("min"),
                     "max": item.get("max"),
                     "ci95_low": item.get("ci95_low"),
@@ -715,7 +773,7 @@ def _group_key(child: dict, base_workload: dict) -> tuple:
         cross_shard_ratio = metrics.get("actual_cross_shard_ratio")
     return (
         child.get("suite_type", ""), child.get("method_config_id", ""), method.get("display_name", ""),
-        child.get("method_role", method.get("role", "custom")), child.get("scan_variable", ""), child.get("scan_value", ""),
+        child.get("method_role", method.get("role", "custom")), child.get("seed"), child.get("scan_variable", ""), child.get("scan_value", ""),
         topology.get("nodes"), topology.get("shards"), topology.get("validators_per_shard"), topology.get("worker_count", metrics.get("configured_worker_count", metrics.get("worker_count"))),
         workload.get("tx_count", child.get("estimated_transactions")), cross_shard_ratio, workload.get("timeout_every"),
         fault.get("mode", "disabled"), block_size, block_interval_ms,
@@ -743,7 +801,7 @@ def _eligible_for_within_method_sensitivity(child: dict) -> bool:
 
 
 def _aggregate(key: tuple, entries: list[dict]) -> dict:
-    suite, method_id, method_name, role, scan_variable, scan_value, nodes, shards, validators, worker_count, tx_count, ratio, timeout, fault, block_size, block_interval_ms, replay_mode, target_submission_tps, pacing_schedule, changed = key
+    suite, method_id, method_name, role, seed, scan_variable, scan_value, nodes, shards, validators, worker_count, tx_count, ratio, timeout, fault, block_size, block_interval_ms, replay_mode, target_submission_tps, pacing_schedule, changed = key
     observed_completed = [entry for entry in entries if entry.get("status") == "completed"]
     if suite == "workload_sensitivity":
         completed = [entry for entry in entries if _eligible_for_within_method_sensitivity(entry)]
@@ -762,17 +820,19 @@ def _aggregate(key: tuple, entries: list[dict]) -> dict:
     )
     mean = lambda name: _mean([item.get(name) for item in metrics])
     return {
-        "suite_type": suite, "method_config_id": method_id, "method_name": method_name, "method_role": role,
+        "suite_type": suite, "method_config_id": method_id, "method_name": method_name, "method_role": role, "seed": seed,
         "scan_variable": scan_variable, "scan_value": scan_value, "topology_nodes": nodes, "topology_shards": shards,
         "validators_per_shard": validators, "worker_count": worker_count, "tx_count": tx_count, "cross_shard_ratio": ratio, "timeout_every": timeout,
         "fault_mode": fault, "block_size": block_size, "block_interval_ms": block_interval_ms,
         "replay_mode": replay_mode, "target_submission_tps": target_submission_tps,
         "mean_observed_submission_tps": mean("observed_submission_tps"), "mean_submission_duration_ms": mean("submission_duration_ms"), "mean_observed_mempool_admission_tps": mean("observed_mempool_admission_tps"), "mean_mempool_admission_duration_ms": mean("mempool_admission_duration_ms"), "pacing_schedule": pacing_schedule,
         "sample_count": stats["count"], "completed_count": stats["completed_count"], "observed_completed_count": len(observed_completed), "completed_invalid_count": len(completed_invalid), "blocked_count": len(blocked), "failed_count": stats["failed_count"], "missing_count": stats["missing_count"],
-        "mean_tps": stats["mean"], "median_tps": stats["median"], "std_tps": stats["std"], "min_tps": stats["min"], "max_tps": stats["max"], "ci95_low_tps": stats["ci95_low"], "ci95_high_tps": stats["ci95_high"],
+        "mean_tps": stats["mean"], "median_tps": stats["median"], "std_tps": stats["std"], "cv_tps": stats.get("cv"), "cv_percent_tps": stats.get("cv_percent"), "min_tps": stats["min"], "max_tps": stats["max"], "ci95_low_tps": stats["ci95_low"], "ci95_high_tps": stats["ci95_high"],
         "mean_p50_ms": mean("p50_finality_ms") or mean("p50_latency_ms"),
         "mean_p95_ms": mean("p95_finality_ms") or mean("p95_latency_ms"),
         "mean_p99_ms": mean("p99_finality_ms") or mean("p99_latency_ms"),
+        "mean_completion_duration_ms": mean("completion_duration_ms"),
+        "mean_logical_finality_tps": mean("logical_finality_tps"),
         "submitted": sum(_number(item.get("submitted_unique_tx_count")) for item in finalities), "terminal": sum(_number(item.get("terminal_unique_tx_count")) for item in finalities), "incomplete": sum(_number(item.get("incomplete_unique_tx_count")) for item in finalities),
         "cross_requested": sum(_number(item.get("cross_shard_requested_unique_count")) for item in finalities), "cross_finalized": sum(_number(item.get("cross_shard_finalized_unique_count")) for item in finalities), "cross_refunded": sum(_number(item.get("cross_shard_refunded_unique_count")) for item in finalities), "cross_failed": sum(_number(item.get("cross_shard_failed_unique_count")) for item in finalities),
         "changed_plugin_categories": ",".join(changed),
@@ -800,7 +860,7 @@ def _overall(children: list[dict], *, cross_method_statistics_valid: bool = True
         # A mean/CI over heterogeneous semantic cohorts has no paper meaning.
         # Keep per-method paper_result_analysis rows, counts, and raw observations,
         # but suppress misleading run-group cross-method aggregate statistics.
-        for key in ("mean", "median", "std", "min", "max", "ci95_low", "ci95_high"):
+        for key in ("mean", "median", "std", "cv", "cv_percent", "min", "max", "ci95_low", "ci95_high"):
             summary[key] = None
     summary.update({
         "direct_cross_semantic_performance_comparison_valid": cross_method_statistics_valid,
@@ -857,7 +917,7 @@ def _figure_rows(groups: list[dict]) -> list[dict]:
 def _paper_table_rows(groups: list[dict]) -> list[dict]:
     rows = []
     for row in groups:
-        rows.append({"suite_type": row["suite_type"], "method_id": row["method_config_id"], "method_name": row["method_name"], "method_role": row["method_role"], "scan_variable": row["scan_variable"], "scan_value": row["scan_value"], "nodes": row["topology_nodes"], "shards": row["topology_shards"], "validators_per_shard": row["validators_per_shard"], "tx_count": row["tx_count"], "cross_shard_ratio": row["cross_shard_ratio"], "timeout_every": row["timeout_every"], "fault_mode": row["fault_mode"], "block_size": row["block_size"], "block_interval_ms": row["block_interval_ms"], "replay_mode": row.get("replay_mode"), "target_submission_tps": row.get("target_submission_tps"), "observed_submission_tps_mean": row.get("mean_observed_submission_tps"), "submission_duration_ms_mean": row.get("mean_submission_duration_ms"), "observed_mempool_admission_tps_mean": row.get("mean_observed_mempool_admission_tps"), "mempool_admission_duration_ms_mean": row.get("mean_mempool_admission_duration_ms"), "pacing_schedule": row.get("pacing_schedule"), "sample_count": row["sample_count"], "success_sample_count": row["completed_count"], "failed_sample_count": row["failed_count"], "tps_mean": row["mean_tps"], "tps_std": row["std_tps"], "tps_min": row["min_tps"], "tps_max": row["max_tps"], "latency_p50_mean": row["mean_p50_ms"], "latency_p95_mean": row["mean_p95_ms"], "latency_p99_mean": row["mean_p99_ms"], "terminal_mean": row["terminal"], "incomplete_mean": row["incomplete"], "orphan_mean": row.get("orphan"), "cross_shard_requested_mean": row["cross_requested"], "cross_shard_finalized_mean": row["cross_finalized"], "no_fallback_all": row.get("no_fallback_all"), "state_root_consistent_all": row.get("state_root_consistent_all")})
+        rows.append({"suite_type": row["suite_type"], "method_id": row["method_config_id"], "method_name": row["method_name"], "method_role": row["method_role"], "seed": row.get("seed"), "scan_variable": row["scan_variable"], "scan_value": row["scan_value"], "nodes": row["topology_nodes"], "shards": row["topology_shards"], "validators_per_shard": row["validators_per_shard"], "tx_count": row["tx_count"], "cross_shard_ratio": row["cross_shard_ratio"], "timeout_every": row["timeout_every"], "fault_mode": row["fault_mode"], "block_size": row["block_size"], "block_interval_ms": row["block_interval_ms"], "replay_mode": row.get("replay_mode"), "target_submission_tps": row.get("target_submission_tps"), "observed_submission_tps_mean": row.get("mean_observed_submission_tps"), "submission_duration_ms_mean": row.get("mean_submission_duration_ms"), "observed_mempool_admission_tps_mean": row.get("mean_observed_mempool_admission_tps"), "mempool_admission_duration_ms_mean": row.get("mean_mempool_admission_duration_ms"), "pacing_schedule": row.get("pacing_schedule"), "sample_count": row["sample_count"], "success_sample_count": row["completed_count"], "failed_sample_count": row["failed_count"], "tps_mean": row["mean_tps"], "tps_std": row["std_tps"], "tps_cv_percent": row.get("cv_percent_tps"), "tps_min": row["min_tps"], "tps_max": row["max_tps"], "latency_p50_mean": row["mean_p50_ms"], "latency_p95_mean": row["mean_p95_ms"], "latency_p99_mean": row["mean_p99_ms"], "completion_duration_ms_mean": row.get("mean_completion_duration_ms"), "terminal_mean": row["terminal"], "incomplete_mean": row["incomplete"], "orphan_mean": row.get("orphan"), "cross_shard_requested_mean": row["cross_requested"], "cross_shard_finalized_mean": row["cross_finalized"], "no_fallback_all": row.get("no_fallback_all"), "state_root_consistent_all": row.get("state_root_consistent_all")})
     return rows
 
 

@@ -122,6 +122,13 @@ def classify_artifact(name: str) -> tuple[str, str, str, str]:
         return "aggregate_metric", "cluster_replica_deduplicated", "v5_metric_aggregator", "mbe_replica_deduplicated_remote_operations_v1"
     if name == "aggregate/remote_state_metrics_summary.json":
         return "aggregate_metric", "node_physical_and_replica_deduplicated", "v5_metric_aggregator", "mbe_remote_state_metrics_v2"
+    if base in {"resource_usage_summary.json", "resource_usage_timeseries.csv", "resource_sampler_summary.json"}:
+        producer = "mbe_supervisor" if base != "resource_usage_summary.json" else "v5_observability_metrics"
+        return "research_observability", "validator_node_processes_completion_window", producer, "mbe_v5_resource_observability_v1"
+    if base in {"network_metrics_summary.json", "network_message_summary.csv"}:
+        return "research_observability", "successful_node_receive_completion_window", "v5_observability_metrics", "mbe_v5_network_observability_v1"
+    if base == "observability_collection_error.json":
+        return "audit_log", "observer_failure_open", "v5_real_cluster_runner", "mbe_v5_observability_error_v1"
     if name.startswith("aggregate/"):
         return "aggregate_metric", "cluster_aggregate", "v5_metric_aggregator", "mbe_v5_aggregate_metric_v1"
     if name.startswith("node_") or name.startswith("nodes/"):

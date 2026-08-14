@@ -1,3 +1,4 @@
+// MBE_V5_RESULTS_UI_FINAL_CN_CLOSURE_20260814_V4
 import type { V5FormalAggregate, V5FormalChildRun, V5FormalRunGroup } from "../../api";
 
 type Props = { group: V5FormalRunGroup; aggregate: V5FormalAggregate | null; children: V5FormalChildRun[] };
@@ -16,23 +17,23 @@ export default function V5GroupSummary({ group, aggregate, children }: Props) {
     <h2>实验组摘要</h2>
     <dl className="stage-flow-kpis">
       <Metric label="实验组" value={group.run_group_id} /><Metric label="计划名称" value={group.plan?.name ?? group.plan_name} />
-      <Metric label="状态" value={group.status} /><Metric label="执行后端" value={group.execution_backend} />
-      <Metric label="运行时真实性" value={group.runtime_truth} /><Metric label="子实验" value={`${group.completed_child_runs}/${group.total_child_runs}`} />
+      <Metric label="状态" value={statusText(group.status)} /><Metric label="执行后端" value={backendText(group.execution_backend)} />
+      <Metric label="运行时真实性" value={runtimeTruthText(group.runtime_truth)} /><Metric label="子实验" value={`${group.completed_child_runs}/${group.total_child_runs}`} />
       <Metric label="执行失败或阻止" value={children.length ? failedOrBlocked : undefined} />
       <Metric label="完成但结果无效" value={children.length ? completedInvalid : undefined} />
       <Metric label="完成且结果有效" value={children.length ? completedValid : undefined} />
-      <Metric label="实验类型" value={(group.plan?.suites ?? group.suite_names)?.join(", ")} /><Metric label="方法" value={group.plan?.methods.map((item) => item.display_name).join(", ") ?? group.method_names?.join(", ")} />
+      <Metric label="实验类型" value={(group.plan?.suites ?? group.suite_names)?.map(suiteText).join(", ")} /><Metric label="方法" value={group.plan?.methods.map((item) => item.display_name).join(", ") ?? group.method_names?.join(", ")} />
       <Metric label="随机种子" value={group.plan?.seeds.join(", ")} /><Metric label="重复次数" value={group.plan?.repeats} />
       <Metric label="创建时间" value={group.created_at} /><Metric label="更新时间" value={group.updated_at} />
       <Metric label="基础拓扑" value={topology ? `${topology.nodes}/${topology.shards}/${topology.validators_per_shard}` : undefined} />
       <Metric label="基础交易数量" value={base?.tx_count} /><Metric label="负载插件" value={workload?.plugin_id} />
       <Metric label="跨片交易比例" value={workload?.config.cross_shard_ratio} /><Metric label="超时间隔" value={workload?.config.timeout_every} />
     </dl>
-    {partialRun && <div className="notice" data-testid="v5-partial-run-warning"><strong>PARTIAL / NOT PAPER READY</strong><span>正式矩阵尚未全部成功完成；图表会保留计划中的缺失点，但本组不能作为完整论文结果。</span></div>}
-    {performanceComparisonValid === false && <div className="notice" data-testid="v5-performance-incomparable"><strong>性能比较不可直接使用</strong><span>执行语义、公平性或跨方法最终状态等价门未通过。包含有状态与无状态方法时，请使用 Stateless Hash 与 MetaTrack 进行直接性能比较；同语义方法还必须具有相同初始状态、状态归属映射和最终全局状态。</span></div>}
+    {partialRun && <div className="notice" data-testid="v5-partial-run-warning"><strong>部分完成 / 尚未达到论文完整结果要求</strong><span>正式矩阵尚未全部成功完成；图表会保留计划中的缺失点，但本组不能作为完整论文结果。</span></div>}
+    {performanceComparisonValid === false && <div className="notice" data-testid="v5-performance-incomparable"><strong>性能比较不可直接使用</strong><span>直接跨语义性能比较受限。只有同一执行语义组且满足公平性、初始状态、状态归属映射和最终全局状态等价时，才可计算直接性能提升、排名或加速比；跨语义组只用于并列观察与机制解释。</span></div>}
     {stateEquivalent === false && <div className="notice" data-testid="v5-state-incomparable"><strong>跨方法状态不等价</strong><span>至少一个可比较方法组的初始状态、状态归属映射或最终全局状态摘要不一致，本轮性能结论已被禁止进入论文分析。</span></div>}
-    <p className="muted">Local multi-process, localhost TCP, PBFT-style, signed transactions, persistent local state, and no silent fallback. This is not a production blockchain or production PBFT claim.</p>
-    <div data-testid="v5-group-aggregate"><h3>论文有效结果聚合</h3><p className="muted">平均值、置信区间和图表默认只使用 paper_eligible 样本。完成但无效和兼容性阻止的结果保留为原始观察证据，不进入论文比较。</p><dl className="stage-flow-kpis">
+    <p className="muted">本地多进程、localhost TCP、PBFT 风格共识消息、签名交易、持久化本地状态，并且无静默回退。本实验环境不声明为生产级区块链或生产级 PBFT 实现。</p>
+    <div data-testid="v5-group-aggregate"><h3>论文有效结果聚合</h3><p className="muted">平均值、置信区间和图表默认只使用论文有效（paper_eligible）样本。完成但无效和兼容性阻止的结果保留为原始观察证据，不进入论文比较。</p><dl className="stage-flow-kpis">
       <Metric label="同语义论文候选数" value={aggregate?.paper_valid_count ?? aggregate?.count} /><Metric label="跨语义汇总平均 TPS" value={performanceComparisonValid ? aggregate?.mean : undefined} /><Metric label="跨语义汇总中位 TPS" value={performanceComparisonValid ? aggregate?.median : undefined} />
       <Metric label="跨语义汇总标准差" value={performanceComparisonValid ? aggregate?.std : undefined} /><Metric label="跨语义最小 / 最大" value={performanceComparisonValid && aggregate ? `${display(aggregate.min)} / ${display(aggregate.max)}` : undefined} />
       <Metric label="跨语义 95% 置信区间" value={performanceComparisonValid && aggregate ? `${display(aggregate.ci95_low)} / ${display(aggregate.ci95_high)}` : undefined} />
@@ -41,6 +42,11 @@ export default function V5GroupSummary({ group, aggregate, children }: Props) {
     </dl></div>
   </section>;
 }
+
+function statusText(value: string): string { return ({ completed: "已完成", completed_with_failures: "完成但有失败", running: "运行中", queued: "排队中", starting: "启动中", failed: "失败", cancelled: "已取消", timed_out: "超时" } as Record<string, string>)[value] ?? value; }
+function backendText(value: string): string { return ({ real_cluster: "真实集群", simulation: "仿真", preview: "预览" } as Record<string, string>)[value] ?? value; }
+function runtimeTruthText(value: string): string { return ({ v5_real_cluster_candidate: "V5 真实集群候选环境", local_multi_process: "本地多进程", real_cluster: "真实集群", production: "生产环境" } as Record<string, string>)[value] ?? value; }
+function suiteText(value: string): string { return ({ main_experiment: "主实验", comparison_experiment: "方法对比", ablation_experiment: "消融实验", workload_sensitivity: "工作负载敏感性", topology_scaling: "拓扑扩展", fault_recovery_experiment: "故障恢复" } as Record<string, string>)[value] ?? value; }
 
 function Metric({ label, value }: { label: string; value: unknown }) { return <div data-testid={`v5-group-${legacySlug(label) ?? slug(label)}`}><dt>{label}</dt><dd>{display(value)}</dd></div>; }
 function display(value: unknown): string { return value === undefined || value === null || value === "" ? "-" : typeof value === "number" ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : String(value); }
