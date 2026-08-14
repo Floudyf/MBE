@@ -128,6 +128,12 @@ func (r *NodeRuntime) handlePBFTPrePrepare(ctx context.Context, msg p2p.MessageE
 	if pre.BlockHash != pre.Block.BlockHash {
 		return fmt.Errorf("pbft pre-prepare payload digest mismatch")
 	}
+	if err := r.verifyPBFTPrePrepareAuthentication(pre); err != nil {
+		return fmt.Errorf("pbft pre-prepare authentication: %w", err)
+	}
+	if err := r.validateConsensusBlockBody(pre.Block); err != nil {
+		return fmt.Errorf("pbft pre-prepare block body: %w", err)
+	}
 
 	state := r.pbftState()
 	if handled, err := r.maybeRespondWithCertifiedCommit(ctx, msg.FromNode, pre); handled || err != nil {
@@ -142,10 +148,12 @@ func (r *NodeRuntime) handlePBFTPrePrepare(ctx context.Context, msg p2p.MessageE
 	// retransmission. The proposal was already fully validated, so immediately
 	// re-send PREPARE instead of re-running expensive execution-plan evidence.
 	if state.IsDuplicatePrePrepare(pre.View, pre.Sequence, pre.BlockHash) {
-		prepare, err := state.OnPrePrepare(pre)
-		if err != nil {
-			r.setLastProposalError(err)
-			return err
+		prepare := pbft.Prepare{
+			View:      pre.View,
+			Sequence:  pre.Sequence,
+			Height:    pre.Height,
+			NodeID:    r.node.NodeID,
+			BlockHash: pre.BlockHash,
 		}
 		r.logConsensus("PBFT_PRE_PREPARE_RETRANSMIT_ACCEPTED", msg.FromNode, pre.BlockHash, pre.Height)
 		return r.broadcastPBFTPrepare(ctx, prepare)
@@ -183,6 +191,9 @@ func (r *NodeRuntime) handlePBFTPrepare(ctx context.Context, msg p2p.MessageEnve
 	if err := validatePBFTEnvelope(msg, prepare.View, prepare.Sequence, prepare.Height, prepare.NodeID); err != nil {
 		return err
 	}
+	if err := r.verifyPBFTPrepareAuthentication(prepare); err != nil {
+		return fmt.Errorf("pbft prepare authentication: %w", err)
+	}
 	r.logConsensus(msg.MessageType, msg.FromNode, prepare.BlockHash, prepare.Height)
 
 	reached, _, err := r.pbftState().AcceptPrepare(prepare)
@@ -214,10 +225,16 @@ func (r *NodeRuntime) handlePBFTCommit(ctx context.Context, msg p2p.MessageEnvel
 	// single-validator shard, where one local vote is already the complete
 	// PBFT quorum. Multi-validator runtimes reject this compatibility form.
 	if commit.BlockHash == "" && commit.NodeID == "" {
+		if r.pbftAuthenticationRequired() {
+			return fmt.Errorf("legacy singleton pbft commit wire form is disabled when validator authentication is enabled")
+		}
 		return r.handleLegacySingletonCommit(ctx, msg)
 	}
 	if err := validatePBFTEnvelope(msg, commit.View, commit.Sequence, commit.Height, commit.NodeID); err != nil {
 		return err
+	}
+	if err := r.verifyPBFTCommitAuthentication(commit); err != nil {
+		return fmt.Errorf("pbft commit authentication: %w", err)
 	}
 	r.logConsensus(msg.MessageType, msg.FromNode, commit.BlockHash, commit.Height)
 
@@ -274,6 +291,9 @@ func (r *NodeRuntime) handleLegacySingletonCommit(ctx context.Context, msg p2p.M
 }
 
 func (r *NodeRuntime) broadcastPBFTPrepare(ctx context.Context, prepare pbft.Prepare) error {
+	if err := r.signPBFTPrepare(&prepare); err != nil {
+		return fmt.Errorf("sign pbft prepare: %w", err)
+	}
 	reached, _, err := r.pbftState().AcceptPrepare(prepare)
 	if err != nil {
 		return err
@@ -314,6 +334,9 @@ func (r *NodeRuntime) broadcastPBFTPrepare(ctx context.Context, prepare pbft.Pre
 }
 
 func (r *NodeRuntime) broadcastPBFTCommit(ctx context.Context, commit pbft.Commit) error {
+	if err := r.signPBFTCommit(&commit); err != nil {
+		return fmt.Errorf("sign pbft commit: %w", err)
+	}
 	state := r.pbftState()
 	reached, _, block, err := state.AcceptCommit(commit)
 	if err != nil {
@@ -396,6 +419,12 @@ func (r *NodeRuntime) beginPBFTProposal(ctx context.Context, block realblock.Blo
 		LeaderID:  r.node.NodeID,
 		BlockHash: block.BlockHash,
 		Block:     block,
+	}
+	if err := r.validateConsensusBlockBody(block); err != nil {
+		return fmt.Errorf("primary consensus block body: %w", err)
+	}
+	if err := r.signPBFTPrePrepare(&pre); err != nil {
+		return fmt.Errorf("sign pbft pre-prepare: %w", err)
 	}
 	prepare, err := state.OnPrePrepare(pre)
 	if err != nil {
@@ -506,6 +535,9 @@ func (r *NodeRuntime) retransmitCurrentPBFTProposal(ctx context.Context) error {
 		BlockHash: block.BlockHash,
 		Block:     block,
 	}
+	if err := r.signPBFTPrePrepare(&pre); err != nil {
+		return fmt.Errorf("sign retransmitted pbft pre-prepare: %w", err)
+	}
 	prepare, err := state.OnPrePrepare(pre)
 	if err != nil {
 		return err
@@ -605,6 +637,9 @@ func (r *NodeRuntime) rebroadcastCurrentPBFTViewChange(ctx context.Context) erro
 	if err != nil {
 		return err
 	}
+	if err := r.signPBFTViewChange(&vc); err != nil {
+		return fmt.Errorf("sign retransmitted pbft view-change: %w", err)
+	}
 	if _, _, err := state.AcceptViewChange(vc); err != nil {
 		return err
 	}
@@ -635,6 +670,10 @@ func (r *NodeRuntime) initiatePBFTViewChange(ctx context.Context, newView uint64
 	vc, err := state.BuildViewChange(newView, height)
 	if err != nil {
 		r.setLastProposalError(err)
+		return
+	}
+	if err := r.signPBFTViewChange(&vc); err != nil {
+		r.setLastProposalError(fmt.Errorf("sign pbft view-change: %w", err))
 		return
 	}
 	if !state.MarkViewChangeBroadcast(newView) {
@@ -692,6 +731,9 @@ func (r *NodeRuntime) handlePBFTViewChange(ctx context.Context, msg p2p.MessageE
 	if msg.FromNode != vc.NodeID || msg.Height != vc.Height || msg.View != vc.View {
 		return fmt.Errorf("pbft view-change envelope mismatch")
 	}
+	if err := r.verifyPBFTViewChangeAuthentication(vc); err != nil {
+		return fmt.Errorf("pbft view-change authentication: %w", err)
+	}
 	state := r.pbftState()
 	reached, count, err := state.AcceptViewChange(vc)
 	if err != nil {
@@ -715,6 +757,9 @@ func (r *NodeRuntime) broadcastPBFTNewView(ctx context.Context, newView, height 
 	nv, err := state.BuildNewView(newView, height)
 	if err != nil {
 		return err
+	}
+	if err := r.signPBFTNewView(&nv); err != nil {
+		return fmt.Errorf("sign pbft new-view: %w", err)
 	}
 	selected, hasSelected, err := state.AcceptNewView(nv)
 	if err != nil {
@@ -748,6 +793,9 @@ func (r *NodeRuntime) handlePBFTNewView(ctx context.Context, msg p2p.MessageEnve
 	}
 	if msg.FromNode != nv.LeaderID || msg.View != nv.View || msg.Height != nv.Height {
 		return fmt.Errorf("pbft new-view envelope mismatch")
+	}
+	if err := r.verifyPBFTNewViewAuthentication(nv); err != nil {
+		return fmt.Errorf("pbft new-view authentication: %w", err)
 	}
 	selected, hasSelected, err := r.pbftState().AcceptNewView(nv)
 	if err != nil {
@@ -815,6 +863,12 @@ func (r *NodeRuntime) onPBFTNewViewAccepted(ctx context.Context, nv pbft.NewView
 		BlockHash: selected.BlockHash,
 		Block:     selected,
 	}
+	if err := r.validateConsensusBlockBody(selected); err != nil {
+		return fmt.Errorf("new-view selected consensus block body: %w", err)
+	}
+	if err := r.signPBFTPrePrepare(&pre); err != nil {
+		return fmt.Errorf("sign new-view pbft pre-prepare: %w", err)
+	}
 	prepare, err := r.pbftState().OnPrePrepare(pre)
 	if err != nil {
 		return err
@@ -832,6 +886,9 @@ func (r *NodeRuntime) handlePBFTCheckpoint(_ context.Context, msg p2p.MessageEnv
 	}
 	if msg.FromNode != checkpoint.NodeID || msg.Height != checkpoint.Height {
 		return fmt.Errorf("pbft checkpoint envelope mismatch")
+	}
+	if err := r.verifyPBFTCheckpointAuthentication(checkpoint); err != nil {
+		return fmt.Errorf("pbft checkpoint authentication: %w", err)
 	}
 	stable, _, _, err := r.pbftState().AcceptCheckpoint(checkpoint)
 	if err != nil {
@@ -853,6 +910,10 @@ func (r *NodeRuntime) maybeBroadcastPBFTCheckpoint(ctx context.Context, block re
 	}
 	stateRoot := r.plugins.StateStorage.Root(r.db)
 	checkpoint := state.BuildCheckpoint(block.Height, block.BlockHash, stateRoot)
+	if err := r.signPBFTCheckpoint(&checkpoint); err != nil {
+		r.setLastProposalError(fmt.Errorf("sign pbft checkpoint: %w", err))
+		return
+	}
 	stable, _, _, err := state.AcceptCheckpoint(checkpoint)
 	if err != nil {
 		r.setLastProposalError(err)
@@ -980,6 +1041,18 @@ func (r *NodeRuntime) handleCertifiedCatchupBlock(ctx context.Context, fromNode 
 	if fromNode == "" || fromNode != item.SourceNode || !r.pbftState().IsValidator(fromNode) {
 		return fmt.Errorf("certified catch-up source is not a validator")
 	}
+	if err := r.validateConsensusBlockBody(item.Block); err != nil {
+		r.mu.Lock()
+		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
+		r.mu.Unlock()
+		return fmt.Errorf("certified catch-up block body: %w", err)
+	}
+	if err := r.verifyCommitCertificateAuthentication(item.Certificate); err != nil {
+		r.mu.Lock()
+		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
+		r.mu.Unlock()
+		return fmt.Errorf("certified catch-up authentication: %w", err)
+	}
 	if err := r.pbftState().AcceptCommitCertificate(item.Certificate, item.Block); err != nil {
 		r.mu.Lock()
 		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
@@ -1059,10 +1132,11 @@ func (r *NodeRuntime) deferPBFTPrePrepareWithDisposition(fromNode string, pre pb
 		}
 	}
 	r.deferredPrePrepares[block.Height] = deferredPrePrepare{
-		FromNode: fromNode,
-		View:     pre.View,
-		Sequence: pre.Sequence,
-		Block:    block,
+		FromNode:  fromNode,
+		View:      pre.View,
+		Sequence:  pre.Sequence,
+		Block:     block,
+		Signature: pre.Signature,
 	}
 	return prePrepareDeferralStored
 }
@@ -1093,6 +1167,7 @@ func (r *NodeRuntime) replayDeferredPBFTPrePrepare(ctx context.Context) {
 		LeaderID:  pending.FromNode,
 		BlockHash: pending.Block.BlockHash,
 		Block:     pending.Block,
+		Signature: pending.Signature,
 	}
 	envelope, err := pbftPrePrepareEnvelope(pre, pending.FromNode, r.node.ShardID)
 	if err != nil {

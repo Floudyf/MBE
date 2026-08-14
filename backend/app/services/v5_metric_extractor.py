@@ -559,8 +559,29 @@ def _apply_batch_si_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "transaction_execution_ms": total("transaction_execution_ms"),
         "deterministic_materialization_ms": total("deterministic_materialization_ms"),
         "state_commitment_ms": total("state_commitment_ms"),
+        "batch_si_executor_plan_parse_ms": total("batch_si_executor_plan_parse_ms"),
+        "batch_si_executor_plan_verify_ms": total("batch_si_executor_plan_verify_ms"),
+        "batch_si_plan_payload_bytes": total("batch_si_plan_payload_bytes"),
+        "batch_si_worker_pool_setup_ms": total("batch_si_worker_pool_setup_ms"),
+        "batch_si_worker_pool_wait_ms": total("batch_si_worker_pool_wait_ms"),
+        "batch_si_executor_full_verify_count": total("batch_si_executor_full_verify_count"),
+        "batch_si_executor_full_verify_skip_count": total("batch_si_executor_full_verify_skip_count"),
         "batch_si_cross_scheme_algorithm_reuse": False,
     })
+    verification_modes = sorted({
+        str(block.get("batch_si_executor_plan_verify_mode"))
+        for block in blocks
+        if block.get("batch_si_executor_plan_verify_mode") not in (None, "")
+    })
+    if len(verification_modes) == 1:
+        metrics["batch_si_executor_plan_verify_mode"] = verification_modes[0]
+    preverified_values = [
+        block.get("batch_si_execution_plan_preverified")
+        for block in blocks
+        if isinstance(block.get("batch_si_execution_plan_preverified"), bool)
+    ]
+    if preverified_values:
+        metrics["batch_si_execution_plan_preverified"] = all(preverified_values)
     metrics["source_artifacts"].extend(
         str(path.relative_to(run_dir)).replace("\\", "/")
         for path in _batch_si_leader_summary_paths(run_dir)
