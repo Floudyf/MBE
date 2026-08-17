@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import re
@@ -1441,10 +1442,38 @@ def _csv_value(value: Any) -> Any:
     return value
 
 
+_MAX_CHILD_DIR_NAME_CHARS = 72
+
+
 def _child_dir_name(row: dict[str, Any]) -> str:
+    """Return a deterministic artifact directory name that is safe on Windows.
+
+    Historical short names are preserved exactly. Only names exceeding the
+    bounded component length are compacted to a readable prefix plus a stable
+    digest of the full historical name.
+    """
     value = str(row["scan_value"]).replace(".", "_").replace("/", "_")
-    method = (row.get("method_config_id") or row.get("baseline_id") or "method").replace("/", "_")
-    return f"run_{row['run_index']:03d}_{row['experiment_type']}_{method}_seed_{row['seed']}_{row['scan_variable']}_{value}"
+    method = (
+        row.get("method_config_id")
+        or row.get("baseline_id")
+        or "method"
+    ).replace("/", "_")
+    full_name = (
+        f"run_{row['run_index']:03d}_{row['experiment_type']}_{method}"
+        f"_seed_{row['seed']}_{row['scan_variable']}_{value}"
+    )
+    if len(full_name) <= _MAX_CHILD_DIR_NAME_CHARS:
+        return full_name
+
+    digest = hashlib.sha256(full_name.encode("utf-8")).hexdigest()[:16]
+    readable_prefix = (
+        f"run_{row['run_index']:03d}_{row['experiment_type']}_{method}"
+    )
+    prefix_budget = _MAX_CHILD_DIR_NAME_CHARS - len(digest) - 1
+    prefix = readable_prefix[:prefix_budget].rstrip("._- ")
+    if not prefix:
+        prefix = f"run_{int(row['run_index']):03d}"
+    return f"{prefix}_{digest}"
 
 
 def _mirror_latest(run_dir: Path, latest_dir: Path) -> None:
