@@ -541,3 +541,62 @@ func TestRuntimeStatusExposesInFlightProposalWork(t *testing.T) {
 }
 
 func nowForTest() (t time.Time) { return time.Unix(100, 0) }
+
+func TestLifecycleStatusSeparatesAdmissionAndExecutionFailure(t *testing.T) {
+	events := []LifecycleEvent{
+		{TimestampMS: 100, TxID: "tx-admission", LogicalTxID: "tx-admission", Stage: "failed", ShardID: "s0", Success: false, Error: "future_nonce_not_supported"},
+		{TimestampMS: 200, TxID: "tx-execution", LogicalTxID: "tx-execution", Stage: "failed", ShardID: "s0", BlockHeight: 7, Success: false, Error: "execution_failed"},
+		{TimestampMS: 300, TxID: "tx-admission", LogicalTxID: "tx-admission", Stage: "durable_committed", ShardID: "s0", BlockHeight: 8, Success: true},
+	}
+	sets := classifyLifecycleStatus(events)
+	if !sets.admissionRejected["tx-admission"] || sets.executionFailed["tx-admission"] {
+		t.Fatalf("admission rejection classification drifted: %#v", sets)
+	}
+	if !sets.executionFailed["tx-execution"] || sets.admissionRejected["tx-execution"] {
+		t.Fatalf("execution failure classification drifted: %#v", sets)
+	}
+	if !sets.terminal["tx-admission"] {
+		t.Fatal("later durable commit did not make admission-rejected transaction terminal")
+	}
+	if !sets.terminal["tx-execution"] {
+		t.Fatal("committed-block execution failure was not terminal")
+	}
+}
+
+func TestLifecycleStatusAdmissionRejectionAloneIsNotNodeTerminal(t *testing.T) {
+	sets := classifyLifecycleStatus([]LifecycleEvent{{
+		TimestampMS: 100,
+		TxID:        "tx-1",
+		LogicalTxID: "tx-1",
+		Stage:       "failed",
+		ShardID:     "s0",
+		Success:     false,
+		Error:       "future_nonce_not_supported",
+	}})
+	if !sets.admissionRejected["tx-1"] || !sets.failed["tx-1"] {
+		t.Fatalf("admission rejection evidence missing: %#v", sets)
+	}
+	if sets.terminal["tx-1"] {
+		t.Fatal("replica-local admission rejection became node-terminal")
+	}
+}
+
+func TestLifecycleStatusLegacyCrossExecutionFailureWaitsForProtocolOutcome(t *testing.T) {
+	events := []LifecycleEvent{
+		{TimestampMS: 100, TxID: "cross-1", LogicalTxID: "cross-1", Stage: "sourcelock", ShardID: "s0", BlockHeight: 1, Success: true},
+		{TimestampMS: 200, TxID: "cross-1", LogicalTxID: "cross-1", Stage: "failed", ShardID: "s1", BlockHeight: 2, Success: false, Error: "execution_failed"},
+	}
+	sets := classifyLifecycleStatus(events)
+	if !sets.executionFailed["cross-1"] {
+		t.Fatal("cross-shard execution failure evidence was lost")
+	}
+	if sets.terminal["cross-1"] {
+		t.Fatal("legacy cross-shard execution failure closed before finalize/refund")
+	}
+
+	events = append(events, LifecycleEvent{TimestampMS: 300, TxID: "cross-1", LogicalTxID: "cross-1", Stage: "refund", ShardID: "s0", BlockHeight: 3, Success: false})
+	sets = classifyLifecycleStatus(events)
+	if !sets.terminal["cross-1"] || !sets.refunded["cross-1"] {
+		t.Fatal("refund did not close legacy cross-shard lifecycle")
+	}
+}

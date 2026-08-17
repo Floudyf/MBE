@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	realblock "metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/tx"
@@ -55,14 +56,36 @@ func (p bsxBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecution
 	if input.Block.ExecutionPlan == nil {
 		return BlockExecutionResult{}, fmt.Errorf("bsx execution plan missing")
 	}
+	parseStarted := time.Now()
 	plan, err := literatureParsePlan(input.Block.ExecutionPlan.Payload, bsxPlanAlgorithmID)
+	parseMS := time.Since(parseStarted).Milliseconds()
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
-	if err := literatureVerifyPlan(input.Block, plan, bsxPlanAlgorithmID, buildBSXPlan); err != nil {
+	verifyStarted := time.Now()
+	verifyMode := "full_recompute"
+	if input.ExecutionPlanVerified {
+		verifyMode = "preverified_projection"
+		err = verifyPreverifiedLiteratureGraphProjection(input.Block, plan, bsxPlanAlgorithmID)
+	} else {
+		err = literatureVerifyPlan(input.Block, plan, bsxPlanAlgorithmID, buildBSXPlan)
+	}
+	verifyMS := time.Since(verifyStarted).Milliseconds()
+	if err != nil {
 		return BlockExecutionResult{}, err
 	}
-	return executeBSXPlanWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, configuredWorkerCount(p.config, input.WorkerCount))
+	result, err := executeBSXPlanWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, configuredWorkerCount(p.config, input.WorkerCount))
+	if err != nil {
+		return BlockExecutionResult{}, err
+	}
+	if result.ActualMetrics == nil {
+		result.ActualMetrics = map[string]any{}
+	}
+	result.ActualMetrics["literature_plan_parse_ms"] = parseMS
+	result.ActualMetrics["literature_plan_verify_ms"] = verifyMS
+	result.ActualMetrics["literature_plan_verify_mode"] = verifyMode
+	result.ActualMetrics["literature_plan_preverified"] = input.ExecutionPlanVerified
+	return result, nil
 }
 
 func buildBSXPlan(block realblock.Block) (literatureGraphPlan, error) {

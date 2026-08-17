@@ -70,7 +70,11 @@ def _failed_runtime_diagnostics(group_dir: Path, group: dict) -> list[tuple[Path
     total = 0
     group_id = str(group.get("run_group_id") or group_dir.name)
     for child in children(group_id):
-        if child.get("status") == "completed":
+        completed_invalid = (
+            child.get("individual_result_valid") is False
+            or str(child.get("comparison_eligibility_status") or "") == "individual_result_invalid"
+        )
+        if child.get("status") == "completed" and not completed_invalid:
             continue
         result = child.get("result") if isinstance(child.get("result"), dict) else {}
         run_id = str(result.get("run_id") or "")
@@ -90,6 +94,6 @@ def _failed_runtime_diagnostics(group_dir: Path, group: dict) -> list[tuple[Path
             if size > _MAX_DIAGNOSTIC_FILE_BYTES or total + size > _MAX_DIAGNOSTIC_TOTAL_BYTES:
                 continue
             archive_name = (Path("runtime_diagnostics") / child_id / path.relative_to(runtime_root)).as_posix()
-            entries.append((path, archive_name, "failed_child_runtime"))
+            entries.append((path, archive_name, "non_paper_eligible_child_runtime"))
             total += size
     return entries

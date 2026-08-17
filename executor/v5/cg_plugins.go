@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	realblock "metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/tx"
@@ -60,14 +61,36 @@ func (p cgBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionI
 	if input.Block.ExecutionPlan == nil {
 		return BlockExecutionResult{}, fmt.Errorf("cg execution plan missing")
 	}
+	parseStarted := time.Now()
 	plan, err := literatureParsePlan(input.Block.ExecutionPlan.Payload, cgPlanAlgorithmID)
+	parseMS := time.Since(parseStarted).Milliseconds()
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
-	if err := verifyCGPlanSmart(input.Block, plan, cgPlanningWorkerCount(p.config)); err != nil {
+	verifyStarted := time.Now()
+	verifyMode := "full_recompute"
+	if input.ExecutionPlanVerified {
+		verifyMode = "preverified_projection"
+		err = verifyPreverifiedLiteratureGraphProjection(input.Block, plan, cgPlanAlgorithmID)
+	} else {
+		err = verifyCGPlanSmart(input.Block, plan, cgPlanningWorkerCount(p.config))
+	}
+	verifyMS := time.Since(verifyStarted).Milliseconds()
+	if err != nil {
 		return BlockExecutionResult{}, err
 	}
-	return executeCGPlanWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, configuredWorkerCount(p.config, input.WorkerCount))
+	result, err := executeCGPlanWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, configuredWorkerCount(p.config, input.WorkerCount))
+	if err != nil {
+		return BlockExecutionResult{}, err
+	}
+	if result.ActualMetrics == nil {
+		result.ActualMetrics = map[string]any{}
+	}
+	result.ActualMetrics["literature_plan_parse_ms"] = parseMS
+	result.ActualMetrics["literature_plan_verify_ms"] = verifyMS
+	result.ActualMetrics["literature_plan_verify_mode"] = verifyMode
+	result.ActualMetrics["literature_plan_preverified"] = input.ExecutionPlanVerified
+	return result, nil
 }
 
 func cgPlanningWorkerCount(config map[string]any) int {

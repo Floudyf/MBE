@@ -24,7 +24,7 @@ export default function V5GroupSummary({ group, aggregate, children }: Props) {
       <Metric label="完成且结果有效" value={children.length ? completedValid : undefined} />
       <Metric label="实验类型" value={(group.plan?.suites ?? group.suite_names)?.map(suiteText).join(", ")} /><Metric label="方法" value={group.plan?.methods.map((item) => item.display_name).join(", ") ?? group.method_names?.join(", ")} />
       <Metric label="随机种子" value={group.plan?.seeds.join(", ")} /><Metric label="重复次数" value={group.plan?.repeats} />
-      <Metric label="创建时间" value={group.created_at} /><Metric label="更新时间" value={group.updated_at} />
+      <Metric label="创建时间" value={timestampDisplay(group.created_at)} /><Metric label="更新时间" value={timestampDisplay(group.updated_at)} />
       <Metric label="基础拓扑" value={topology ? `${topology.nodes}/${topology.shards}/${topology.validators_per_shard}` : undefined} />
       <Metric label="基础交易数量" value={base?.tx_count} /><Metric label="负载插件" value={workload?.plugin_id} />
       <Metric label="跨片交易比例" value={workload?.config.cross_shard_ratio} /><Metric label="超时间隔" value={workload?.config.timeout_every} />
@@ -47,6 +47,12 @@ function statusText(value: string): string { return ({ completed: "已完成", c
 function backendText(value: string): string { return ({ real_cluster: "真实集群", simulation: "仿真", preview: "预览" } as Record<string, string>)[value] ?? value; }
 function runtimeTruthText(value: string): string { return ({ v5_real_cluster_candidate: "V5 真实集群候选环境", local_multi_process: "本地多进程", real_cluster: "真实集群", production: "生产环境" } as Record<string, string>)[value] ?? value; }
 function suiteText(value: string): string { return ({ main_experiment: "主实验", comparison_experiment: "方法对比", ablation_experiment: "消融实验", workload_sensitivity: "工作负载敏感性", topology_scaling: "拓扑扩展", fault_recovery_experiment: "故障恢复" } as Record<string, string>)[value] ?? value; }
+
+function timestampDisplay(value: string | undefined | null): string | undefined {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
 
 function Metric({ label, value }: { label: string; value: unknown }) { return <div data-testid={`v5-group-${legacySlug(label) ?? slug(label)}`}><dt>{label}</dt><dd>{display(value)}</dd></div>; }
 function display(value: unknown): string { return value === undefined || value === null || value === "" ? "-" : typeof value === "number" ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : String(value); }

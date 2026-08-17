@@ -95,7 +95,7 @@ function ThetaMetricChart({ testId, title, unit, series, thetaValues }: { testId
   const y = (value: number) => top + plotHeight - (value / yMax) * plotHeight;
   const yTicks = Array.from({ length: 6 }, (_, index) => (yMax * index) / 5);
   return <article className="final-card wide analysis-chart" data-testid={testId}>
-    <div className="section-heading"><div><h3>{title}</h3><p className="muted">横轴固定使用受控偏斜度 θ；单个随机种子时只跨重复运行统计，多个随机种子时先计算各随机种子的重复均值，再对这些均值计算 Student-t 95% 置信区间。缺失、失败或无效点以 × 标记并保持断线。</p></div></div>
+    <div className="section-heading"><div><h3>{title}</h3><p className="muted">横轴固定使用构造目标账户写偏斜 θ（target_account_write_theta）；单个随机种子时只跨重复运行统计，多个随机种子时先计算各随机种子的重复均值，再对这些均值计算 Student-t 95% 置信区间。缺失、失败或无效点以 × 标记并保持断线。</p></div></div>
     <div className="table-wrap">
       <svg data-testid={`${testId}-svg`} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${title} line chart`} style={{ width: "100%", minWidth: 720 }}>
         {yTicks.map((tick) => <g key={tick}>
@@ -108,7 +108,7 @@ function ThetaMetricChart({ testId, title, unit, series, thetaValues }: { testId
           <line x1={x(theta)} x2={x(theta)} y1={top + plotHeight} y2={top + plotHeight + 5} stroke="currentColor" />
           <text x={x(theta)} y={top + plotHeight + 22} textAnchor="middle" fontSize="12">{theta.toFixed(1)}</text>
         </g>)}
-        <text x={left + plotWidth / 2} y={height - 12} textAnchor="middle" fontSize="13">偏斜度 θ</text>
+        <text x={left + plotWidth / 2} y={height - 12} textAnchor="middle" fontSize="13">目标账户写偏斜 θ</text>
         <text x="16" y={top + plotHeight / 2} transform={`rotate(-90 16 ${top + plotHeight / 2})`} textAnchor="middle" fontSize="13">{unit}</text>
         {series.map((item, seriesIndex) => {
           const pointByTheta = new Map(item.points.map((point) => [point.theta, point]));

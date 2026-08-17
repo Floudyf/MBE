@@ -38,6 +38,7 @@ type WorkloadPlan struct {
 	TruthLabel               string         `json:"truth_label"`
 	SelectionMode            string         `json:"selection_mode"`
 	VariantParameters        map[string]any `json:"variant_parameters"`
+	AuditMetadata            map[string]any `json:"audit_metadata,omitempty"`
 	ReplayMode               string         `json:"replay_mode"`
 	TargetSubmissionTPS      int            `json:"target_submission_tps,omitempty"`
 	SkewAxis                 string         `json:"skew_axis"`

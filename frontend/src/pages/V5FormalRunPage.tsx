@@ -7,6 +7,8 @@ import {
   fetchV5PluginCatalog,
   fetchV5WorkloadDatasets,
   previewV5FormalRun,
+  fetchV5FormalResumeCandidates,
+  resumeSelectedV5FormalChildren,
   previewV5Workload,
   validateV5ExperimentSpec,
   type V5CompatibilityResult,
@@ -14,6 +16,8 @@ import {
   type V5FormalMethod,
   type V5FormalPreviewResponse,
   type V5FormalRunGroupDetail,
+  type V5FormalResumeCandidates,
+  type V5FormalResumeMode,
   type V5FormalRunRequest,
   type V5FormalSuite,
   type V5PluginManifest,
@@ -34,6 +38,7 @@ const recentGroupKey = "mbe.v5FormalRunGroupId";
 const formalRunDraftKey = "mbe.v5FormalRunDraft.v1";
 const groundhogMethodId = "hash_groundhog";
 const alphaValues = [0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4];
+const MAX_FORMAL_CHILD_RUNS = 1024;
 
 type Topology = { nodes: number; shards: number; validators_per_shard: number };
 type TopologyPoint = Topology & { worker_count?: number };
@@ -241,6 +246,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   const [catalogError, setCatalogError] = useState("");
   const [busy, setBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
+  const [resumeBusy, setResumeBusy] = useState(false);
+  const [resumeCandidates, setResumeCandidates] = useState<V5FormalResumeCandidates | null>(null);
   const [draftStatus, setDraftStatus] = useState(restoredDraft ? `已恢复上次实验配置${restoredDraft.saved_at ? `（${restoredDraft.saved_at.replace("T", " ").slice(0, 19)}）` : ""}。` : "实验配置会自动保存在本机浏览器。");
   const pollTimer = useRef<number | null>(null);
   const formRevision = useRef(0);
@@ -646,6 +653,40 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     }
   }
 
+  async function openResumeSelection() {
+    if (!groupId || !groupDetail) return;
+    setResumeBusy(true);
+    try {
+      const response = await fetchV5FormalResumeCandidates(groupId);
+      setResumeCandidates(response);
+      setMessage(response.candidate_count
+        ? `可选择继续 ${response.resume_unfinished_count} 个未启动/中断子实验；可选择重试 ${response.retry_failed_count} 个失败/超时子实验。`
+        : "当前 RunGroup 没有可继续或可重试的子实验。");
+      setError("");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setResumeBusy(false);
+    }
+  }
+
+  async function startSelectedResume(mode: V5FormalResumeMode, childRunIds: string[]) {
+    if (!groupId || !childRunIds.length) return;
+    setResumeBusy(true);
+    try {
+      const summary = await resumeSelectedV5FormalChildren(groupId, mode, childRunIds);
+      setMessage(`已启动选中的 ${childRunIds.length} 个子实验：${summary.run_group_id}`);
+      setResumeCandidates(null);
+      setError("");
+      await queryGroup(groupId, true);
+      schedulePolling(groupId);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setResumeBusy(false);
+    }
+  }
+
   async function queryGroup(id = groupId, silent = false) {
     if (!id) return;
     try {
@@ -799,8 +840,10 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     </article>
 
     <article className="final-card wide">
-      <div className="section-heading"><div><h3>实验组状态</h3><p className="muted">最近的实验组 ID 保存在浏览器，只用于刷新后的查询。强制停止会请求后端终止当前 supervisor 与节点进程树，并保留已生成的诊断产物。</p></div><div className="button-row"><button type="button" onClick={() => void queryGroup()} disabled={!groupId || busy}>重新查询</button><button type="button" data-testid="v5-cancel-run-group-button" onClick={() => void cancelGroup()} disabled={!groupId || !groupDetail || terminal(groupDetail.group.status) || groupDetail.group.status === "cancelling" || cancelBusy}>{groupDetail?.group.status === "cancelling" ? "正在停止…" : cancelBusy ? "正在请求…" : "强制停止实验"}</button></div></div>
+      <div className="section-heading"><div><h3>实验组状态</h3><p className="muted">每个正式 child 最多运行 30 分钟；超时保留诊断但不进入正式 TPS。继续运行前先选择具体 θ / Repeat / 方法；已完成 child 不会出现在候选列表中。</p></div><div className="button-row"><button type="button" onClick={() => void queryGroup()} disabled={!groupId || busy}>重新查询</button><button type="button" data-testid="v5-resume-run-group-button" onClick={() => void openResumeSelection()} disabled={!groupId || !groupDetail || resumeBusy || !["cancelled", "interrupted", "completed_with_failures", "failed"].includes(groupDetail.group.status)}>{resumeBusy ? "读取候选中…" : "选择继续未完成实验 / 重试"}</button><button type="button" data-testid="v5-cancel-run-group-button" onClick={() => void cancelGroup()} disabled={!groupId || !groupDetail || terminal(groupDetail.group.status) || groupDetail.group.status === "cancelling" || cancelBusy}>{groupDetail?.group.status === "cancelling" ? "正在停止…" : cancelBusy ? "正在请求…" : "强制停止实验"}</button></div></div>
       {groupId && <p><strong>run_group_id：</strong><code>{groupId}</code> {onOpenResults && <button type="button" onClick={() => onOpenResults(groupId)}>查看结果与产物</button>}</p>}
+      {groupDetail && <p className="muted" data-testid="v5-formal-progress-accounting">已完成 {groupDetail.group.completed_child_runs}；失败 {groupDetail.group.failed_child_runs ?? 0}；超时 {groupDetail.group.timed_out_child_runs ?? 0}；中断 {groupDetail.group.interrupted_child_runs ?? 0}；未启动 {groupDetail.group.not_started_child_runs ?? 0}；总计 {groupDetail.group.total_child_runs}。{typeof groupDetail.group.execution_policy?.child_wall_timeout_seconds === "number" ? ` Child 上限 ${groupDetail.group.execution_policy.child_wall_timeout_seconds}s。` : ""}</p>}
+      {resumeCandidates && <ResumeSelectionPanel data={resumeCandidates} busy={resumeBusy} onClose={() => setResumeCandidates(null)} onStart={(mode, ids) => void startSelectedResume(mode, ids)} />}
       {groupDetail && <GroupStatus detail={groupDetail} />}
     </article>
   </section>;
@@ -861,7 +904,7 @@ function CurrentMethods({ suite, methods, preferredMethodId, workerCount, childC
     <div><span>当前实验</span><strong>{suiteTitle}</strong></div>
     <div><span>已选方法</span><strong>{methods.length ? methods.map((method) => methodDefinition(method.method_id)?.title ?? method.display_name).join("、") : "未选择"}</strong></div>
     <div><span>节点内并发</span><strong>{workerCount} Workers</strong></div>
-    <div><span>预计子实验</span><strong>{childCount}</strong></div>
+    <div><span>预计子实验 / 上限</span><strong>{childCount} / {MAX_FORMAL_CHILD_RUNS}</strong></div>
     {preferredMethodId && methods.some((method) => method.method_id === preferredMethodId) && <small>包含从实验设计页带入的方法。</small>}
   </div>;
 }
@@ -878,17 +921,246 @@ function PointEditor({ title, onAdd, children }: { title: string; onAdd: () => v
   return <article className="final-card wide" data-testid={`v5-point-editor-${title}`}><div className="section-heading"><h3>{title}</h3><button type="button" onClick={onAdd}>添加扫描点</button></div>{children}</article>;
 }
 
+function ResumeSelectionPanel({ data, busy, onStart, onClose }: { data: V5FormalResumeCandidates; busy: boolean; onStart: (mode: V5FormalResumeMode, ids: string[]) => void; onClose: () => void }) {
+  const preferredMode: V5FormalResumeMode = data.resume_unfinished_count > 0 ? "resume_unfinished" : "retry_failed";
+  const [mode, setMode] = useState<V5FormalResumeMode>(preferredMode);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [thetaFilter, setThetaFilter] = useState("all");
+  const [repeatFilter, setRepeatFilter] = useState("all");
+  const [methodFilter, setMethodFilter] = useState("all");
+
+  useEffect(() => {
+    const nextMode: V5FormalResumeMode = data.resume_unfinished_count > 0 ? "resume_unfinished" : "retry_failed";
+    setMode(nextMode);
+    setSelected(data.candidates.filter((item) => item.mode === nextMode).map((item) => item.child_run_id));
+    setThetaFilter("all"); setRepeatFilter("all"); setMethodFilter("all");
+  }, [data]);
+
+  const modeCandidates = useMemo(() => data.candidates.filter((item) => item.mode === mode), [data, mode]);
+  const thetaOptions = useMemo(() => [...new Set(modeCandidates.map((item) => resumeThetaValue(item)).filter((item) => item !== "—"))].sort((a, b) => Number(a) - Number(b)), [modeCandidates]);
+  const repeatOptions = useMemo(() => [...new Set(modeCandidates.map((item) => String(item.repeat_index)))].sort((a, b) => Number(a) - Number(b)), [modeCandidates]);
+  const methodOptions = useMemo(() => [...new Map(modeCandidates.map((item) => [item.method_config_id ?? item.method_name ?? "", item.method_name ?? item.method_config_id ?? ""] as const)).entries()].filter(([id]) => id), [modeCandidates]);
+  const visible = modeCandidates.filter((item) => (thetaFilter === "all" || resumeThetaValue(item) === thetaFilter) && (repeatFilter === "all" || String(item.repeat_index) === repeatFilter) && (methodFilter === "all" || (item.method_config_id ?? item.method_name ?? "") === methodFilter));
+  const selectedSet = new Set(selected);
+  const chosen = modeCandidates.filter((item) => selectedSet.has(item.child_run_id));
+  const totalTx = chosen.reduce((sum, item) => sum + Number(item.estimated_transactions || 0), 0);
+  const totalProcesses = chosen.reduce((sum, item) => sum + Number(item.estimated_processes || 0), 0);
+
+  function changeMode(next: V5FormalResumeMode) {
+    setMode(next);
+    setSelected(data.candidates.filter((item) => item.mode === next).map((item) => item.child_run_id));
+    setThetaFilter("all"); setRepeatFilter("all"); setMethodFilter("all");
+  }
+  function toggleChild(id: string) { setSelected((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]); }
+  function selectVisible() { setSelected((current) => [...new Set([...current, ...visible.map((item) => item.child_run_id)])]); }
+  function clearVisible() { const ids = new Set(visible.map((item) => item.child_run_id)); setSelected((current) => current.filter((item) => !ids.has(item))); }
+
+  return <article className="final-card wide" data-testid="v5-resume-selection-panel">
+    <div className="section-heading"><div><h4>选择继续 / 重试子实验</h4><p className="muted">默认只选择未启动/中断项；失败和超时需要切换到“重试失败/超时”后明确勾选。候选顺序按 θ → Repeat → 方法排列。</p></div><button type="button" className="ghost-button" onClick={onClose} disabled={busy}>关闭</button></div>
+    <div className="button-row">
+      <button type="button" aria-pressed={mode === "resume_unfinished"} onClick={() => changeMode("resume_unfinished")}>继续未启动 / 中断 ({data.resume_unfinished_count})</button>
+      <button type="button" aria-pressed={mode === "retry_failed"} onClick={() => changeMode("retry_failed")}>重试失败 / 超时 ({data.retry_failed_count})</button>
+    </div>
+    <div className="experiment-condition-grid">
+      <label><span>θ / α</span><select value={thetaFilter} onChange={(event) => setThetaFilter(event.target.value)}><option value="all">全部</option>{thetaOptions.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+      <label><span>Repeat</span><select value={repeatFilter} onChange={(event) => setRepeatFilter(event.target.value)}><option value="all">全部</option>{repeatOptions.map((value) => <option key={value} value={value}>{Number(value) + 1}</option>)}</select></label>
+      <label><span>方法</span><select value={methodFilter} onChange={(event) => setMethodFilter(event.target.value)}><option value="all">全部</option>{methodOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
+      <div className="button-row"><button type="button" onClick={selectVisible}>全选当前筛选</button><button type="button" onClick={clearVisible}>清空当前筛选</button></div>
+    </div>
+    <p data-testid="v5-resume-selection-summary"><strong>已选择：</strong>{chosen.length} child；<strong>预计交易：</strong>{totalTx.toLocaleString()}；<strong>预计节点进程启动：</strong>{totalProcesses.toLocaleString()}。</p>
+    <div className="table-wrap formal-matrix-wrap"><table data-testid="v5-resume-candidate-table"><thead><tr><th>选择</th><th>θ/α</th><th>Repeat</th><th>方法</th><th>当前状态</th><th>Attempt</th><th>交易数</th><th>Child ID</th></tr></thead><tbody>{visible.map((item) => <tr key={item.child_run_id}><td><input type="checkbox" checked={selectedSet.has(item.child_run_id)} onChange={() => toggleChild(item.child_run_id)} /></td><td>{resumeThetaValue(item)}</td><td>{item.repeat_index + 1}</td><td>{item.method_name ?? item.method_config_id ?? "—"}</td><td>{statusLabel(item.status)}{item.execution_status && item.execution_status !== item.status ? ` / ${statusLabel(item.execution_status)}` : ""}</td><td>{item.attempt}</td><td>{item.estimated_transactions.toLocaleString()}</td><td><code>{item.child_run_id}</code></td></tr>)}</tbody></table></div>
+    {!visible.length && <p className="muted">当前筛选没有候选子实验。</p>}
+    <div className="button-row"><button type="button" className="v3-secondary-button" onClick={() => onStart(mode, chosen.map((item) => item.child_run_id))} disabled={busy || !chosen.length || !data.selection_allowed}>{busy ? "正在启动…" : `开始选中的 ${chosen.length} 个子实验`}</button></div>
+  </article>;
+}
+
+function resumeThetaValue(item: { target_theta?: number | null; target_alpha?: number | null; scan_value?: string }): string {
+  if (typeof item.target_theta === "number") return String(item.target_theta);
+  if (typeof item.target_alpha === "number") return String(item.target_alpha);
+  return item.scan_value && item.scan_value.length < 32 ? item.scan_value : "—";
+}
+
 function GroupStatus({ detail }: { detail: V5FormalRunGroupDetail }) {
+  const [issueDetail, setIssueDetail] = useState<{
+    childId: string;
+    method: string;
+    execution: string;
+    artifact: string;
+    eligibility: string;
+    severity: "error" | "warning";
+    text: string;
+  } | null>(null);
+  const [issueCopied, setIssueCopied] = useState(false);
+
+  const copyIssueDetail = async () => {
+    if (!issueDetail) return;
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(issueDetail.text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = issueDetail.text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+      setIssueCopied(true);
+      window.setTimeout(() => setIssueCopied(false), 1600);
+    } catch {
+      setIssueCopied(false);
+    }
+  };
   const failed = detail.children.filter((child) => ["failed", "blocked"].includes(child.status)).length;
   return <><p data-testid="v5-formal-group-summary"><strong>状态：</strong>{statusLabel(detail.group.status)}；<strong>执行后端：</strong>{backendLabel(detail.group.execution_backend)}；<strong>子实验：</strong>{detail.group.completed_child_runs}/{detail.group.total_child_runs}；<strong>失败：</strong>{failed}</p><div className="table-wrap"><table data-testid="v5-formal-child-table"><thead><tr><th>子实验</th><th>实验类型</th><th>方法</th><th>种子</th><th>交易</th><th>执行状态</th><th>产物状态</th><th>正式结果</th><th>无回退</th><th>阻断原因</th></tr></thead><tbody>{detail.children.map((child) => {
     const execution = child.execution_status ?? child.result?.summary?.execution_status ?? child.status;
     const artifact = child.artifact_status ?? child.result?.summary?.artifact_status;
     const eligible = child.formal_eligibility ?? child.result?.summary?.formal_eligibility;
     const blockers = [...(child.execution_gate?.blockers ?? child.result?.summary?.execution_gate?.blockers ?? []), ...(child.artifact_gate?.blockers ?? child.result?.summary?.artifact_gate?.blockers ?? [])];
+    const issueItems = Array.from(new Set([
+      ...blockers.map((item) => String(item)),
+      ...(child.error ? [String(child.error)] : []),
+    ].map((item) => item.trim()).filter(Boolean)));
+    const isFailure = ["failed", "blocked"].includes(String(execution ?? "").toLowerCase()) || ["failed", "blocked"].includes(String(child.status ?? "").toLowerCase());
+    const hasWarning = artifact === "incomplete" || eligible === false || issueItems.length > 0;
+    const severity: "error" | "warning" = isFailure ? "error" : "warning";
+    const eligibilityLabel = eligible === true ? "可用" : eligible === false ? "不可用" : "未提供";
+    const issueText = [
+      `child_run_id: ${child.child_run_id}`,
+      `method: ${child.method.display_name}`,
+      `execution_status: ${execution ?? "未提供"}`,
+      `artifact_status: ${artifact ?? "未提供"}`,
+      `formal_result: ${eligibilityLabel}`,
+      "",
+      ...issueItems.map((item, index) => `${index + 1}. ${item}`),
+    ].join("\n");
     const executionLabel = execution === "completed" ? "已完成" : execution === "failed" ? "失败" : String(execution ?? "未提供");
     const artifactLabel = artifact === "complete" ? "完整" : artifact === "incomplete" ? "不完整" : String(artifact ?? "未提供");
-    return <tr key={child.child_run_id}><td>{child.child_run_id}</td><td>{suiteLabel(child.suite_type)}</td><td>{child.method.display_name}</td><td>{child.seed}</td><td>{child.estimated_transactions}</td><td>{executionLabel}</td><td>{artifactLabel}</td><td>{eligible === true ? "可用" : eligible === false ? "不可用" : "未提供"}</td><td>{child.result?.summary?.no_fallback === undefined ? "未提供" : String(child.result.summary.no_fallback)}</td><td>{blockers.length ? blockers.join("; ") : (child.error ?? "无")}</td></tr>;
-  })}</tbody></table></div></>;
+    return <tr key={child.child_run_id}><td>{child.child_run_id}</td><td>{suiteLabel(child.suite_type)}</td><td>{child.method.display_name}</td><td>{child.seed}</td><td>{child.estimated_transactions}</td><td>{executionLabel}</td><td>{artifactLabel}</td><td>{eligible === true ? "可用" : eligible === false ? "不可用" : "未提供"}</td><td>{child.result?.summary?.no_fallback === undefined ? "未提供" : String(child.result.summary.no_fallback)}</td><td style={{ whiteSpace: "nowrap" }}>{issueItems.length || hasWarning ? <button
+      type="button"
+      data-testid="v5-formal-issue-button"
+      onClick={() => {
+        setIssueCopied(false);
+        setIssueDetail({
+          childId: child.child_run_id,
+          method: child.method.display_name,
+          execution: executionLabel,
+          artifact: artifactLabel,
+          eligibility: eligibilityLabel,
+          severity,
+          text: issueText,
+        });
+      }}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        minHeight: 30,
+        padding: "4px 10px",
+        borderRadius: 999,
+        border: severity === "error" ? "1px solid #fecaca" : "1px solid #fde68a",
+        background: severity === "error" ? "#fef2f2" : "#fffbeb",
+        color: severity === "error" ? "#b91c1c" : "#92400e",
+        fontWeight: 700,
+        fontSize: 12,
+        lineHeight: 1,
+        whiteSpace: "nowrap",
+        cursor: "pointer",
+      }}
+      aria-label={`${severity === "error" ? "失败" : "警告"}详情：${child.child_run_id}`}
+    >{severity === "error" ? "失败详情" : "警告详情"} · {Math.max(issueItems.length, 1)}</button> : <span className="muted">无</span>}</td></tr>;
+  })}</tbody></table></div>{issueDetail && <div
+    data-testid="v5-formal-issue-dialog"
+    role="presentation"
+    onMouseDown={(event) => {
+      if (event.target === event.currentTarget) setIssueDetail(null);
+    }}
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 10000,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: 24,
+      background: "rgba(15, 23, 42, 0.48)",
+      backdropFilter: "blur(2px)",
+    }}
+  >
+    <section
+      role="dialog"
+      aria-modal="true"
+      aria-label="实验异常详情"
+      style={{
+        width: "calc(100vw - 48px)",
+        maxWidth: 920,
+        maxHeight: "82vh",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        borderRadius: 16,
+        border: "1px solid #e2e8f0",
+        background: "#ffffff",
+        boxShadow: "0 24px 70px rgba(15, 23, 42, 0.28)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "18px 20px", borderBottom: "1px solid #e2e8f0" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <strong style={{ fontSize: 17 }}>实验异常详情</strong>
+            <span style={{
+              display: "inline-flex",
+              alignItems: "center",
+              padding: "4px 9px",
+              borderRadius: 999,
+              background: issueDetail.severity === "error" ? "#fef2f2" : "#fffbeb",
+              color: issueDetail.severity === "error" ? "#b91c1c" : "#92400e",
+              fontSize: 12,
+              fontWeight: 700,
+            }}>{issueDetail.severity === "error" ? "失败" : "警告"}</span>
+          </div>
+          <div className="muted" style={{ marginTop: 7, overflowWrap: "anywhere" }}>{issueDetail.method} · {issueDetail.childId}</div>
+        </div>
+        <button type="button" onClick={() => setIssueDetail(null)} aria-label="关闭异常详情" style={{ flex: "0 0 auto" }}>关闭</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, padding: "14px 20px 0" }}>
+        <div><span className="muted">执行状态</span><div><strong>{issueDetail.execution}</strong></div></div>
+        <div><span className="muted">产物状态</span><div><strong>{issueDetail.artifact}</strong></div></div>
+        <div><span className="muted">正式结果</span><div><strong>{issueDetail.eligibility}</strong></div></div>
+      </div>
+      <div style={{ minHeight: 0, padding: 20, flex: "1 1 auto", overflow: "hidden" }}>
+        <pre style={{
+          boxSizing: "border-box",
+          width: "100%",
+          maxHeight: "52vh",
+          margin: 0,
+          padding: 14,
+          overflow: "auto",
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+          borderRadius: 10,
+          border: "1px solid #e2e8f0",
+          background: "#f8fafc",
+          color: "#0f172a",
+          fontSize: 12,
+          lineHeight: 1.65,
+        }}>{issueDetail.text}</pre>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "0 20px 18px" }}>
+        <button type="button" onClick={() => void copyIssueDetail()} data-testid="v5-formal-issue-copy" style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+          <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="9" y="9" width="11" height="11" rx="2" />
+            <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" />
+          </svg>
+          {issueCopied ? "已复制" : "复制详情"}
+        </button>
+        <button type="button" onClick={() => setIssueDetail(null)}>关闭</button>
+      </div>
+    </section>
+  </div>}</>;
 }
 
 function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; selectedSuite: V5FormalSuite; topology: Topology; blockProduction: BlockProduction; source: V5WorkloadSourceSpec | null; seeds: number[]; repeats: number; workloadPoints: WorkloadPoint[]; topologyPoints: TopologyPoint[]; faultPoints: FaultPoint[]; estimatedChildren: number; workloadRunnable: boolean; workerCount: number }): string | null {
@@ -914,7 +1186,7 @@ function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; s
     if (invalid) return "拓扑扫描点必须满足节点数=分片数×每片验证节点数，Worker 为 1、2、4 或 8。";
   }
   if (input.selectedSuite === "fault_recovery_experiment" && (input.faultPoints.length < 2 || !input.faultPoints.some((item) => item.mode === "disabled") || !input.faultPoints.some((item) => item.mode !== "disabled"))) return "故障实验需要无故障基准点和至少一个故障点。";
-  if (input.estimatedChildren > 100) return "正式矩阵超过 100 个子实验硬上限。";
+  if (input.estimatedChildren > MAX_FORMAL_CHILD_RUNS) return `正式矩阵超过 ${MAX_FORMAL_CHILD_RUNS} 个子实验硬上限。`;
   return null;
 }
 
@@ -945,7 +1217,7 @@ function boundedInteger(value: number, min: number, max: number): number { if (!
 function snapAlpha(value: number): number { return alphaValues.reduce((best, item) => Math.abs(item - value) < Math.abs(best - value) ? item : best, 0); }
 function toggle<T>(item: T, values: T[]): T[] { return values.includes(item) ? values.filter((value) => value !== item) : [...values, item]; }
 function replace<T>(items: T[], index: number, value: T): T[] { return items.map((item, current) => current === index ? value : item); }
-function terminal(status: string): boolean { return ["completed", "completed_with_failures", "failed", "cancelled"].includes(status); }
+function terminal(status: string): boolean { return ["completed", "completed_with_failures", "failed", "cancelled", "interrupted"].includes(status); }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function stringValue(value: unknown): string { return value === undefined || value === null || value === "" ? "未提供" : String(value); }
 function cleanWorkloadPoints(points: WorkloadPoint[]): Array<Record<string, number>> { return points.map((point) => Object.fromEntries(Object.entries(point).filter(([, value]) => typeof value === "number" && globalThis.Number.isFinite(value))) as Record<string, number>); }

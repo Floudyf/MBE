@@ -395,6 +395,60 @@ func TestFinalityDoesNotDrainBeforeSourceFinalize(t *testing.T) {
 	assertSummary(1000, 0)
 }
 
+func TestDeriveLiveTerminalRequiresShardAgreementForFailure(t *testing.T) {
+	classification := map[string]bool{"tx-1": false}
+	statuses := []map[string]any{
+		{"shard_id": "s0", "execution_failed_logical_tx_ids": []any{}, "admission_rejected_logical_tx_ids": []any{"tx-1"}},
+		{"shard_id": "s0", "execution_failed_logical_tx_ids": []any{}, "admission_rejected_logical_tx_ids": []any{}},
+	}
+	terminal, counts, err := deriveLiveTerminalWithExpected(classification, statuses, false, map[string]int{"s0": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal["tx-1"] || counts["terminal"] != 0 || counts["incomplete"] != 1 {
+		t.Fatalf("single-replica failure became globally terminal: terminal=%v counts=%v", terminal, counts)
+	}
+	statuses[1]["admission_rejected_logical_tx_ids"] = []any{"tx-1"}
+	terminal, counts, err = deriveLiveTerminalWithExpected(classification, statuses, false, map[string]int{"s0": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal["tx-1"] || counts["terminal"] != 1 || counts["incomplete"] != 0 {
+		t.Fatalf("replica-agreed deterministic failure did not become terminal: terminal=%v counts=%v", terminal, counts)
+	}
+}
+
+func TestDeriveLiveTerminalDurableCommitOverridesReplicaLocalFailure(t *testing.T) {
+	classification := map[string]bool{"tx-1": false}
+	statuses := []map[string]any{
+		{"shard_id": "s0", "execution_failed_logical_tx_ids": []any{}, "admission_rejected_logical_tx_ids": []any{"tx-1"}},
+		{"shard_id": "s0", "durable_committed_logical_tx_ids": []any{"tx-1"}, "execution_failed_logical_tx_ids": []any{}, "admission_rejected_logical_tx_ids": []any{}},
+	}
+	terminal, counts, err := deriveLiveTerminalWithExpected(classification, statuses, false, map[string]int{"s0": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal["tx-1"] || counts["terminal"] != 1 || counts["incomplete"] != 0 {
+		t.Fatalf("durable commit did not authoritatively close transaction: terminal=%v counts=%v", terminal, counts)
+	}
+}
+
+func TestDeriveLiveTerminalExecutionFailureIsAuthoritativeForIntraShard(t *testing.T) {
+	classification := map[string]bool{"tx-1": false}
+	statuses := []map[string]any{{
+		"shard_id":                          "s0",
+		"execution_failed_logical_tx_ids":   []any{"tx-1"},
+		"admission_rejected_logical_tx_ids": []any{},
+	}}
+	terminal, counts, err := deriveLiveTerminalWithExpected(classification, statuses, false, map[string]int{"s0": 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal["tx-1"] || counts["terminal"] != 1 || counts["incomplete"] != 0 {
+		t.Fatalf("committed-block execution failure did not close intra-shard transaction: terminal=%v counts=%v", terminal, counts)
+	}
+}
+
 func TestDeriveLiveTerminalUsesSubmittedClassification(t *testing.T) {
 	classification := map[string]bool{"intra": false, "cross": true}
 	statuses := []map[string]any{
@@ -584,8 +638,163 @@ func TestFinalityCountsDurableCommitIndependentlyOfTerminalStageOrder(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary["intra_shard_committed_unique_count"] != 1 || summary["intra_shard_terminal_unique_count"] != 1 || summary["terminal_unique_tx_count"] != 1 {
+	if summary["intra_shard_committed_unique_count"] != 1 || summary["intra_shard_terminal_unique_count"] != 1 || summary["terminal_unique_tx_count"] != 1 || summary["finalized_unique_logical_tx_count"] != 1 {
 		t.Fatalf("same-timestamp stages caused metric drift: %#v", summary)
+	}
+}
+
+func TestFinalityDurableCommitOverridesEarlierReplicaFailure(t *testing.T) {
+	root := t.TempDir()
+	client := filepath.Join(root, "client")
+	n0 := filepath.Join(root, "nodes", "n0")
+	n1 := filepath.Join(root, "nodes", "n1")
+	for _, dir := range []string{client, n0, n1} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := "bsx-future-nonce-regression"
+	writeRows(filepath.Join(client, "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, [][]string{{"100", id, "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""}})
+	header := []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success", "error"}
+	writeRows(filepath.Join(client, "client_lifecycle.csv"), header, [][]string{{"100", id, id, "submitted", "mbe-client", "s0", "", "", "0", "true", ""}})
+	writeRows(filepath.Join(n0, "transaction_lifecycle.csv"), header, [][]string{{"500", id, id, "durable_committed", "n0", "s0", "", "", "10", "true", ""}})
+	writeRows(filepath.Join(n1, "transaction_lifecycle.csv"), header, [][]string{
+		{"120", id, id, "failed", "n1", "s0", "", "", "0", "false", "future_nonce_not_supported"},
+		{"501", id, id, "durable_committed", "n1", "s0", "", "", "10", "true", ""},
+	})
+	writeDrainStatus(t, root, 500)
+	summary, err := deriveFinalityArtifacts(root, []v5.NodePlan{{NodeID: "n0", ShardID: "s0", DataDir: n0}, {NodeID: "n1", ShardID: "s0", DataDir: n1}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary["intra_shard_committed_unique_count"] != 1 || summary["terminal_unique_tx_count"] != 1 || summary["finalized_unique_logical_tx_count"] != 1 || summary["incomplete_unique_tx_count"] != 0 {
+		t.Fatalf("authoritative durable commit accounting is wrong: %#v", summary)
+	}
+	file, err := os.Open(filepath.Join(root, "transaction_finality.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(file).ReadAll()
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[1][3] != "durable_committed" || rows[1][4] != "true" || rows[1][6] != "400" {
+		t.Fatalf("earlier replica failure overrode durable commit: %#v", rows)
+	}
+}
+
+func TestFinalityDurableCommitPreservesUnsuccessfulBusinessOutcome(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "committed-unsuccessful"
+	writeRows(filepath.Join(root, "client", "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, [][]string{{"100", id, "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""}})
+	header := []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success", "error"}
+	writeRows(filepath.Join(root, "client", "client_lifecycle.csv"), header, [][]string{
+		{"100", id, id, "submitted", "mbe-client", "s0", "", "", "0", "true", ""},
+		{"300", id, id, "durable_committed", "n0", "s0", "", "", "1", "false", "business_failure"},
+	})
+	writeDrainStatus(t, root, 300)
+	summary, err := deriveFinalityArtifacts(root, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary["intra_shard_committed_unique_count"] != 1 || summary["terminal_unique_tx_count"] != 1 || summary["finalized_unique_logical_tx_count"] != 0 {
+		t.Fatalf("authoritative commit incorrectly promoted unsuccessful business outcome: %#v", summary)
+	}
+}
+
+func TestFinalityFailureRemainsTerminalWithoutAuthoritativeOutcome(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "failed-only"
+	writeRows(filepath.Join(root, "client", "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, [][]string{{"100", id, "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""}})
+	header := []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success", "error"}
+	writeRows(filepath.Join(root, "client", "client_lifecycle.csv"), header, [][]string{
+		{"100", id, id, "submitted", "mbe-client", "s0", "", "", "0", "true", ""},
+		{"200", id, id, "failed", "n0", "s0", "", "", "1", "false", "execution_failed"},
+	})
+	writeDrainStatus(t, root, 200)
+	summary, err := deriveFinalityArtifacts(root, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary["terminal_unique_tx_count"] != 1 || summary["finalized_unique_logical_tx_count"] != 0 || summary["incomplete_unique_tx_count"] != 0 {
+		t.Fatalf("failed-only lifecycle did not remain terminal failure: %#v", summary)
+	}
+}
+
+func TestFinalityReplicaLocalAdmissionRejectionRequiresShardAgreement(t *testing.T) {
+	root := t.TempDir()
+	client := filepath.Join(root, "client")
+	n0 := filepath.Join(root, "nodes", "n0")
+	n1 := filepath.Join(root, "nodes", "n1")
+	for _, dir := range []string{client, n0, n1} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id := "admission-only"
+	writeRows(filepath.Join(client, "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, [][]string{{"100", id, "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""}})
+	header := []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success", "error"}
+	writeRows(filepath.Join(client, "client_lifecycle.csv"), header, [][]string{{"100", id, id, "submitted", "mbe-client", "s0", "", "", "0", "true", ""}})
+	writeRows(filepath.Join(n0, "transaction_lifecycle.csv"), header, [][]string{{"120", id, id, "failed", "n0", "s0", "", "", "0", "false", "future_nonce_not_supported"}})
+	writeRows(filepath.Join(n1, "transaction_lifecycle.csv"), header, nil)
+	writeDrainStatus(t, root, 200)
+	summary, err := deriveFinalityArtifacts(root, []v5.NodePlan{{NodeID: "n0", ShardID: "s0", DataDir: n0}, {NodeID: "n1", ShardID: "s0", DataDir: n1}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary["terminal_unique_tx_count"] != 0 || summary["incomplete_unique_tx_count"] != 1 {
+		t.Fatalf("single-replica admission rejection became final terminal: %#v", summary)
+	}
+
+	writeRows(filepath.Join(n1, "transaction_lifecycle.csv"), header, [][]string{{"121", id, id, "failed", "n1", "s0", "", "", "0", "false", "future_nonce_not_supported"}})
+	summary, err = deriveFinalityArtifacts(root, []v5.NodePlan{{NodeID: "n0", ShardID: "s0", DataDir: n0}, {NodeID: "n1", ShardID: "s0", DataDir: n1}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary["terminal_unique_tx_count"] != 1 || summary["finalized_unique_logical_tx_count"] != 0 || summary["incomplete_unique_tx_count"] != 0 {
+		t.Fatalf("shard-wide admission rejection did not become failure fallback: %#v", summary)
+	}
+}
+
+func TestFinalityExecutionFailureOverridesEarlierAdmissionRejection(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "client"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	id := "admission-then-execution-failure"
+	writeRows(filepath.Join(root, "client", "client_submission_log.csv"), []string{"timestamp", "tx_id", "sender", "ingress_node", "shard_id", "workload_path", "is_cross_shard", "source_shard", "target_shard", "submitted", "latency_ms", "error"}, [][]string{{"100", id, "sender", "n0", "s0", "", "false", "s0", "", "true", "1", ""}})
+	header := []string{"timestamp_ms", "tx_id", "logical_tx_id", "stage", "node_id", "shard_id", "source_shard", "target_shard", "block_height", "success", "error"}
+	writeRows(filepath.Join(root, "client", "client_lifecycle.csv"), header, [][]string{
+		{"100", id, id, "submitted", "mbe-client", "s0", "", "", "0", "true", ""},
+		{"120", id, id, "failed", "n1", "s0", "", "", "0", "false", "future_nonce_not_supported"},
+		{"500", id, id, "failed", "n0", "s0", "", "", "9", "false", "execution_failed"},
+	})
+	writeDrainStatus(t, root, 500)
+	summary, err := deriveFinalityArtifacts(root, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary["terminal_unique_tx_count"] != 1 || summary["finalized_unique_logical_tx_count"] != 0 {
+		t.Fatalf("execution failure terminal accounting is wrong: %#v", summary)
+	}
+	file, err := os.Open(filepath.Join(root, "transaction_finality.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := csv.NewReader(file).ReadAll()
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[1][3] != "failed" || rows[1][4] != "false" || rows[1][6] != "400" {
+		t.Fatalf("earlier admission rejection overrode committed-block execution failure: %#v", rows)
 	}
 }
 

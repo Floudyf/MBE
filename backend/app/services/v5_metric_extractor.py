@@ -136,6 +136,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     p95 = finality.get("p95_finality_ms")
     p99 = finality.get("p99_finality_ms")
     metrics: dict[str, Any] = {
+        "finality_semantics_version": finality.get("finality_semantics_version"),
         "finalized_tx_count": finality.get("finalized_unique_logical_tx_count"),
         "submitted_unique_tx_count": submitted,
         "terminal_unique_tx_count": terminal,
@@ -327,6 +328,17 @@ def _apply_workload_replay_metrics(metrics: dict[str, Any], run_dir: Path) -> No
             return completion.get(name)
         return default
 
+    variant_parameters = replay.get("variant_parameters") if isinstance(replay.get("variant_parameters"), dict) else {}
+    audit = replay.get("audit_metadata") if isinstance(replay.get("audit_metadata"), dict) else {}
+    target_account_write_theta = audit.get("target_account_write_theta")
+    if target_account_write_theta is None:
+        target_account_write_theta = variant_parameters.get("target_theta")
+    measured_account_touch_theta = audit.get("measured_account_touch_theta")
+    if measured_account_touch_theta is None:
+        measured_account_touch_theta = audit.get("measured_account_access_theta")
+    if measured_account_touch_theta is None:
+        measured_account_touch_theta = audit.get("measured_access_theta")
+
     metrics.update({
         "replay_mode": first("replay_mode"),
         "target_submission_tps": first("target_submission_tps"),
@@ -335,6 +347,11 @@ def _apply_workload_replay_metrics(metrics: dict[str, Any], run_dir: Path) -> No
         "pacing_schedule": first("pacing_schedule"),
         "pacing_late_release_count": first("pacing_late_release_count", 0),
         "pacing_max_schedule_lag_ms": first("pacing_max_schedule_lag_ms", 0),
+        "target_account_write_theta": target_account_write_theta,
+        "measured_account_write_theta": audit.get("measured_account_write_theta"),
+        "measured_account_touch_theta": measured_account_touch_theta,
+        "measured_account_access_theta": audit.get("measured_account_access_theta"),
+        "theta_axis": audit.get("theta_axis"),
     })
     for name in ("workload_replay_summary.json", "client_submission_complete.json"):
         if (run_dir / name).is_file() and name not in metrics["source_artifacts"]:

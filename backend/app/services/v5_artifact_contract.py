@@ -129,6 +129,8 @@ def classify_artifact(name: str) -> tuple[str, str, str, str]:
         return "research_observability", "successful_node_receive_completion_window", "v5_observability_metrics", "mbe_v5_network_observability_v1"
     if base == "observability_collection_error.json":
         return "audit_log", "observer_failure_open", "v5_real_cluster_runner", "mbe_v5_observability_error_v1"
+    if base == "artifact_storage_summary.json":
+        return "storage_metadata", "post_measurement_storage", "v5_artifact_storage", "mbe_v5_artifact_storage_v1"
     if name.startswith("aggregate/"):
         return "aggregate_metric", "cluster_aggregate", "v5_metric_aggregator", "mbe_v5_aggregate_metric_v1"
     if name.startswith("node_") or name.startswith("nodes/"):

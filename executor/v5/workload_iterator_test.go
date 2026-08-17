@@ -120,6 +120,7 @@ func TestCanonicalTraceIteratorPreservesDirectAccessListV3(t *testing.T) {
 	plan.SourceFileSHA256 = "physical-file-hash"
 	plan.SelectionMode = "validated_prefix"
 	plan.VariantParameters = map[string]any{"access_profile": "balanced", "target_theta": 0.8}
+	plan.AuditMetadata = map[string]any{"target_account_write_theta": 0.8, "measured_account_write_theta": 0.79, "measured_account_access_theta": 0.78, "theta_axis": "account_write"}
 	iter, err := NewCanonicalTraceIterator(plan, 2, dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +160,9 @@ func TestCanonicalTraceIteratorPreservesDirectAccessListV3(t *testing.T) {
 	summary := iter.Summary()
 	if summary.SourceFileSHA256 != "physical-file-hash" || summary.SelectionMode != "validated_prefix" || fmt.Sprint(summary.VariantParameters["access_profile"]) != "balanced" {
 		t.Fatalf("universal dataset identity was not preserved in replay summary: %#v", summary)
+	}
+	if summary.AuditMetadata["target_account_write_theta"] != 0.8 || summary.AuditMetadata["theta_axis"] != "account_write" {
+		t.Fatalf("dataset audit metadata was not preserved in replay summary: %#v", summary.AuditMetadata)
 	}
 }
 

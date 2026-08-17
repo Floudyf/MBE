@@ -1425,6 +1425,19 @@ export type V5FormalRunGroup = {
   method_names?: string[];
   method_ids?: string[];
   failed_child_runs?: number | null;
+  blocked_child_runs?: number | null;
+  cancelled_child_runs?: number | null;
+  timed_out_child_runs?: number | null;
+  interrupted_child_runs?: number | null;
+  not_started_child_runs?: number | null;
+  worker_heartbeat_at?: string | null;
+  active_child_run_id?: string | null;
+  active_child_started_at?: string | null;
+  interrupted_at?: string | null;
+  interrupted_reason?: string | null;
+  resume_requested_count?: number | null;
+  resume_attempt?: number | null;
+  execution_policy?: Record<string, unknown>;
   performance_comparison_valid?: boolean;
   direct_cross_semantic_performance_comparison_valid?: boolean;
   within_semantic_cohort_state_equivalence_valid?: boolean | null;
@@ -1443,6 +1456,13 @@ export type V5FormalRunGroup = {
   is_test?: boolean;
 };
 export type V5FormalRunGroupDetail = { group: V5FormalRunGroup; children: V5FormalChildRun[] };
+export type V5FormalResumeMode = "resume_unfinished" | "retry_failed";
+export type V5FormalResumeCandidate = {
+  child_run_id: string; mode: V5FormalResumeMode; status: string; execution_status?: string | null; attempt: number; method_config_id?: string; method_name?: string; seed?: number; repeat_index: number; scan_variable?: string; scan_value?: string; target_theta?: number | null; target_alpha?: number | null; estimated_transactions: number; estimated_processes: number; error?: string;
+};
+export type V5FormalResumeCandidates = {
+  schema_version: string; run_group_id: string; group_status: string; worker_active: boolean; selection_allowed: boolean; resume_unfinished_count: number; retry_failed_count: number; candidate_count: number; candidates: V5FormalResumeCandidate[];
+};
 export type V5FormalArtifactCatalogEntry = {
   name: string;
   size_bytes: number;
@@ -1454,6 +1474,18 @@ export type V5FormalArtifactCatalogEntry = {
   download_url?: string;
 };
 export type V5FormalArtifactCatalog = { run_group_id: string; status: "ready" | "pending"; bundle_ready: boolean; bundle_size_bytes: number; file_count: number; files: V5FormalArtifactCatalogEntry[] };
+export type V5ArtifactStorageChild = {
+  child_run_id: string; run_id?: string; method_id?: string; method_name?: string; seed?: number; repeat_index?: number; child_status?: string; formal_eligibility?: boolean;
+  storage_state: string; original_file_count?: number; original_logical_bytes?: number; online_physical_bytes?: number | null; current_effective_bytes?: number | null; saved_bytes?: number | null; saving_ratio?: number | null;
+  ntfs_compression_succeeded?: boolean | null; ntfs_compression_error?: string; archive_format?: string | null; archive_bytes?: number | null; archive_sha256?: string | null; archive_verified?: boolean | null; archived_file_count?: number | null; raw_deleted_after_verification?: boolean | null; archive_download_url?: string | null; formal_eligibility_affected?: boolean;
+};
+export type V5ArtifactStorageJob = {
+  schema_version?: string; job_id?: string; action?: "archive" | string; status?: "queued" | "running" | "interrupted" | "completed" | "completed_with_errors" | "failed" | string; phase?: string; delete_raw?: boolean; compression_level?: number; total_children?: number; processed_children?: number; archived_children?: number; error_count?: number; skipped_count?: number; created_at?: string; started_at?: string; heartbeat_at?: string; finished_at?: string; interrupted_at?: string; resumed_from_job_id?: string | null; archive_engine_preference?: string; archive_engine?: string; native_tar_executable?: string; native_tar_error?: string; current_child_run_id?: string | null; current_run_id?: string | null; current_method_id?: string | null; current_method_name?: string | null; current_repeat_index?: number | null; current_theta?: number | null; current_alpha?: number | null; source_file_count?: number; processed_file_count?: number; source_logical_bytes?: number; processed_source_bytes?: number; processed_tar_bytes?: number; archive_bytes_written?: number; archive_bytes?: number; verified_file_count?: number; released_file_count?: number; raw_deleted_after_verification?: boolean; fatal_error?: string; recent_errors?: Array<{ child_run_id?: string; error: string }>; recent_skipped?: Array<{ child_run_id?: string; reason: string }>; formal_eligibility_affected?: boolean;
+};
+export type V5ArtifactStorageGroup = {
+  schema_version: string; run_group_id: string; group_status: string; operation_ready: boolean; child_count: number; run_dir_child_count?: number; unavailable_child_count?: number; managed_child_count: number; ntfs_compressed_child_count: number; archived_child_count: number; cold_archive_child_count: number; archive_online_child_count: number; restorable_child_count: number; restored_child_count: number; known_effective_child_count?: number; unmeasured_effective_child_count?: number;
+  original_logical_bytes: number; known_original_logical_bytes?: number; current_effective_bytes: number | null; current_known_effective_bytes?: number; archive_bytes: number; saved_bytes: number | null; saving_ratio: number | null; known_saved_bytes?: number; known_saving_ratio?: number | null; artifact_storage_job?: V5ArtifactStorageJob | null; children: V5ArtifactStorageChild[]; formal_eligibility_affected: boolean; operation?: string; operation_errors?: Array<{ child_run_id?: string; error: string }>; operation_skipped?: Array<{ child_run_id?: string; reason: string }>; delete_raw_requested?: boolean; compression_level?: number;
+};
 export type V5FormalRunGroupSummary = { run_group_id: string; status: string; plan_name: string; execution_backend: string; runtime_truth: string; created_at?: string; updated_at?: string; finished_at?: string | null; total_child_runs: number; completed_child_runs: number; failed_child_runs: number; suite_names: string[]; method_names: string[]; method_ids: string[]; aggregate?: V5FormalAggregate; source_label: "user" | "e2e" | "script"; tags: string[]; is_test: boolean };
 export type V5FormalRunGroupSummaryPage = { items: V5FormalRunGroupSummary[]; total: number; next_cursor: string | null };
 export type V5CleanupReport = {
@@ -1604,6 +1636,18 @@ export async function cancelV5FormalRunGroup(groupId: string): Promise<V5FormalR
   return request<V5FormalRunGroupSummary>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/cancel`, { method: "POST" });
 }
 
+export async function resumeV5FormalRunGroup(groupId: string, includeFailed = false, includeTimedOut = false): Promise<V5FormalRunGroupSummary> {
+  return request<V5FormalRunGroupSummary>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/resume-unfinished?include_failed=${String(includeFailed)}&include_timed_out=${String(includeTimedOut)}`, { method: "POST" });
+}
+
+export async function fetchV5FormalResumeCandidates(groupId: string): Promise<V5FormalResumeCandidates> {
+  return request<V5FormalResumeCandidates>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/resume-candidates`);
+}
+
+export async function resumeSelectedV5FormalChildren(groupId: string, mode: V5FormalResumeMode, childRunIds: string[]): Promise<V5FormalRunGroupSummary> {
+  return request<V5FormalRunGroupSummary>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/resume-selected`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, child_run_ids: childRunIds }) });
+}
+
 export async function listV5FormalRunGroups(): Promise<V5FormalRunGroup[]> {
   return request<V5FormalRunGroup[]>("/api/v5/formal/run-groups");
 }
@@ -1628,6 +1672,22 @@ export async function fetchV5FormalGroupAnalysis(groupId: string): Promise<V5For
 
 export async function fetchV5FormalArtifactCatalog(groupId: string): Promise<V5FormalArtifactCatalog> {
   return request<V5FormalArtifactCatalog>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/artifacts`);
+}
+
+export async function fetchV5ArtifactStorage(groupId: string): Promise<V5ArtifactStorageGroup> {
+  return request<V5ArtifactStorageGroup>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/storage`);
+}
+
+export async function compactV5ArtifactStorage(groupId: string): Promise<V5ArtifactStorageGroup> {
+  return request<V5ArtifactStorageGroup>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/storage/compact`, { method: "POST" });
+}
+
+export async function archiveV5ArtifactStorage(groupId: string, deleteRaw = true, compressionLevel = 3): Promise<V5ArtifactStorageGroup> {
+  return request<V5ArtifactStorageGroup>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/storage/archive`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ delete_raw: deleteRaw, compression_level: compressionLevel }) });
+}
+
+export async function restoreV5ArtifactStorage(groupId: string): Promise<V5ArtifactStorageGroup> {
+  return request<V5ArtifactStorageGroup>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/storage/restore`, { method: "POST" });
 }
 
 export function v5FormalBundleURL(groupId: string): string {

@@ -890,6 +890,7 @@ func (r *NodeRuntime) handlePBFTCheckpoint(_ context.Context, msg p2p.MessageEnv
 	if err := r.verifyPBFTCheckpointAuthentication(checkpoint); err != nil {
 		return fmt.Errorf("pbft checkpoint authentication: %w", err)
 	}
+	r.noteCatchupTarget(checkpoint.Height)
 	stable, _, _, err := r.pbftState().AcceptCheckpoint(checkpoint)
 	if err != nil {
 		return err
@@ -982,6 +983,9 @@ func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, request
 	if requester == "" || !r.pbftState().IsValidator(requester) || request.ShardID != r.node.ShardID || request.FromHeight == 0 || request.ToHeight < request.FromHeight {
 		return fmt.Errorf("invalid certified catch-up request")
 	}
+	if request.ToHeight-request.FromHeight+1 > certifiedCatchupBatchSize {
+		return fmt.Errorf("certified catch-up request exceeds batch limit")
+	}
 	r.mu.Lock()
 	if r.catchupResponsesInFlight >= maxConcurrentCatchupResponses {
 		r.incrementRuntimeMetricLocked("pbft_catchup_response_busy_count")
@@ -999,6 +1003,27 @@ func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, request
 	if request.FromHeight > committedHeight {
 		return nil
 	}
+
+	// Read only the requested durable height range. The storage layer builds a
+	// lightweight height->offset index once and extends it only across newly
+	// appended JSONL bytes, so a 1,000+ block Groundhog recovery does not
+	// repeatedly parse and restore the entire 400-760 MB durable block log.
+	toHeight := request.ToHeight
+	if committedHeight < toHeight {
+		toHeight = committedHeight
+	}
+	committedBlocks, err := r.store.ReadCommittedRange(request.FromHeight, toHeight)
+	if err != nil {
+		return err
+	}
+	blocksByHeight := make(map[uint64]realblock.Block, len(committedBlocks))
+	for _, block := range committedBlocks {
+		blocksByHeight[block.Height] = block
+	}
+	r.mu.Lock()
+	r.incrementRuntimeMetricLocked("pbft_catchup_indexed_range_read_count")
+	r.mu.Unlock()
+
 	sent := 0
 	missingHeight := uint64(0)
 	for height := request.FromHeight; height <= request.ToHeight && height <= committedHeight; height++ {
@@ -1007,10 +1032,7 @@ func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, request
 			missingHeight = height
 			break
 		}
-		block, ok, err := r.store.ReadCommittedAtHeight(height)
-		if err != nil {
-			return err
-		}
+		block, ok := blocksByHeight[height]
 		if !ok || block.BlockHash != cert.BlockHash {
 			missingHeight = height
 			break
@@ -1020,6 +1042,14 @@ func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, request
 		}
 		sent++
 	}
+	if sent > 0 {
+		r.mu.Lock()
+		if r.runtimeMetricCounts == nil {
+			r.runtimeMetricCounts = map[string]int64{}
+		}
+		r.runtimeMetricCounts["pbft_catchup_blocks_served_count"] += int64(sent)
+		r.mu.Unlock()
+	}
 	if sent == 0 || missingHeight != 0 {
 		snapshot := r.pbftState().Snapshot()
 		hint := CatchupUnavailable{SourceNode: r.node.NodeID, RequestedFromHeight: func() uint64 {
@@ -1027,7 +1057,7 @@ func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, request
 				return missingHeight
 			}
 			return request.FromHeight
-		}(), CommittedHeight: committedHeight, StableCheckpointHeight: snapshot.StableCheckpointHeight, Reason: "commit_certificate_not_retained; checkpoint_state_transfer_required"}
+		}(), CommittedHeight: committedHeight, StableCheckpointHeight: snapshot.StableCheckpointHeight, Reason: "certified_catchup_proof_or_block_unavailable"}
 		envelope, err := p2p.NewEnvelope(catchupUnavailableMessage, r.node.NodeID, requester, r.node.ShardID, request.FromHeight, snapshot.View, request.FromHeight, hint)
 		if err != nil {
 			return err

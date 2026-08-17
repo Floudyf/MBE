@@ -411,7 +411,7 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			}
 			heights[shard][fmt.Sprint(status["committed_height"])] = true
 		}
-		liveTerminal, _, err := deriveLiveTerminal(classification, statuses, statelessDirect)
+		liveTerminal, _, err := deriveLiveTerminalWithExpected(classification, statuses, statelessDirect, validatorCountByShard(plan.NodeConfigs))
 		if err != nil {
 			_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": []string{"terminal_accounting_missing"}, "phase": "FAILED", "reason": err.Error(), "submitted": submitted})
 			return err
@@ -798,8 +798,10 @@ func timestampValue(value any) int64 {
 
 type lifecycleRecord struct {
 	timestamp                               int64
+	blockHeight                             uint64
 	txID, logicalID, stage, nodeID, shardID string
 	success                                 bool
+	errorText                               string
 }
 
 func validateSubmissionClassification(classification map[string]bool, expected int) error {
@@ -939,21 +941,80 @@ func loadSubmissionClassification(dataDir string, expected int) (map[string]bool
 }
 
 func deriveLiveTerminal(classification map[string]bool, statuses []map[string]any, statelessDirect bool) (map[string]bool, map[string]int, error) {
+	return deriveLiveTerminalWithExpected(classification, statuses, statelessDirect, nil)
+}
+
+func deriveLiveTerminalWithExpected(classification map[string]bool, statuses []map[string]any, statelessDirect bool, expectedValidatorsByShard map[string]int) (map[string]bool, map[string]int, error) {
 	if err := validateSubmissionClassification(classification, len(classification)); err != nil {
 		return nil, nil, err
 	}
 	terminal := map[string]bool{}
+	observedValidatorsByShard := map[string]int{}
+	admissionVotesByLogical := map[string]map[string]int{}
 	for _, status := range statuses {
+		shardID := strings.TrimSpace(fmt.Sprint(status["shard_id"]))
+		if shardID != "" && shardID != "<nil>" {
+			observedValidatorsByShard[shardID]++
+		}
 		for _, logicalID := range stringSlice(status["durable_committed_logical_tx_ids"]) {
 			if isCross, submitted := classification[logicalID]; submitted && (!isCross || statelessDirect) {
 				terminal[logicalID] = true
 			}
 		}
-		for _, key := range []string{"source_finalized_logical_tx_ids", "refunded_logical_tx_ids", "failed_logical_tx_ids"} {
+		for _, key := range []string{"source_finalized_logical_tx_ids", "refunded_logical_tx_ids"} {
 			for _, logicalID := range stringSlice(status[key]) {
 				if _, submitted := classification[logicalID]; submitted {
 					terminal[logicalID] = true
 				}
+			}
+		}
+
+		// Current runtimes expose committed-block execution failures separately
+		// from mempool/admission rejection.  An intra-shard execution failure is
+		// a deterministic terminal outcome; legacy cross-shard execution still
+		// waits for source-finalize/refund unless stateless-direct is in use.
+		_, hasExecutionField := status["execution_failed_logical_tx_ids"]
+		_, hasAdmissionField := status["admission_rejected_logical_tx_ids"]
+		for _, logicalID := range stringSlice(status["execution_failed_logical_tx_ids"]) {
+			if isCross, submitted := classification[logicalID]; submitted && (!isCross || statelessDirect) {
+				terminal[logicalID] = true
+			}
+		}
+
+		// Admission rejection can be replica-local (the BSX θ=1.2 incident was
+		// exactly one validator observing future_nonce_not_supported before all
+		// replicas later durable-committed the transaction).  Keep it as a failure
+		// fallback only when every validator in the shard reports rejection.
+		admissionIDs := stringSlice(status["admission_rejected_logical_tx_ids"])
+		if !hasExecutionField && !hasAdmissionField {
+			// Compatibility for statuses written before the split: generic failed
+			// observations are treated conservatively as admission-style evidence.
+			admissionIDs = stringSlice(status["failed_logical_tx_ids"])
+		}
+		seenAdmission := map[string]bool{}
+		for _, logicalID := range admissionIDs {
+			if _, submitted := classification[logicalID]; !submitted || seenAdmission[logicalID] {
+				continue
+			}
+			seenAdmission[logicalID] = true
+			if admissionVotesByLogical[logicalID] == nil {
+				admissionVotesByLogical[logicalID] = map[string]int{}
+			}
+			admissionVotesByLogical[logicalID][shardID]++
+		}
+	}
+	for logicalID, byShard := range admissionVotesByLogical {
+		if terminal[logicalID] {
+			continue
+		}
+		for shardID, votes := range byShard {
+			expected := observedValidatorsByShard[shardID]
+			if configured := expectedValidatorsByShard[shardID]; configured > 0 {
+				expected = configured
+			}
+			if expected > 0 && votes >= expected {
+				terminal[logicalID] = true
+				break
 			}
 		}
 	}
@@ -965,6 +1026,15 @@ func deriveLiveTerminal(classification map[string]bool, statuses []map[string]an
 	}
 	counts := map[string]int{"submitted": len(classification), "terminal": len(terminal), "incomplete": len(classification) - len(terminal), "cross_submitted": crossSubmitted, "intra_submitted": len(classification) - crossSubmitted}
 	return terminal, counts, nil
+}
+func validatorCountByShard(nodes []v5.NodePlan) map[string]int {
+	out := map[string]int{}
+	for _, node := range nodes {
+		if node.ShardID != "" {
+			out[node.ShardID]++
+		}
+	}
+	return out
 }
 
 func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirect bool) (map[string]any, error) {
@@ -1008,7 +1078,15 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 				return nil, err
 			}
 			success, _ := strconv.ParseBool(row[9])
-			all = append(all, lifecycleRecord{timestamp: stamp, txID: row[1], logicalID: row[2], stage: row[3], nodeID: row[4], shardID: row[5], success: success})
+			blockHeight := uint64(0)
+			if len(row) > 8 && strings.TrimSpace(row[8]) != "" {
+				blockHeight, _ = strconv.ParseUint(strings.TrimSpace(row[8]), 10, 64)
+			}
+			errorText := ""
+			if len(row) > 10 {
+				errorText = row[10]
+			}
+			all = append(all, lifecycleRecord{timestamp: stamp, blockHeight: blockHeight, txID: row[1], logicalID: row[2], stage: row[3], nodeID: row[4], shardID: row[5], success: success, errorText: errorText})
 			rawRows = append(rawRows, row)
 		}
 	}
@@ -1020,16 +1098,18 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 		return nil, err
 	}
 	type aggregate struct {
-		submitted        int64
-		cross            bool
-		durableCommitted bool
-		targetCommit     bool
-		crossFinal       bool
-		crossRefund      bool
-		failed           bool
-		terminal         int64
-		terminalStage    string
-		success          bool
+		submitted                int64
+		cross                    bool
+		durableCommitted         bool
+		targetCommit             bool
+		terminal                 int64
+		terminalStage            string
+		success                  bool
+		executionFailureTerminal int64
+		executionFailureStage    string
+		admissionFailureTerminal int64
+		admissionFailureStage    string
+		admissionFailureVoters   map[string]map[string]bool
 	}
 	byLogical := map[string]*aggregate{}
 	for logicalID, isCross := range classification {
@@ -1041,7 +1121,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 			entry = &aggregate{cross: classification[event.logicalID]}
 			byLogical[event.logicalID] = entry
 		}
-		if event.stage == "submitted" && (entry.submitted == 0 || event.timestamp < entry.submitted) {
+		if strings.EqualFold(event.stage, "submitted") && (entry.submitted == 0 || event.timestamp < entry.submitted) {
 			entry.submitted = event.timestamp
 		}
 		stage := strings.ToLower(event.stage)
@@ -1051,53 +1131,103 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 		if stage == "targetcommit" {
 			entry.targetCommit = true
 		}
-		if stage == "sourcefinalize" {
-			entry.crossFinal = true
-		}
-		if stage == "refund" {
-			entry.crossRefund = true
-		}
 		if stage == "failed" {
-			entry.failed = true
+			if event.blockHeight > 0 {
+				if entry.executionFailureTerminal == 0 || event.timestamp < entry.executionFailureTerminal {
+					entry.executionFailureTerminal = event.timestamp
+					entry.executionFailureStage = event.stage
+				}
+			} else {
+				if entry.admissionFailureTerminal == 0 || event.timestamp < entry.admissionFailureTerminal {
+					entry.admissionFailureTerminal = event.timestamp
+					entry.admissionFailureStage = event.stage
+				}
+				if entry.admissionFailureVoters == nil {
+					entry.admissionFailureVoters = map[string]map[string]bool{}
+				}
+				if entry.admissionFailureVoters[event.shardID] == nil {
+					entry.admissionFailureVoters[event.shardID] = map[string]bool{}
+				}
+				voter := strings.TrimSpace(event.nodeID)
+				if voter == "" {
+					voter = "<unknown>"
+				}
+				entry.admissionFailureVoters[event.shardID][voter] = true
+			}
 		}
-	}
-	for _, event := range all {
-		entry := byLogical[event.logicalID]
-		stage := strings.ToLower(event.stage)
-		terminal := stage == "durable_committed" || stage == "sourcefinalize" || stage == "refund" || stage == "failed"
-		if !terminal {
-			continue
+		authoritative := false
+		if entry.cross {
+			if statelessDirect {
+				authoritative = stage == "durable_committed"
+			} else {
+				authoritative = stage == "sourcefinalize" || stage == "refund"
+			}
+		} else {
+			authoritative = stage == "durable_committed"
 		}
-		if stage == "durable_committed" && entry.cross && !statelessDirect {
-			continue
-		}
-		if entry.terminal == 0 || event.timestamp < entry.terminal {
+		if authoritative && (entry.terminal == 0 || event.timestamp < entry.terminal) {
 			entry.terminal = event.timestamp
 			entry.terminalStage = event.stage
-			entry.success = event.success && event.stage != "failed"
+			entry.success = event.success
+		}
+	}
+	// Failure is a fallback only when no protocol-authoritative outcome exists.
+	// Prefer a committed-block execution failure over admission rejection; the
+	// latter can be replica-local and can precede a later durable commit.
+	expectedValidatorsByShard := validatorCountByShard(nodes)
+	for _, entry := range byLogical {
+		if entry.terminal != 0 {
+			continue
+		}
+		if entry.executionFailureTerminal > 0 {
+			entry.terminal = entry.executionFailureTerminal
+			entry.terminalStage = entry.executionFailureStage
+			entry.success = false
+			continue
+		}
+		if entry.admissionFailureTerminal > 0 {
+			admissionTerminal := len(expectedValidatorsByShard) == 0
+			for shardID, voters := range entry.admissionFailureVoters {
+				expected := expectedValidatorsByShard[shardID]
+				if expected > 0 && len(voters) >= expected {
+					admissionTerminal = true
+					break
+				}
+			}
+			if admissionTerminal {
+				entry.terminal = entry.admissionFailureTerminal
+				entry.terminalStage = entry.admissionFailureStage
+				entry.success = false
+			}
 		}
 	}
 	intraCommitted, intraTerminal, crossRequested, crossTarget, crossFinalized, crossRefunded, crossFailed := 0, 0, 0, 0, 0, 0, 0
 	for _, entry := range byLogical {
+		stage := strings.ToLower(entry.terminalStage)
 		if entry.cross {
 			crossRequested++
 			if entry.targetCommit {
 				crossTarget++
 			}
-			if entry.crossFinal || (statelessDirect && entry.durableCommitted) {
+			switch stage {
+			case "durable_committed":
+				if statelessDirect {
+					crossFinalized++
+				}
+			case "sourcefinalize":
 				crossFinalized++
-			}
-			if entry.crossRefund {
+			case "refund":
 				crossRefunded++
-			}
-			if entry.failed {
+			case "failed":
 				crossFailed++
 			}
-		} else if entry.durableCommitted {
-			intraTerminal++
-			intraCommitted++
-		} else if entry.terminal > 0 {
-			intraTerminal++
+		} else {
+			if entry.durableCommitted {
+				intraCommitted++
+			}
+			if entry.terminal > 0 {
+				intraTerminal++
+			}
 		}
 	}
 	rows := [][]string{}
@@ -1157,7 +1287,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 		return nil, err
 	}
 	terminalUnique := intraTerminal + crossFinalized + crossRefunded + crossFailed
-	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle_and_drain_completion", "cross_shard_execution_mode": map[bool]string{true: "stateless_direct_execution", false: "legacy_lock_relay_finalize"}[statelessDirect], "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "intra_shard_terminal_unique_count": intraTerminal, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": timing.EndToEndTPS, "logical_window_start_ms": timing.LogicalWindowStartMS, "logical_window_end_ms": timing.LogicalWindowEndMS, "logical_finality_duration_ms": timing.LogicalFinalityDurationMS, "logical_finality_tps": timing.LogicalFinalityTPS, "drain_started_at_ms": timing.DrainStartedAtMS, "drain_finished_at_ms": timing.DrainFinishedAtMS, "drain_duration_ms": timing.DrainDurationMS, "system_delta_drain_block_count": timing.SystemDeltaDrainBlockCount, "completion_window_start_ms": timing.CompletionWindowStartMS, "completion_window_end_ms": timing.CompletionWindowEndMS, "completion_duration_ms": timing.CompletionDurationMS, "end_to_end_tps": timing.EndToEndTPS, "tail_completion_overhead_ms": timing.TailCompletionOverheadMS, "tcp_send_latency_excluded": true}
+	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle_and_drain_completion", "finality_semantics_version": "authoritative_protocol_outcome_with_classified_failure_v2", "cross_shard_execution_mode": map[bool]string{true: "stateless_direct_execution", false: "legacy_lock_relay_finalize"}[statelessDirect], "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "intra_shard_terminal_unique_count": intraTerminal, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": timing.EndToEndTPS, "logical_window_start_ms": timing.LogicalWindowStartMS, "logical_window_end_ms": timing.LogicalWindowEndMS, "logical_finality_duration_ms": timing.LogicalFinalityDurationMS, "logical_finality_tps": timing.LogicalFinalityTPS, "drain_started_at_ms": timing.DrainStartedAtMS, "drain_finished_at_ms": timing.DrainFinishedAtMS, "drain_duration_ms": timing.DrainDurationMS, "system_delta_drain_block_count": timing.SystemDeltaDrainBlockCount, "completion_window_start_ms": timing.CompletionWindowStartMS, "completion_window_end_ms": timing.CompletionWindowEndMS, "completion_duration_ms": timing.CompletionDurationMS, "end_to_end_tps": timing.EndToEndTPS, "tail_completion_overhead_ms": timing.TailCompletionOverheadMS, "tcp_send_latency_excluded": true}
 	return summary, v5.SaveJSON(filepath.Join(dataDir, "finality_summary.json"), summary)
 }
 

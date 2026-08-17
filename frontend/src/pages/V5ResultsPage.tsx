@@ -4,9 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import {
   cleanupV5LegacySavedConfigs,
   cleanupV5OrphanRealClusterDirs,
+  archiveV5ArtifactStorage,
+  compactV5ArtifactStorage,
   deleteFailedV5FormalRunGroups,
   deleteSelectedV5FormalRunGroups,
   deleteV5FormalRunGroup,
+  fetchV5ArtifactStorage,
   fetchV5FormalArtifactCatalog,
   fetchV5FormalChildRun,
   fetchV5FormalGroupAnalysis,
@@ -14,8 +17,10 @@ import {
   fetchV5FormalRunGroup,
   listV5FormalRunGroupSummaries,
   rebuildV5FormalBundle,
+  restoreV5ArtifactStorage,
   scanV5LegacySavedConfigs,
   scanV5OrphanRealClusterDirs,
+  type V5ArtifactStorageGroup,
   type V5FormalAggregate,
   type V5FormalAnalysis,
   type V5FormalArtifactCatalog,
@@ -59,6 +64,24 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   const [historyOpen, setHistoryOpen] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [bundleBusy, setBundleBusy] = useState(false);
+  const [storage, setStorage] = useState<V5ArtifactStorageGroup | null>(null);
+  const [storageBusyAction, setStorageBusyAction] = useState<"compact" | "archive" | "restore" | "">("");
+  useEffect(() => {
+    const job = storage?.artifact_storage_job;
+    if (!selectedGroupId || !job || !["queued", "running"].includes(String(job.status ?? ""))) return;
+    let disposed = false;
+    const refreshStorageJob = async () => {
+      try {
+        const next = await fetchV5ArtifactStorage(selectedGroupId);
+        if (!disposed) setStorage(next);
+      } catch {
+        // The normal page-level refresh/error path remains authoritative.
+      }
+    };
+    const timer = window.setInterval(() => { void refreshStorageJob(); }, 2000);
+    void refreshStorageJob();
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [selectedGroupId, storage?.artifact_storage_job?.job_id, storage?.artifact_storage_job?.status]);
   const [cleanupReport, setCleanupReport] = useState<V5CleanupReport | null>(null);
   const [orphanScan, setOrphanScan] = useState<V5OrphanRealClusterScan | null>(null);
   const [legacyScan, setLegacyScan] = useState<V5LegacySavedConfigScan | null>(null);
@@ -166,15 +189,17 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       setAggregate(null);
       setCatalog(null);
       setAnalysis(null);
+      setStorage(null);
       clearChildSelection();
     }
     setBusy(true);
     try {
-      const [groupDetail, groupAggregate, artifactCatalog, groupAnalysis] = await Promise.all([
+      const [groupDetail, groupAggregate, artifactCatalog, groupAnalysis, storageStatus] = await Promise.all([
         fetchV5FormalRunGroup(groupId),
         fetchV5FormalGroupMetrics(groupId),
         fetchV5FormalArtifactCatalog(groupId),
         fetchV5FormalGroupAnalysis(groupId),
+        fetchV5ArtifactStorage(groupId).catch(() => null),
       ]);
       if (revision !== groupRevision.current) return false;
       detailRef.current = groupDetail;
@@ -182,6 +207,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       setAggregate(groupAggregate);
       setCatalog(artifactCatalog);
       setAnalysis(groupAnalysis);
+      setStorage(storageStatus);
       window.localStorage.setItem(recentGroupKey, groupId);
       setGroups((current) => current.map((item) => item.run_group_id === groupId ? {
         ...item,
@@ -258,6 +284,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     setAggregate(null);
     setCatalog(null);
     setAnalysis(null);
+    setStorage(null);
     clearChildSelection();
   }
 
@@ -394,6 +421,55 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     }
   }
 
+  async function compactStorage() {
+    if (!selectedGroupId) return;
+    setStorageBusyAction("compact");
+    try {
+      const result = await compactV5ArtifactStorage(selectedGroupId);
+      setStorage(result);
+      setNotice(result.operation_errors?.length ? `透明压缩完成，${result.operation_errors.length} 个子实验需要检查。` : "现有 Raw 的 NTFS 透明压缩处理完成。");
+    } catch (caught) {
+      setError(`透明压缩失败：${message(caught)}`);
+    } finally {
+      setStorageBusyAction("");
+    }
+  }
+
+  async function archiveStorage() {
+    if (!selectedGroupId) return;
+    const interrupted = storage?.artifact_storage_job?.status === "interrupted";
+    const prompt = interrupted
+      ? "继续上次中断的冷归档任务？已经完整校验并释放 Raw 的 child 会自动跳过。"
+      : "启动后台冷归档？Windows 将优先使用系统 tar.exe 流式打包，Zstandard level 3 使用全部逻辑 CPU 线程压缩；逐文件校验通过后才删除 Raw。页面切换或刷新不会丢失任务状态。";
+    if (!window.confirm(prompt)) return;
+    setStorageBusyAction("archive");
+    try {
+      const result = await archiveV5ArtifactStorage(selectedGroupId, true, 3);
+      setStorage(result);
+      const job = result.artifact_storage_job;
+      setNotice(job?.status === "interrupted" ? "冷归档任务仍处于中断状态，请再次点击继续。" : `后台冷归档已启动${job?.total_children != null ? `：${job.total_children} 个终态 child` : ""}。可以切换页面，返回后会从后端恢复进度。`);
+    } catch (caught) {
+      setError(`启动冷归档失败：${message(caught)}`);
+    } finally {
+      setStorageBusyAction("");
+    }
+  }
+
+  async function restoreStorage() {
+    if (!selectedGroupId) return;
+    if (!window.confirm("恢复当前 RunGroup 的冷归档 Raw？归档文件会继续保留，因此恢复后磁盘占用会上升。")) return;
+    setStorageBusyAction("restore");
+    try {
+      const result = await restoreV5ArtifactStorage(selectedGroupId);
+      setStorage(result);
+      setNotice(result.operation_errors?.length ? `恢复完成，${result.operation_errors.length} 个子实验需要检查。` : "原始产物恢复完成，Windows 下已重新尝试 NTFS 透明压缩。");
+    } catch (caught) {
+      setError(`恢复原始产物失败：${message(caught)}`);
+    } finally {
+      setStorageBusyAction("");
+    }
+  }
+
   const selectedGroup = detail?.group;
   const selectedSelectorGroup = selectorGroups.find((group) => group.run_group_id === selectedGroupId);
   const selectedMethodNames = selectedSelectorGroup?.method_names
@@ -447,6 +523,11 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       onSelectChild={(childId) => { if (detail) void loadChild(detail.group.run_group_id, childId); }}
       onRebuild={() => void rebuildBundle()}
       rebuilding={bundleBusy}
+      storage={storage}
+      onCompactStorage={() => void compactStorage()}
+      onArchiveStorage={() => void archiveStorage()}
+      onRestoreStorage={() => void restoreStorage()}
+      storageBusyAction={storageBusyAction}
     />}
     <details className="v5-legacy-results-details">
       <summary>高级 / 旧版完整详细视图</summary>
@@ -498,7 +579,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
           <td><span>{statusLabel(group.status)}</span><small>{group.status}</small></td>
           <td>{group.plan_name || "—"}</td>
           <td><span>{backendLabel(group.execution_backend)}</span><small>{group.execution_backend}</small></td>
-          <td>{group.updated_at || "—"}</td>
+          <td>{formatLocalTimestamp(group.updated_at)}</td>
           <td>{group.completed_child_runs}/{group.total_child_runs}</td>
           <td>{metric(group.failed_child_runs)}</td>
           <td>{group.suite_names.map((suite) => `${suiteLabel(suite)} (${suite})`).join(", ") || "—"}</td>
@@ -562,7 +643,10 @@ function ChildRow({ child, selected, onSelect }: { child: V5FormalChildRun; sele
 }
 
 function runGroupOptionLabel(group: V5FormalRunGroupSummary): string {
-  const time = group.updated_at ? group.updated_at.replace("T", " ").slice(5, 16) : "时间未知";
+  // Anchor the selector to creation time. A resumed historical RunGroup may
+  // update hours later, and using updated_at made it look like a newly-created
+  // experiment. Dates are rendered in the browser's local timezone.
+  const time = formatLocalTimestamp(group.created_at || group.updated_at, true);
   const suffix = group.run_group_id.split("_").pop() ?? group.run_group_id;
   const suite = group.suite_names.length ? suiteLabel(group.suite_names[0]) : (group.plan_name || "实验");
   const methods = group.method_names.length
@@ -587,6 +671,16 @@ function compactMethodName(name: string): string {
   if (lower.includes("conflict graph") || /(^|\W)cg(\W|$)/i.test(name)) return "CG";
   if (lower.includes("serial")) return "Serial";
   return name;
+}
+
+function formatLocalTimestamp(value: string | undefined | null, compact = false): string {
+  if (!value) return compact ? "时间未知" : "—";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  if (compact) {
+    return parsed.toLocaleString(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+  return parsed.toLocaleString();
 }
 
 function metric(value: unknown): string { return value === undefined || value === null ? "—" : String(value); }

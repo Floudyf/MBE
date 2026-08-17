@@ -211,6 +211,8 @@ func (p batchSIBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 		"batch_si_plan_payload_bytes":              metrics.PlanPayloadBytes,
 		"batch_si_worker_pool_setup_ms":            metrics.WorkerPoolSetupMS,
 		"batch_si_worker_pool_wait_ms":             metrics.WorkerPoolWaitMS,
+		"batch_si_worker_pool_create_count":        metrics.WorkerPoolCreateCount,
+		"batch_si_batch_barrier_count":             metrics.BatchBarrierCount,
 		"batch_si_execution_plan_preverified":      input.ExecutionPlanVerified,
 		"batch_si_executor_full_verify_count":      boolToInt(!input.ExecutionPlanVerified),
 		"batch_si_executor_full_verify_skip_count": boolToInt(input.ExecutionPlanVerified),

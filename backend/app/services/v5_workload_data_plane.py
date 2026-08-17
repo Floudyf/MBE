@@ -272,12 +272,65 @@ def _match_variant_value(left: Any, right: Any) -> bool:
     return str(left) == str(right)
 
 
+def _axie_prefix_audit_entry(*, requested_tx_count: int, parameters: dict[str, Any]) -> dict[str, Any]:
+    """Return the builder-side prefix audit for the controlled Axie family.
+
+    The installed dataset manifest intentionally carries only the stable selection
+    contract.  The builder's prefix_variant_index.json carries measured statistics
+    for the exact selected prefix.  Keep the manifest authoritative for file
+    selection, then merge only audit/measurement fields from the index.
+    """
+    audit_path = (
+        ROOT
+        / "dataset"
+        / "Axie_Infinity"
+        / "axie_controlled_account_skew_v1"
+        / "prefix_variant_index.json"
+    )
+    if not audit_path.is_file():
+        return {}
+    try:
+        payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    for candidate in payload.get("variants") or []:
+        if int(candidate.get("tx_count") or candidate.get("prefix_record_count") or 0) != requested_tx_count:
+            continue
+        if all(_match_variant_value(candidate.get(name), value) for name, value in parameters.items()):
+            return dict(candidate)
+    return {}
+
+
 def _resolve_family_entry(manifest: dict[str, Any], *, requested_tx_count: int, parameters: dict[str, Any]) -> dict[str, Any]:
     for entry in manifest.get("prefix_variants") or []:
         if int(entry.get("tx_count") or entry.get("prefix_record_count") or 0) != requested_tx_count:
             continue
-        if all(_match_variant_value(entry.get(name), value) for name, value in parameters.items()):
-            return dict(entry)
+        if not all(_match_variant_value(entry.get(name), value) for name, value in parameters.items()):
+            continue
+        resolved = dict(entry)
+        if str(manifest.get("adapter_id") or "") == "axie_controlled_rmw_v1":
+            audit = _axie_prefix_audit_entry(
+                requested_tx_count=requested_tx_count,
+                parameters=parameters,
+            )
+            # Selection/file identity remains manifest-controlled.  Merge only
+            # builder audit fields so measured theta values cannot redirect the
+            # workload source selected by the reviewed manifest.
+            for key in (
+                "measured_account_write_theta",
+                "measured_account_access_theta",
+                "measured_read_ratio",
+                "measured_write_ratio",
+                "account_write_hhi",
+                "account_write_top1_share",
+                "account_write_top10_share",
+                "account_write_top100_share",
+                "unique_state_keys_per_tx",
+                "theta_axis",
+            ):
+                if resolved.get(key) is None and audit.get(key) is not None:
+                    resolved[key] = audit[key]
+        return resolved
     raise WorkloadDataError("requested dataset variant/prefix is not present in the manifest")
 
 
@@ -454,7 +507,22 @@ def preview_workload(request: WorkloadPreviewRequest, *, shards: int = 4) -> Wor
         audit = resolved.get("prefix_audit")
         if audit:
             selected_window_preview["validated_prefix_audit"] = audit
-            selected_window_preview["measured_access_theta"] = audit.get("measured_access_theta")
+            target_account_write_theta = audit.get("target_account_write_theta")
+            if target_account_write_theta is None:
+                target_account_write_theta = parameters.get("target_theta")
+            measured_account_write_theta = audit.get("measured_account_write_theta")
+            measured_account_touch_theta = audit.get("measured_account_touch_theta")
+            if measured_account_touch_theta is None:
+                measured_account_touch_theta = audit.get("measured_account_access_theta")
+            if measured_account_touch_theta is None:
+                measured_account_touch_theta = audit.get("measured_access_theta")
+            selected_window_preview["target_account_write_theta"] = target_account_write_theta
+            selected_window_preview["measured_account_write_theta"] = measured_account_write_theta
+            selected_window_preview["measured_account_touch_theta"] = measured_account_touch_theta
+            # Keep the legacy preview key populated for old UI consumers, but its
+            # meaning is explicitly the account-touch statistic rather than the
+            # controlled account-write theta axis.
+            selected_window_preview["measured_access_theta"] = measured_account_touch_theta
             selected_window_preview["measured_read_ratio"] = audit.get("measured_read_ratio")
             selected_window_preview["read_modify_write_topology_preserved"] = audit.get("read_modify_write_topology_preserved")
         operation_counts = dict(selected_window_preview.get("operation_counts") or manifest.get("operation_counts") or {})

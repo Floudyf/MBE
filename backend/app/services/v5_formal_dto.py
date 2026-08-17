@@ -10,6 +10,9 @@ from pydantic import BaseModel, ConfigDict
 _SUMMARY_KEYS = (
     "run_group_id", "status", "execution_backend", "runtime_truth", "created_at", "updated_at", "finished_at",
     "total_child_runs", "completed_child_runs", "failed_child_runs", "blocked_child_runs", "cancelled_child_runs",
+    "timed_out_child_runs", "interrupted_child_runs", "not_started_child_runs",
+    "worker_heartbeat_at", "active_child_run_id", "active_child_started_at", "interrupted_at", "interrupted_reason", "stale_supervisor_reap",
+    "resume_requested_count", "resume_attempt", "resumed_at", "execution_policy",
 )
 _GROUP_TRUTH_KEYS = (
     "performance_comparison_valid",
@@ -98,6 +101,10 @@ def group_summary(group: dict, *, children: list[dict] | None = None) -> dict:
         body["failed_child_runs"] = sum(item.get("status") == "failed" for item in children)
         body["blocked_child_runs"] = sum(item.get("status") == "blocked" for item in children)
         body["cancelled_child_runs"] = sum(item.get("status") == "cancelled" for item in children)
+        body["timed_out_child_runs"] = sum(item.get("status") == "timed_out" for item in children)
+        body["interrupted_child_runs"] = sum(item.get("status") == "interrupted" for item in children)
+        materialized = {str(item.get("child_run_id") or "") for item in children if item.get("child_run_id")}
+        body["not_started_child_runs"] = max(0, int(group.get("total_child_runs") or 0) - len(materialized))
     body.update(
         {
             "plan_name": plan.get("name", ""),

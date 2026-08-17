@@ -89,7 +89,7 @@ function summarizeSkew(value: unknown): string {
   if (!record) return valueText(value);
   const flattened = flattenRecord(record, "", 0);
   if (!flattened.length) return "无偏斜统计";
-  const priority = ["target_theta", "realized_theta", "mle_theta", "theta", "target_alpha", "realized_alpha", "alpha", "skew_axis", "axis", "access_profile", "identity_count", "active_key_count", "unique_key_count", "top1_share", "top_1_share"];
+  const priority = ["target_account_write_theta", "measured_account_write_theta", "measured_account_touch_theta", "target_theta", "realized_theta", "mle_theta", "theta", "target_alpha", "realized_alpha", "alpha", "skew_axis", "axis", "access_profile", "identity_count", "active_key_count", "unique_key_count", "top1_share", "top_1_share"];
   flattened.sort((a, b) => rankKey(a[0], priority) - rankKey(b[0], priority) || a[0].localeCompare(b[0]));
   const selected = flattened.slice(0, 6);
   return selected.map(([key, item]) => `${friendlyKey(key)}: ${compactScalar(item)}`).join(" · ") + (flattened.length > selected.length ? ` · 另 ${flattened.length - selected.length} 项` : "");
@@ -124,7 +124,11 @@ function compactScalar(value: unknown): string {
 function friendlyKey(path: string): string {
   const key = path.split(".").pop() ?? path;
   const labels: Record<string, string> = {
-    target_theta: "目标 θ",
+    target_account_write_theta: "目标账户写 θ",
+    measured_account_write_theta: "实测账户写 θ",
+    measured_account_touch_theta: "实测账户触点 θ",
+    measured_account_access_theta: "实测账户触点 θ",
+    target_theta: "构造目标 θ",
     realized_theta: "实现 θ",
     mle_theta: "MLE θ",
     theta: "θ",
