@@ -24,9 +24,12 @@ test("shows persisted V5 results, runtime evidence, and real artifacts", async (
 
   await page.getByRole("button", { name: "查看结果与产物" }).click();
   await expect(page.getByTestId("v5-results-page")).toBeVisible();
+  const legacy = page.locator("details.v5-legacy-results-details");
+  await legacy.locator("summary").first().click();
+  await expect(legacy).toHaveAttribute("open", "");
   await expect(page.getByTestId("v5-group-rungroup").locator("dd")).toHaveText(groupId);
-  await expect(page.getByTestId("v5-group-status").locator("dd")).toHaveText("completed");
-  await expect(page.getByTestId("v5-group-backend").locator("dd")).toHaveText("real_cluster");
+  await expect(page.getByTestId("v5-group-status").locator("dd")).toHaveText("已完成");
+  await expect(page.getByTestId("v5-group-backend").locator("dd")).toHaveText("真实集群");
   await expect(page.getByTestId("v5-group-children").locator("dd")).toHaveText("1/1");
   await expect(page.getByTestId("v5-run-group-list").locator("tr", { hasText: groupId })).toHaveCount(0);
 
@@ -42,8 +45,8 @@ test("shows persisted V5 results, runtime evidence, and real artifacts", async (
   await expect(page.getByTestId("v5-metric-intra-committed").locator("dd")).toHaveText("30");
   await expect(page.getByTestId("v5-metric-cross-requested").locator("dd")).toHaveText("10");
   await expect(page.getByTestId("v5-metric-cross-finalized").locator("dd")).toHaveText("10");
-  await expect(page.getByTestId("v5-metric-state-root-consistent").locator("dd")).toHaveText("true");
-  await expect(page.getByTestId("v5-metric-no-fallback").locator("dd")).toHaveText("true");
+  await expect(page.getByTestId("v5-metric-state-root-consistent").locator("dd")).toHaveText("是");
+  await expect(page.getByTestId("v5-metric-no-fallback").locator("dd")).toHaveText("是");
   await expect(page.getByTestId("v5-metric-orphan-processes").locator("dd")).toHaveText("0");
 
   const groupCatalog = page.getByTestId("v5-group-artifact-catalog");

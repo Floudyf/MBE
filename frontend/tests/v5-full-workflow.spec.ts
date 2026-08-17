@@ -60,8 +60,12 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
     const groupId = await page.locator("code").filter({ hasText: "v5grp_" }).innerText();
 
     await page.getByRole("button", { name: "查看结果与产物" }).click();
+    await expect(page.getByTestId("v5-results-page")).toBeVisible();
+    const legacy = page.locator("details.v5-legacy-results-details");
+    await legacy.locator("summary").first().click();
+    await expect(legacy).toHaveAttribute("open", "");
     await expect(page.getByTestId("v5-group-rungroup").locator("dd")).toHaveText(groupId);
-    await expect(page.getByTestId("v5-group-backend").locator("dd")).toHaveText("real_cluster");
+    await expect(page.getByTestId("v5-group-backend").locator("dd")).toHaveText("真实集群");
     await expect(page.getByTestId("v5-group-children").locator("dd")).toHaveText("1/1");
     const child = page.getByTestId("v5-child-table").locator("tbody tr").first().locator("td");
     await expect(child.nth(2)).toContainText("Block-STM"); await expect(child.nth(7)).toHaveText("已完成");
@@ -69,8 +73,8 @@ test("saves a V5 method profile and executes the complete Formal workflow", asyn
     await expect(page.getByTestId("v5-metric-method-config-id").locator("dd")).toHaveText("hash_block_stm");
     await expect(page.getByTestId("v5-metric-terminal").locator("dd")).toHaveText("40"); await expect(page.getByTestId("v5-metric-incomplete").locator("dd")).toHaveText("0");
     await expect(page.getByTestId("v5-metric-cross-requested").locator("dd")).toHaveText("10"); await expect(page.getByTestId("v5-metric-cross-finalized").locator("dd")).toHaveText("10");
-    await expect(page.getByTestId("v5-metric-orphan-processes").locator("dd")).toHaveText("0"); await expect(page.getByTestId("v5-metric-no-fallback").locator("dd")).toHaveText("true"); await expect(page.getByTestId("v5-metric-state-root-consistent").locator("dd")).toHaveText("true");
-    await expect(page.getByTestId("v5-bundle-ready").locator("dd")).toHaveText("true");
+    await expect(page.getByTestId("v5-metric-orphan-processes").locator("dd")).toHaveText("0"); await expect(page.getByTestId("v5-metric-no-fallback").locator("dd")).toHaveText("是"); await expect(page.getByTestId("v5-metric-state-root-consistent").locator("dd")).toHaveText("是");
+    await expect(page.getByTestId("v5-bundle-ready").locator("dd")).toHaveText("是");
 
     await navigation.getByRole("button", { name: "高级功能", exact: true }).click();
     const advanced = page.getByTestId("advanced-navigation");

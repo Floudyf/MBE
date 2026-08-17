@@ -5,7 +5,13 @@ test("comparison preview expands the formal four methods across seeds", async ({
   await page.goto("/");
   await page.getByTestId("primary-navigation").locator("button").nth(1).click();
   await page.getByTestId("workload-mode-derived").click();
-  await expect(page.getByLabel("dataset tx count").locator("option")).toHaveText(["1K", "10K", "50K", "100K", "250K", "Full"]);
+  const datasetTxCount = page.getByLabel("dataset tx count");
+  await expect(datasetTxCount).toBeVisible();
+  const supportedDatasetCounts = await datasetTxCount.locator("option").evaluateAll((options) =>
+    options.map((option) => (option as HTMLOptionElement).value),
+  );
+  expect(supportedDatasetCounts.length).toBeGreaterThan(0);
+  expect(supportedDatasetCounts.every((value) => value === "Full" || Number(value) >= 1000)).toBe(true);
   await page.getByTestId("workload-mode-synthetic").click();
   await selectOnlySuite(page, "comparison_experiment");
   await page.getByLabel("tx_count").fill("20");

@@ -80,7 +80,11 @@ async function openResults(page: Page) {
     return route.fulfill({ status: 404, json: { detail: "unexpected V5 formal endpoint" } });
   });
   await page.goto("/");
-  await page.getByTestId("primary-navigation").getByRole("button").nth(2).click();
+  await page.getByTestId("primary-navigation").getByRole("button", { name: "③ 结果与产物", exact: true }).click();
+  await expect(page.getByTestId("v5-results-page")).toBeVisible();
+  const legacy = page.locator("details.v5-legacy-results-details");
+  await legacy.locator("summary").first().click();
+  await expect(legacy).toHaveAttribute("open", "");
   await expect(page.getByTestId("v5-analysis-panel")).toBeVisible();
 }
 
@@ -113,7 +117,7 @@ test("toggles latency chart between P99 and P95 without changing transaction dat
 test("offers CSV PNG SVG and PDF downloads for each formal chart", async ({ page }) => {
   await openResults(page);
 
-  for (const label of ["Download CSV", "Download SVG", "Download PNG", "Download PDF"]) {
+  for (const label of ["下载 CSV", "下载 SVG", "下载 PNG", "下载 PDF"]) {
     await expect(page.getByTestId("v5-paper-chart-end_to_end_tps").getByRole("button", { name: label })).toBeVisible();
     await expect(page.getByTestId("v5-paper-chart-p99_finality_ms").getByRole("button", { name: label })).toBeVisible();
   }
@@ -123,10 +127,10 @@ test("downloads formal chart data and image artifacts", async ({ page }) => {
   await openResults(page);
   const chart = page.getByTestId("v5-paper-chart-end_to_end_tps");
   const expectations = [
-    { label: "Download CSV", filename: "end_to_end_tps.csv", marker: "method_id,method_name,sample_status" },
-    { label: "Download SVG", filename: "end_to_end_tps.svg", marker: "<svg" },
-    { label: "Download PNG", filename: "end_to_end_tps.png", marker: "\u0089PNG" },
-    { label: "Download PDF", filename: "end_to_end_tps.pdf", marker: "%PDF" },
+    { label: "下载 CSV", filename: "end_to_end_tps.csv", marker: "method_id,method_name,sample_status" },
+    { label: "下载 SVG", filename: "end_to_end_tps.svg", marker: "<svg" },
+    { label: "下载 PNG", filename: "end_to_end_tps.png", marker: "\u0089PNG" },
+    { label: "下载 PDF", filename: "end_to_end_tps.pdf", marker: "%PDF" },
   ];
 
   for (const item of expectations) {
@@ -145,23 +149,23 @@ test("groups formal artifact catalog by V5.2 truth roles and opens only core ana
   await openResults(page);
 
   await expect(page.getByTestId("v5-artifact-group-core-analysis")).toHaveAttribute("open", "");
-  await expect(page.getByTestId("v5-artifact-group-core-analysis")).toContainText("paper_analysis");
-  await expect(page.getByTestId("v5-artifact-group-core-analysis")).toContainText("Download");
-  await expect(page.getByTestId("v5-artifact-group-core-analysis").getByRole("link", { name: "Download" }).first()).toHaveAttribute("href", /\/artifacts\/paper_figure_data\.csv$/);
-  await expect(page.getByTestId("v5-artifact-group-core-analysis")).not.toContainText("workload_evidence");
+  await expect(page.getByTestId("v5-artifact-group-core-analysis")).toContainText("论文分析");
+  await expect(page.getByTestId("v5-artifact-group-core-analysis")).toContainText("下载");
+  await expect(page.getByTestId("v5-artifact-group-core-analysis").getByRole("link", { name: "下载" }).first()).toHaveAttribute("href", /\/artifacts\/paper_figure_data\.csv$/);
+  await expect(page.getByTestId("v5-artifact-group-core-analysis")).not.toContainText("工作负载证据");
   await expect(page.getByTestId("v5-artifact-group-aggregate-metrics")).not.toHaveAttribute("open", "");
   await expect(page.getByTestId("v5-artifact-group-client-workload-evidence")).not.toHaveAttribute("open", "");
 
   await page.getByTestId("v5-artifact-group-aggregate-metrics").locator("summary").click();
-  await expect(page.getByTestId("v5-artifact-group-aggregate-metrics")).toContainText("aggregate_metric");
+  await expect(page.getByTestId("v5-artifact-group-aggregate-metrics")).toContainText("聚合指标");
   await expect(page.getByTestId("v5-artifact-group-aggregate-metrics")).toContainText("node_physical_and_replica_deduplicated");
   await page.getByTestId("v5-artifact-group-node-mechanism-evidence").locator("summary").click();
-  await expect(page.getByTestId("v5-artifact-group-node-mechanism-evidence")).toContainText("node_mechanism_evidence");
+  await expect(page.getByTestId("v5-artifact-group-node-mechanism-evidence")).toContainText("节点级机制证据");
   await page.getByTestId("v5-artifact-group-client-workload-evidence").locator("summary").click();
-  await expect(page.getByTestId("v5-artifact-group-client-workload-evidence")).toContainText("workload_evidence");
+  await expect(page.getByTestId("v5-artifact-group-client-workload-evidence")).toContainText("工作负载证据");
   await expect(page.getByTestId("v5-artifact-group-client-workload-evidence")).toContainText("canonical_workload_selection");
   await page.getByTestId("v5-artifact-group-logs-audit").locator("summary").click();
-  await expect(page.getByTestId("v5-artifact-group-logs-audit")).toContainText("audit_log");
+  await expect(page.getByTestId("v5-artifact-group-logs-audit")).toContainText("审计日志");
 });
 
 
@@ -235,7 +239,11 @@ async function openV2SevenMethodResults(page: Page) {
     return route.fulfill({ status: 404, json: { detail: "unexpected V5 formal endpoint" } });
   });
   await page.goto("/");
-  await page.getByTestId("primary-navigation").getByRole("button").nth(2).click();
+  await page.getByTestId("primary-navigation").getByRole("button", { name: "③ 结果与产物", exact: true }).click();
+  await expect(page.getByTestId("v5-results-page")).toBeVisible();
+  const legacy = page.locator("details.v5-legacy-results-details");
+  await legacy.locator("summary").first().click();
+  await expect(legacy).toHaveAttribute("open", "");
   await expect(page.getByTestId("v5-analysis-panel")).toBeVisible();
 }
 
@@ -309,7 +317,11 @@ async function openBatchSIComparisonResults(page: Page) {
     return route.fulfill({ status: 404, json: { detail: "unexpected V5 formal endpoint" } });
   });
   await page.goto("/");
-  await page.getByTestId("primary-navigation").getByRole("button").nth(2).click();
+  await page.getByTestId("primary-navigation").getByRole("button", { name: "③ 结果与产物", exact: true }).click();
+  await expect(page.getByTestId("v5-results-page")).toBeVisible();
+  const legacy = page.locator("details.v5-legacy-results-details");
+  await legacy.locator("summary").first().click();
+  await expect(legacy).toHaveAttribute("open", "");
   await expect(page.getByTestId("v5-analysis-panel")).toBeVisible();
 }
 

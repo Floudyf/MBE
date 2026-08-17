@@ -218,12 +218,12 @@ test("results page exposes legacy saved-config scan and dry-run cleanup evidence
   });
 
   await page.goto("/");
-  await page.getByTestId("primary-navigation").getByRole("button").nth(2).click();
+  await page.getByTestId("primary-navigation").getByRole("button", { name: "③ 结果与产物", exact: true }).click();
   const history = page.getByTestId("v5-run-group-list");
   await history.locator("summary").click();
   await history.getByRole("button", { name: "扫描旧方案" }).click();
   await expect(page.getByTestId("v5-cleanup-evidence")).toContainText("v3cfg_legacy_formal_plan");
-  await history.getByRole("button", { name: "旧方案 dry-run" }).click();
+  await history.getByRole("button", { name: "旧方案清理预演" }).click();
   await expect(page.getByTestId("v5-cleanup-evidence")).toContainText("cleanup_report");
   await expect(page.getByTestId("v5-cleanup-evidence")).toContainText("cleanup_report.json");
 });
@@ -364,7 +364,11 @@ test("child detail exposes artifact contract missing evidence", async ({ page })
   });
 
   await page.goto("/");
-  await page.getByTestId("primary-navigation").getByRole("button").nth(2).click();
+  await page.getByTestId("primary-navigation").getByRole("button", { name: "③ 结果与产物", exact: true }).click();
+  await expect(page.getByTestId("v5-results-page")).toBeVisible();
+  const legacy = page.locator("details.v5-legacy-results-details");
+  await legacy.locator("summary").first().click();
+  await expect(legacy).toHaveAttribute("open", "");
   await expect(page.getByTestId("v5-artifact-contract-status").locator("dd")).toHaveText("incomplete");
   await expect(page.getByTestId("v5-artifact-contract-expected").locator("dd")).toHaveText("8");
   await expect(page.getByTestId("v5-artifact-contract-actual").locator("dd")).toHaveText("7");
@@ -383,7 +387,7 @@ test("child detail exposes artifact contract missing evidence", async ({ page })
   await expect(page.getByTestId("v5-metric-post-aggregation-physical-op-count").locator("dd")).toHaveText("5");
   await expect(page.getByTestId("v5-metric-physical-ops-saved-count").locator("dd")).toHaveText("2");
   await expect(page.getByTestId("v5-metric-logical-update-count-deprecated").locator("dd")).toHaveText("7");
-  await expect(page.getByTestId("v5-child-artifact-catalog")).toContainText("aggregate_metric");
+  await expect(page.getByTestId("v5-child-artifact-catalog")).toContainText("聚合指标");
   await expect(page.getByTestId("v5-child-artifact-catalog")).toContainText("node_physical_and_replica_deduplicated");
   await expect(page.getByTestId("v5-child-artifact-catalog")).toContainText("v5_metric_aggregator / mbe_remote_state_metrics_v2");
 });
