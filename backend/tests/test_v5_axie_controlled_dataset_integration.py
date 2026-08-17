@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.app.services import v5_metric_extractor
 from backend.app.services import v5_workload_data_plane as plane
 from backend.app.services.v5_workload_data_plane import WorkloadPreviewRequest
 from backend.app.services.workload_adapters.axie_controlled_rmw_v1 import (
@@ -129,6 +130,32 @@ def test_axie_controlled_manifest_resolves_profile_theta_prefix(
     expected.parent.mkdir(parents=True)
     expected.write_bytes(b"placeholder")
 
+    audit_index = (
+        tmp_path
+        / "dataset"
+        / "Axie_Infinity"
+        / "axie_controlled_account_skew_v1"
+        / "prefix_variant_index.json"
+    )
+    audit_index.parent.mkdir(parents=True, exist_ok=True)
+    audit_index.write_text(
+        json.dumps({
+            "schema_version": "axie_controlled_prefix_index_v1",
+            "variants": [{
+                "access_profile": "write_heavy",
+                "target_theta": 1.2,
+                "target_account_write_theta": 1.2,
+                "tx_count": 6000,
+                "measured_account_write_theta": 1.199935386998708,
+                "measured_account_access_theta": 1.199935386998708,
+                "measured_read_ratio": 0.2,
+                "measured_write_ratio": 0.8,
+                "theta_axis": "account_write",
+            }],
+        }) + "\n",
+        encoding="utf-8",
+    )
+
     request = WorkloadPreviewRequest(
         source_type="dataset",
         plugin_id="canonical_trace_replay",
@@ -154,6 +181,9 @@ def test_axie_controlled_manifest_resolves_profile_theta_prefix(
     assert audit["master_file_sha256"] == selected_manifest["source_sha256"]
     assert audit["read_modify_write_topology_preserved"] is True
     assert audit["target_account_write_theta"] == 1.2
+    assert audit["measured_account_write_theta"] == pytest.approx(1.199935386998708)
+    assert audit["measured_account_access_theta"] == pytest.approx(1.199935386998708)
+    assert audit["theta_axis"] == "account_write"
 
 
 def test_axie_controlled_dataset_summary_becomes_selectable_when_family_files_exist(
@@ -171,3 +201,25 @@ def test_axie_controlled_dataset_summary_becomes_selectable_when_family_files_ex
     assert summary.source_layout == "variant_file_family"
     assert summary.supported_tx_counts == list(range(1000, 10001, 1000))
     assert summary.variant_definitions[0]["parameters"][0]["name"] == "access_profile"
+
+
+def test_axie_theta_audit_metrics_keep_write_and_touch_axes_distinct(tmp_path: Path) -> None:
+    (tmp_path / "workload_replay_summary.json").write_text(
+        json.dumps({
+            "variant_parameters": {"access_profile": "balanced", "target_theta": 1.2},
+            "audit_metadata": {
+                "target_account_write_theta": 1.2,
+                "measured_account_write_theta": 1.154,
+                "measured_account_access_theta": 1.161,
+                "theta_axis": "account_write",
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    metrics = {"source_artifacts": []}
+    v5_metric_extractor._apply_workload_replay_metrics(metrics, tmp_path)
+    assert metrics["target_account_write_theta"] == 1.2
+    assert metrics["measured_account_write_theta"] == 1.154
+    assert metrics["measured_account_touch_theta"] == 1.161
+    assert metrics["measured_account_access_theta"] == 1.161
+    assert metrics["theta_axis"] == "account_write"

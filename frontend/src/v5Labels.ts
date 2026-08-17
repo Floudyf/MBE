@@ -11,7 +11,7 @@ export const categoryLabel = (value: string) => ({
 }[value] ?? value);
 
 export const roleLabel = (value: string) => ({ main: "完整方法", baseline: "基线方法", ablation: "消融方法", custom: "自定义方法" }[value] ?? value);
-export const statusLabel = (value: string) => ({ queued: "排队中", starting: "启动中", running: "运行中", completed: "已完成", completed_with_failures: "完成但存在失败", failed: "失败", cancelled: "已取消", blocked: "已阻止", runnable: "可运行" }[value] ?? value);
+export const statusLabel = (value: string) => ({ not_started: "未启动", queued: "排队中", starting: "启动中", running: "运行中", cancelling: "正在停止", interrupted: "运行中断", timed_out: "运行超时", completed: "已完成", completed_with_failures: "完成但存在失败", failed: "失败", cancelled: "已取消", blocked: "已阻止", blocked_resource_system_pressure: "系统资源不足", blocked_resource_disk_pressure: "磁盘空间不足", runnable: "可运行" }[value] ?? value);
 export const backendLabel = (value: string) => value === "real_cluster" ? "真实多进程集群" : value;
 export const truthLabel = (value: string) => value === "v5_real_cluster_candidate" ? "本地真实集群研究运行时" : value;
 export const booleanLabel = (value: unknown) => value === true ? "是" : value === false ? "否" : "—";

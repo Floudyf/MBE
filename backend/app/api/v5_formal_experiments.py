@@ -9,12 +9,12 @@ from backend.app.services.v5_formal_run_store import ROOT_DIR, group_dir
 
 from backend.app.models.v5_formal_experiment import V5FormalRunRequest
 from backend.app.services.v5_formal_run_store import children, create_group, read_child, read_group, write_group
-from backend.app.services.v5_formal_scheduler import finalize_cancelled, start, worker_active
+from backend.app.services.v5_formal_scheduler import DEFAULT_FORMAL_EXECUTION_POLICY, finalize_cancelled, list_resume_candidates, reconcile_stale_group, resume_selected, resume_unfinished, start, worker_active
 from backend.app.services.v5_formal_artifact_catalog import read_catalog, safe_artifact_name
 from backend.app.services.v5_formal_dto import V5FormalChildResponse, V5FormalRunGroupDetailResponse, child_detail as child_detail_dto, child_summary, group_detail, group_summary
 from backend.app.services.v5_formal_plan_validator import FormalPlanValidationError, validate_request
 from backend.app.services.v5_reproducibility_bundle import build as build_reproducibility_bundle
-from backend.app.services import v5_cleanup_service
+from backend.app.services import v5_cleanup_service, v5_formal_artifact_storage
 
 
 router = APIRouter(prefix="/api/v5/formal", tags=["v5"])
@@ -48,6 +48,10 @@ def create_run_group(payload: V5FormalRunRequest) -> dict:
             "failed_child_runs": 0,
             "blocked_child_runs": 0,
             "cancelled_child_runs": 0,
+            "timed_out_child_runs": 0,
+            "interrupted_child_runs": 0,
+            "not_started_child_runs": len(checked.rows),
+            "execution_policy": dict(DEFAULT_FORMAL_EXECUTION_POLICY),
             "max_concurrent_real_clusters": 1,
         }
     )
@@ -83,7 +87,8 @@ def list_run_group_summaries(
 @router.get("/run-groups/{group_id}", response_model=V5FormalRunGroupDetailResponse)
 def get_run_group(group_id: str) -> dict:
     try:
-        return group_detail(read_group(group_id), children(group_id))
+        group = reconcile_stale_group(group_id)
+        return group_detail(group, children(group_id))
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, "unknown formal run group") from exc
 
@@ -200,6 +205,62 @@ def group_artifacts(group_id: str) -> dict:
         raise HTTPException(404, "unknown formal run group") from exc
 
 
+@router.get("/run-groups/{group_id}/storage")
+def group_storage(group_id: str) -> dict:
+    try:
+        return v5_formal_artifact_storage.status(group_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+
+
+@router.post("/run-groups/{group_id}/storage/compact")
+def compact_group_storage(group_id: str) -> dict:
+    try:
+        return v5_formal_artifact_storage.compact(group_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    except v5_formal_artifact_storage.FormalArtifactStorageError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/run-groups/{group_id}/storage/archive")
+def archive_group_storage(group_id: str, payload: dict | None = None) -> dict:
+    payload = payload or {}
+    delete_raw = payload.get("delete_raw", True)
+    level = payload.get("compression_level", 3)
+    if not isinstance(delete_raw, bool):
+        raise HTTPException(422, "delete_raw must be boolean")
+    if isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 19:
+        raise HTTPException(422, "compression_level must be an integer between 1 and 19")
+    try:
+        return v5_formal_artifact_storage.start_archive_job(group_id, delete_raw=delete_raw, compression_level=level)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    except v5_formal_artifact_storage.FormalArtifactStorageError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/run-groups/{group_id}/storage/restore")
+def restore_group_storage(group_id: str) -> dict:
+    try:
+        return v5_formal_artifact_storage.restore(group_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    except v5_formal_artifact_storage.FormalArtifactStorageError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/run-groups/{group_id}/storage/children/{child_id}/archive")
+def download_child_cold_archive(group_id: str, child_id: str):
+    try:
+        path = v5_formal_artifact_storage.child_archive_path(group_id, child_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "cold archive not available") from exc
+    except v5_formal_artifact_storage.FormalArtifactStorageError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return FileResponse(path, filename=path.name, media_type="application/zstd")
+
+
 @router.get("/run-groups/{group_id}/bundle")
 def bundle(group_id: str):
     try: path = group_dir(group_id) / "artifacts.zip"
@@ -288,6 +349,50 @@ def cancel_run_group(group_id: str) -> dict:
     return _summary_for_group(group)
 
 
+@router.get("/run-groups/{group_id}/resume-candidates")
+def resume_candidates_run_group(group_id: str) -> dict:
+    try:
+        return list_resume_candidates(group_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/run-groups/{group_id}/resume-selected")
+def resume_selected_run_group(group_id: str, payload: dict) -> dict:
+    mode = str(payload.get("mode") or "")
+    raw_ids = payload.get("child_run_ids")
+    if not isinstance(raw_ids, list) or not all(isinstance(item, str) and item for item in raw_ids):
+        raise HTTPException(422, "child_run_ids must be a non-empty string list")
+    try:
+        group = resume_selected(group_id, raw_ids, mode=mode)
+        return _summary_for_group(group)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/run-groups/{group_id}/resume-unfinished")
+def resume_unfinished_run_group(
+    group_id: str,
+    include_failed: bool = Query(False),
+    include_timed_out: bool = Query(False),
+) -> dict:
+    try:
+        group = resume_unfinished(
+            group_id,
+            include_failed=include_failed,
+            include_timed_out=include_timed_out,
+        )
+        return _summary_for_group(group)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 @router.post("/run-groups/{group_id}/retry-failed")
 def retry_failed(group_id: str) -> dict:
     try: group = read_group(group_id)
@@ -303,7 +408,7 @@ def retry_failed(group_id: str) -> dict:
 def _groups() -> list[dict]:
     if not ROOT_DIR.is_dir():
         return []
-    return [read_group(path.name) for path in sorted(ROOT_DIR.glob("v5grp_*"), reverse=True) if (path / "run_group.json").is_file()]
+    return [reconcile_stale_group(path.name) for path in sorted(ROOT_DIR.glob("v5grp_*"), reverse=True) if (path / "run_group.json").is_file()]
 
 
 def _summary_for_group(group: dict) -> dict:
@@ -319,6 +424,10 @@ def ensure_persisted_child_counts(group: dict) -> dict:
     group["failed_child_runs"] = sum(item.get("status") == "failed" for item in items)
     group["blocked_child_runs"] = sum(item.get("status") == "blocked" for item in items)
     group["cancelled_child_runs"] = sum(item.get("status") == "cancelled" for item in items)
+    group["timed_out_child_runs"] = sum(item.get("status") == "timed_out" for item in items)
+    group["interrupted_child_runs"] = sum(item.get("status") == "interrupted" for item in items)
+    materialized = {str(item.get("child_run_id") or "") for item in items if item.get("child_run_id")}
+    group["not_started_child_runs"] = max(0, int(group.get("total_child_runs") or 0) - len(materialized))
     write_group(group)
     return group
 

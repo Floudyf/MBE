@@ -213,6 +213,8 @@ type BatchSIMetrics struct {
 	PlanPayloadBytes                     int    `json:"plan_payload_bytes"`
 	WorkerPoolSetupMS                    int64  `json:"worker_pool_setup_ms"`
 	WorkerPoolWaitMS                     int64  `json:"worker_pool_wait_ms"`
+	WorkerPoolCreateCount                int    `json:"worker_pool_create_count"`
+	BatchBarrierCount                    int    `json:"batch_barrier_count"`
 }
 
 type batchSITxDescriptor struct {
@@ -1350,6 +1352,15 @@ func (e *BatchSIExecutor) executeConsensusPlanWithCommitment(ctx context.Context
 	allReceipts := make([]Receipt, 0, len(b.TxList))
 	maximumObserved := 0
 	var snapshotDuration, executionDuration, materializationDuration time.Duration
+	workerCount := e.Config.WorkerCount
+	if e.Config.ExecutionMode == BatchSIExecutionSnapshotSerial {
+		workerCount = 1
+	}
+	poolSetupStarted := time.Now()
+	pool := newBatchSIBlockWorkerPool(ctx, e, workerCount)
+	e.workerPoolSetupDuration += time.Since(poolSetupStarted)
+	executionDuration += e.workerPoolSetupDuration
+	defer pool.Close()
 	for _, batch := range plan.Batches {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
@@ -1369,7 +1380,7 @@ func (e *BatchSIExecutor) executeConsensusPlanWithCommitment(ctx context.Context
 			transactions = append(transactions, item)
 		}
 		executionStarted := time.Now()
-		batchResults, observed, err := e.executeBatch(ctx, b, transactions, snapshot, blockIndex)
+		batchResults, observed, err := e.executeBatchWithPool(ctx, pool, b, transactions, snapshot, blockIndex)
 		executionDuration += time.Since(executionStarted)
 		if err != nil {
 			return Result{}, err
@@ -1470,6 +1481,8 @@ func (e *BatchSIExecutor) executeConsensusPlanWithCommitment(ctx context.Context
 		PlanPayloadBytes:                     e.planPayloadBytes,
 		WorkerPoolSetupMS:                    e.workerPoolSetupDuration.Milliseconds(),
 		WorkerPoolWaitMS:                     e.workerPoolWaitDuration.Milliseconds(),
+		WorkerPoolCreateCount:                1,
+		BatchBarrierCount:                    len(plan.Batches),
 	}
 	result.TransactionExecutionMS = e.Metrics.TransactionExecutionMS
 	result.DeterministicMaterializationMS = e.Metrics.DeterministicMaterializationMS
@@ -1483,78 +1496,152 @@ type batchSITxExecutionResult struct {
 	Delta   TxDelta
 }
 
-func (e *BatchSIExecutor) executeBatch(ctx context.Context, b block.Block, items []tx.SignedTransaction, snapshot map[string]string, blockIndex map[string]int) ([]batchSITxExecutionResult, int, error) {
+type batchSIBlockWorkerTask struct {
+	index         int
+	block         block.Block
+	item          tx.SignedTransaction
+	snapshot      map[string]string
+	originalIndex int
+	results       []batchSITxExecutionResult
+	done          *sync.WaitGroup
+	tracker       *batchSIParallelTracker
+	errMu         *sync.Mutex
+	firstErr      *error
+}
+
+type batchSIParallelTracker struct {
+	mu      sync.Mutex
+	active  int
+	maximum int
+}
+
+func (t *batchSIParallelTracker) enter() {
+	t.mu.Lock()
+	t.active++
+	if t.active > t.maximum {
+		t.maximum = t.active
+	}
+	t.mu.Unlock()
+}
+
+func (t *batchSIParallelTracker) leave() {
+	t.mu.Lock()
+	t.active--
+	t.mu.Unlock()
+}
+
+func (t *batchSIParallelTracker) max() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.maximum
+}
+
+type batchSIBlockWorkerPool struct {
+	ctx      context.Context
+	executor *BatchSIExecutor
+	jobs     chan batchSIBlockWorkerTask
+	wg       sync.WaitGroup
+}
+
+func newBatchSIBlockWorkerPool(ctx context.Context, executor *BatchSIExecutor, workerCount int) *batchSIBlockWorkerPool {
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	pool := &batchSIBlockWorkerPool{
+		ctx:      ctx,
+		executor: executor,
+		jobs:     make(chan batchSIBlockWorkerTask, workerCount),
+	}
+	for worker := 0; worker < workerCount; worker++ {
+		pool.wg.Add(1)
+		go func() {
+			defer pool.wg.Done()
+			for task := range pool.jobs {
+				if err := pool.ctx.Err(); err != nil {
+					task.errMu.Lock()
+					if *task.firstErr == nil {
+						*task.firstErr = err
+					}
+					task.errMu.Unlock()
+					task.done.Done()
+					continue
+				}
+				task.tracker.enter()
+				receipt, delta := pool.executor.executeTransaction(task.block, task.item, task.snapshot, task.originalIndex)
+				task.results[task.index] = batchSITxExecutionResult{Item: task.item, Receipt: receipt, Delta: delta}
+				task.tracker.leave()
+				task.done.Done()
+			}
+		}()
+	}
+	return pool
+}
+
+func (p *batchSIBlockWorkerPool) Close() {
+	if p == nil {
+		return
+	}
+	close(p.jobs)
+	p.wg.Wait()
+}
+
+func (e *BatchSIExecutor) executeBatchWithPool(ctx context.Context, pool *batchSIBlockWorkerPool, b block.Block, items []tx.SignedTransaction, snapshot map[string]string, blockIndex map[string]int) ([]batchSITxExecutionResult, int, error) {
 	results := make([]batchSITxExecutionResult, len(items))
 	if len(items) == 0 {
 		return results, 0, nil
 	}
+	tracker := &batchSIParallelTracker{}
+	var done sync.WaitGroup
+	var errMu sync.Mutex
+	var firstErr error
+	for index, item := range items {
+		if err := ctx.Err(); err != nil {
+			done.Wait()
+			return nil, tracker.max(), err
+		}
+		done.Add(1)
+		task := batchSIBlockWorkerTask{
+			index:         index,
+			block:         b,
+			item:          item,
+			snapshot:      snapshot,
+			originalIndex: blockIndex[item.TxID],
+			results:       results,
+			done:          &done,
+			tracker:       tracker,
+			errMu:         &errMu,
+			firstErr:      &firstErr,
+		}
+		select {
+		case pool.jobs <- task:
+		case <-ctx.Done():
+			done.Done()
+			done.Wait()
+			return nil, tracker.max(), ctx.Err()
+		}
+	}
+	waitStarted := time.Now()
+	done.Wait()
+	e.workerPoolWaitDuration += time.Since(waitStarted)
+	if firstErr != nil {
+		return nil, tracker.max(), firstErr
+	}
+	return results, tracker.max(), nil
+}
+
+// executeBatch is retained for focused tests and direct callers. The normal
+// block path uses executeBatchWithPool so one worker set is reused across every
+// batch while preserving the exact batch barrier and snapshot semantics.
+func (e *BatchSIExecutor) executeBatch(ctx context.Context, b block.Block, items []tx.SignedTransaction, snapshot map[string]string, blockIndex map[string]int) ([]batchSITxExecutionResult, int, error) {
 	workerCount := e.Config.WorkerCount
 	if e.Config.ExecutionMode == BatchSIExecutionSnapshotSerial {
 		workerCount = 1
 	}
-	if workerCount > len(items) {
-		workerCount = len(items)
-	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
-	type job struct{ index int }
 	setupStarted := time.Now()
-	jobs := make(chan job)
-	var wg sync.WaitGroup
-	var active int
-	var maximum int
-	var activeMu sync.Mutex
-	var firstErr error
-	var errMu sync.Mutex
-	for worker := 0; worker < workerCount; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for task := range jobs {
-				if ctx.Err() != nil {
-					errMu.Lock()
-					if firstErr == nil {
-						firstErr = ctx.Err()
-					}
-					errMu.Unlock()
-					continue
-				}
-				activeMu.Lock()
-				active++
-				if active > maximum {
-					maximum = active
-				}
-				activeMu.Unlock()
-				item := items[task.index]
-				receipt, delta := e.executeTransaction(b, item, snapshot, blockIndex[item.TxID])
-				results[task.index] = batchSITxExecutionResult{Item: item, Receipt: receipt, Delta: delta}
-				activeMu.Lock()
-				active--
-				activeMu.Unlock()
-			}
-		}()
-	}
+	pool := newBatchSIBlockWorkerPool(ctx, e, workerCount)
 	e.workerPoolSetupDuration += time.Since(setupStarted)
-	for index := range items {
-		select {
-		case jobs <- job{index: index}:
-		case <-ctx.Done():
-			close(jobs)
-			waitStarted := time.Now()
-			wg.Wait()
-			e.workerPoolWaitDuration += time.Since(waitStarted)
-			return nil, maximum, ctx.Err()
-		}
-	}
-	close(jobs)
-	waitStarted := time.Now()
-	wg.Wait()
-	e.workerPoolWaitDuration += time.Since(waitStarted)
-	if firstErr != nil {
-		return nil, maximum, firstErr
-	}
-	return results, maximum, nil
+	defer pool.Close()
+	return e.executeBatchWithPool(ctx, pool, b, items, snapshot, blockIndex)
 }
 
 func (e *BatchSIExecutor) executeTransaction(b block.Block, item tx.SignedTransaction, snapshot map[string]string, originalIndex int) (Receipt, TxDelta) {

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -11,7 +12,7 @@ from uuid import uuid4
 from backend.app.core.paths import ROOT
 from backend.app.models.v5_experiment_spec import V5PluginSelection, V5Topology
 from backend.app.models.v5_formal_experiment import V5FormalExperimentPlan
-from backend.app.services import v5_real_cluster_runner
+from backend.app.services import v5_formal_artifact_storage, v5_real_cluster_runner
 from backend.app.services.v5_formal_run_store import children, group_dir, read_group, write_attempt, write_child, write_group
 from backend.app.services.v5_fairness_validator import validate as validate_fairness, write_artifacts as write_fairness_artifacts
 from backend.app.services.v5_metric_extractor import extract as extract_metrics
@@ -23,6 +24,273 @@ from backend.app.services.v5_workload_data_plane import load_manifest, supported
 
 SUPPORTED_SYNTHETIC_WORKLOAD_POINT_FIELDS = {"tx_count", "cross_shard_ratio", "timeout_every"}
 SUPPORTED_DATASET_WORKLOAD_POINT_FIELDS = {"tx_count", "target_alpha", "target_theta", "access_profile", "skew_axis"}
+
+DEFAULT_FORMAL_EXECUTION_POLICY = {
+    "schema_version": "mbe_v5_formal_execution_policy_v3",
+    "child_wall_timeout_seconds": 1800,
+    "worker_heartbeat_seconds": 5,
+    "stale_worker_timeout_seconds": 30,
+    "resource_recovery_wait_seconds": 30,
+    "fixed_workload_completion_required_for_formal_tps": True,
+    "partial_timeout_metrics_diagnostic_only": True,
+    "auto_cold_archive_terminal_children": True,
+    "auto_cold_archive_delete_raw": True,
+    "auto_cold_archive_compression_level": 3,
+}
+_ACTIVE_CHILD_STATES = {"queued", "starting", "running", "cancelling"}
+_RESUMABLE_CHILD_STATES = {"cancelled", "interrupted"}
+
+
+def _execution_policy(group: dict) -> dict:
+    raw = group.get("execution_policy") if isinstance(group.get("execution_policy"), dict) else {}
+    return {**DEFAULT_FORMAL_EXECUTION_POLICY, **raw, "schema_version": DEFAULT_FORMAL_EXECUTION_POLICY["schema_version"]}
+
+
+def _write_worker_heartbeat(group_id: str, *, child_id: str = "", child_started_at: str = "") -> None:
+    group = read_group(group_id)
+    group["worker_heartbeat_at"] = datetime.now(UTC).isoformat()
+    group["worker_pid"] = os.getpid()
+    if child_id:
+        group["active_child_run_id"] = child_id
+        if child_started_at:
+            group["active_child_started_at"] = child_started_at
+    else:
+        group.pop("active_child_run_id", None)
+        group.pop("active_child_started_at", None)
+    write_group(group)
+
+
+def _heartbeat_age_seconds(group: dict) -> float:
+    raw = str(group.get("worker_heartbeat_at") or "")
+    if not raw:
+        return float("inf")
+    try:
+        stamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=UTC)
+        return max(0.0, (datetime.now(UTC) - stamp).total_seconds())
+    except ValueError:
+        return float("inf")
+
+
+def reconcile_stale_group(group_id: str) -> dict:
+    group = read_group(group_id)
+    if group.get("status") not in {"starting", "running", "cancelling"}:
+        return group
+    if worker_active(group_id):
+        return group
+    policy = _execution_policy(group)
+    if _heartbeat_age_seconds(group) < float(policy["stale_worker_timeout_seconds"]):
+        return group
+    if group.get("status") == "cancelling":
+        return finalize_cancelled(group_id)
+    interrupted_at = datetime.now(UTC).isoformat()
+    stale_reap = v5_real_cluster_runner.reap_persisted_supervisors(group_id)
+    items = children(group_id)
+    for item in items:
+        if item.get("status") in _ACTIVE_CHILD_STATES:
+            item["status"] = "interrupted"
+            item["execution_status"] = "interrupted"
+            item["formal_eligibility"] = False
+            item["paper_candidate"] = False
+            item["interrupted_at"] = interrupted_at
+            item["error"] = item.get("error") or "formal_worker_disappeared"
+            write_child(group_id, item)
+    group["status"] = "interrupted"
+    group["interrupted_at"] = interrupted_at
+    group["interrupted_reason"] = "stale_worker_heartbeat"
+    group["stale_supervisor_reap"] = stale_reap
+    group["paper_candidate"] = False
+    _refresh_child_counts(group, items)
+    write_group(group)
+    return group
+
+
+def _resume_candidate_mode(item: dict | None) -> tuple[str, str] | None:
+    if item is None:
+        return ("resume_unfinished", "not_started")
+    status = str(item.get("status") or "")
+    if status in _RESUMABLE_CHILD_STATES:
+        return ("resume_unfinished", status)
+    if status in {"failed", "timed_out"}:
+        return ("retry_failed", status)
+    return None
+
+
+def list_resume_candidates(group_id: str) -> dict:
+    group = reconcile_stale_group(group_id)
+    matrix = list(group.get("matrix") or [])
+    if matrix:
+        raw_plan = group.get("plan")
+        if isinstance(raw_plan, dict):
+            plan = V5FormalExperimentPlan.model_validate(raw_plan)
+            ordered = _ordered_execution_rows(matrix, plan)
+        else:
+            # Backward-compatible recovery for historical/minimal RunGroup metadata.
+            # Candidate classification only requires the persisted matrix + child states.
+            ordered = matrix
+    else:
+        raw_plan = group.get("plan")
+        if not isinstance(raw_plan, dict):
+            raise ValueError("formal RunGroup has neither a persisted matrix nor a recoverable plan")
+        plan = V5FormalExperimentPlan.model_validate(raw_plan)
+        matrix = list(expand(plan, group.get("execution_backend", "real_cluster")))
+        ordered = _ordered_execution_rows(matrix, plan)
+    existing = {str(item.get("child_run_id") or ""): item for item in children(group_id)}
+    output: list[dict] = []
+    for row in ordered:
+        child_id = str(row.get("child_run_id") or "")
+        if not child_id:
+            continue
+        item = existing.get(child_id)
+        classification = _resume_candidate_mode(item)
+        if classification is None:
+            continue
+        mode, status_value = classification
+        workload_point = row.get("workload_point") if isinstance(row.get("workload_point"), dict) else {}
+        method = row.get("method") if isinstance(row.get("method"), dict) else {}
+        output.append({
+            "child_run_id": child_id,
+            "mode": mode,
+            "status": status_value,
+            "execution_status": (item or {}).get("execution_status"),
+            "attempt": int((item or {}).get("attempt") or 0),
+            "method_config_id": row.get("method_config_id"),
+            "method_name": method.get("display_name") or row.get("method_config_id"),
+            "seed": row.get("seed"),
+            "repeat_index": int(row.get("repeat_index") or 0),
+            "scan_variable": row.get("scan_variable"),
+            "scan_value": row.get("scan_value"),
+            "target_theta": workload_point.get("target_theta"),
+            "target_alpha": workload_point.get("target_alpha"),
+            "estimated_transactions": int(row.get("estimated_transactions") or workload_point.get("tx_count") or 0),
+            "estimated_processes": int(row.get("estimated_processes") or 0),
+            "error": (item or {}).get("error") or "",
+        })
+    resume_count = sum(item["mode"] == "resume_unfinished" for item in output)
+    retry_count = sum(item["mode"] == "retry_failed" for item in output)
+    return {
+        "schema_version": "mbe_v5_formal_resume_candidates_v1",
+        "run_group_id": group_id,
+        "group_status": group.get("status"),
+        "worker_active": worker_active(group_id),
+        "selection_allowed": not worker_active(group_id),
+        "resume_unfinished_count": resume_count,
+        "retry_failed_count": retry_count,
+        "candidate_count": len(output),
+        "candidates": output,
+    }
+
+
+def _start_selected_children(group_id: str, requested: list[str], *, selection_mode: str, candidate_rows: list[dict]) -> dict:
+    group = reconcile_stale_group(group_id)
+    if worker_active(group_id):
+        raise ValueError("formal RunGroup worker is still active")
+    if not requested:
+        raise ValueError("no child experiments were selected")
+    now = datetime.now(UTC).isoformat()
+    selected_set = set(requested)
+    selected_rows = [item for item in candidate_rows if item.get("child_run_id") in selected_set]
+    selection = {
+        "schema_version": "mbe_v5_formal_resume_selection_v1",
+        "mode": selection_mode,
+        "selected_at": now,
+        "child_run_ids": list(requested),
+        "child_count": len(requested),
+        "estimated_transactions": sum(int(item.get("estimated_transactions") or 0) for item in selected_rows),
+        "estimated_process_starts": sum(int(item.get("estimated_processes") or 0) for item in selected_rows),
+    }
+    history = list(group.get("resume_selection_history") or [])
+    history.append(selection)
+    group["resume_selection_history"] = history[-20:]
+    group["resume_selection"] = selection
+    group["resume_requested_child_ids"] = list(requested)
+    group["resume_requested_count"] = len(requested)
+    group["resume_attempt"] = int(group.get("resume_attempt", 0)) + 1
+    group["resumed_at"] = now
+    group["status"] = "queued"
+    group["cancel_requested"] = False
+    group["paper_candidate"] = False
+    group["performance_comparison_valid"] = False
+    group["bundle_status"] = "pending_after_resume"
+    group.pop("finished_at", None)
+    group.pop("group_error", None)
+    group.pop("aggregate", None)
+    group.pop("state_equivalence_validation", None)
+    group.pop("pairwise_logical_state_equivalent", None)
+    # Resume invalidates a terminal bundle because it captured the pre-resume
+    # group state.  Bundle invalidation is best-effort: historical tests and
+    # migrated metadata may carry a non-canonical group id, which must never
+    # prevent the persisted resume request from starting.
+    try:
+        (group_dir(group_id) / "artifacts.zip").unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+    write_group(group)
+    start(group_id)
+    return read_group(group_id)
+
+
+def resume_selected(group_id: str, child_run_ids: list[str], *, mode: str) -> dict:
+    if mode not in {"resume_unfinished", "retry_failed"}:
+        raise ValueError("resume selection mode must be resume_unfinished or retry_failed")
+    payload = list_resume_candidates(group_id)
+    eligible = [item for item in payload["candidates"] if item.get("mode") == mode]
+    eligible_ids = {str(item.get("child_run_id") or "") for item in eligible}
+    requested_set = {str(item) for item in child_run_ids if str(item)}
+    invalid = sorted(requested_set - eligible_ids)
+    if invalid:
+        raise ValueError(f"selected child experiments are not eligible for {mode}: {invalid}")
+    requested = [str(item.get("child_run_id")) for item in eligible if str(item.get("child_run_id")) in requested_set]
+    return _start_selected_children(group_id, requested, selection_mode=mode, candidate_rows=eligible)
+
+
+def resume_unfinished(group_id: str, *, include_failed: bool = False, include_timed_out: bool = False) -> dict:
+    payload = list_resume_candidates(group_id)
+    requested_rows = [item for item in payload["candidates"] if item.get("mode") == "resume_unfinished"]
+    if include_failed:
+        requested_rows.extend(item for item in payload["candidates"] if item.get("status") == "failed")
+    if include_timed_out:
+        requested_rows.extend(item for item in payload["candidates"] if item.get("status") == "timed_out")
+    requested = [str(item.get("child_run_id")) for item in requested_rows]
+    if not requested:
+        group = reconcile_stale_group(group_id)
+        group["resume_requested_count"] = 0
+        write_group(group)
+        return group
+    return _start_selected_children(group_id, requested, selection_mode="legacy_resume_unfinished", candidate_rows=requested_rows)
+
+
+def _is_system_resource_error(exc: BaseException) -> bool:
+    winerror = getattr(exc, "winerror", None)
+    return winerror in {8, 14, 1450} or any(
+        token in str(exc).lower()
+        for token in ("winerror 1450", "not enough storage", "insufficient system resources")
+    )
+
+
+def _ordered_execution_rows(rows: list[dict], plan: V5FormalExperimentPlan) -> list[dict]:
+    if list(plan.suites) != ["workload_sensitivity"]:
+        return list(rows)
+    method_order = {
+        (item.get("method_id") if isinstance(item, dict) else item.method_id): index
+        for index, item in enumerate(plan.methods or [])
+    }
+    def scan_value(row: dict):
+        point = row.get("workload_point") or {}
+        for key in ("target_theta", "target_alpha", "tx_count"):
+            value = point.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                return (key, float(value))
+        return (str(row.get("scan_variable") or ""), str(row.get("scan_value") or ""))
+    return sorted(
+        rows,
+        key=lambda row: (
+            scan_value(row),
+            int(row.get("repeat_index") or 0),
+            method_order.get(str(row.get("method_config_id") or ""), 10_000),
+        ),
+    )
 
 
 def _workload_blockers(point: dict, topology: dict, source_type: str = "synthetic", supported_counts: set[int] | None = None) -> list[str]:
@@ -119,7 +387,7 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
                         "estimated_processes": variant["topology_point"].get("nodes", plan.base_spec.topology.nodes) if backend == "real_cluster" else 0,
                         "estimated_transactions": estimated_transactions, "block_size": block_settings["block_size"], "block_interval_ms": block_settings["block_interval_ms"], "estimated_block_count": estimated_block_count, "runnable": backend != "simulation" and not blockers, "blockers": blockers + (["V3 simulation adapter pending"] if backend == "simulation" else []), "warnings": [],
                     })
-    return validate_fairness(rows)[0]
+    return validate_fairness(_ordered_execution_rows(rows, plan))[0]
 
 
 
@@ -312,6 +580,8 @@ def start(group_id: str) -> None:
     group["status"] = "starting"
     group["worker_pid"] = os.getpid()
     group["worker_thread"] = worker_name
+    group["worker_heartbeat_at"] = datetime.now(UTC).isoformat()
+    group["execution_policy"] = _execution_policy(group)
     write_group(group)
     worker = threading.Thread(target=_worker, args=(group_id,), name=worker_name, daemon=True)
     worker.start()
@@ -355,12 +625,16 @@ def _run_worker(group_id: str) -> None:
         finalize_cancelled(group_id)
         return
     group["status"] = "running"
+    group["worker_heartbeat_at"] = datetime.now(UTC).isoformat()
+    group["execution_policy"] = _execution_policy(group)
     write_group(group)
     plan = V5FormalExperimentPlan.model_validate(group["plan"])
     backend = group["execution_backend"]
     all_rows = group.get("matrix") or expand(plan, backend)
     checked_rows, fairness = validate_fairness(all_rows)
-    requested = set(group.pop("retry_requested_child_ids", []))
+    retry_requested = set(group.pop("retry_requested_child_ids", []))
+    resume_requested = set(group.pop("resume_requested_child_ids", []))
+    requested = retry_requested | resume_requested
     rows = [row for row in checked_rows if row["child_run_id"] in requested] if requested else checked_rows
     group["fairness_validation"] = fairness
     group["performance_comparison_valid"] = bool(fairness.get("performance_comparison_valid", False))
@@ -379,6 +653,8 @@ def _run_worker(group_id: str) -> None:
         child_id = row["child_run_id"]
         existing_attempt = next((item.get("attempt", 0) for item in children(group_id) if item.get("child_run_id") == child_id), 0)
         attempt_number = existing_attempt + 1
+        child_started_at = datetime.now(UTC).isoformat()
+        _write_worker_heartbeat(group_id, child_id=child_id, child_started_at=child_started_at)
         child = {
             **row,
             "child_run_id": child_id,
@@ -389,8 +665,9 @@ def _run_worker(group_id: str) -> None:
         write_child(group_id, child)
         _refresh_child_counts(group, children(group_id))
         write_group(group)
-        write_attempt(group_id, child_id, {"attempt_number": attempt_number, "status": "running", "started_at": datetime.now(UTC).isoformat()})
+        write_attempt(group_id, child_id, {"attempt_number": attempt_number, "status": "running", "started_at": child_started_at})
         stop_after_child = False
+        policy = _execution_policy(read_group(group_id))
         try:
             if row.get("blockers"):
                 child.update({"status": "blocked", "error": "; ".join(row["blockers"]), "paper_candidate": False})
@@ -405,8 +682,12 @@ def _run_worker(group_id: str) -> None:
                 result = v5_real_cluster_runner.run(
                     spec,
                     cancel_check=lambda: bool(read_group(group_id).get("cancel_requested")),
+                    timeout_seconds=int(policy["child_wall_timeout_seconds"]),
+                    heartbeat_callback=lambda: _write_worker_heartbeat(group_id, child_id=child_id, child_started_at=child_started_at),
+                    heartbeat_interval_seconds=float(policy["worker_heartbeat_seconds"]),
+                    runtime_context={"run_group_id": group_id, "child_run_id": child_id},
                 )
-                if result["status"] == "cancelled":
+                if result["status"] != "completed":
                     metrics = {}
                 else:
                     result_dir = _physical_result_dir(result)
@@ -469,10 +750,44 @@ def _run_worker(group_id: str) -> None:
             group["resource_pressure_stop_child_id"] = child_id
             write_group(group)
             stop_after_child = True
+        except OSError as exc:
+            if _is_system_resource_error(exc):
+                child.update({
+                    "status": "failed",
+                    "execution_status": "blocked_resource_system_pressure",
+                    "artifact_status": "incomplete",
+                    "formal_eligibility": False,
+                    "error": str(exc),
+                    "resource_pressure": {
+                        "schema_version": "mbe_v5_system_resource_pressure_v1",
+                        "winerror": getattr(exc, "winerror", None),
+                        "error": str(exc),
+                        "observed_at": datetime.now(UTC).isoformat(),
+                    },
+                    "paper_candidate": False,
+                })
+                group = read_group(group_id)
+                group["last_system_resource_pressure"] = child["resource_pressure"]
+                group["last_system_resource_pressure_child_id"] = child_id
+                write_group(group)
+                time.sleep(max(0, int(policy["resource_recovery_wait_seconds"])))
+            else:
+                child.update({"status": "failed", "error": str(exc), "paper_candidate": False})
         except Exception as exc:  # preserve failure evidence for result center and retry policy
             child.update({"status": "failed", "error": str(exc), "paper_candidate": False})
         write_child(group_id, child)
         write_attempt(group_id, child_id, {"attempt_number": attempt_number, "status": child["status"], "finished_at": datetime.now(UTC).isoformat(), "result": child.get("result"), "metrics": child.get("metrics"), "error": child.get("error")})
+        if bool(policy.get("auto_cold_archive_terminal_children", True)) and bool(policy.get("auto_cold_archive_delete_raw", True)):
+            _write_worker_heartbeat(group_id, child_id=child_id, child_started_at=child_started_at)
+            v5_formal_artifact_storage.auto_archive_terminal_child(
+                group_id,
+                child_id,
+                compression_level=int(policy.get("auto_cold_archive_compression_level", 3)),
+            )
+        _write_worker_heartbeat(group_id)
+        group = read_group(group_id)
+        _refresh_child_counts(group, children(group_id))
+        write_group(group)
         if child.get("status") == "cancelled":
             finalize_cancelled(group_id)
             return
@@ -1015,11 +1330,15 @@ def _is_paper_candidate_result(result: dict, metrics: dict) -> bool:
 
 
 def _refresh_child_counts(group: dict, items: list[dict]) -> None:
-    group["total_child_runs"] = group.get("total_child_runs") or len({item.get("child_run_id") for item in items})
+    materialized_ids = {str(item.get("child_run_id") or "") for item in items if item.get("child_run_id")}
+    group["total_child_runs"] = group.get("total_child_runs") or len(materialized_ids)
     group["completed_child_runs"] = sum(item.get("status") == "completed" for item in items)
     group["failed_child_runs"] = sum(item.get("status") == "failed" for item in items)
     group["blocked_child_runs"] = sum(item.get("status") == "blocked" for item in items)
     group["cancelled_child_runs"] = sum(item.get("status") == "cancelled" for item in items)
+    group["timed_out_child_runs"] = sum(item.get("status") == "timed_out" for item in items)
+    group["interrupted_child_runs"] = sum(item.get("status") == "interrupted" for item in items)
+    group["not_started_child_runs"] = max(0, int(group.get("total_child_runs") or 0) - len(materialized_ids))
 
 
 def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id: str | None = None):

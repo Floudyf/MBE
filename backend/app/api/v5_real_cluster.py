@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.app.models.v5_experiment_spec import V5ExperimentSpec
-from backend.app.services import v5_real_cluster_artifacts, v5_real_cluster_runner
+from backend.app.services import v5_artifact_storage, v5_real_cluster_artifacts, v5_real_cluster_runner
 
 
 router = APIRouter(prefix="/api/v5/real-cluster", tags=["v5"])
@@ -42,8 +44,28 @@ def artifacts(run_id: str) -> dict:
 
 
 @router.get("/runs/{run_id}/artifacts/{filename:path}")
-def artifact(run_id: str, filename: str) -> FileResponse:
+def artifact(run_id: str, filename: str):
     try:
-        return FileResponse(v5_real_cluster_artifacts.artifact_path(v5_real_cluster_runner.run_dir(run_id), filename))
-    except (ValueError, FileNotFoundError) as exc:
+        run_dir = v5_real_cluster_runner.run_dir(run_id)
+        return FileResponse(v5_real_cluster_artifacts.artifact_path(run_dir, filename))
+    except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+    except FileNotFoundError:
+        try:
+            run_dir = v5_real_cluster_runner.run_dir(run_id)
+            info = v5_artifact_storage.archived_artifact_info(run_dir, filename)
+            headers = {
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(Path(filename).name)}",
+                "Content-Length": str(int(info["size_bytes"])),
+                "X-MBE-Artifact-Storage": "tar.zst",
+                "X-MBE-Artifact-SHA256": str(info.get("sha256") or ""),
+            }
+            return StreamingResponse(
+                v5_artifact_storage.stream_archived_artifact(run_dir, filename),
+                media_type="application/octet-stream",
+                headers=headers,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except v5_artifact_storage.ArtifactStorageError as exc:
+            raise HTTPException(409, f"archived artifact integrity/storage error: {exc}") from exc

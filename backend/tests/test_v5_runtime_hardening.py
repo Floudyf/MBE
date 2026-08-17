@@ -9,6 +9,7 @@ from backend.app.services.v5_fairness_validator import validate as validate_fair
 from backend.app.services.v5_paper_exporter import paper_result_analysis
 from backend.app.services.v5_real_cluster_runner import (
     _completion_gate,
+    _evaluate_artifact_contract_after_summary_presence,
     _global_business_state_digest,
     _global_final_state_digest,
     _metatrack_control_plane_evidence,
@@ -137,6 +138,18 @@ def test_root_failure_is_empty_without_failure_evidence(tmp_path: Path) -> None:
     assert _root_failure(tmp_path, "") == ""
 
 
+
+
+def test_artifact_contract_sees_real_cluster_summary_before_freeze(tmp_path: Path) -> None:
+    expected = ["real_cluster_summary.json"]
+    contract = _evaluate_artifact_contract_after_summary_presence(
+        tmp_path,
+        {"execution_status": "failed", "root_failure": "drain no-progress timeout"},
+        expected,
+    )
+    assert (tmp_path / "real_cluster_summary.json").is_file()
+    assert "real_cluster_summary.json" not in contract["missing_expected_artifacts"]
+
 def test_failed_runtime_diagnostics_are_included_in_bundle(tmp_path: Path, monkeypatch) -> None:
     group_dir = tmp_path / "group"
     group_dir.mkdir()
@@ -159,7 +172,20 @@ def test_failed_runtime_diagnostics_are_included_in_bundle(tmp_path: Path, monke
                 "child_run_id": "v5child_failed",
                 "status": "failed",
                 "result": {"run_id": "v5_failed"},
-            }
+            },
+            {
+                "child_run_id": "v5child_completed_invalid",
+                "status": "completed",
+                "individual_result_valid": False,
+                "comparison_eligibility_status": "individual_result_invalid",
+                "result": {"run_id": "v5_completed_invalid"},
+            },
+            {
+                "child_run_id": "v5child_completed_valid",
+                "status": "completed",
+                "individual_result_valid": True,
+                "result": {"run_id": "v5_completed_valid"},
+            },
         ],
     )
     monkeypatch.setattr(
@@ -175,6 +201,9 @@ def test_failed_runtime_diagnostics_are_included_in_bundle(tmp_path: Path, monke
         names = set(archive.namelist())
     assert "runtime_diagnostics/v5child_failed/stalled_runtime_report.json" in names
     assert "runtime_diagnostics/v5child_failed/node_runtime_status.json" in names
+    assert "runtime_diagnostics/v5child_completed_invalid/stalled_runtime_report.json" in names
+    assert "runtime_diagnostics/v5child_completed_invalid/node_runtime_status.json" in names
+    assert not any("v5child_completed_valid" in name for name in names)
     assert not any(name.endswith("ignored.bin") for name in names)
 
 

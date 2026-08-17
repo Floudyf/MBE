@@ -65,13 +65,19 @@ func executeBSXPlanWithCommitment(ctx context.Context, block realblock.Block, ba
 	allReceipts := make([]execution.Receipt, 0, len(block.TxList))
 	maximumObserved := 0
 	var executionDuration, applyDuration time.Duration
+	poolSetupStarted := time.Now()
+	pool := newFixedBlockWorkerPool(ctx, workerCount)
+	poolSetupDuration := time.Since(poolSetupStarted)
+	executionDuration += poolSetupDuration
+	defer pool.Close()
+	serialExecutor := execution.NewSerialExecutor()
 	for _, wave := range plan.Waves {
 		if err := ctx.Err(); err != nil {
 			return BlockExecutionResult{}, err
 		}
 		snapshot := working
 		started := time.Now()
-		waveResults, observed, err := executeBSXWave(ctx, block, wave, byID, indexByID, snapshot, workerCount)
+		waveResults, observed, err := executeBSXWaveWithPool(ctx, pool, serialExecutor, block, wave, byID, indexByID, snapshot)
 		executionDuration += time.Since(started)
 		if err != nil {
 			return BlockExecutionResult{}, err
@@ -146,6 +152,9 @@ func executeBSXPlanWithCommitment(ctx context.Context, block realblock.Block, ba
 		"maximum_wave_width":               plan.Metrics.MaximumWaveWidth,
 		"graph_color_count":                plan.Metrics.ColorCount,
 		"pairwise_conflict_check_count":    plan.Metrics.PairChecks,
+		"worker_pool_create_count":         1,
+		"worker_pool_setup_ms":             poolSetupDuration.Milliseconds(),
+		"wave_barrier_count":               len(plan.Waves),
 		"abort_count":                      0,
 		"reexecution_count":                0,
 		"serializable":                     true,
@@ -169,71 +178,53 @@ func executeBSXPlanWithCommitment(ctx context.Context, block realblock.Block, ba
 	}, nil
 }
 
-func executeBSXWave(ctx context.Context, block realblock.Block, wave []string, byID map[string]tx.SignedTransaction, indexByID map[string]int, snapshot map[string]string, workers int) ([]bsxWaveResult, int, error) {
+func executeBSXWaveWithPool(ctx context.Context, pool *fixedBlockWorkerPool, serialExecutor *execution.SerialExecutor, block realblock.Block, wave []string, byID map[string]tx.SignedTransaction, indexByID map[string]int, snapshot map[string]string) ([]bsxWaveResult, int, error) {
 	results := make([]bsxWaveResult, len(wave))
 	if len(wave) == 0 {
 		return results, 0, nil
 	}
-	if workers > len(wave) {
-		workers = len(wave)
-	}
-	type job struct{ index int }
-	jobs := make(chan job)
-	var wg sync.WaitGroup
-	var active, maximum int
-	var mu sync.Mutex
 	var firstErr error
-	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			serial := execution.NewSerialExecutor()
-			for task := range jobs {
-				if ctx.Err() != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = ctx.Err()
-					}
-					mu.Unlock()
-					continue
+	var errMu sync.Mutex
+	tasks := make([]func(), len(wave))
+	for index, id := range wave {
+		taskIndex := index
+		txID := id
+		tasks[index] = func() {
+			if err := ctx.Err(); err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
 				}
-				id := wave[task.index]
-				item, ok := byID[id]
-				if !ok {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = fmt.Errorf("plan references unknown transaction %s", id)
-					}
-					mu.Unlock()
-					continue
-				}
-				mu.Lock()
-				active++
-				if active > maximum {
-					maximum = active
-				}
-				mu.Unlock()
-				receipt, delta := serial.ExecuteTransaction(block, item, snapshot, indexByID[id])
-				results[task.index] = bsxWaveResult{Item: item, Receipt: receipt, Delta: delta}
-				mu.Lock()
-				active--
-				mu.Unlock()
+				errMu.Unlock()
+				return
 			}
-		}()
-	}
-	for index := range wave {
-		select {
-		case <-ctx.Done():
-			close(jobs)
-			wg.Wait()
-			return nil, maximum, ctx.Err()
-		case jobs <- job{index: index}:
+			item, ok := byID[txID]
+			if !ok {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("plan references unknown transaction %s", txID)
+				}
+				errMu.Unlock()
+				return
+			}
+			receipt, delta := serialExecutor.ExecuteTransaction(block, item, snapshot, indexByID[txID])
+			results[taskIndex] = bsxWaveResult{Item: item, Receipt: receipt, Delta: delta}
 		}
 	}
-	close(jobs)
-	wg.Wait()
+	maximum, err := pool.Run(tasks)
+	if err != nil {
+		return nil, maximum, err
+	}
 	if firstErr != nil {
 		return nil, maximum, firstErr
 	}
 	return results, maximum, nil
+}
+
+// executeBSXWave is retained for focused tests and direct callers. The normal
+// block path creates one pool and reuses it across all scheduling waves.
+func executeBSXWave(ctx context.Context, block realblock.Block, wave []string, byID map[string]tx.SignedTransaction, indexByID map[string]int, snapshot map[string]string, workers int) ([]bsxWaveResult, int, error) {
+	pool := newFixedBlockWorkerPool(ctx, workers)
+	defer pool.Close()
+	return executeBSXWaveWithPool(ctx, pool, execution.NewSerialExecutor(), block, wave, byID, indexByID, snapshot)
 }

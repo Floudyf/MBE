@@ -18,7 +18,7 @@ from backend.app.core.paths import ROOT, V5_REAL_CLUSTER_RUNS_ROOT
 from backend.app.models.v5_experiment_spec import V5ExperimentSpec
 from backend.app.services.v5_experiment_compiler import compile_plan
 from backend.app.services.v5_compatibility_engine import V5CompatibilityError
-from backend.app.services import v5_real_cluster_artifacts, v5_observability_metrics
+from backend.app.services import v5_artifact_storage, v5_real_cluster_artifacts, v5_observability_metrics
 from backend.app.services.v5_artifact_contract import evaluate_expected_artifacts, write_run_artifact_catalog
 
 
@@ -147,11 +147,95 @@ def _terminate_process_tree(process: subprocess.Popen) -> None:
             pass
 
 
+def _resolve_runner_timeout_seconds(spec: V5ExperimentSpec, explicit_timeout_seconds: int | None) -> int:
+    if explicit_timeout_seconds is not None:
+        return max(1, int(explicit_timeout_seconds))
+    configured_timeout_seconds = int(os.environ.get("MBE_V5_REAL_CLUSTER_TIMEOUT_SECONDS", "7200"))
+    return max(configured_timeout_seconds, (spec.duration_ms // 1000) + 90)
+
+
+def _write_supervisor_process_evidence(run_dir: Path, payload: dict) -> None:
+    try:
+        (run_dir / "supervisor_process.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _pid_matches_persisted_supervisor(pid: int, run_dir: Path) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            command = [
+                "powershell.exe", "-NoLogo", "-NoProfile", "-Command",
+                f"$p=Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' -ErrorAction SilentlyContinue; if($p){{$p.CommandLine}}",
+            ]
+            probe = subprocess.run(command, capture_output=True, text=True, timeout=10, check=False)
+            cmdline = (probe.stdout or "").lower()
+        else:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", errors="replace").lower()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "mbe-supervisor" in cmdline and str(run_dir).lower() in cmdline
+
+
+def reap_persisted_supervisors(run_group_id: str) -> list[dict]:
+    results: list[dict] = []
+    if not RUNS_ROOT.is_dir():
+        return results
+    for evidence_path in sorted(RUNS_ROOT.glob("v5_*/supervisor_process.json")):
+        try:
+            payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(payload.get("run_group_id") or "") != str(run_group_id):
+            continue
+        if str(payload.get("status") or "") == "reaped":
+            continue
+        pid = int(payload.get("pid") or 0)
+        run_dir = evidence_path.parent
+        matched = _pid_matches_persisted_supervisor(pid, run_dir)
+        terminated = False
+        if matched:
+            if os.name == "nt":
+                try:
+                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20, check=False)
+                    terminated = True
+                except (OSError, subprocess.SubprocessError):
+                    terminated = False
+            else:
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                    terminated = True
+                except (OSError, ProcessLookupError):
+                    terminated = False
+        record = {
+            "run_id": run_dir.name,
+            "pid": pid,
+            "process_identity_matched": matched,
+            "termination_requested": terminated,
+            "checked_at": datetime.now(UTC).isoformat(),
+        }
+        payload.update({
+            "status": "stale_reaped" if terminated else "stale_reap_skipped",
+            "stale_reap": record,
+        })
+        _write_supervisor_process_evidence(run_dir, payload)
+        results.append(record)
+    return results
+
+
 def _run_supervisor_process(
     command: list[str],
     run_dir: Path,
     timeout_seconds: int,
     cancel_check: Callable[[], bool] | None,
+    heartbeat_callback: Callable[[], None] | None = None,
+    heartbeat_interval_seconds: float = 5.0,
+    runtime_context: dict | None = None,
 ) -> tuple[int, str, str, bool, bool]:
     stdout_path = run_dir / "supervisor_stdout.log"
     stderr_path = run_dir / "supervisor_stderr.log"
@@ -177,7 +261,23 @@ def _run_supervisor_process(
             stderr=stderr_handle,
             **popen_kwargs,
         )
+        process_evidence = {
+            "schema_version": "mbe_v5_supervisor_process_v1",
+            "pid": int(process.pid),
+            "started_at": datetime.now(UTC).isoformat(),
+            "timeout_seconds": int(timeout_seconds),
+            **(runtime_context or {}),
+        }
+        _write_supervisor_process_evidence(run_dir, process_evidence)
+        last_heartbeat = 0.0
         while process.poll() is None:
+            now_monotonic = time.monotonic()
+            if heartbeat_callback is not None and now_monotonic - last_heartbeat >= max(1.0, heartbeat_interval_seconds):
+                last_heartbeat = now_monotonic
+                try:
+                    heartbeat_callback()
+                except Exception:
+                    pass
             if cancel_check is not None:
                 try:
                     cancelled = bool(cancel_check())
@@ -188,7 +288,6 @@ def _run_supervisor_process(
                     stderr_handle.flush()
                     _terminate_process_tree(process)
                     break
-            now_monotonic = time.monotonic()
             if now_monotonic - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
                 last_disk_check = now_monotonic
                 evidence = _disk_pressure_evidence(run_dir, threshold_bytes=emergency_threshold, phase="running_child")
@@ -211,6 +310,14 @@ def _run_supervisor_process(
             returncode = process.poll()
         if returncode is None:
             returncode = 125
+        process_evidence.update({
+            "status": "reaped",
+            "returncode": int(returncode),
+            "reaped_at": datetime.now(UTC).isoformat(),
+            "cancelled": bool(cancelled),
+            "timed_out": bool(timed_out),
+        })
+        _write_supervisor_process_evidence(run_dir, process_evidence)
 
     return int(returncode), _read_log_tail(stdout_path), _read_log_tail(stderr_path), cancelled, timed_out
 
@@ -248,7 +355,96 @@ def _cancelled_run_result(run_id: str, run_dir: Path, stdout: str, stderr: str) 
     }
 
 
-def run(spec: V5ExperimentSpec, *, cancel_check: Callable[[], bool] | None = None) -> dict:
+def _timed_out_run_result(run_id: str, run_dir: Path, stdout: str, stderr: str, timeout_seconds: int) -> dict:
+    # A timeout is a bounded formal execution outcome. It keeps diagnostics but
+    # never masquerades as a completed fixed-workload performance sample.
+    try:
+        v5_observability_metrics.write_observability_summaries(run_dir)
+    except Exception:
+        pass
+    summary = v5_real_cluster_artifacts.read_summary(run_dir)
+    finality = summary.get("finality_evidence") if isinstance(summary.get("finality_evidence"), dict) else {}
+    timeout_summary = {
+        "schema_version": "mbe_v5_formal_timeout_v1",
+        "execution_status": "timed_out",
+        "timeout_seconds": int(timeout_seconds),
+        "timed_out_at": datetime.now(UTC).isoformat(),
+        "submitted_unique_tx_count": finality.get("submitted_unique_tx_count"),
+        "terminal_unique_tx_count": finality.get("terminal_unique_tx_count"),
+        "finalized_unique_logical_tx_count": finality.get("finalized_unique_logical_tx_count"),
+        "incomplete_unique_tx_count": finality.get("incomplete_unique_tx_count"),
+        "committed_block_count": summary.get("committed_block_count"),
+        "formal_eligibility": False,
+        "diagnostic_only": True,
+    }
+    try:
+        (run_dir / "formal_timeout_summary.json").write_text(
+            json.dumps(timeout_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        pass
+    summary.update({
+        "execution_status": "timed_out",
+        "artifact_status": "incomplete",
+        "formal_eligibility": False,
+        "execution_gate": {"passed": False, "blockers": ["formal_child_wall_timeout"]},
+        "artifact_gate": {"passed": False, "blockers": ["timed_out_before_artifact_validation"]},
+        "completion_gate": {"passed": False, "blockers": ["formal_child_wall_timeout"]},
+        "timed_out": True,
+        "timeout_seconds": int(timeout_seconds),
+        "no_fallback": True,
+    })
+    try:
+        summary["artifact_storage"] = v5_artifact_storage.finalize_online_storage(run_dir, run_id=run_id)
+    except Exception:
+        pass
+    (run_dir / "real_cluster_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    try:
+        write_run_artifact_catalog(run_dir, run_id=run_id)
+    except Exception:
+        pass
+    return {
+        "run_id": run_id,
+        "status": "timed_out",
+        "output_dir": _logical_output_dir(run_dir),
+        "summary": summary,
+        "artifacts": v5_real_cluster_artifacts.list_artifacts(run_dir, run_id),
+        "stdout": stdout,
+        "stderr": stderr,
+        "error": "formal_child_wall_timeout",
+        "no_fallback": True,
+    }
+
+
+def _evaluate_artifact_contract_after_summary_presence(
+    run_dir: Path, summary: dict, expected_artifacts: object
+) -> dict:
+    """Evaluate the run contract after publishing the summary path it expects.
+
+    real_cluster_summary.json is itself part of the formal artifact contract.
+    Writing a provisional copy first prevents the frozen child record from
+    reporting that file as missing even though the runner publishes it before
+    returning. The caller overwrites the provisional content with final gates and
+    status after evaluation.
+    """
+    (run_dir / "real_cluster_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return evaluate_expected_artifacts(run_dir, expected_artifacts)
+
+
+def run(
+    spec: V5ExperimentSpec,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+    timeout_seconds: int | None = None,
+    heartbeat_callback: Callable[[], None] | None = None,
+    heartbeat_interval_seconds: float = 5.0,
+    runtime_context: dict | None = None,
+) -> dict:
     if spec.execution_backend != "real_cluster":
         raise ValueError("real cluster endpoint requires execution_backend=real_cluster; no fallback is available")
     run_id = "v5_" + datetime.now(UTC).strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:8]
@@ -262,16 +458,21 @@ def run(spec: V5ExperimentSpec, *, cancel_check: Callable[[], bool] | None = Non
     plan_path = run_dir / "compiled_run_plan.json"
     plan_path.write_text(json.dumps(plan.model_dump(), indent=2) + "\n", encoding="utf-8")
     command = ["go", "run", "./cmd/mbe-supervisor", "--mode", "v5-real-cluster", "--plan", str(plan_path), "--data-dir", str(run_dir)]
-    configured_timeout_seconds = int(os.environ.get("MBE_V5_REAL_CLUSTER_TIMEOUT_SECONDS", "7200"))
-    runner_timeout_seconds = max(configured_timeout_seconds, (spec.duration_ms // 1000) + 90)
+    runner_timeout_seconds = _resolve_runner_timeout_seconds(spec, timeout_seconds)
 
     returncode, stdout, stderr, cancelled, timed_out = _run_supervisor_process(
-        command, run_dir, runner_timeout_seconds, cancel_check
+        command,
+        run_dir,
+        runner_timeout_seconds,
+        cancel_check,
+        heartbeat_callback=heartbeat_callback,
+        heartbeat_interval_seconds=heartbeat_interval_seconds,
+        runtime_context=runtime_context,
     )
     if cancelled:
         return _cancelled_run_result(run_id, run_dir, stdout, stderr)
     if timed_out:
-        returncode = 124
+        return _timed_out_run_result(run_id, run_dir, stdout, stderr, runner_timeout_seconds)
 
     resource_guard_path = run_dir / "resource_guard.json"
     resource_guard_triggered = resource_guard_path.is_file() or "real cluster stopped by disk-pressure guard" in (stderr or "")
@@ -337,7 +538,12 @@ def run(spec: V5ExperimentSpec, *, cancel_check: Callable[[], bool] | None = Non
     # protocol/system keys when investigating a mismatch.
     summary["global_business_state_digest"] = _global_business_state_digest(summary)
     summary.update(_metatrack_control_plane_evidence(run_dir, summary))
-    artifact_contract = evaluate_expected_artifacts(run_dir, plan.artifact_contract or plan.expected_artifacts)
+
+    artifact_contract = _evaluate_artifact_contract_after_summary_presence(
+        run_dir,
+        summary,
+        plan.artifact_contract or plan.expected_artifacts,
+    )
     summary["artifact_contract"] = artifact_contract
     summary["artifact_contract_version"] = artifact_contract["artifact_contract_version"]
     summary["artifact_contract_status"] = artifact_contract["artifact_contract_status"]
@@ -363,6 +569,13 @@ def run(spec: V5ExperimentSpec, *, cancel_check: Callable[[], bool] | None = Non
         root_failure = "real cluster execution failed without a reported root cause"
     if root_failure:
         summary["root_failure"] = root_failure
+
+    # Storage post-processing starts only after protocol execution, observability,
+    # correctness gates and the formal artifact contract have all completed.
+    # NTFS compression is transparent and failure-open, so it cannot change the
+    # experiment result or contaminate the measurement window.
+    if status_value == "completed":
+        summary["artifact_storage"] = v5_artifact_storage.finalize_online_storage(run_dir, run_id=run_id)
 
     (run_dir / "real_cluster_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	realblock "metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/consensus/pbft"
 	"metaverse-chainlab/executor/realism/p2p"
 	"metaverse-chainlab/executor/realism/storage"
@@ -114,5 +115,111 @@ func TestPBFTCatchupReplaySuppressesCrossShardSideEffects(t *testing.T) {
 	r.onCommittedTxWithOrigin(context.Background(), item, Relay{}, CommitOriginCatchUp)
 	if len(r.events) != 0 || len(r.lifecycle) != 0 {
 		t.Fatal("certified catch-up replay emitted cross-shard side effects")
+	}
+}
+
+func recoveryCertificateAt(height uint64, blockHash string) pbft.CommitCertificate {
+	cert := pbft.CommitCertificate{View: 0, Sequence: height, Height: height, BlockHash: blockHash}
+	for _, id := range []string{"n0", "n1", "n2"} {
+		cert.Commits = append(cert.Commits, pbft.Commit{View: 0, Sequence: height, Height: height, NodeID: id, BlockHash: blockHash})
+	}
+	return cert
+}
+
+func TestPBFTUrgentCatchupUsesThirtyTwoBlockBatchToKnownTarget(t *testing.T) {
+	r := pbftUnitRuntime("n3")
+	r.committedHeight = 319
+	r.committedHash = "height-319"
+	r.noteCatchupTarget(1500)
+
+	var got CatchupRequest
+	r.sendToNodeHook = func(_ context.Context, to string, msg p2p.MessageEnvelope) error {
+		if to != "n0" || msg.MessageType != catchupRequestMessage {
+			t.Fatalf("unexpected catch-up send: to=%s type=%s", to, msg.MessageType)
+		}
+		request, err := p2p.DecodePayload[CatchupRequest](msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = request
+		return nil
+	}
+
+	r.requestCatchup(context.Background())
+	if got.FromHeight != 320 || got.ToHeight != 351 {
+		t.Fatalf("urgent catch-up range=%d..%d, want 320..351", got.FromHeight, got.ToHeight)
+	}
+	if r.runtimeMetricCounts["pbft_catchup_urgent_request_count"] != 1 {
+		t.Fatalf("urgent request metric=%d", r.runtimeMetricCounts["pbft_catchup_urgent_request_count"])
+	}
+}
+
+func TestPBFTNormalCatchupKeepsSmallProbeRange(t *testing.T) {
+	r := pbftUnitRuntime("n3")
+	var got CatchupRequest
+	r.sendToNodeHook = func(_ context.Context, _ string, msg p2p.MessageEnvelope) error {
+		request, err := p2p.DecodePayload[CatchupRequest](msg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = request
+		return nil
+	}
+	r.requestCatchup(context.Background())
+	if got.FromHeight != 1 || got.ToHeight != 9 {
+		t.Fatalf("normal catch-up range=%d..%d, want 1..9", got.FromHeight, got.ToHeight)
+	}
+}
+
+func TestPBFTCatchupRequestServesMultiBlockBatch(t *testing.T) {
+	r := pbftUnitRuntime("n1")
+	r.store = storage.NewBlockStore(t.TempDir(), "n1", "s0")
+
+	b1 := pbftUnitBlock()
+	b2 := pbftUnitBlock()
+	b2.Height = 2
+	b2.PreviousHash = b1.BlockHash
+	realblock.AssignHash(&b2)
+	for _, b := range []realblock.Block{b1, b2} {
+		if err := r.store.AppendCommitted(b, storage.CommitRecord{NodeID: "n1", ShardID: "s0", Height: b.Height, BlockHash: b.BlockHash, Committed: true}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.pbftState().AcceptCommitCertificate(recoveryCertificateAt(b.Height, b.BlockHash), b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.committedHeight = 2
+	r.committedHash = b2.BlockHash
+
+	heights := []uint64{}
+	r.sendToNodeHook = func(_ context.Context, to string, msg p2p.MessageEnvelope) error {
+		if msg.MessageType == catchupBlockMessage {
+			payload, err := p2p.DecodePayload[CatchupBlock](msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			heights = append(heights, payload.Block.Height)
+		}
+		return nil
+	}
+	if err := r.handleCertifiedCatchupRequest(context.Background(), "n0", CatchupRequest{ShardID: "s0", FromHeight: 1, ToHeight: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if len(heights) != 2 || heights[0] != 1 || heights[1] != 2 {
+		t.Fatalf("served heights=%v", heights)
+	}
+	if r.runtimeMetricCounts["pbft_catchup_blocks_served_count"] != 2 {
+		t.Fatalf("served metric=%d", r.runtimeMetricCounts["pbft_catchup_blocks_served_count"])
+	}
+	if r.runtimeMetricCounts["pbft_catchup_indexed_range_read_count"] != 1 {
+		t.Fatalf("indexed range reads=%d, want 1", r.runtimeMetricCounts["pbft_catchup_indexed_range_read_count"])
+	}
+}
+
+func TestPBFTCatchupRequestRejectsOversizedBatch(t *testing.T) {
+	r := pbftUnitRuntime("n1")
+	err := r.handleCertifiedCatchupRequest(context.Background(), "n0", CatchupRequest{ShardID: "s0", FromHeight: 1, ToHeight: certifiedCatchupBatchSize + 1})
+	if err == nil {
+		t.Fatal("oversized certified catch-up batch was accepted")
 	}
 }

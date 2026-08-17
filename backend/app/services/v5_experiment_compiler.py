@@ -286,6 +286,7 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         "truth_label": materialized.truth_label,
         "selection_mode": materialized.selection_mode,
         "variant_parameters": materialized.variant_parameters,
+        "audit_metadata": materialized.summary.get("audit_metadata") or {},
         "source_file_sha256": materialized.source_file_sha256,
         "replay_mode": source.replay_mode,
         "target_submission_tps": source.target_submission_tps,

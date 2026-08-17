@@ -1,6 +1,7 @@
 // MBE_V5_RESULTS_UI_TRUTH_CN_FINAL_20260814_V5
 import { useMemo, useState } from "react";
 import type {
+  V5ArtifactStorageGroup,
   V5FormalAggregate,
   V5FormalAnalysis,
   V5FormalArtifactCatalog,
@@ -28,6 +29,11 @@ type Props = {
   onSelectChild: (childId: string) => void;
   onRebuild?: () => void;
   rebuilding?: boolean;
+  storage: V5ArtifactStorageGroup | null;
+  onCompactStorage?: () => void;
+  onArchiveStorage?: () => void;
+  onRestoreStorage?: () => void;
+  storageBusyAction?: "compact" | "archive" | "restore" | "";
 };
 
 const tabs: Array<{ id: Tab; label: string }> = [
@@ -70,7 +76,7 @@ export default function V5ResultsDashboard(props: Props) {
       {tab === "observability" && <V5ResourceNetworkPanel children={children} />}
       {tab === "mechanism" && <V5MechanismAnalysis children={children} />}
       {tab === "children" && <ChildrenPanel group={group} children={children} selectedChild={props.selectedChild} selectedChildId={props.selectedChildId} onSelectChild={props.onSelectChild} />}
-      {tab === "artifacts" && <V5EvidencePanel groupId={group.run_group_id} catalog={props.catalog} children={children} onRebuild={props.onRebuild} rebuilding={props.rebuilding} />}
+      {tab === "artifacts" && <V5EvidencePanel groupId={group.run_group_id} catalog={props.catalog} children={children} storage={props.storage} onRebuild={props.onRebuild} rebuilding={props.rebuilding} onCompactStorage={props.onCompactStorage} onArchiveStorage={props.onArchiveStorage} onRestoreStorage={props.onRestoreStorage} storageBusyAction={props.storageBusyAction} />}
     </div>
   </section>;
 }

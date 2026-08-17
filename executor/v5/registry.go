@@ -385,6 +385,7 @@ type BlockExecutionResult struct {
 	BlockExecutionMS       int64            `json:"block_execution_ms"`
 	TransactionExecutionMS int64            `json:"transaction_execution_ms"`
 	DeterministicApplyMS   int64            `json:"deterministic_apply_ms"`
+	StateDBApplyMS         int64            `json:"state_db_apply_ms"`
 	StateCommitmentMS      int64            `json:"state_commitment_ms"`
 	StateRootVersion       string           `json:"state_root_version"`
 	PersistenceMetrics     map[string]any   `json:"persistence_metrics,omitempty"`
@@ -446,6 +447,7 @@ type WorkloadReplaySummary struct {
 	SourceFileSHA256         string         `json:"source_file_sha256,omitempty"`
 	SelectionMode            string         `json:"selection_mode,omitempty"`
 	VariantParameters        map[string]any `json:"variant_parameters,omitempty"`
+	AuditMetadata            map[string]any `json:"audit_metadata,omitempty"`
 	MaterializedSHA256       string         `json:"materialized_sha256,omitempty"`
 	ExpectedCount            int            `json:"expected_count"`
 	ReadCount                int            `json:"read_count"`

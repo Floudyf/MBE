@@ -13,7 +13,7 @@ from backend.app.services.v5_plugin_manifest_store import STORE
 
 CATALOG_DEFAULT_METHOD_ID = "v5_catalog_default"
 METHOD_EXCLUDED_CATEGORIES = {"workload", "fault_injection"}
-MAX_CHILD_RUNS = 100
+MAX_CHILD_RUNS = 1024
 
 
 def _batch_si_method(
@@ -235,6 +235,16 @@ class FormalPlanValidationError(ValueError):
     pass
 
 
+def validate_child_run_capacity(child_count: int) -> None:
+    # Pure capacity guard; scheduler execution semantics remain unchanged.
+    if child_count < 1:
+        raise FormalPlanValidationError("formal matrix must contain at least one Child Run")
+    if child_count > MAX_CHILD_RUNS:
+        raise FormalPlanValidationError(
+            f"formal matrix exceeds the {MAX_CHILD_RUNS} Child Run limit"
+        )
+
+
 @dataclass(frozen=True)
 class ValidatedFormalPlan:
     plan: V5FormalExperimentPlan
@@ -252,10 +262,7 @@ def validate_request(payload: V5FormalRunRequest, *, allow_blocked_rows: bool = 
     _validate_fault_points(plan)
     _validate_suite_shape(plan)
     rows = expand(plan, payload.execution_backend)
-    if len(rows) > MAX_CHILD_RUNS:
-        raise FormalPlanValidationError(f"formal matrix exceeds the {MAX_CHILD_RUNS} Child Run limit")
-    if not rows:
-        raise FormalPlanValidationError("formal matrix must contain at least one Child Run")
+    validate_child_run_capacity(len(rows))
 
     row_errors: list[str] = []
     for row in rows:

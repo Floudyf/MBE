@@ -967,6 +967,27 @@ func (s *State) AcceptCheckpoint(msg Checkpoint) (bool, int, CheckpointCertifica
 		StateRoot:   msg.StateRoot,
 		Checkpoints: sortedCheckpoints(s.CheckpointVotes[key]),
 	}
+
+	// A quorum checkpoint learned from remote validators is safety evidence, but
+	// it is not yet a locally installed checkpoint. Advancing LowWatermark before
+	// this replica has durably committed the checkpoint block can strand a lagging
+	// replica exactly one block behind the watermark (for example committed=19,
+	// remote stable checkpoint=20). Require both the local durable block and this
+	// replica's own checkpoint vote for the same block/state digest before moving
+	// local watermarks. Remote votes remain buffered so the transition happens as
+	// soon as local catch-up commits the checkpoint height and broadcasts its vote.
+	localBlock, locallyDurable := s.CommittedBlocks[msg.Height]
+	localVote, localVotePresent := s.CheckpointVotes[key][s.NodeID]
+	localCheckpointInstalled := locallyDurable &&
+		localBlock.BlockHash == msg.BlockHash &&
+		localVotePresent &&
+		localVote.Height == msg.Height &&
+		localVote.BlockHash == msg.BlockHash &&
+		localVote.StateRoot == msg.StateRoot
+	if !localCheckpointInstalled {
+		return false, count, copyCheckpointCertificate(cert), nil
+	}
+
 	newlyStable := msg.Height > s.StableCheckpoint.Height
 	if newlyStable {
 		s.StableCheckpoint = cert
@@ -1025,18 +1046,12 @@ func (s *State) inWatermarksLocked(height uint64) bool {
 }
 
 func (s *State) pruneStableLocked(height uint64) {
-	// Commit certificates are compact catch-up proofs. Retain a trailing
-	// watermark window even after a stable checkpoint so a briefly lagging
-	// correct replica can replay certified blocks without unsafe state install.
-	certFloor := uint64(0)
-	if height > s.WatermarkWindow {
-		certFloor = height - s.WatermarkWindow
-	}
-	for h := range s.CommitCertificates {
-		if h < certFloor {
-			delete(s.CommitCertificates, h)
-		}
-	}
+	// Commit certificates are compact quorum proofs and are the only safe input
+	// to V5 live replica catch-up. Keep them for the lifetime of this runtime
+	// instead of pruning them at the PBFT low watermark. The prior trailing-window
+	// policy made a correct replica permanently unrecoverable after a long pause:
+	// durable blocks remained on disk while the proof required to import them had
+	// already been discarded. Raw PREPARE/COMMIT vote maps are still pruned below.
 	for hash, b := range s.LockedBlocks {
 		if b.Height <= height {
 			delete(s.LockedBlocks, hash)
