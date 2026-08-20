@@ -1435,6 +1435,13 @@ export type V5FormalRunGroup = {
   active_child_started_at?: string | null;
   interrupted_at?: string | null;
   interrupted_reason?: string | null;
+  bundle_status?: "pending_after_resume" | "building" | "ready" | "failed" | string | null;
+  bundle_started_at?: string | null;
+  bundle_ready_at?: string | null;
+  bundle_failed_at?: string | null;
+  bundle_size_bytes?: number | null;
+  bundle_sha256?: string | null;
+  bundle_error?: string | null;
   resume_requested_count?: number | null;
   resume_attempt?: number | null;
   execution_policy?: Record<string, unknown>;
@@ -1738,3 +1745,5 @@ async function request<T = unknown>(path: string, init?: RequestInit): Promise<T
   }
   return response.json() as Promise<T>;
 }
+
+// MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7

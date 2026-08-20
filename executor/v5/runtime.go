@@ -1057,6 +1057,7 @@ func (r *NodeRuntime) requestCatchup(ctx context.Context) {
 	}
 	r.lastCatchupRequest = time.Now()
 	r.incrementRuntimeMetricLocked("pbft_catchup_request_count")
+	requestOrdinal := r.runtimeMetricCounts["pbft_catchup_request_count"]
 	if urgent {
 		r.incrementRuntimeMetricLocked("pbft_catchup_urgent_request_count")
 	}
@@ -1073,7 +1074,10 @@ func (r *NodeRuntime) requestCatchup(ctx context.Context) {
 		}
 	}
 	request := CatchupRequest{ShardID: r.node.ShardID, FromHeight: from, ToHeight: to, KnownHeight: knownHeight, KnownHash: knownHash}
-	for _, validator := range r.catchupPeerCandidates() {
+	// Rotate a certified catch-up source on each retry. A successful TCP send
+	// does not prove that a busy primary can service the requested proof range.
+	// Safety is unchanged because catch-up blocks still require PBFT commit certs.
+	for _, validator := range rotateCatchupPeers(r.catchupPeerCandidates(), requestOrdinal) {
 		envelope, err := p2p.NewEnvelope(catchupRequestMessage, r.node.NodeID, validator, r.node.ShardID, from, r.currentPBFTView(), from, request)
 		if err != nil {
 			continue
@@ -1111,6 +1115,21 @@ func (r *NodeRuntime) catchupPeerCandidates() []string {
 		appendPeer(validator)
 	}
 	return out
+}
+
+func rotateCatchupPeers(peers []string, requestOrdinal int64) []string {
+	out := append([]string(nil), peers...)
+	if len(out) <= 1 {
+		return out
+	}
+	offset := int((requestOrdinal - 1) % int64(len(out)))
+	if offset < 0 {
+		offset = 0
+	}
+	rotated := make([]string, 0, len(out))
+	rotated = append(rotated, out[offset:]...)
+	rotated = append(rotated, out[:offset]...)
+	return rotated
 }
 
 func (r *NodeRuntime) catchupRequestInterval(urgentMode ...bool) time.Duration {
@@ -7127,3 +7146,5 @@ func planDigestsConsistent(rows [][]string) bool {
 	}
 	return true
 }
+
+// MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7

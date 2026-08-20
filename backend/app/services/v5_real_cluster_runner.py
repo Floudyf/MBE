@@ -8,6 +8,7 @@ import os
 import signal
 import shutil
 import subprocess
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -164,6 +165,23 @@ def _write_supervisor_process_evidence(run_dir: Path, payload: dict) -> None:
         pass
 
 
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            probe = subprocess.run(
+                ["powershell.exe", "-NoLogo", "-NoProfile", "-Command",
+                 f"$p=Get-Process -Id {pid} -ErrorAction SilentlyContinue; if($p){{'1'}}"],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+            return (probe.stdout or "").strip() == "1"
+        os.kill(pid, 0)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _pid_matches_persisted_supervisor(pid: int, run_dir: Path) -> bool:
     if pid <= 0:
         return False
@@ -193,16 +211,21 @@ def reap_persisted_supervisors(run_group_id: str) -> list[dict]:
             continue
         if str(payload.get("run_group_id") or "") != str(run_group_id):
             continue
-        if str(payload.get("status") or "") == "reaped":
+        if str(payload.get("status") or "") in {"reaped", "stale_reaped", "already_gone"}:
             continue
         pid = int(payload.get("pid") or 0)
         run_dir = evidence_path.parent
-        matched = _pid_matches_persisted_supervisor(pid, run_dir)
+        alive_before = _pid_exists(pid)
+        matched = _pid_matches_persisted_supervisor(pid, run_dir) if alive_before else False
         terminated = False
         if matched:
             if os.name == "nt":
                 try:
-                    subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20, check=False)
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        timeout=20, check=False,
+                    )
                     terminated = True
                 except (OSError, subprocess.SubprocessError):
                     terminated = False
@@ -212,17 +235,26 @@ def reap_persisted_supervisors(run_group_id: str) -> list[dict]:
                     terminated = True
                 except (OSError, ProcessLookupError):
                     terminated = False
+        alive_after = _pid_exists(pid)
+        if not alive_before:
+            lifecycle_status = "already_gone"
+        elif matched and terminated and not alive_after:
+            lifecycle_status = "stale_reaped"
+        elif alive_before and not matched:
+            lifecycle_status = "stale_identity_mismatch"
+        else:
+            lifecycle_status = "stale_reap_failed"
         record = {
             "run_id": run_dir.name,
             "pid": pid,
+            "process_alive_before": alive_before,
+            "process_alive_after": alive_after,
             "process_identity_matched": matched,
             "termination_requested": terminated,
+            "lifecycle_status": lifecycle_status,
             "checked_at": datetime.now(UTC).isoformat(),
         }
-        payload.update({
-            "status": "stale_reaped" if terminated else "stale_reap_skipped",
-            "stale_reap": record,
-        })
+        payload.update({"status": lifecycle_status, "stale_reap": record})
         _write_supervisor_process_evidence(run_dir, payload)
         results.append(record)
     return results
@@ -237,6 +269,9 @@ def _run_supervisor_process(
     heartbeat_interval_seconds: float = 5.0,
     runtime_context: dict | None = None,
 ) -> tuple[int, str, str, bool, bool]:
+    # Wall timeout is enforced by an independent timer thread. Heartbeat and
+    # cancellation callbacks run in daemon helper threads so a stuck callback
+    # cannot block the timeout/reap path.
     stdout_path = run_dir / "supervisor_stdout.log"
     stderr_path = run_dir / "supervisor_stderr.log"
     popen_kwargs: dict = {}
@@ -245,11 +280,9 @@ def _run_supervisor_process(
     else:
         popen_kwargs["start_new_session"] = True
 
-    cancelled = False
-    timed_out = False
-    started = time.monotonic()
-    last_disk_check = 0.0
-    emergency_threshold = _threshold_bytes("MBE_V5_EMERGENCY_MIN_FREE_GB", _DEFAULT_EMERGENCY_FREE_GB)
+    emergency_threshold = _threshold_bytes(
+        "MBE_V5_EMERGENCY_MIN_FREE_GB", _DEFAULT_EMERGENCY_FREE_GB
+    )
     with stdout_path.open("w", encoding="utf-8", buffering=1) as stdout_handle, stderr_path.open(
         "w", encoding="utf-8", buffering=1
     ) as stderr_handle:
@@ -262,64 +295,120 @@ def _run_supervisor_process(
             **popen_kwargs,
         )
         process_evidence = {
-            "schema_version": "mbe_v5_supervisor_process_v1",
+            "schema_version": "mbe_v5_supervisor_process_v2",
             "pid": int(process.pid),
             "started_at": datetime.now(UTC).isoformat(),
             "timeout_seconds": int(timeout_seconds),
+            "watchdog_independent_of_heartbeat": True,
             **(runtime_context or {}),
         }
         _write_supervisor_process_evidence(run_dir, process_evidence)
-        last_heartbeat = 0.0
-        while process.poll() is None:
-            now_monotonic = time.monotonic()
-            if heartbeat_callback is not None and now_monotonic - last_heartbeat >= max(1.0, heartbeat_interval_seconds):
-                last_heartbeat = now_monotonic
+
+        stop_helpers = threading.Event()
+        timed_out_event = threading.Event()
+        cancelled_event = threading.Event()
+
+        def watchdog() -> None:
+            if stop_helpers.wait(max(1, int(timeout_seconds))):
+                return
+            if process.poll() is None:
+                timed_out_event.set()
+                _terminate_process_tree(process)
+
+        def heartbeat_loop() -> None:
+            if heartbeat_callback is None:
+                return
+            interval = max(1.0, float(heartbeat_interval_seconds))
+            while not stop_helpers.is_set() and process.poll() is None:
                 try:
                     heartbeat_callback()
                 except Exception:
                     pass
-            if cancel_check is not None:
+                if stop_helpers.wait(interval):
+                    return
+
+        def cancellation_loop() -> None:
+            if cancel_check is None:
+                return
+            while not stop_helpers.is_set() and process.poll() is None:
                 try:
-                    cancelled = bool(cancel_check())
+                    if bool(cancel_check()):
+                        cancelled_event.set()
+                        _terminate_process_tree(process)
+                        return
                 except Exception:
-                    cancelled = False
-                if cancelled:
-                    stderr_handle.write("\nformal RunGroup cancellation requested; terminating supervisor process tree\n")
-                    stderr_handle.flush()
-                    _terminate_process_tree(process)
-                    break
-            if now_monotonic - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
-                last_disk_check = now_monotonic
-                evidence = _disk_pressure_evidence(run_dir, threshold_bytes=emergency_threshold, phase="running_child")
-                if evidence["below_threshold"]:
-                    _write_resource_guard(run_dir, evidence)
-                    stderr_handle.write("\nreal cluster stopped by disk-pressure guard\n")
-                    stderr_handle.flush()
-                    _terminate_process_tree(process)
-                    break
-            if time.monotonic() - started >= timeout_seconds:
-                timed_out = True
-                stderr_handle.write(f"\nreal cluster timed out after {timeout_seconds} seconds\n")
-                stderr_handle.flush()
-                _terminate_process_tree(process)
-                break
-            time.sleep(0.25)
+                    pass
+                if stop_helpers.wait(0.5):
+                    return
+
+        threading.Thread(target=watchdog, name=f"v5-wall-watchdog-{process.pid}", daemon=True).start()
+        threading.Thread(target=heartbeat_loop, name=f"v5-heartbeat-{process.pid}", daemon=True).start()
+        threading.Thread(target=cancellation_loop, name=f"v5-cancel-watch-{process.pid}", daemon=True).start()
+
+        disk_pressure_stop = False
+        last_disk_check = 0.0
+        try:
+            while process.poll() is None:
+                now_monotonic = time.monotonic()
+                if now_monotonic - last_disk_check >= _DISK_CHECK_INTERVAL_SECONDS:
+                    last_disk_check = now_monotonic
+                    evidence = _disk_pressure_evidence(
+                        run_dir, threshold_bytes=emergency_threshold, phase="running_child"
+                    )
+                    if evidence["below_threshold"]:
+                        disk_pressure_stop = True
+                        _write_resource_guard(run_dir, evidence)
+                        _terminate_process_tree(process)
+                        break
+                time.sleep(0.25)
+        finally:
+            stop_helpers.set()
+
+        if timed_out_event.is_set():
+            stderr_handle.write(
+                f"\nreal cluster timed out after {timeout_seconds} seconds; independent wall watchdog reclaimed supervisor process tree\n"
+            )
+        elif cancelled_event.is_set():
+            stderr_handle.write(
+                "\nformal RunGroup cancellation requested; terminating supervisor process tree\n"
+            )
+        elif disk_pressure_stop:
+            stderr_handle.write("\nreal cluster stopped by disk-pressure guard\n")
+        stderr_handle.flush()
+
         returncode = process.poll()
         if returncode is None:
             _terminate_process_tree(process)
             returncode = process.poll()
         if returncode is None:
             returncode = 125
+
+        cancelled = cancelled_event.is_set()
+        timed_out = timed_out_event.is_set()
+        termination_reason = (
+            "formal_child_wall_timeout" if timed_out else
+            "cancel_requested" if cancelled else
+            "disk_pressure_guard" if disk_pressure_stop else
+            "process_exit"
+        )
         process_evidence.update({
             "status": "reaped",
             "returncode": int(returncode),
             "reaped_at": datetime.now(UTC).isoformat(),
             "cancelled": bool(cancelled),
             "timed_out": bool(timed_out),
+            "termination_reason": termination_reason,
+            "process_alive_after_reap": _pid_exists(int(process.pid)),
         })
         _write_supervisor_process_evidence(run_dir, process_evidence)
 
-    return int(returncode), _read_log_tail(stdout_path), _read_log_tail(stderr_path), cancelled, timed_out
+    return (
+        int(returncode),
+        _read_log_tail(stdout_path),
+        _read_log_tail(stderr_path),
+        cancelled,
+        timed_out,
+    )
 
 
 def _cancelled_run_result(run_id: str, run_dir: Path, stdout: str, stderr: str) -> dict:
@@ -356,26 +445,54 @@ def _cancelled_run_result(run_id: str, run_dir: Path, stdout: str, stderr: str) 
 
 
 def _timed_out_run_result(run_id: str, run_dir: Path, stdout: str, stderr: str, timeout_seconds: int) -> dict:
-    # A timeout is a bounded formal execution outcome. It keeps diagnostics but
-    # never masquerades as a completed fixed-workload performance sample.
+    # A timeout is diagnostic-only and never masquerades as a completed sample.
     try:
         v5_observability_metrics.write_observability_summaries(run_dir)
     except Exception:
         pass
     summary = v5_real_cluster_artifacts.read_summary(run_dir)
     finality = summary.get("finality_evidence") if isinstance(summary.get("finality_evidence"), dict) else {}
+    drain = _read_json(run_dir / "drain_status.json")
+
+    def evidence_value(finality_key: str, drain_key: str):
+        value = finality.get(finality_key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value), "finality_evidence"
+        value = drain.get(drain_key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value), "drain_status"
+        return None, None
+
+    submitted, submitted_source = evidence_value("submitted_unique_tx_count", "submitted")
+    terminal, terminal_source = evidence_value("terminal_unique_tx_count", "terminal")
+    incomplete, incomplete_source = evidence_value("incomplete_unique_tx_count", "incomplete")
+    finalized = finality.get("finalized_unique_logical_tx_count")
+    if isinstance(finalized, (int, float)) and not isinstance(finalized, bool):
+        finalized = int(finalized)
+    else:
+        finalized = None
+
     timeout_summary = {
-        "schema_version": "mbe_v5_formal_timeout_v1",
+        "schema_version": "mbe_v5_formal_timeout_v2",
         "execution_status": "timed_out",
         "timeout_seconds": int(timeout_seconds),
         "timed_out_at": datetime.now(UTC).isoformat(),
-        "submitted_unique_tx_count": finality.get("submitted_unique_tx_count"),
-        "terminal_unique_tx_count": finality.get("terminal_unique_tx_count"),
-        "finalized_unique_logical_tx_count": finality.get("finalized_unique_logical_tx_count"),
-        "incomplete_unique_tx_count": finality.get("incomplete_unique_tx_count"),
+        "submitted_unique_tx_count": submitted,
+        "terminal_unique_tx_count": terminal,
+        "finalized_unique_logical_tx_count": finalized,
+        "incomplete_unique_tx_count": incomplete,
         "committed_block_count": summary.get("committed_block_count"),
+        "drain_phase": drain.get("phase"),
+        "drain_completion_reason": drain.get("completion_reason"),
+        "evidence_sources": {
+            "submitted_unique_tx_count": submitted_source,
+            "terminal_unique_tx_count": terminal_source,
+            "incomplete_unique_tx_count": incomplete_source,
+            "finalized_unique_logical_tx_count": "finality_evidence" if finalized is not None else None,
+        },
         "formal_eligibility": False,
         "diagnostic_only": True,
+        "terminal_is_not_assumed_finalized": True,
     }
     try:
         (run_dir / "formal_timeout_summary.json").write_text(
@@ -383,6 +500,7 @@ def _timed_out_run_result(run_id: str, run_dir: Path, stdout: str, stderr: str, 
         )
     except OSError:
         pass
+
     summary.update({
         "execution_status": "timed_out",
         "artifact_status": "incomplete",
@@ -392,6 +510,7 @@ def _timed_out_run_result(run_id: str, run_dir: Path, stdout: str, stderr: str, 
         "completion_gate": {"passed": False, "blockers": ["formal_child_wall_timeout"]},
         "timed_out": True,
         "timeout_seconds": int(timeout_seconds),
+        "formal_timeout_evidence": timeout_summary,
         "no_fallback": True,
     })
     try:
@@ -928,3 +1047,5 @@ def _number(value: object) -> float:
 
 def _positive_number(value: object) -> bool:
     return _number(value) > 0
+
+# MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7

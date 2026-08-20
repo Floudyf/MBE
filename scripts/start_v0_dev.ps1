@@ -1,7 +1,8 @@
 ﻿[CmdletBinding()]
 param(
     [switch]$SkipToolInstall,
-    [switch]$SkipDependencyInstall
+    [switch]$SkipDependencyInstall,
+    [switch]$EnableBackendReload
 )
 
 $ErrorActionPreference = "Stop"
@@ -436,7 +437,14 @@ try {
     } else {
         $backendPid = Get-ListeningProcessId 8000
         if ($backendPid) { throw "Port 8000 is occupied by PID $backendPid, but the MBE health endpoint is not responding." }
-        $backendCommand = "`$env:Path=$pathLiteral; Set-Location -LiteralPath $rootLiteral; & $venvPythonLiteral -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000"
+        $backendReloadFlag = ""
+        $backendReloadMode = "0"
+        if ($EnableBackendReload) {
+            $backendReloadFlag = "--reload "
+            $backendReloadMode = "1"
+            Write-Warn "Backend reload is explicitly enabled. Do not start Formal real-cluster experiments in this mode."
+        }
+        $backendCommand = "`$env:MBE_V5_BACKEND_RELOAD='$backendReloadMode'; `$env:Path=$pathLiteral; Set-Location -LiteralPath $rootLiteral; & $venvPythonLiteral -m uvicorn backend.app.main:app $($backendReloadFlag)--host 127.0.0.1 --port 8000"
         Start-Process powershell.exe -ArgumentList "-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $backendCommand
     }
 
@@ -462,3 +470,5 @@ try {
     Write-Host "Project root: $projectRoot" -ForegroundColor DarkGray
     exit 1
 }
+
+# MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7

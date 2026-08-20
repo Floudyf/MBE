@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -26,7 +27,7 @@ SUPPORTED_SYNTHETIC_WORKLOAD_POINT_FIELDS = {"tx_count", "cross_shard_ratio", "t
 SUPPORTED_DATASET_WORKLOAD_POINT_FIELDS = {"tx_count", "target_alpha", "target_theta", "access_profile", "skew_axis"}
 
 DEFAULT_FORMAL_EXECUTION_POLICY = {
-    "schema_version": "mbe_v5_formal_execution_policy_v3",
+    "schema_version": "mbe_v5_formal_execution_policy_v4",
     "child_wall_timeout_seconds": 1800,
     "worker_heartbeat_seconds": 5,
     "stale_worker_timeout_seconds": 30,
@@ -46,18 +47,87 @@ def _execution_policy(group: dict) -> dict:
     return {**DEFAULT_FORMAL_EXECUTION_POLICY, **raw, "schema_version": DEFAULT_FORMAL_EXECUTION_POLICY["schema_version"]}
 
 
-def _write_worker_heartbeat(group_id: str, *, child_id: str = "", child_started_at: str = "") -> None:
-    group = read_group(group_id)
-    group["worker_heartbeat_at"] = datetime.now(UTC).isoformat()
-    group["worker_pid"] = os.getpid()
-    if child_id:
-        group["active_child_run_id"] = child_id
-        if child_started_at:
-            group["active_child_started_at"] = child_started_at
+def _worker_heartbeat_path(group_id: str) -> Path:
+    return group_dir(group_id) / "worker_heartbeat.json"
+
+
+def _read_worker_heartbeat_sidecar(group_id: str) -> dict:
+    # Sidecar telemetry is optional. Legacy tests and internal callers may use
+    # synthetic group IDs that intentionally bypass the public ID contract.
+    # In that case, preserve the historical reconcile behavior by treating the
+    # sidecar as absent instead of raising before stale-group logic runs.
+    try:
+        path = _worker_heartbeat_path(group_id)
+    except ValueError:
+        return {}
+    if not path.is_file():
+        return {}
+    for attempt in range(3):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except PermissionError:
+            if attempt == 2:
+                return {}
+            time.sleep(0.002)
+        except (OSError, json.JSONDecodeError):
+            return {}
+    return {}
+
+
+def _overlay_worker_heartbeat(group_id: str, group: dict) -> dict:
+    heartbeat = _read_worker_heartbeat_sidecar(group_id)
+    if not heartbeat:
+        return group
+    observed = dict(group)
+    if heartbeat.get("worker_heartbeat_at"):
+        observed["worker_heartbeat_at"] = heartbeat.get("worker_heartbeat_at")
+    active_child = str(heartbeat.get("active_child_run_id") or "")
+    active_started = str(heartbeat.get("active_child_started_at") or "")
+    if active_child:
+        observed["active_child_run_id"] = active_child
+        if active_started:
+            observed["active_child_started_at"] = active_started
     else:
-        group.pop("active_child_run_id", None)
-        group.pop("active_child_started_at", None)
-    write_group(group)
+        observed.pop("active_child_run_id", None)
+        observed.pop("active_child_started_at", None)
+    return observed
+
+
+def _write_worker_heartbeat(group_id: str, *, child_id: str = "", child_started_at: str = "") -> None:
+    directory = group_dir(group_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = _worker_heartbeat_path(group_id)
+    temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    payload = {
+        "schema_version": "mbe_v5_formal_worker_heartbeat_v1",
+        "run_group_id": group_id,
+        "worker_heartbeat_at": datetime.now(UTC).isoformat(),
+        "worker_pid": os.getpid(),
+        "active_child_run_id": child_id or None,
+        "active_child_started_at": child_started_at or None,
+    }
+    try:
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+        for attempt in range(20):
+            try:
+                os.replace(temp_path, path)
+                return
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.005)
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _heartbeat_age_seconds(group: dict) -> float:
@@ -74,7 +144,7 @@ def _heartbeat_age_seconds(group: dict) -> float:
 
 
 def reconcile_stale_group(group_id: str) -> dict:
-    group = read_group(group_id)
+    group = _overlay_worker_heartbeat(group_id, read_group(group_id))
     if group.get("status") not in {"starting", "running", "cancelling"}:
         return group
     if worker_active(group_id):
@@ -101,6 +171,9 @@ def reconcile_stale_group(group_id: str) -> dict:
     group["interrupted_reason"] = "stale_worker_heartbeat"
     group["stale_supervisor_reap"] = stale_reap
     group["paper_candidate"] = False
+    group.pop("active_child_run_id", None)
+    group.pop("active_child_started_at", None)
+    group["worker_terminalized_at"] = interrupted_at
     _refresh_child_counts(group, items)
     write_group(group)
     return group
@@ -576,6 +649,14 @@ def _changed_categories(plan: V5FormalExperimentPlan, method: dict) -> list[str]
 
 def start(group_id: str) -> None:
     group = read_group(group_id)
+    if (
+        str(group.get("execution_backend") or "") == "real_cluster"
+        and os.environ.get("MBE_V5_BACKEND_RELOAD", "0").strip() == "1"
+    ):
+        raise RuntimeError(
+            "Formal real-cluster RunGroups cannot start while backend reload is enabled; "
+            "restart MBE without --reload"
+        )
     worker_name = f"v5-formal-worker-{group_id}"
     group["status"] = "starting"
     group["worker_pid"] = os.getpid()
@@ -796,22 +877,65 @@ def _run_worker(group_id: str) -> None:
     finalize(group_id)
 
 
+def _bundle_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _try_build_bundle(directory: Path, group: dict) -> bool:
-    # Persist the state that a successful ZIP should contain before creating it.
-    # Remove a prior/partial ZIP first so catalog.bundle_ready can never mistake
-    # a corrupt archive for a completed reproducibility bundle.
     output = directory / "artifacts.zip"
+    temp_output = directory / f".artifacts.{uuid4().hex}.tmp.zip"
+    for stale in directory.glob(".artifacts.*.tmp.zip"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     try:
         output.unlink(missing_ok=True)
     except OSError:
         pass
-    group["bundle_status"] = "ready"
-    group.pop("bundle_error", None)
-    group.pop("bundle_failed_at", None)
+
+    group["bundle_status"] = "building"
+    group["bundle_started_at"] = datetime.now(UTC).isoformat()
+    for key in ("bundle_ready_at", "bundle_size_bytes", "bundle_sha256", "bundle_error", "bundle_failed_at"):
+        group.pop(key, None)
     write_group(group)
+
     try:
-        build_bundle(directory, group)
+        try:
+            build_bundle(directory, group, output_path=temp_output)
+        except TypeError as exc:
+            if "output_path" not in str(exc):
+                raise
+            legacy_output = Path(build_bundle(directory, group))
+            if legacy_output.resolve() != temp_output.resolve():
+                os.replace(legacy_output, temp_output)
+
+        with zipfile.ZipFile(temp_output, "r") as archive:
+            bad_member = archive.testzip()
+            if bad_member is not None:
+                raise RuntimeError(f"bundle CRC verification failed at {bad_member}")
+            names = set(archive.namelist())
+            required = {"reproducibility_manifest.json", "artifact_manifest.json", "run_group.json"}
+            missing = sorted(required - names)
+            if missing:
+                raise RuntimeError(f"bundle missing required entries: {missing}")
+
+        os.replace(temp_output, output)
+        group["bundle_status"] = "ready"
+        group["bundle_ready_at"] = datetime.now(UTC).isoformat()
+        group["bundle_size_bytes"] = int(output.stat().st_size)
+        group["bundle_sha256"] = _bundle_sha256(output)
+        write_group(group)
+        return True
     except Exception as exc:
+        try:
+            temp_output.unlink(missing_ok=True)
+        except OSError:
+            pass
         try:
             output.unlink(missing_ok=True)
         except OSError:
@@ -821,7 +945,6 @@ def _try_build_bundle(directory: Path, group: dict) -> bool:
         group["bundle_failed_at"] = datetime.now(UTC).isoformat()
         write_group(group)
         return False
-    return True
 
 
 def finalize_cancelled(group_id: str) -> dict:
@@ -846,6 +969,8 @@ def finalize_cancelled(group_id: str) -> dict:
     _refresh_child_counts(group, items)
     group["performance_comparison_valid"] = False
     group["paper_candidate"] = False
+    group.pop("active_child_run_id", None)
+    group.pop("active_child_started_at", None)
     group["bundle_path"] = str(directory / "artifacts.zip")
     write_group(group)
     _try_build_bundle(directory, group)
@@ -895,6 +1020,8 @@ def finalize(group_id: str) -> dict:
     # 在打包前写入最终状态，确保 ZIP 内的 run_group.json
     # 与 API 查询到的最终状态完全一致。
     group["finished_at"] = datetime.now(UTC).isoformat()
+    group.pop("active_child_run_id", None)
+    group.pop("active_child_started_at", None)
     group["bundle_path"] = str(directory / "artifacts.zip")
     write_group(group)
 
@@ -1421,3 +1548,5 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
     spec.formal_plan_config_id = formal_plan_config_id or spec.formal_plan_config_id
     spec.method_config_id = row.get("method_config_id")
     return spec
+
+# MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7

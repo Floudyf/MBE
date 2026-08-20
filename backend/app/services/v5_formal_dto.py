@@ -13,6 +13,8 @@ _SUMMARY_KEYS = (
     "timed_out_child_runs", "interrupted_child_runs", "not_started_child_runs",
     "worker_heartbeat_at", "active_child_run_id", "active_child_started_at", "interrupted_at", "interrupted_reason", "stale_supervisor_reap",
     "resume_requested_count", "resume_attempt", "resumed_at", "execution_policy",
+    "bundle_status", "bundle_started_at", "bundle_ready_at", "bundle_failed_at",
+    "bundle_size_bytes", "bundle_sha256", "bundle_error",
 )
 _GROUP_TRUTH_KEYS = (
     "performance_comparison_valid",
@@ -211,3 +213,5 @@ def _safe_summary(value):
     if isinstance(value, list):
         return [_safe_summary(item) for item in value]
     return deepcopy(value)
+
+# MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7

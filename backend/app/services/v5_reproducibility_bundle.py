@@ -31,8 +31,16 @@ def _experiment_conditions(group: dict) -> dict:
     }
 
 
-def build(group_dir: Path, group: dict) -> Path:
-    group_files = [path for path in group_dir.rglob("*") if path.is_file() and path.name not in {"artifacts.zip", "reproducibility_manifest.json", "artifact_manifest.json"}]
+def build(group_dir: Path, group: dict, output_path: Path | None = None) -> Path:
+    output = output_path or (group_dir / "artifacts.zip")
+    output_resolved = output.resolve()
+    group_files = [
+        path for path in group_dir.rglob("*")
+        if path.is_file()
+        and path.name not in {"artifacts.zip", "reproducibility_manifest.json", "artifact_manifest.json"}
+        and not path.name.startswith(".artifacts.")
+        and path.resolve() != output_resolved
+    ]
     archive_entries: list[tuple[Path, str, str]] = [
         (path, path.relative_to(group_dir).as_posix(), "run_group") for path in group_files
     ]
@@ -55,7 +63,6 @@ def build(group_dir: Path, group: dict) -> Path:
     artifact_manifest = group_dir / "artifact_manifest.json"
     reproducibility_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     artifact_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    output = group_dir / "artifacts.zip"
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as archive:
         for path, archive_name, _ in archive_entries:
             if path.is_file():
@@ -97,3 +104,5 @@ def _failed_runtime_diagnostics(group_dir: Path, group: dict) -> list[tuple[Path
             entries.append((path, archive_name, "non_paper_eligible_child_runtime"))
             total += size
     return entries
+
+# MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7
