@@ -26,6 +26,7 @@ type durableBlockRangeIndex struct {
 	offsets              map[uint64]durableBlockOffset
 	fullScanCount        int64
 	incrementalScanCount int64
+	markerSeedCount      int64
 }
 
 var durableBlockRangeIndexes sync.Map
@@ -88,6 +89,62 @@ func durableBlockHeightFromLine(line []byte, legacyWrapped bool) (uint64, error)
 	return header.Height, nil
 }
 
+func (idx *durableBlockRangeIndex) seedFromCommitMarkers(sourceSize int64) bool {
+	if idx.legacyWrapped || sourceSize <= 0 {
+		return false
+	}
+	path := filepath.Join(filepath.Dir(idx.path), "commit_markers.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+
+	// Consume only newline-terminated marker records. A concurrent partial tail
+	// is not a completed durable marker and must not force a multi-GB fallback
+	// scan of blocks.jsonl.
+	lines := bytes.Split(data, []byte{'\n'})
+	if len(lines) < 2 {
+		return false
+	}
+	seeded := map[uint64]durableBlockOffset{}
+	expectedOffset := int64(0)
+	lastHeight := uint64(0)
+	count := 0
+	for _, line := range lines[:len(lines)-1] {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var marker CommitMarker
+		if json.Unmarshal(line, &marker) != nil {
+			return false
+		}
+		if marker.Version != "durable_commit_marker_v1" || !marker.Committed || marker.Height == 0 || marker.BlockHash == "" {
+			return false
+		}
+		if marker.BlockLength <= 0 || marker.BlockLength > maxCommittedBlockRecordBytes || marker.BlockSourceSize <= 0 {
+			// Historical markers have no offsets; retain the existing safe scan.
+			return false
+		}
+		if marker.BlockOffset != expectedOffset ||
+			marker.BlockSourceSize != marker.BlockOffset+int64(marker.BlockLength) ||
+			marker.BlockSourceSize > sourceSize ||
+			(lastHeight > 0 && marker.Height <= lastHeight) {
+			return false
+		}
+		seeded[marker.Height] = durableBlockOffset{offset: marker.BlockOffset, length: marker.BlockLength}
+		expectedOffset = marker.BlockSourceSize
+		lastHeight = marker.Height
+		count++
+	}
+	if count == 0 {
+		return false
+	}
+	idx.offsets = seeded
+	idx.indexedSize = expectedOffset
+	idx.markerSeedCount++
+	return true
+}
+
 func (idx *durableBlockRangeIndex) refresh() error {
 	info, err := os.Stat(idx.path)
 	if err != nil {
@@ -99,6 +156,11 @@ func (idx *durableBlockRangeIndex) refresh() error {
 	if info.Size() < idx.indexedSize {
 		idx.indexedSize = 0
 		idx.offsets = map[uint64]durableBlockOffset{}
+	}
+	if idx.indexedSize == 0 && len(idx.offsets) == 0 && !idx.legacyWrapped {
+		if idx.seedFromCommitMarkers(info.Size()) && info.Size() == idx.indexedSize {
+			return nil
+		}
 	}
 	start := idx.indexedSize
 	if start == 0 {
@@ -233,3 +295,5 @@ func (s *BlockStore) ReadCommittedRange(fromHeight, toHeight uint64) ([]block.Bl
 	}
 	return out, nil
 }
+
+// MBE_PBFT_CATCHUP_TAIL_CLOSURE_20260821_V5

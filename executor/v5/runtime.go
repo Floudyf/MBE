@@ -1082,7 +1082,7 @@ func (r *NodeRuntime) requestCatchup(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if err := r.sendToNode(ctx, validator, envelope); err == nil {
+		if err := r.sendCatchupToNode(ctx, validator, envelope); err == nil {
 			r.mu.Lock()
 			r.incrementRuntimeMetricLocked("pbft_catchup_request_peer_count")
 			r.mu.Unlock()
@@ -1448,12 +1448,7 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		if err != nil {
 			return err
 		}
-		r.mu.Lock()
-		r.incrementRuntimeMetricLocked("pbft_catchup_unavailable_count")
-		r.lastProposalError = fmt.Sprintf("pbft catch-up unavailable from %s: %s; stable_checkpoint=%d", item.SourceNode, item.Reason, item.StableCheckpointHeight)
-		r.mu.Unlock()
-		r.noteCatchupTarget(item.CommittedHeight)
-		return nil
+		return r.handleCatchupUnavailable(msg.FromNode, msg.ShardID, item)
 	case stateFetchRequestMessage:
 		request, err := p2p.DecodePayload[StateFetchRequest](msg)
 		if err != nil {
@@ -1484,6 +1479,26 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		}
 		r.handleStateDeltaApplyAck(ack)
 	}
+	return nil
+}
+
+func (r *NodeRuntime) handleCatchupUnavailable(fromNode, shardID string, item CatchupUnavailable) error {
+	if fromNode == "" || fromNode != item.SourceNode || !r.pbftState().IsValidator(fromNode) {
+		return fmt.Errorf("certified catch-up unavailable source is not a validator")
+	}
+	if shardID != "" && shardID != r.node.ShardID {
+		return fmt.Errorf("certified catch-up unavailable shard mismatch")
+	}
+	if item.RequestedFromHeight == 0 || item.StableCheckpointHeight > item.CommittedHeight {
+		return fmt.Errorf("certified catch-up unavailable metadata is invalid")
+	}
+	r.mu.Lock()
+	r.incrementRuntimeMetricLocked("pbft_catchup_unavailable_count")
+	r.lastProposalError = fmt.Sprintf("pbft catch-up unavailable from %s: %s; requested_from=%d; source_committed=%d; stable_checkpoint=%d", item.SourceNode, item.Reason, item.RequestedFromHeight, item.CommittedHeight, item.StableCheckpointHeight)
+	r.mu.Unlock()
+	// CatchupUnavailable is an unsigned liveness hint, not a PBFT certificate.
+	// It must never manufacture a larger recovery target; target heights remain
+	// driven by consensus-observed future PRE-PREPARE/checkpoint evidence.
 	return nil
 }
 
@@ -5666,6 +5681,16 @@ func (r *NodeRuntime) sendStateAccessToNode(ctx context.Context, nodeID string, 
 	}
 	return r.transport.SendStateAccess(ctx, nodeID, envelope)
 }
+
+func (r *NodeRuntime) sendCatchupToNode(ctx context.Context, nodeID string, envelope p2p.MessageEnvelope) error {
+	if r.sendToNodeHook != nil {
+		return r.sendToNodeHook(ctx, nodeID, envelope)
+	}
+	if r.transport == nil {
+		return fmt.Errorf("transport is not configured")
+	}
+	return r.transport.SendCatchup(ctx, nodeID, envelope)
+}
 func (r *NodeRuntime) blockSize() int {
 	if r.plugins.BlockProducer == nil {
 		return 1
@@ -6019,6 +6044,29 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	sort.Slice(pendingFutureBlockHeights, func(i, j int) bool { return pendingFutureBlockHeights[i] < pendingFutureBlockHeights[j] })
 	pendingFutureBlockCount := len(pendingFutureBlockHeights)
 	pbftQuorumFinalizeRetryCount := r.runtimeMetricCounts["pbft_quorum_finalize_retry_count"]
+	pbftCatchupMetrics := map[string]int64{}
+	for _, key := range []string{
+		"pbft_catchup_request_count",
+		"pbft_catchup_urgent_request_count",
+		"pbft_catchup_request_peer_count",
+		"pbft_catchup_block_count",
+		"pbft_catchup_success_count",
+		"pbft_catchup_failure_count",
+		"pbft_catchup_block_body_failure_count",
+		"pbft_catchup_certificate_auth_failure_count",
+		"pbft_catchup_certificate_accept_failure_count",
+		"pbft_catchup_parent_mismatch_count",
+		"pbft_catchup_enqueue_failure_count",
+		"pbft_catchup_source_block_identity_failure_count",
+		"pbft_catchup_unavailable_count",
+		"pbft_catchup_response_busy_count",
+		"pbft_catchup_blocks_served_count",
+		"pbft_catchup_indexed_range_read_count",
+		"pbft_catchup_stale_block_drop_count",
+		"pbft_catchup_unavailable_send_failure_count",
+	} {
+		pbftCatchupMetrics[key] = r.runtimeMetricCounts[key]
+	}
 	commitPhase := r.commitPhase
 	commitPhaseHeight := r.commitPhaseHeight
 	commitPhaseHash := r.commitPhaseHash
@@ -6146,7 +6194,7 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 
 	mempoolIDs := r.pool.IDs()
 	sort.Strings(mempoolIDs)
-	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_in_flight_hash": proposalInFlightHash, "proposal_work_details_available": proposalWorkDetailsAvailable, "proposal_logical_tx_ids": proposalLogicalTxIDs, "proposal_system_state_delta_count": proposalSystemStateDeltaCount, "proposal_validation_work_units": proposalWorkUnits, "proposal_timeout_ms": proposalTimeoutMS, "proposal_vote_count": proposalVoteCount, "proposal_quorum": proposalQuorum, "proposal_quorum_reached": proposalQuorumReached, "proposal_age_ms": proposalAgeMS, "proposal_committing": proposalCommitting, "proposal_finalize_queued": proposalFinalizeQueued, "pbft_quorum_finalize_retry_count": pbftQuorumFinalizeRetryCount, "pbft_view": pbftSnapshot.View, "pbft_current_leader": pbftSnapshot.LeaderID, "pbft_stage": pbftSnapshot.Stage, "pbft_prepare_vote_count": pbftPrepareVoteCount, "pbft_prepare_quorum": pbftSnapshot.PrepareQuorum, "pbft_commit_vote_count": pbftCommitVoteCount, "pbft_commit_quorum": pbftSnapshot.CommitQuorum, "pbft_commit_certificate_count": pbftSnapshot.CommitCertificateCount, "pbft_last_consensus_progress_at_ms": pbftSnapshot.LastProgressAtMS, "pbft_preprepare_retransmit_count": proposalRetransmitCount, "pbft_view_change_target": viewChangeTarget, "pbft_view_change_vote_count": pbftViewChangeVoteCount, "pbft_low_watermark": pbftSnapshot.LowWatermark, "pbft_high_watermark": pbftSnapshot.HighWatermark, "pbft_stable_checkpoint_height": pbftSnapshot.StableCheckpointHeight, "pbft_catchup_target_height": catchupTargetHeight, "commit_worker_running": commitWorkerRunning, "commit_task_queue_depth": commitTaskQueueDepth, "commit_task_queue_capacity": commitTaskQueueCapacity, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "last_commit_failure": lastCommitFailure, "last_state_fetch": lastStateFetch, "pending_state_fetch_count": len(pendingStateFetches), "pending_state_fetches": pendingStateFetches, "state_fetch_failures": stateFetchFailures, "last_state_fetch_service": lastStateFetchService, "state_fetch_service_errors": stateFetchServiceErrors, "fatal_persistence_error": fatalPersistenceError, "fatal_execution_error": fatalExecutionError, "block_execution_progress": blockExecutionProgress, "block_execution_height": blockExecutionProgress.BlockHeight, "block_execution_progress_at_ms": blockExecutionProgress.LastProgressAtMS, "block_execution_validated_count": blockExecutionProgress.ValidatedCount, "block_execution_task_count": blockExecutionProgress.ExecutionTaskCount, "block_validation_task_count": blockExecutionProgress.ValidationTaskCount, "block_execution_abort_count": blockExecutionProgress.AbortCount, "block_execution_reexecution_count": blockExecutionProgress.ReexecutionCount, "block_execution_scheduler_queue_length": blockExecutionProgress.SchedulerQueueLen, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": pendingFutureBlockCount, "pending_future_block_heights": pendingFutureBlockHeights, "pending_cross_shard_count": pendingCrossShardCount, "pending_cross_shard_ids": pendingCrossShardIDs, "pending_relay_source_count": pendingRelaySourceCount, "pending_relay_source_ids": pendingRelaySourceIDs, "pending_outbound_relay_count": pendingOutboundRelayCount, "pending_outbound_relay_ids": pendingOutboundRelayIDs, "pending_finalize_message_count": pendingFinalizeMessageCount, "pending_finalize_message_ids": pendingFinalizeMessageIDs, "outbound_relay_send_errors": outboundRelaySendErrors, "finalize_send_errors": finalizeSendErrors, "state_fetch_request_queue_depth": stateFetchRequestQueueDepth, "state_fetch_request_queue_capacity": stateFetchMailboxCapacity, "state_fetch_response_queue_depth": stateFetchResponseQueueDepth, "state_fetch_response_queue_capacity": stateFetchResponseMailboxCapacity, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(lifecycleSets.terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "execution_failed_logical_tx_ids": executionFailedIDs, "admission_rejected_logical_tx_ids": admissionRejectedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_in_flight_hash": proposalInFlightHash, "proposal_work_details_available": proposalWorkDetailsAvailable, "proposal_logical_tx_ids": proposalLogicalTxIDs, "proposal_system_state_delta_count": proposalSystemStateDeltaCount, "proposal_validation_work_units": proposalWorkUnits, "proposal_timeout_ms": proposalTimeoutMS, "proposal_vote_count": proposalVoteCount, "proposal_quorum": proposalQuorum, "proposal_quorum_reached": proposalQuorumReached, "proposal_age_ms": proposalAgeMS, "proposal_committing": proposalCommitting, "proposal_finalize_queued": proposalFinalizeQueued, "pbft_quorum_finalize_retry_count": pbftQuorumFinalizeRetryCount, "pbft_view": pbftSnapshot.View, "pbft_current_leader": pbftSnapshot.LeaderID, "pbft_stage": pbftSnapshot.Stage, "pbft_prepare_vote_count": pbftPrepareVoteCount, "pbft_prepare_quorum": pbftSnapshot.PrepareQuorum, "pbft_commit_vote_count": pbftCommitVoteCount, "pbft_commit_quorum": pbftSnapshot.CommitQuorum, "pbft_commit_certificate_count": pbftSnapshot.CommitCertificateCount, "pbft_last_consensus_progress_at_ms": pbftSnapshot.LastProgressAtMS, "pbft_preprepare_retransmit_count": proposalRetransmitCount, "pbft_view_change_target": viewChangeTarget, "pbft_view_change_vote_count": pbftViewChangeVoteCount, "pbft_low_watermark": pbftSnapshot.LowWatermark, "pbft_high_watermark": pbftSnapshot.HighWatermark, "pbft_stable_checkpoint_height": pbftSnapshot.StableCheckpointHeight, "pbft_catchup_target_height": catchupTargetHeight, "pbft_catchup_metrics": pbftCatchupMetrics, "commit_worker_running": commitWorkerRunning, "commit_task_queue_depth": commitTaskQueueDepth, "commit_task_queue_capacity": commitTaskQueueCapacity, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "last_commit_failure": lastCommitFailure, "last_state_fetch": lastStateFetch, "pending_state_fetch_count": len(pendingStateFetches), "pending_state_fetches": pendingStateFetches, "state_fetch_failures": stateFetchFailures, "last_state_fetch_service": lastStateFetchService, "state_fetch_service_errors": stateFetchServiceErrors, "fatal_persistence_error": fatalPersistenceError, "fatal_execution_error": fatalExecutionError, "block_execution_progress": blockExecutionProgress, "block_execution_height": blockExecutionProgress.BlockHeight, "block_execution_progress_at_ms": blockExecutionProgress.LastProgressAtMS, "block_execution_validated_count": blockExecutionProgress.ValidatedCount, "block_execution_task_count": blockExecutionProgress.ExecutionTaskCount, "block_validation_task_count": blockExecutionProgress.ValidationTaskCount, "block_execution_abort_count": blockExecutionProgress.AbortCount, "block_execution_reexecution_count": blockExecutionProgress.ReexecutionCount, "block_execution_scheduler_queue_length": blockExecutionProgress.SchedulerQueueLen, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": pendingFutureBlockCount, "pending_future_block_heights": pendingFutureBlockHeights, "pending_cross_shard_count": pendingCrossShardCount, "pending_cross_shard_ids": pendingCrossShardIDs, "pending_relay_source_count": pendingRelaySourceCount, "pending_relay_source_ids": pendingRelaySourceIDs, "pending_outbound_relay_count": pendingOutboundRelayCount, "pending_outbound_relay_ids": pendingOutboundRelayIDs, "pending_finalize_message_count": pendingFinalizeMessageCount, "pending_finalize_message_ids": pendingFinalizeMessageIDs, "outbound_relay_send_errors": outboundRelaySendErrors, "finalize_send_errors": finalizeSendErrors, "state_fetch_request_queue_depth": stateFetchRequestQueueDepth, "state_fetch_request_queue_capacity": stateFetchMailboxCapacity, "state_fetch_response_queue_depth": stateFetchResponseQueueDepth, "state_fetch_response_queue_capacity": stateFetchResponseMailboxCapacity, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(lifecycleSets.terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "execution_failed_logical_tx_ids": executionFailedIDs, "admission_rejected_logical_tx_ids": admissionRejectedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
 }
 func mapIDs(items map[string]bool) []string {
@@ -7148,3 +7196,7 @@ func planDigestsConsistent(rows [][]string) bool {
 }
 
 // MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7
+
+// MBE_PBFT_CATCHUP_TAIL_CLOSURE_20260821_V5
+
+// MBE_PBFT_DURABLE_IDENTITY_CLOSURE_20260821_V7

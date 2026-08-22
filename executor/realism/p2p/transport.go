@@ -27,6 +27,7 @@ type Transport struct {
 	connMu              sync.Mutex
 	outbound            map[string]*outboundConn
 	stateAccessOutbound map[string]*outboundConn
+	catchupOutbound     map[string]*outboundConn
 	inbound             map[net.Conn]struct{}
 }
 
@@ -42,7 +43,7 @@ func NewTransport(nodeID, listenAddr string, peers []Peer, handler Handler) *Tra
 			peerMap[p.NodeID] = p
 		}
 	}
-	return &Transport{NodeID: nodeID, ListenAddr: listenAddr, Peers: peerMap, Log: &NetworkLog{}, handler: handler, outbound: map[string]*outboundConn{}, stateAccessOutbound: map[string]*outboundConn{}, inbound: map[net.Conn]struct{}{}}
+	return &Transport{NodeID: nodeID, ListenAddr: listenAddr, Peers: peerMap, Log: &NetworkLog{}, handler: handler, outbound: map[string]*outboundConn{}, stateAccessOutbound: map[string]*outboundConn{}, catchupOutbound: map[string]*outboundConn{}, inbound: map[net.Conn]struct{}{}}
 }
 
 func (t *Transport) Start(ctx context.Context) error {
@@ -105,6 +106,10 @@ func (t *Transport) Stop() error {
 	for peerID, outbound := range t.stateAccessOutbound {
 		_ = outbound.conn.Close()
 		delete(t.stateAccessOutbound, peerID)
+	}
+	for peerID, outbound := range t.catchupOutbound {
+		_ = outbound.conn.Close()
+		delete(t.catchupOutbound, peerID)
 	}
 	for conn := range t.inbound {
 		_ = conn.Close()
@@ -189,6 +194,18 @@ func (t *Transport) Send(ctx context.Context, peerID string, msg MessageEnvelope
 // request/response RPC past its state-access deadline.
 func (t *Transport) SendStateAccess(ctx context.Context, peerID string, msg MessageEnvelope) error {
 	return t.send(ctx, peerID, msg, t.stateAccessOutbound, "state_access_send")
+}
+
+// SendCatchup gives bulk certified recovery traffic a dedicated persistent
+// per-peer TCP lane while retaining the same configured network-fault policy.
+func (t *Transport) SendCatchup(ctx context.Context, peerID string, msg MessageEnvelope) error {
+	t.connMu.Lock()
+	if t.catchupOutbound == nil {
+		t.catchupOutbound = map[string]*outboundConn{}
+	}
+	lane := t.catchupOutbound
+	t.connMu.Unlock()
+	return t.send(ctx, peerID, msg, lane, "send")
 }
 
 func (t *Transport) send(ctx context.Context, peerID string, msg MessageEnvelope, outboundByPeer map[string]*outboundConn, direction string) error {
@@ -290,3 +307,5 @@ func (t *Transport) faultDecision(direction, peerID string, msg MessageEnvelope)
 	t.mu.Unlock()
 	return policy.Decide(direction, peerID, msg.MessageType, msg.MessageID)
 }
+
+// MBE_PBFT_CATCHUP_TAIL_CLOSURE_20260821_V5

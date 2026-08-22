@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -206,16 +207,20 @@ func (s *BlockStore) ReadCommitted() ([]block.Block, error) {
 }
 
 func (s *BlockStore) ReadCommittedAtHeight(height uint64) (block.Block, bool, error) {
-	blocks, err := s.ReadCommitted()
+	if height == 0 {
+		return block.Block{}, false, nil
+	}
+	blocks, err := s.ReadCommittedRange(height, height)
 	if err != nil {
 		return block.Block{}, false, err
 	}
-	for _, item := range blocks {
-		if item.Height == height {
-			return item, true, nil
-		}
+	if len(blocks) == 0 {
+		return block.Block{}, false, nil
 	}
-	return block.Block{}, false, nil
+	if len(blocks) != 1 || blocks[0].Height != height {
+		return block.Block{}, false, fmt.Errorf("committed height lookup returned %d rows for height %d", len(blocks), height)
+	}
+	return blocks[0], true, nil
 }
 
 func (s *BlockStore) HasTransaction(txID string) (bool, error) {
@@ -259,18 +264,37 @@ func (s *BlockStore) committedMarkerHashes() (map[string]bool, error) {
 	}
 	defer f.Close()
 	hashes := map[string]bool{}
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var row CommitMarker
-		if err := json.Unmarshal(scanner.Bytes(), &row); err != nil {
-			return nil, err
+	reader := bufio.NewReaderSize(f, 64*1024)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			// appendJSON writes a newline before Sync. A concurrent reader may see
+			// the final marker before that newline is visible; such an unterminated
+			// tail has not completed the durable-marker write and is ignored. A
+			// newline-terminated malformed marker remains a hard error.
+			if line[len(line)-1] != '\n' {
+				if readErr == io.EOF {
+					break
+				}
+				return nil, fmt.Errorf("read durable commit marker tail: %w", readErr)
+			}
+			var row CommitMarker
+			if err := json.Unmarshal(line, &row); err != nil {
+				return nil, err
+			}
+			if row.Version != "durable_commit_marker_v1" || !row.Committed || row.BlockHash == "" {
+				return nil, fmt.Errorf("invalid durable commit marker for block %q", row.BlockHash)
+			}
+			hashes[row.BlockHash] = true
 		}
-		if row.Version != "durable_commit_marker_v1" || !row.Committed || row.BlockHash == "" {
-			return nil, fmt.Errorf("invalid durable commit marker for block %q", row.BlockHash)
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return nil, readErr
 		}
-		hashes[row.BlockHash] = true
 	}
-	return hashes, scanner.Err()
+	return hashes, nil
 }
 
 func WriteCommitCSV(path string, records []CommitRecord) error {
@@ -292,3 +316,5 @@ func WriteCommitCSV(path string, records []CommitRecord) error {
 	}
 	return metrics.WriteCSV(path, []string{"timestamp", "node_id", "shard_id", "height", "block_hash", "proposer_id", "tx_count", "prepare_quorum", "commit_quorum", "committed", "state_commit"}, rows)
 }
+
+// MBE_PBFT_CATCHUP_TAIL_CLOSURE_20260821_V5

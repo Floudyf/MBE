@@ -972,11 +972,36 @@ func (r *NodeRuntime) maybeRespondWithCertifiedCommit(ctx context.Context, toNod
 }
 
 func (r *NodeRuntime) sendCertifiedCatchupBlock(ctx context.Context, toNode string, block realblock.Block, cert pbft.CommitCertificate) error {
+	if block.BlockHash == "" || realblock.Hash(block) != block.BlockHash || cert.BlockHash != block.BlockHash || cert.Height != block.Height {
+		r.mu.Lock()
+		r.incrementRuntimeMetricLocked("pbft_catchup_source_block_identity_failure_count")
+		r.mu.Unlock()
+		return fmt.Errorf("certified catch-up source block identity mismatch at height %d", block.Height)
+	}
 	envelope, err := p2p.NewEnvelope(catchupBlockMessage, r.node.NodeID, toNode, r.node.ShardID, block.Height, cert.View, cert.Sequence, CatchupBlock{Block: block, SourceNode: r.node.NodeID, Certificate: cert})
 	if err != nil {
 		return err
 	}
-	return r.sendToNode(ctx, toNode, envelope)
+	return r.sendCatchupToNode(ctx, toNode, envelope)
+}
+
+func (r *NodeRuntime) sendCatchupUnavailable(ctx context.Context, requester string, request CatchupRequest, committedHeight uint64, reason string) error {
+	snapshot := r.pbftState().Snapshot()
+	hint := CatchupUnavailable{SourceNode: r.node.NodeID, RequestedFromHeight: request.FromHeight, CommittedHeight: committedHeight, StableCheckpointHeight: snapshot.StableCheckpointHeight, Reason: reason}
+	envelope, err := p2p.NewEnvelope(catchupUnavailableMessage, r.node.NodeID, requester, r.node.ShardID, request.FromHeight, snapshot.View, request.FromHeight, hint)
+	if err != nil {
+		return err
+	}
+	if err := r.sendCatchupToNode(ctx, requester, envelope); err != nil {
+		// Preserve the existing overload guard contract: negative recovery hints
+		// are best-effort and must not turn responder saturation into a handler
+		// error/retry amplifier.
+		r.mu.Lock()
+		r.incrementRuntimeMetricLocked("pbft_catchup_unavailable_send_failure_count")
+		r.mu.Unlock()
+		return nil
+	}
+	return nil
 }
 
 func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, requester string, request CatchupRequest) error {
@@ -987,13 +1012,13 @@ func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, request
 		return fmt.Errorf("certified catch-up request exceeds batch limit")
 	}
 	r.mu.Lock()
+	committedHeight := r.committedHeight
 	if r.catchupResponsesInFlight >= maxConcurrentCatchupResponses {
 		r.incrementRuntimeMetricLocked("pbft_catchup_response_busy_count")
 		r.mu.Unlock()
-		return nil
+		return r.sendCatchupUnavailable(ctx, requester, request, committedHeight, "responder_busy")
 	}
 	r.catchupResponsesInFlight++
-	committedHeight := r.committedHeight
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
@@ -1001,7 +1026,7 @@ func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, request
 		r.mu.Unlock()
 	}()
 	if request.FromHeight > committedHeight {
-		return nil
+		return r.sendCatchupUnavailable(ctx, requester, request, committedHeight, "source_behind_request")
 	}
 
 	// Read only the requested durable height range. The storage layer builds a
@@ -1051,18 +1076,11 @@ func (r *NodeRuntime) handleCertifiedCatchupRequest(ctx context.Context, request
 		r.mu.Unlock()
 	}
 	if sent == 0 || missingHeight != 0 {
-		snapshot := r.pbftState().Snapshot()
-		hint := CatchupUnavailable{SourceNode: r.node.NodeID, RequestedFromHeight: func() uint64 {
-			if missingHeight != 0 {
-				return missingHeight
-			}
-			return request.FromHeight
-		}(), CommittedHeight: committedHeight, StableCheckpointHeight: snapshot.StableCheckpointHeight, Reason: "certified_catchup_proof_or_block_unavailable"}
-		envelope, err := p2p.NewEnvelope(catchupUnavailableMessage, r.node.NodeID, requester, r.node.ShardID, request.FromHeight, snapshot.View, request.FromHeight, hint)
-		if err != nil {
-			return err
+		nextRequest := request
+		if missingHeight != 0 {
+			nextRequest.FromHeight = missingHeight
 		}
-		_ = r.sendToNode(ctx, requester, envelope)
+		return r.sendCatchupUnavailable(ctx, requester, nextRequest, committedHeight, "certified_catchup_proof_or_block_unavailable")
 	}
 	return nil
 }
@@ -1071,34 +1089,40 @@ func (r *NodeRuntime) handleCertifiedCatchupBlock(ctx context.Context, fromNode 
 	if fromNode == "" || fromNode != item.SourceNode || !r.pbftState().IsValidator(fromNode) {
 		return fmt.Errorf("certified catch-up source is not a validator")
 	}
+	r.mu.Lock()
+	expected := r.committedHeight + 1
+	committedHash := r.committedHash
+	if item.Block.Height < expected {
+		r.incrementRuntimeMetricLocked("pbft_catchup_stale_block_drop_count")
+		r.mu.Unlock()
+		return nil
+	}
+	r.mu.Unlock()
 	if err := r.validateConsensusBlockBody(item.Block); err != nil {
 		r.mu.Lock()
 		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
+		r.incrementRuntimeMetricLocked("pbft_catchup_block_body_failure_count")
 		r.mu.Unlock()
 		return fmt.Errorf("certified catch-up block body: %w", err)
 	}
 	if err := r.verifyCommitCertificateAuthentication(item.Certificate); err != nil {
 		r.mu.Lock()
 		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
+		r.incrementRuntimeMetricLocked("pbft_catchup_certificate_auth_failure_count")
 		r.mu.Unlock()
 		return fmt.Errorf("certified catch-up authentication: %w", err)
 	}
 	if err := r.pbftState().AcceptCommitCertificate(item.Certificate, item.Block); err != nil {
 		r.mu.Lock()
 		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
+		r.incrementRuntimeMetricLocked("pbft_catchup_certificate_accept_failure_count")
 		r.mu.Unlock()
 		return err
-	}
-	r.mu.Lock()
-	expected := r.committedHeight + 1
-	committedHash := r.committedHash
-	r.mu.Unlock()
-	if item.Block.Height < expected {
-		return nil
 	}
 	if item.Block.Height == expected && item.Block.PreviousHash != committedHash {
 		r.mu.Lock()
 		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
+		r.incrementRuntimeMetricLocked("pbft_catchup_parent_mismatch_count")
 		r.mu.Unlock()
 		return fmt.Errorf("certified catch-up parent mismatch at height %d", item.Block.Height)
 	}
@@ -1109,6 +1133,7 @@ func (r *NodeRuntime) handleCertifiedCatchupBlock(ctx context.Context, fromNode 
 	if err := r.enqueueCommitTask(commitTaskCatchUp, item.Block, CommitOriginCatchUp); err != nil {
 		r.mu.Lock()
 		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
+		r.incrementRuntimeMetricLocked("pbft_catchup_enqueue_failure_count")
 		r.mu.Unlock()
 		return err
 	}
@@ -1243,3 +1268,7 @@ func (r *NodeRuntime) clearLastProposalError() {
 	r.lastProposalError = ""
 	r.mu.Unlock()
 }
+
+// MBE_PBFT_CATCHUP_TAIL_CLOSURE_20260821_V5
+
+// MBE_PBFT_DURABLE_IDENTITY_CLOSURE_20260821_V7

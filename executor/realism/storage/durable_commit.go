@@ -28,14 +28,17 @@ type TxIndexRecord struct {
 }
 
 type CommitMarker struct {
-	Version     string `json:"version"`
-	NodeID      string `json:"node_id"`
-	ShardID     string `json:"shard_id"`
-	Height      uint64 `json:"height"`
-	BlockHash   string `json:"block_hash"`
-	ReceiptRoot string `json:"receipt_root"`
-	StateRoot   string `json:"state_root"`
-	Committed   bool   `json:"committed"`
+	Version         string `json:"version"`
+	NodeID          string `json:"node_id"`
+	ShardID         string `json:"shard_id"`
+	Height          uint64 `json:"height"`
+	BlockHash       string `json:"block_hash"`
+	ReceiptRoot     string `json:"receipt_root"`
+	StateRoot       string `json:"state_root"`
+	Committed       bool   `json:"committed"`
+	BlockOffset     int64  `json:"block_offset,omitempty"`
+	BlockLength     int    `json:"block_length,omitempty"`
+	BlockSourceSize int64  `json:"block_source_size,omitempty"`
 }
 
 type CommitSummary struct {
@@ -198,9 +201,14 @@ func (s *BlockStore) DurableCommitWithMetrics(b block.Block, result execution.Re
 	if err := os.MkdirAll(s.DataDir, 0o755); err != nil {
 		return pm, fmt.Errorf("create durable store: %w", err)
 	}
-	b.StateRootBefore = result.StateRootBefore
-	b.StateRootAfter = result.StateRootAfter
-	b.ReceiptRoot = result.ReceiptRoot
+	// Preserve the exact consensus block body that PBFT voted on. Block.Hash
+	// commits to StateRootBefore/StateRootAfter/ReceiptRoot, so execution-result
+	// roots must not rewrite those fields after certification. Executed roots
+	// remain durable in state/receipts/commit_markers.
+	//
+	// Keep the generic storage API contract unchanged: focused runtime/storage
+	// fixtures may use synthetic hashes such as h6/h7. Production PBFT paths
+	// already validate block identity before commit and certified recovery.
 	b.StateCommit = true
 
 	receiptStarted := time.Now()
@@ -230,15 +238,24 @@ func (s *BlockStore) DurableCommitWithMetrics(b block.Block, result execution.Re
 	if err != nil {
 		return pm, err
 	}
-	written, err = appendJSON(filepath.Join(s.DataDir, "blocks.jsonl"), storedBlock)
+	blockPath := filepath.Join(s.DataDir, "blocks.jsonl")
+	blockOffset := int64(0)
+	if info, statErr := os.Stat(blockPath); statErr == nil {
+		blockOffset = info.Size()
+	} else if !os.IsNotExist(statErr) {
+		return pm, fmt.Errorf("stat durable block log: %w", statErr)
+	}
+	written, err = appendJSON(blockPath, storedBlock)
 	if err != nil {
 		return pm, err
 	}
+	blockLength := written
+	blockSourceSize := blockOffset + blockLength
 	pm.WrittenBytes += written
 	if s.failpoint == "after_block_append" {
 		return pm, fmt.Errorf("injected durable commit failure after block append")
 	}
-	marker := CommitMarker{Version: "durable_commit_marker_v1", NodeID: s.NodeID, ShardID: s.ShardID, Height: b.Height, BlockHash: b.BlockHash, ReceiptRoot: result.ReceiptRoot, StateRoot: result.StateRootAfter, Committed: true}
+	marker := CommitMarker{Version: "durable_commit_marker_v1", NodeID: s.NodeID, ShardID: s.ShardID, Height: b.Height, BlockHash: b.BlockHash, ReceiptRoot: result.ReceiptRoot, StateRoot: result.StateRootAfter, Committed: true, BlockOffset: blockOffset, BlockLength: int(blockLength), BlockSourceSize: blockSourceSize}
 	written, err = appendJSON(filepath.Join(s.DataDir, "commit_markers.jsonl"), marker)
 	if err != nil {
 		return pm, err
@@ -307,3 +324,7 @@ func appendJSONBatch(path string, values []any) (int64, error) {
 	}
 	return info.Size() - before, nil
 }
+
+// MBE_PBFT_CATCHUP_TAIL_CLOSURE_20260821_V5
+
+// MBE_PBFT_DURABLE_IDENTITY_CLOSURE_20260821_V7

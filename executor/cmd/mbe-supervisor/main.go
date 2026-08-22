@@ -351,6 +351,77 @@ func planUsesStatelessDirectExecution(plan v5.Plan) bool {
 	return v5.PlanUsesStatelessDirectExecution(plan)
 }
 
+func readRuntimeStatusWithRetry(path string, attempts int, delay time.Duration) (map[string]any, bool) {
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		raw, err := os.ReadFile(path)
+		if err == nil {
+			var status map[string]any
+			if json.Unmarshal(raw, &status) == nil {
+				return status, true
+			}
+		}
+		if attempt+1 < attempts && delay > 0 {
+			time.Sleep(delay)
+		}
+	}
+	return nil, false
+}
+
+func mergeTerminalEvidence(seen map[string]bool, current map[string]bool) map[string]bool {
+	if seen == nil {
+		seen = map[string]bool{}
+	}
+	for logicalID := range current {
+		seen[logicalID] = true
+	}
+	return seen
+}
+
+type drainProgressObservation struct {
+	Snapshot         progressSnapshot
+	Initialized      bool
+	AnyProgress      bool
+	TerminalProgress bool
+	HeightProgress   bool
+	MempoolProgress  bool
+	PendingProgress  bool
+}
+
+// Infrastructure counters are comparable only when every configured node has a
+// fresh decodable status. Missing nodes otherwise look like mempool/pending work
+// suddenly vanished and can falsely reset the no-progress timer. Terminal IDs
+// are safe to accumulate from any subset because protocol terminality is
+// monotonic within a run.
+func observeDrainProgress(previous progressSnapshot, initialized bool, current progressSnapshot, freshStatusComplete bool) drainProgressObservation {
+	out := drainProgressObservation{Snapshot: previous, Initialized: initialized}
+	if current.Terminal > previous.Terminal {
+		out.Snapshot.Terminal = current.Terminal
+		out.AnyProgress = true
+		out.TerminalProgress = true
+	}
+	if !freshStatusComplete {
+		return out
+	}
+	if !initialized || progressChanged(previous, current) {
+		out.AnyProgress = true
+	}
+	if !initialized || current.MaxHeight != previous.MaxHeight || current.MinHeight != previous.MinHeight {
+		out.HeightProgress = true
+	}
+	if !initialized || current.Mempool != previous.Mempool || current.Reserved != previous.Reserved {
+		out.MempoolProgress = true
+	}
+	if !initialized || current.Pending != previous.Pending || current.ProposalInFlight != previous.ProposalInFlight {
+		out.PendingProgress = true
+	}
+	out.Snapshot = current
+	out.Initialized = true
+	return out
+}
+
 func drainV5(plan v5.Plan, dataDir string) error {
 	started := time.Now()
 	statelessDirect := planUsesStatelessDirectExecution(plan)
@@ -374,6 +445,9 @@ func drainV5(plan v5.Plan, dataDir string) error {
 	initialized := false
 	var lastStatuses []map[string]any
 	var lastHeights map[string]map[string]bool
+	lastObserved := progressSnapshot{MinHeight: -1}
+	lastFreshStatusComplete := false
+	terminalSeen := map[string]bool{}
 	for time.Now().Before(deadline) {
 		statuses := []map[string]any{}
 		terminal := map[string]bool{}
@@ -382,13 +456,8 @@ func drainV5(plan v5.Plan, dataDir string) error {
 		fatalExecution := ""
 		heights := map[string]map[string]bool{}
 		for _, node := range plan.NodeConfigs {
-			raw, err := os.ReadFile(filepath.Join(node.DataDir, "node_runtime_status.json"))
-			if err != nil {
-				allEmpty = false
-				continue
-			}
-			var status map[string]any
-			if json.Unmarshal(raw, &status) != nil {
+			status, ok := readRuntimeStatusWithRetry(filepath.Join(node.DataDir, "node_runtime_status.json"), 20, 5*time.Millisecond)
+			if !ok {
 				allEmpty = false
 				continue
 			}
@@ -416,14 +485,16 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": []string{"terminal_accounting_missing"}, "phase": "FAILED", "reason": err.Error(), "submitted": submitted})
 			return err
 		}
-		terminal = liveTerminal
+		terminalSeen = mergeTerminalEvidence(terminalSeen, liveTerminal)
+		terminal = terminalSeen
 		if hasNonTerminalMempool(statuses, terminal) {
 			allEmpty = false
 		}
 		if hasPendingProposalWork(statuses, terminal) {
 			allEmpty = false
 		}
-		aligned := true
+		freshStatusComplete := len(statuses) == len(plan.NodeConfigs)
+		aligned := freshStatusComplete
 		for _, values := range heights {
 			if len(values) != 1 {
 				aligned = false
@@ -431,23 +502,26 @@ func drainV5(plan v5.Plan, dataDir string) error {
 		}
 		current := makeProgressSnapshot(len(terminal), statuses, heights)
 		now := time.Now()
-		if !initialized || progressChanged(previous, current) {
+		observation := observeDrainProgress(previous, initialized, current, freshStatusComplete)
+		if observation.AnyProgress {
 			lastProgress = now
 		}
-		if !initialized || current.Terminal != previous.Terminal {
+		if observation.TerminalProgress {
 			lastTerminalProgress = now
 		}
-		if !initialized || current.MaxHeight != previous.MaxHeight || current.MinHeight != previous.MinHeight {
+		if observation.HeightProgress {
 			lastHeightProgress = now
 		}
-		if !initialized || current.Mempool != previous.Mempool || current.Reserved != previous.Reserved {
+		if observation.MempoolProgress {
 			lastMempoolProgress = now
 		}
-		if !initialized || current.Pending != previous.Pending || current.ProposalInFlight != previous.ProposalInFlight {
+		if observation.PendingProgress {
 			lastPendingProgress = now
 		}
-		previous = current
-		initialized = true
+		previous = observation.Snapshot
+		initialized = observation.Initialized
+		lastObserved = current
+		lastFreshStatusComplete = freshStatusComplete
 		lastStatuses = statuses
 		lastHeights = heights
 		if fatalPersistence != "" {
@@ -464,11 +538,21 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			writeStalledRuntimeReport(dataDir, []string{"fatal_execution_error"}, reason, submitted, len(terminal), current, statuses, heights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
 			return fmt.Errorf("%s", reason)
 		}
-		if initialized && now.Sub(lastProgress) > budget.NoProgressTimeout {
+		if now.Sub(lastProgress) > budget.NoProgressTimeout {
 			phase = "FAILED"
 			reason := "drain no-progress timeout"
-			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "no_progress_timeout", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
-			writeStalledRuntimeReport(dataDir, []string{"no_progress_timeout"}, reason, submitted, len(terminal), current, statuses, heights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
+			classifiers := []string{"no_progress_timeout"}
+			if !freshStatusComplete {
+				classifiers = append(classifiers, "status_snapshot_incomplete")
+			}
+			if current.MinHeight != current.MaxHeight {
+				classifiers = append(classifiers, "validator_height_lag")
+			}
+			if len(terminal) < submitted {
+				classifiers = append(classifiers, "terminal_accounting_missing")
+			}
+			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "no_progress_timeout", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "node_count": len(statuses), "expected_node_count": len(plan.NodeConfigs), "fresh_status_complete": freshStatusComplete, "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
+			writeStalledRuntimeReport(dataDir, classifiers, reason, submitted, len(terminal), current, statuses, heights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
 			return fmt.Errorf("%s", reason)
 		}
 		phase = "DRAINING"
@@ -482,20 +566,25 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "drain_quiescent", "drain_started_at": started.UnixMilli(), "drain_finished_at": finishedAt.UnixMilli(), "drain_observed_quiescent_at": now.UnixMilli(), "drain_finish_source": "max_node_last_progress_at_bounded", "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
 			return nil
 		}
-		_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "in_progress", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "node_count": len(statuses), "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
+		_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": len(terminal), "incomplete": submitted - len(terminal), "phase": phase, "completion_reason": "in_progress", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "node_count": len(statuses), "expected_node_count": len(plan.NodeConfigs), "fresh_status_complete": freshStatusComplete, "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
 		time.Sleep(250 * time.Millisecond)
 	}
+	terminalCount := len(terminalSeen)
+	_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"submitted": submitted, "terminal": terminalCount, "incomplete": submitted - terminalCount, "phase": "FAILED", "completion_reason": "hard_timeout", "drain_started_at": started.UnixMilli(), "last_progress_at": lastProgress.UnixMilli(), "last_terminal_progress_at": lastTerminalProgress.UnixMilli(), "last_height_progress_at": lastHeightProgress.UnixMilli(), "last_mempool_progress_at": lastMempoolProgress.UnixMilli(), "last_pending_progress_at": lastPendingProgress.UnixMilli(), "node_count": len(lastStatuses), "expected_node_count": len(plan.NodeConfigs), "fresh_status_complete": lastFreshStatusComplete, "hard_timeout_ms": budget.HardTimeout.Milliseconds(), "no_progress_timeout_ms": budget.NoProgressTimeout.Milliseconds()})
 	classifiers := []string{}
-	if previous.MaxHeight != previous.MinHeight {
+	if !lastFreshStatusComplete {
+		classifiers = append(classifiers, "status_snapshot_incomplete")
+	}
+	if lastObserved.MinHeight != lastObserved.MaxHeight {
 		classifiers = append(classifiers, "validator_height_lag")
 	}
-	if previous.Terminal < submitted {
+	if terminalCount < submitted {
 		classifiers = append(classifiers, "terminal_accounting_missing")
 	}
 	if len(classifiers) == 0 {
 		classifiers = append(classifiers, "unknown")
 	}
-	writeStalledRuntimeReport(dataDir, classifiers, "drain hard timeout", submitted, previous.Terminal, previous, lastStatuses, lastHeights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
+	writeStalledRuntimeReport(dataDir, classifiers, "drain hard timeout", submitted, terminalCount, lastObserved, lastStatuses, lastHeights, lastProgress, lastTerminalProgress, lastHeightProgress, lastMempoolProgress, lastPendingProgress)
 	return fmt.Errorf("drain hard timeout")
 }
 
@@ -2675,3 +2764,5 @@ func writeHeightRootMatrix(dataDir string, nodes []v5.NodePlan) (bool, bool, err
 	}
 	return stateConsistent, receiptConsistent, v5.SaveJSON(filepath.Join(dataDir, "state_consistency_report.json"), map[string]any{"consistent": len(first) == 0, "state_root_consistent": stateConsistent, "receipt_root_consistent": receiptConsistent, "first_divergence": first})
 }
+
+// MBE_PBFT_CATCHUP_TAIL_CLOSURE_20260821_V5
