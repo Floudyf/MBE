@@ -179,7 +179,7 @@ def _measure_unmanaged_run(run_dir: Path, run_id: str) -> dict:
     }
 
 
-def auto_archive_terminal_child(group_id: str, child_id: str, *, compression_level: int = 3) -> dict:
+def auto_archive_terminal_child(group_id: str, child_id: str, *, compression_level: int = 10) -> dict:
     """Cold-archive a measured terminal child before the next Formal child starts.
 
     This is failure-open by design. Formal execution status, metrics and correctness
@@ -199,12 +199,13 @@ def auto_archive_terminal_child(group_id: str, child_id: str, *, compression_lev
     if not run_dir.is_dir():
         return {"attempted": False, "reason": "real_cluster_run_dir_missing", "run_id": run_id}
     try:
-        storage = v5_artifact_storage.archive_run(
-            run_dir,
-            run_id=run_id,
-            delete_raw=True,
-            compression_level=compression_level,
-        )
+        with v5_artifact_storage.exact_dedup_archive_mode():
+            storage = v5_artifact_storage.archive_run(
+                run_dir,
+                run_id=run_id,
+                delete_raw=True,
+                compression_level=compression_level,
+            )
         _persist_child_storage(group_id, child, storage)
         return {
             "attempted": True,
@@ -270,6 +271,10 @@ def _child_status(child: dict) -> dict:
         "ntfs_compression_succeeded": storage.get("ntfs_compression_succeeded"),
         "ntfs_compression_error": storage.get("ntfs_compression_error"),
         "archive_format": storage.get("archive_format"),
+        "archive_layout": storage.get("archive_layout"),
+        "archive_dedup_schema": storage.get("archive_dedup_schema"),
+        "archive_unique_object_count": storage.get("archive_unique_object_count"),
+        "archive_duplicate_logical_bytes": storage.get("archive_duplicate_logical_bytes"),
         "archive_bytes": storage.get("archive_bytes"),
         "archive_sha256": storage.get("archive_sha256"),
         "archive_verified": storage.get("archive_verified"),
@@ -382,13 +387,14 @@ def _job_worker(group_id: str, job_id: str, *, delete_raw: bool, compression_lev
                 _write_job(group_id, job_id, {"phase": "already_archived", "processed_children": processed, "archived_children": archived, "error_count": len(errors), "skipped_count": len(skipped)})
                 continue
             try:
-                storage = v5_artifact_storage.archive_run(
-                    run_dir,
-                    run_id=run_id,
-                    delete_raw=delete_raw,
-                    compression_level=compression_level,
-                    progress=progress,
-                )
+                with v5_artifact_storage.exact_dedup_archive_mode():
+                    storage = v5_artifact_storage.archive_run(
+                        run_dir,
+                        run_id=run_id,
+                        delete_raw=delete_raw,
+                        compression_level=compression_level,
+                        progress=progress,
+                    )
                 _persist_child_storage(group_id, child, storage)
                 if storage.get("archive_verified"):
                     archived += 1
@@ -407,7 +413,7 @@ def _job_worker(group_id: str, job_id: str, *, delete_raw: bool, compression_lev
         _set_job_thread(group_id, None)
 
 
-def start_archive_job(group_id: str, *, delete_raw: bool = True, compression_level: int = 3) -> dict:
+def start_archive_job(group_id: str, *, delete_raw: bool = True, compression_level: int = 10) -> dict:
     group = _reconcile_storage_job(group_id)
     _terminal_group(group)
     existing_job = group.get("artifact_storage_job") if isinstance(group.get("artifact_storage_job"), dict) else {}
@@ -434,7 +440,7 @@ def start_archive_job(group_id: str, *, delete_raw: bool = True, compression_lev
         "heartbeat_at": _now(),
         "worker_pid": os.getpid(),
         "resumed_from_job_id": previous.get("job_id") if previous.get("status") == "interrupted" else None,
-        "archive_engine_preference": "windows_tar_zstd_multithread",
+        "archive_engine_preference": "python_tarfile_zstd_exact_dedup",
         "formal_eligibility_affected": False,
     }
     group["artifact_storage_job"] = job
@@ -485,7 +491,7 @@ def compact(group_id: str) -> dict:
     return current
 
 
-def archive(group_id: str, *, delete_raw: bool = True, compression_level: int = 3) -> dict:
+def archive(group_id: str, *, delete_raw: bool = True, compression_level: int = 10) -> dict:
     group = _reconcile_storage_job(group_id)
     _terminal_group(group)
     if _job_active(group_id):
@@ -504,12 +510,13 @@ def archive(group_id: str, *, delete_raw: bool = True, compression_level: int = 
             errors.append({"child_run_id": child.get("child_run_id"), "error": "real-cluster run directory is missing"})
             continue
         try:
-            storage = v5_artifact_storage.archive_run(
-                run_dir,
-                run_id=run_id,
-                delete_raw=delete_raw,
-                compression_level=compression_level,
-            )
+            with v5_artifact_storage.exact_dedup_archive_mode():
+                storage = v5_artifact_storage.archive_run(
+                    run_dir,
+                    run_id=run_id,
+                    delete_raw=delete_raw,
+                    compression_level=compression_level,
+                )
             _persist_child_storage(group_id, child, storage)
             if storage.get("raw_cleanup_error"):
                 errors.append({"child_run_id": child.get("child_run_id"), "error": str(storage.get("raw_cleanup_error"))})

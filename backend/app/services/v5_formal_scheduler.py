@@ -36,7 +36,7 @@ DEFAULT_FORMAL_EXECUTION_POLICY = {
     "partial_timeout_metrics_diagnostic_only": True,
     "auto_cold_archive_terminal_children": True,
     "auto_cold_archive_delete_raw": True,
-    "auto_cold_archive_compression_level": 3,
+    "auto_cold_archive_compression_level": 10,
 }
 _ACTIVE_CHILD_STATES = {"queued", "starting", "running", "cancelling"}
 _RESUMABLE_CHILD_STATES = {"cancelled", "interrupted"}
@@ -438,8 +438,8 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
                     source_type = plan.base_spec.workload_source.source_type if plan.base_spec.workload_source else "synthetic"
                     blockers = _workload_blockers(variant["workload_point"], variant["topology_point"], source_type, _dataset_supported_counts(plan.base_spec.workload_source))
                     worker_count = variant["topology_point"].get("worker_count")
-                    if worker_count is not None and (isinstance(worker_count, bool) or not isinstance(worker_count, int) or not 1 <= worker_count <= 8):
-                        blockers.append("topology worker_count must be an integer between 1 and 8")
+                    if worker_count is not None and (isinstance(worker_count, bool) or not isinstance(worker_count, int) or not 1 <= worker_count <= 32):
+                        blockers.append("topology worker_count must be an integer between 1 and 32")
                     base_workload = next((selection.config for selection in plan.base_spec.plugin_selections if selection.category == "workload"), {})
                     effective_workload = {**base_workload, **variant["workload_point"]} if source_type != "dataset" else {}
                     blockers.extend(_fault_blockers(variant["fault_point"], effective_workload, backend))
@@ -863,7 +863,7 @@ def _run_worker(group_id: str) -> None:
             v5_formal_artifact_storage.auto_archive_terminal_child(
                 group_id,
                 child_id,
-                compression_level=int(policy.get("auto_cold_archive_compression_level", 3)),
+                compression_level=int(policy.get("auto_cold_archive_compression_level", 10)),
             )
         _write_worker_heartbeat(group_id)
         group = read_group(group_id)
@@ -1477,8 +1477,8 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
     if unsupported_topology:
         raise ValueError(f"unsupported topology point fields: {sorted(unsupported_topology)}")
     worker_count_override = topology_point.pop("worker_count", None)
-    if worker_count_override is not None and (isinstance(worker_count_override, bool) or not isinstance(worker_count_override, int) or not 1 <= worker_count_override <= 8):
-        raise ValueError("topology worker_count must be an integer between 1 and 8")
+    if worker_count_override is not None and (isinstance(worker_count_override, bool) or not isinstance(worker_count_override, int) or not 1 <= worker_count_override <= 32):
+        raise ValueError("topology worker_count must be an integer between 1 and 32")
     if topology_point:
         spec.topology = V5Topology(**(spec.topology.model_dump() | topology_point))
 

@@ -227,7 +227,7 @@ def compact_group_storage(group_id: str) -> dict:
 def archive_group_storage(group_id: str, payload: dict | None = None) -> dict:
     payload = payload or {}
     delete_raw = payload.get("delete_raw", True)
-    level = payload.get("compression_level", 3)
+    level = payload.get("compression_level", 10)
     if not isinstance(delete_raw, bool):
         raise HTTPException(422, "delete_raw must be boolean")
     if isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 19:

@@ -21,7 +21,7 @@ ARCHIVE_MANIFEST_SCHEMA = "mbe_v5_tar_zst_archive_manifest_v1"
 STORAGE_SUMMARY_NAME = "artifact_storage_summary.json"
 ARCHIVE_DIR_NAME = "_cold_archive"
 ARCHIVE_MEMBER_MANIFEST = ".mbe_archive_manifest.json"
-DEFAULT_ZSTD_LEVEL = 3
+DEFAULT_ZSTD_LEVEL = 10
 _NATIVE_TAR_ENV = "MBE_V5_NATIVE_TAR_ARCHIVE"
 _ARCHIVE_CHUNK_BYTES = 8 * 1024 * 1024
 ProgressCallback = Callable[[dict], None]
@@ -499,21 +499,520 @@ def _create_archive_native_tar(run_dir: Path, archive: Path, manifest: dict, lev
                 pass
 
 
+# MBE_EXACT_DEDUP_PRODUCTION_V2_BEGIN
+DEDUP_ARCHIVE_LAYOUT = "content_addressed_exact_v1"
+DEDUP_FORMAT_SCHEMA = "mbe_v5_exact_file_content_archive_v1"
+DEDUP_MEMBER_FORMAT = ".mbe_dedup_format.json"
+DEDUP_OBJECT_PREFIX = ".mbe_objects/"
+_DEDUP_ARCHIVE_ENV = "MBE_V5_EXACT_DEDUP_ARCHIVE"
+_ARCHIVE_MODE_LOCAL = threading.local()
+
+@contextmanager
+def exact_dedup_archive_mode():
+    """Opt this thread into exact-dedup archive creation.
+
+    Generic archive_run() remains on the pre-existing native/legacy path unless
+    this context is entered (Formal storage does so explicitly) or the explicit
+    MBE_V5_EXACT_DEDUP_ARCHIVE=1 override is set.
+    """
+    previous = bool(getattr(_ARCHIVE_MODE_LOCAL, "exact_dedup", False))
+    _ARCHIVE_MODE_LOCAL.exact_dedup = True
+    try:
+        yield
+    finally:
+        _ARCHIVE_MODE_LOCAL.exact_dedup = previous
+
+def _exact_dedup_requested() -> bool:
+    if bool(getattr(_ARCHIVE_MODE_LOCAL, "exact_dedup", False)):
+        return True
+    return os.environ.get(_DEDUP_ARCHIVE_ENV, "0").strip().lower() in {"1", "true", "yes", "on"}
+
+def _atomic_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        tmp.write_text(text, encoding=encoding)
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+def _dedup_object_name(sha256: str) -> str:
+    value = str(sha256).lower()
+    if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+        raise ArtifactStorageError(f"invalid SHA-256 for dedup object: {sha256!r}")
+    return f"{DEDUP_OBJECT_PREFIX}{value[:2]}/{value}"
+
+def _manifest_object_sizes(manifest: dict) -> dict[str, int]:
+    sizes: dict[str, int] = {}
+    for item in manifest.get("files", []):
+        name = _safe_relative_name(str(item.get("name") or ""))
+        if name == ARCHIVE_MEMBER_MANIFEST or name == DEDUP_MEMBER_FORMAT or name.startswith(DEDUP_OBJECT_PREFIX):
+            raise ArtifactStorageError(f"artifact path collides with reserved archive-internal path: {name}")
+        sha = str(item.get("sha256") or "").lower()
+        size = int(item.get("size_bytes") or 0)
+        if size < 0:
+            raise ArtifactStorageError(f"negative artifact size in manifest: {name}")
+        _dedup_object_name(sha)
+        previous = sizes.get(sha)
+        if previous is not None and previous != size:
+            raise ArtifactStorageError(f"same SHA-256 has inconsistent sizes: {sha}")
+        sizes[sha] = size
+    return sizes
+
+def _dedup_format_payload(manifest: dict, level: int) -> dict:
+    object_sizes = _manifest_object_sizes(manifest)
+    unique_bytes = sum(object_sizes.values())
+    logical_bytes = int(manifest.get("logical_bytes") or 0)
+    return {
+        "schema_version": DEDUP_FORMAT_SCHEMA,
+        "archive_layout": DEDUP_ARCHIVE_LAYOUT,
+        "run_id": str(manifest.get("run_id") or ""),
+        "manifest_sha256": hashlib.sha256(_manifest_bytes(manifest)).hexdigest(),
+        "source_file_count": int(manifest.get("file_count") or 0),
+        "source_logical_bytes": logical_bytes,
+        "unique_object_count": len(object_sizes),
+        "unique_object_bytes": unique_bytes,
+        "duplicate_logical_bytes": max(0, logical_bytes - unique_bytes),
+        "compression": {"codec": "zstd", "level": int(level), "threads": -1, "write_checksum": True},
+    }
+
+def _validate_source_payload(path: Path, item: dict, *, spool=None) -> tuple[str, int]:
+    expected_size = int(item["size_bytes"])
+    expected_sha = str(item["sha256"]).lower()
+    if not path.is_file():
+        raise ArtifactStorageError(f"source artifact disappeared during archive: {item['name']}")
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            total += len(chunk)
+            digest.update(chunk)
+            if spool is not None:
+                spool.write(chunk)
+    if total != expected_size or digest.hexdigest() != expected_sha:
+        raise ArtifactStorageError(f"source artifact changed after snapshot: {item['name']}")
+    return expected_sha, total
+
+def _create_archive_exact_dedup(run_dir: Path, archive: Path, manifest: dict, level: int, *, progress: ProgressCallback | None = None) -> dict:
+    import io
+    zstd = _zstandard()
+    tmp = archive.with_name(f".{archive.name}.{uuid4().hex}.tmp")
+    started = time.monotonic()
+    fmt = _dedup_format_payload(manifest, level)
+    unique_written: set[str] = set()
+    processed_bytes = 0
+    source_count = int(manifest.get("file_count") or 0)
+    source_logical = int(manifest.get("logical_bytes") or 0)
+    _emit_progress(progress, "packing", archive_engine="python_tarfile_zstd_exact_dedup", archive_layout=DEDUP_ARCHIVE_LAYOUT, source_file_count=source_count, source_logical_bytes=source_logical)
+    try:
+        with tmp.open("wb") as raw:
+            compressor = zstd.ZstdCompressor(level=level, threads=-1, write_checksum=True)
+            with compressor.stream_writer(raw, closefd=False) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w|") as tar:
+                    embedded = _manifest_bytes(manifest)
+                    info = tarfile.TarInfo(ARCHIVE_MEMBER_MANIFEST)
+                    info.size = len(embedded)
+                    info.mtime = 0
+                    tar.addfile(info, io.BytesIO(embedded))
+
+                    fmt_bytes = (json.dumps(fmt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                    fmt_info = tarfile.TarInfo(DEDUP_MEMBER_FORMAT)
+                    fmt_info.size = len(fmt_bytes)
+                    fmt_info.mtime = 0
+                    tar.addfile(fmt_info, io.BytesIO(fmt_bytes))
+
+                    root = run_dir.resolve()
+                    for index, item in enumerate(manifest.get("files", []), start=1):
+                        name = _safe_relative_name(str(item["name"]))
+                        path = (root / Path(*PurePosixPath(name).parts)).resolve()
+                        try:
+                            path.relative_to(root)
+                        except ValueError as exc:
+                            raise ArtifactStorageError(f"source escapes run directory: {name}") from exc
+                        sha = str(item["sha256"]).lower()
+                        size = int(item["size_bytes"])
+                        if sha in unique_written:
+                            _validate_source_payload(path, item)
+                        else:
+                            with tempfile.TemporaryFile() as spool:
+                                _validate_source_payload(path, item, spool=spool)
+                                spool.seek(0)
+                                obj = tarfile.TarInfo(_dedup_object_name(sha))
+                                obj.size = size
+                                obj.mode = 0o444
+                                obj.uid = 0
+                                obj.gid = 0
+                                obj.mtime = 0
+                                tar.addfile(obj, spool)
+                            unique_written.add(sha)
+                        processed_bytes += size
+                        _emit_progress(progress, "compressing", archive_engine="python_tarfile_zstd_exact_dedup", archive_layout=DEDUP_ARCHIVE_LAYOUT, processed_file_count=index, source_file_count=source_count, source_logical_bytes=source_logical, processed_source_bytes=processed_bytes, archive_bytes_written=int(tmp.stat().st_size) if tmp.exists() else 0)
+        if len(unique_written) != int(fmt["unique_object_count"]):
+            raise ArtifactStorageError("dedup object count mismatch during archive build")
+        os.replace(tmp, archive)
+        return {
+            "archive_engine": "python_tarfile_zstd_exact_dedup",
+            "archive_layout": DEDUP_ARCHIVE_LAYOUT,
+            "archive_dedup_schema": DEDUP_FORMAT_SCHEMA,
+            "archive_unique_object_count": int(fmt["unique_object_count"]),
+            "archive_unique_object_bytes": int(fmt["unique_object_bytes"]),
+            "archive_duplicate_logical_bytes": int(fmt["duplicate_logical_bytes"]),
+            "native_tar_used": False,
+            "zstd_threads": -1,
+            "archive_seconds": max(0.0, time.monotonic() - started),
+        }
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+def _read_dedup_format_member(handle) -> dict:
+    try:
+        value = json.loads(handle.read().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ArtifactStorageError("dedup archive format metadata is invalid") from exc
+    if not isinstance(value, dict) or value.get("schema_version") != DEDUP_FORMAT_SCHEMA:
+        raise ArtifactStorageError("dedup archive format schema mismatch")
+    if value.get("archive_layout") != DEDUP_ARCHIVE_LAYOUT:
+        raise ArtifactStorageError("dedup archive layout mismatch")
+    return value
+
+def _materialize_dedup_archive_to_temp(archive: Path, temp_root: Path, manifest: dict) -> None:
+    expected = {str(item["name"]): item for item in manifest.get("files", [])}
+    by_sha: dict[str, list[tuple[str, dict]]] = {}
+    for name, item in expected.items():
+        by_sha.setdefault(str(item["sha256"]).lower(), []).append((name, item))
+    restored: set[str] = set()
+    zstd = _zstandard()
+    format_seen = False
+    with archive.open("rb") as raw:
+        with zstd.ZstdDecompressor().stream_reader(raw) as reader:
+            with tarfile.open(fileobj=reader, mode="r|") as tar:
+                for member in tar:
+                    if member.name == ARCHIVE_MEMBER_MANIFEST:
+                        continue
+                    if member.name == DEDUP_MEMBER_FORMAT:
+                        handle = tar.extractfile(member)
+                        if handle is None:
+                            raise ArtifactStorageError("dedup format metadata is unreadable")
+                        _read_dedup_format_member(handle)
+                        format_seen = True
+                        continue
+                    if not format_seen:
+                        raise ArtifactStorageError(f"unexpected member before dedup metadata: {member.name}")
+                    if not member.isfile() or not member.name.startswith(DEDUP_OBJECT_PREFIX):
+                        raise ArtifactStorageError(f"unexpected dedup restore member: {member.name}")
+                    sha = PurePosixPath(member.name).name.lower()
+                    targets = by_sha.get(sha)
+                    if not targets:
+                        raise ArtifactStorageError(f"unreferenced dedup object: {member.name}")
+                    expected_size = int(targets[0][1]["size_bytes"])
+                    handle = tar.extractfile(member)
+                    if handle is None:
+                        raise ArtifactStorageError(f"dedup object unreadable: {member.name}")
+                    outputs = []
+                    digest = hashlib.sha256()
+                    total = 0
+                    try:
+                        for name, _item in targets:
+                            target = (temp_root / Path(*PurePosixPath(name).parts)).resolve()
+                            try:
+                                target.relative_to(temp_root)
+                            except ValueError as exc:
+                                raise ArtifactStorageError(f"restore target escapes temp root: {name}") from exc
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            outputs.append((name, target.open("wb")))
+                        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+                            total += len(chunk)
+                            digest.update(chunk)
+                            for _name, output in outputs:
+                                output.write(chunk)
+                    finally:
+                        for _name, output in outputs:
+                            output.close()
+                    if total != expected_size or digest.hexdigest() != sha:
+                        raise ArtifactStorageError(f"dedup restored object verification failed: {sha}")
+                    for name, _output in outputs:
+                        restored.add(name)
+    missing = sorted(set(expected) - restored)
+    if missing:
+        raise ArtifactStorageError(f"dedup restore is missing {len(missing)} expected files")
+
+def _repack_legacy_archive_to_dedup_candidate(source_archive: Path, candidate: Path, manifest: dict, level: int, *, progress: ProgressCallback | None = None) -> dict:
+    import io
+    zstd = _zstandard()
+    fmt = _dedup_format_payload(manifest, level)
+    expected = {str(item["name"]): item for item in manifest.get("files", [])}
+    observed: set[str] = set()
+    unique_written: set[str] = set()
+    source_embedded = None
+    started = time.monotonic()
+
+    with source_archive.open("rb") as source_raw, candidate.open("wb") as target_raw:
+        with zstd.ZstdDecompressor().stream_reader(source_raw) as source_reader:
+            compressor = zstd.ZstdCompressor(level=level, threads=-1, write_checksum=True)
+            with compressor.stream_writer(target_raw, closefd=False) as target_writer:
+                with tarfile.open(fileobj=source_reader, mode="r|") as src_tar:
+                    with tarfile.open(fileobj=target_writer, mode="w|") as dst_tar:
+                        embedded = _manifest_bytes(manifest)
+                        info = tarfile.TarInfo(ARCHIVE_MEMBER_MANIFEST)
+                        info.size = len(embedded)
+                        info.mtime = 0
+                        dst_tar.addfile(info, io.BytesIO(embedded))
+                        fmt_bytes = (json.dumps(fmt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                        fmt_info = tarfile.TarInfo(DEDUP_MEMBER_FORMAT)
+                        fmt_info.size = len(fmt_bytes)
+                        fmt_info.mtime = 0
+                        dst_tar.addfile(fmt_info, io.BytesIO(fmt_bytes))
+
+                        for member in src_tar:
+                            if member.name == ARCHIVE_MEMBER_MANIFEST:
+                                handle = src_tar.extractfile(member)
+                                if handle is None:
+                                    raise ArtifactStorageError("legacy embedded manifest unreadable")
+                                source_embedded = json.loads(handle.read().decode("utf-8"))
+                                continue
+                            name = _safe_relative_name(member.name)
+                            item = expected.get(name)
+                            if item is None or not member.isfile() or name in observed:
+                                raise ArtifactStorageError(f"unexpected legacy archive member: {member.name}")
+                            observed.add(name)
+                            handle = src_tar.extractfile(member)
+                            if handle is None:
+                                raise ArtifactStorageError(f"legacy member unreadable: {name}")
+                            sha = str(item["sha256"]).lower()
+                            expected_size = int(item["size_bytes"])
+                            digest = hashlib.sha256()
+                            total = 0
+                            if sha in unique_written:
+                                for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+                                    total += len(chunk)
+                                    digest.update(chunk)
+                            else:
+                                with tempfile.TemporaryFile() as spool:
+                                    for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+                                        total += len(chunk)
+                                        digest.update(chunk)
+                                        spool.write(chunk)
+                                    if total != expected_size or digest.hexdigest() != sha:
+                                        raise ArtifactStorageError(f"legacy member failed verification: {name}")
+                                    spool.seek(0)
+                                    obj = tarfile.TarInfo(_dedup_object_name(sha))
+                                    obj.size = expected_size
+                                    obj.mode = 0o444
+                                    obj.uid = 0
+                                    obj.gid = 0
+                                    obj.mtime = 0
+                                    dst_tar.addfile(obj, spool)
+                                unique_written.add(sha)
+                                continue
+                            if total != expected_size or digest.hexdigest() != sha:
+                                raise ArtifactStorageError(f"legacy member failed verification: {name}")
+
+    if source_embedded != manifest:
+        raise ArtifactStorageError("legacy embedded/external manifest mismatch")
+    missing = sorted(set(expected) - observed)
+    if missing:
+        raise ArtifactStorageError(f"legacy archive missing {len(missing)} expected files")
+    return {
+        "archive_engine": "python_tarfile_zstd_exact_dedup_migration",
+        "archive_layout": DEDUP_ARCHIVE_LAYOUT,
+        "archive_dedup_schema": DEDUP_FORMAT_SCHEMA,
+        "archive_unique_object_count": int(fmt["unique_object_count"]),
+        "archive_unique_object_bytes": int(fmt["unique_object_bytes"]),
+        "archive_duplicate_logical_bytes": int(fmt["duplicate_logical_bytes"]),
+        "native_tar_used": False,
+        "zstd_threads": -1,
+        "archive_seconds": max(0.0, time.monotonic() - started),
+    }
+
+def _dedup_migration_journal_path(archive: Path) -> Path:
+    return archive.parent / f".{archive.name}.exact_dedup_migration.json"
+
+def _rollback_dedup_migration(run_dir: Path, archive: Path, journal: dict) -> None:
+    backup = archive.parent / str(journal.get("backup_name") or "")
+    candidate = archive.parent / str(journal.get("candidate_name") or "")
+    run_id = str(journal.get("run_id") or "")
+    _archive, _manifest_path, checksum_path = _archive_paths(run_dir, run_id)
+    if backup.is_file():
+        if archive.exists():
+            archive.unlink(missing_ok=True)
+        os.replace(backup, archive)
+    if isinstance(journal.get("old_storage"), dict):
+        _atomic_json(run_dir / STORAGE_SUMMARY_NAME, journal["old_storage"])
+    old_checksum = str(journal.get("old_checksum_text") or "")
+    if old_checksum:
+        _atomic_text(checksum_path, old_checksum, encoding="ascii")
+    candidate.unlink(missing_ok=True)
+    backup.unlink(missing_ok=True)
+    _dedup_migration_journal_path(archive).unlink(missing_ok=True)
+
+def _recover_dedup_migration_if_needed(run_dir: Path, archive: Path) -> None:
+    journal_path = _dedup_migration_journal_path(archive)
+    if not journal_path.is_file():
+        return
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ArtifactStorageError(f"unreadable dedup migration journal: {journal_path}") from exc
+    state = str(journal.get("state") or "")
+    new_sha = str(journal.get("new_archive_sha256") or "")
+    backup = archive.parent / str(journal.get("backup_name") or "")
+    if state == "metadata_updated" and archive.is_file():
+        current = read_storage_summary(run_dir)
+        if new_sha and str(current.get("archive_sha256") or "") == new_sha and _sha256_file(archive) == new_sha:
+            _storage, _archive, manifest = _archive_metadata(run_dir)
+            verify_archive(_archive, manifest, expected_archive_sha256=new_sha)
+            backup.unlink(missing_ok=True)
+            journal_path.unlink(missing_ok=True)
+            return
+    _rollback_dedup_migration(run_dir, archive, journal)
+
+def _repack_archive_exact_dedup_unlocked(run_dir: Path, *, run_id: str, compression_level: int = DEFAULT_ZSTD_LEVEL, progress: ProgressCallback | None = None) -> dict:
+    run_dir = run_dir.resolve()
+    level = max(1, min(19, int(compression_level)))
+    archive, manifest_path, checksum_path = _archive_paths(run_dir, run_id)
+    _recover_dedup_migration_if_needed(run_dir, archive)
+    # If a hard stop happened before a journal was written, the canonical old
+    # archive is still authoritative and any candidate temp is uncommitted.
+    for stale_candidate in archive.parent.glob(f".{archive.name}.*.exact_dedup.tmp"):
+        try:
+            stale_candidate.unlink()
+        except OSError:
+            pass
+    storage, archive, manifest = _archive_metadata(run_dir)
+    old_verification = verify_archive(archive, manifest, expected_archive_sha256=str(storage.get("archive_sha256") or ""), progress=progress)
+    if old_verification.get("archive_layout") == DEDUP_ARCHIVE_LAYOUT:
+        return {**storage, "migration_attempted": False, "migration_reason": "already_exact_dedup"}
+    if old_verification.get("archive_layout") != "legacy_paths_v1":
+        raise ArtifactStorageError(f"unsupported archive layout for migration: {old_verification.get('archive_layout')!r}")
+
+    old_sha = _sha256_file(archive)
+    old_size = int(archive.stat().st_size)
+    old_storage = dict(storage)
+    old_checksum_text = checksum_path.read_text(encoding="ascii") if checksum_path.is_file() else ""
+    candidate = archive.parent / f".{archive.name}.{uuid4().hex}.exact_dedup.tmp"
+    backup = archive.parent / f".{archive.name}.{uuid4().hex}.legacy.bak"
+    journal_path = _dedup_migration_journal_path(archive)
+
+    try:
+        engine = _repack_legacy_archive_to_dedup_candidate(archive, candidate, manifest, level, progress=progress)
+        candidate_verification = verify_archive(candidate, manifest, progress=progress)
+        if candidate_verification.get("archive_layout") != DEDUP_ARCHIVE_LAYOUT:
+            raise ArtifactStorageError("migration candidate did not verify as exact dedup")
+        new_sha = _sha256_file(candidate)
+        new_size = int(candidate.stat().st_size)
+        journal = {
+            "schema_version": "mbe_v5_exact_dedup_migration_journal_v1",
+            "run_id": run_id,
+            "state": "prepared",
+            "backup_name": backup.name,
+            "candidate_name": candidate.name,
+            "old_archive_sha256": old_sha,
+            "old_archive_bytes": old_size,
+            "new_archive_sha256": new_sha,
+            "new_archive_bytes": new_size,
+            "old_storage": old_storage,
+            "old_checksum_text": old_checksum_text,
+            "created_at": _now(),
+        }
+        _atomic_json(journal_path, journal)
+        os.replace(archive, backup)
+        journal["state"] = "old_moved"
+        _atomic_json(journal_path, journal)
+        os.replace(candidate, archive)
+        journal["state"] = "new_installed"
+        _atomic_json(journal_path, journal)
+
+        explicit = verify_archive(archive, manifest, expected_archive_sha256=new_sha, progress=progress)
+        current = measure_online_tree(run_dir)
+        original = int(old_storage.get("original_logical_bytes") or manifest.get("logical_bytes") or 0)
+        effective = current["physical_bytes"] + new_size
+        saved = max(0, original - effective)
+        updated = _write_storage_summary(run_dir, {
+            **old_storage,
+            "run_id": run_id,
+            "archive_format": "tar.zst",
+            "archive_layout": DEDUP_ARCHIVE_LAYOUT,
+            "archive_dedup_schema": DEDUP_FORMAT_SCHEMA,
+            "archive_compression": "zstd",
+            "archive_compression_level": level,
+            "archive_engine": engine.get("archive_engine"),
+            "native_tar_used": False,
+            "zstd_threads": -1,
+            "archive_seconds": engine.get("archive_seconds"),
+            "archive_bytes": new_size,
+            "archive_sha256": new_sha,
+            "archive_verified": True,
+            "archive_verified_at": explicit["verified_at"],
+            "archive_unique_object_count": engine.get("archive_unique_object_count"),
+            "archive_unique_object_bytes": engine.get("archive_unique_object_bytes"),
+            "archive_duplicate_logical_bytes": engine.get("archive_duplicate_logical_bytes"),
+            "current_effective_bytes": effective,
+            "saved_bytes": saved,
+            "saving_ratio": (saved / original) if original else 0.0,
+            "archive_migrated_from_layout": "legacy_paths_v1",
+            "archive_migrated_from_bytes": old_size,
+            "archive_migrated_from_sha256": old_sha,
+            "archive_migrated_at": _now(),
+        })
+        _atomic_text(checksum_path, f"{new_sha}  {archive.name}\n", encoding="ascii")
+        journal["state"] = "metadata_updated"
+        _atomic_json(journal_path, journal)
+
+        final_storage, final_archive, final_manifest = _archive_metadata(run_dir)
+        verify_archive(final_archive, final_manifest, expected_archive_sha256=str(final_storage.get("archive_sha256") or ""))
+        backup.unlink(missing_ok=True)
+        journal_path.unlink(missing_ok=True)
+        return {
+            **updated,
+            "migration_attempted": True,
+            "migration_succeeded": True,
+            "migration_old_archive_bytes": old_size,
+            "migration_new_archive_bytes": new_size,
+            "migration_reclaimed_bytes": max(0, old_size - new_size),
+        }
+    except Exception:
+        if journal_path.is_file():
+            try:
+                journal = json.loads(journal_path.read_text(encoding="utf-8"))
+                _rollback_dedup_migration(run_dir, archive, journal)
+            except Exception:
+                pass
+        else:
+            candidate.unlink(missing_ok=True)
+            if backup.is_file() and not archive.is_file():
+                os.replace(backup, archive)
+        raise
+    finally:
+        candidate.unlink(missing_ok=True)
+
+def repack_archive_exact_dedup(run_dir: Path, *, run_id: str, compression_level: int = DEFAULT_ZSTD_LEVEL, progress: ProgressCallback | None = None) -> dict:
+    with _run_storage_lock(run_dir):
+        return _repack_archive_exact_dedup_unlocked(run_dir, run_id=run_id, compression_level=compression_level, progress=progress)
+# MBE_EXACT_DEDUP_PRODUCTION_V2_END
+
 def _create_archive(run_dir: Path, archive: Path, manifest: dict, level: int, *, progress: ProgressCallback | None = None) -> dict:
-    # A hard process stop may leave a previous temporary archive. It is never
-    # part of the verified archive identity and is safe to remove on retry.
     for stale in archive.parent.glob(f".{archive.name}.*.tmp"):
         try:
             stale.unlink()
         except OSError:
             pass
+    if _exact_dedup_requested():
+        return _create_archive_exact_dedup(run_dir, archive, manifest, level, progress=progress)
     tar_executable = _native_tar_executable()
     if tar_executable and _native_tar_compatible(manifest):
         try:
-            return _create_archive_native_tar(run_dir, archive, manifest, level, tar_executable, progress=progress)
+            engine = _create_archive_native_tar(run_dir, archive, manifest, level, tar_executable, progress=progress)
+            return {**engine, "archive_layout": "legacy_paths_v1"}
         except Exception as exc:
             _emit_progress(progress, "native_tar_fallback", archive_engine="python_tarfile_zstd_multithread", native_tar_error=str(exc))
-    return _create_archive_python(run_dir, archive, manifest, level, progress=progress)
+    engine = _create_archive_python(run_dir, archive, manifest, level, progress=progress)
+    return {**engine, "archive_layout": "legacy_paths_v1"}
 
 def _read_external_manifest(path: Path) -> dict:
     try:
@@ -532,9 +1031,12 @@ def verify_archive(archive: Path, manifest: dict, *, expected_archive_sha256: st
         raise ArtifactStorageError("tar.zst archive SHA-256 mismatch")
     zstd = _zstandard()
     expected = {str(item["name"]): item for item in manifest.get("files", [])}
-    _emit_progress(progress, "verifying", source_file_count=len(expected), verified_file_count=0, archive_bytes=int(archive.stat().st_size))
-    observed: set[str] = set()
+    object_sizes: dict[str, int] | None = None
+    observed_paths: set[str] = set()
+    observed_objects: set[str] = set()
     embedded: dict | None = None
+    dedup_format: dict | None = None
+    _emit_progress(progress, "verifying", source_file_count=len(expected), verified_file_count=0, archive_bytes=int(archive.stat().st_size))
     with archive.open("rb") as raw:
         with zstd.ZstdDecompressor().stream_reader(raw) as reader:
             with tarfile.open(fileobj=reader, mode="r|") as tar:
@@ -542,14 +1044,41 @@ def verify_archive(archive: Path, manifest: dict, *, expected_archive_sha256: st
                     if member.name == ARCHIVE_MEMBER_MANIFEST:
                         handle = tar.extractfile(member)
                         if handle is None:
-                            raise ArtifactStorageError("embedded archive manifest is unreadable")
-                        try:
-                            embedded = json.loads(handle.read().decode("utf-8"))
-                        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                            raise ArtifactStorageError("embedded archive manifest is invalid") from exc
+                            raise ArtifactStorageError("embedded archive manifest unreadable")
+                        embedded = json.loads(handle.read().decode("utf-8"))
+                        continue
+                    if member.name == DEDUP_MEMBER_FORMAT and member.name not in expected:
+                        if dedup_format is not None or observed_paths:
+                            raise ArtifactStorageError("dedup format metadata position invalid")
+                        handle = tar.extractfile(member)
+                        if handle is None:
+                            raise ArtifactStorageError("dedup format metadata unreadable")
+                        dedup_format = _read_dedup_format_member(handle)
+                        object_sizes = _manifest_object_sizes(manifest)
+                        continue
+                    if dedup_format is not None:
+                        if not member.isfile() or not member.name.startswith(DEDUP_OBJECT_PREFIX):
+                            raise ArtifactStorageError(f"unexpected dedup member: {member.name}")
+                        sha = PurePosixPath(member.name).name.lower()
+                        if object_sizes is None:
+                            raise ArtifactStorageError("dedup object encountered before dedup metadata")
+                        expected_size = object_sizes.get(sha)
+                        if expected_size is None or member.name != _dedup_object_name(sha) or sha in observed_objects:
+                            raise ArtifactStorageError(f"invalid dedup object: {member.name}")
+                        handle = tar.extractfile(member)
+                        if handle is None:
+                            raise ArtifactStorageError(f"unreadable dedup object: {member.name}")
+                        digest = hashlib.sha256()
+                        size = 0
+                        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+                            size += len(chunk)
+                            digest.update(chunk)
+                        if size != expected_size or digest.hexdigest() != sha:
+                            raise ArtifactStorageError(f"dedup object verification failed: {member.name}")
+                        observed_objects.add(sha)
                         continue
                     name = _safe_relative_name(member.name)
-                    if not member.isfile() or name not in expected:
+                    if not member.isfile() or name not in expected or name in observed_paths:
                         raise ArtifactStorageError(f"unexpected archive member: {member.name}")
                     handle = tar.extractfile(member)
                     if handle is None:
@@ -561,16 +1090,46 @@ def verify_archive(archive: Path, manifest: dict, *, expected_archive_sha256: st
                         digest.update(chunk)
                     if size != int(expected[name]["size_bytes"]) or digest.hexdigest() != str(expected[name]["sha256"]):
                         raise ArtifactStorageError(f"archive member verification failed: {name}")
-                    if name in observed:
-                        raise ArtifactStorageError(f"duplicate archive member: {name}")
-                    observed.add(name)
-                    _emit_progress(progress, "verifying", source_file_count=len(expected), verified_file_count=len(observed), archive_bytes=int(archive.stat().st_size))
+                    observed_paths.add(name)
     if embedded != manifest:
         raise ArtifactStorageError("embedded and external archive manifests differ")
-    missing = sorted(set(expected) - observed)
+    if dedup_format is not None:
+        if str(dedup_format.get("run_id") or "") != str(manifest.get("run_id") or ""):
+            raise ArtifactStorageError("dedup format run_id mismatch")
+        if str(dedup_format.get("manifest_sha256") or "") != hashlib.sha256(_manifest_bytes(manifest)).hexdigest():
+            raise ArtifactStorageError("dedup format manifest SHA-256 mismatch")
+        if object_sizes is None:
+            raise ArtifactStorageError("dedup archive object map was not initialized")
+        required = set(object_sizes)
+        if observed_objects != required:
+            raise ArtifactStorageError(f"dedup object set mismatch: expected={len(required)} observed={len(observed_objects)}")
+        logical = int(manifest.get("logical_bytes") or 0)
+        unique_bytes = sum(object_sizes.values())
+        metrics = {
+            "source_file_count": int(manifest.get("file_count") or 0),
+            "source_logical_bytes": logical,
+            "unique_object_count": len(object_sizes),
+            "unique_object_bytes": unique_bytes,
+            "duplicate_logical_bytes": max(0, logical - unique_bytes),
+        }
+        for key, value in metrics.items():
+            if int(dedup_format.get(key) or 0) != int(value):
+                raise ArtifactStorageError(f"dedup format metric mismatch: {key}")
+        return {
+            "verified": True,
+            "verified_file_count": len(expected),
+            "verified_object_count": len(observed_objects),
+            "archive_layout": DEDUP_ARCHIVE_LAYOUT,
+            "archive_dedup_schema": DEDUP_FORMAT_SCHEMA,
+            "archive_unique_object_count": len(observed_objects),
+            "archive_unique_object_bytes": unique_bytes,
+            "archive_duplicate_logical_bytes": max(0, logical - unique_bytes),
+            "verified_at": _now(),
+        }
+    missing = sorted(set(expected) - observed_paths)
     if missing:
         raise ArtifactStorageError(f"archive is missing {len(missing)} expected files")
-    return {"verified": True, "verified_file_count": len(observed), "verified_at": _now()}
+    return {"verified": True, "verified_file_count": len(observed_paths), "archive_layout": "legacy_paths_v1", "verified_at": _now()}
 
 
 def _delete_archived_raw(run_dir: Path, manifest: dict, *, progress: ProgressCallback | None = None) -> None:
@@ -684,6 +1243,11 @@ def _archive_run_unlocked(run_dir: Path, *, run_id: str, delete_raw: bool = True
         "run_id": run_id,
         "storage_state": "archive_online" if not delete_raw else "archive_verified_pending_raw_cleanup",
         "archive_format": "tar.zst",
+        "archive_layout": engine.get("archive_layout") or "legacy_paths_v1",
+        "archive_dedup_schema": engine.get("archive_dedup_schema"),
+        "archive_unique_object_count": engine.get("archive_unique_object_count"),
+        "archive_unique_object_bytes": engine.get("archive_unique_object_bytes"),
+        "archive_duplicate_logical_bytes": engine.get("archive_duplicate_logical_bytes"),
         "archive_compression": "zstd",
         "archive_compression_level": level,
         "archive_engine": engine.get("archive_engine"),
@@ -784,19 +1348,23 @@ def archived_artifact_info(run_dir: Path, name: str) -> dict:
     item = next((value for value in manifest.get("files", []) if value.get("name") == safe), None)
     if not isinstance(item, dict):
         raise FileNotFoundError(name)
-    return {**item, "archive_path": archive, "archive_sha256": storage.get("archive_sha256")}
+    return {**item, "archive_path": archive, "archive_sha256": storage.get("archive_sha256"), "archive_layout": storage.get("archive_layout") or "legacy_paths_v1"}
 
 
 def stream_archived_artifact(run_dir: Path, name: str) -> Iterator[bytes]:
     info = archived_artifact_info(run_dir, name)
     archive = Path(info["archive_path"])
     safe = _safe_relative_name(name)
+    layout = str(info.get("archive_layout") or "legacy_paths_v1")
+    expected_sha = str(info["sha256"]).lower()
+    expected_size = int(info["size_bytes"])
+    target_member = _dedup_object_name(expected_sha) if layout == DEDUP_ARCHIVE_LAYOUT else safe
     zstd = _zstandard()
     with archive.open("rb") as raw:
         with zstd.ZstdDecompressor().stream_reader(raw) as reader:
             with tarfile.open(fileobj=reader, mode="r|") as tar:
                 for member in tar:
-                    if member.name != safe:
+                    if member.name != target_member:
                         continue
                     handle = tar.extractfile(member)
                     if handle is None:
@@ -807,7 +1375,7 @@ def stream_archived_artifact(run_dir: Path, name: str) -> Iterator[bytes]:
                         size += len(chunk)
                         digest.update(chunk)
                         yield chunk
-                    if size != int(info["size_bytes"]) or digest.hexdigest() != str(info["sha256"]):
+                    if size != expected_size or digest.hexdigest() != expected_sha:
                         raise ArtifactStorageError(f"streamed archive member failed integrity check: {safe}")
                     return
     raise FileNotFoundError(name)
@@ -821,7 +1389,7 @@ def archive_path_for_download(run_dir: Path) -> Path:
 def _restore_run_unlocked(run_dir: Path, *, run_id: str, reapply_ntfs: bool = True) -> dict:
     run_dir = run_dir.resolve()
     storage, archive, manifest = _archive_metadata(run_dir)
-    verify_archive(archive, manifest, expected_archive_sha256=str(storage.get("archive_sha256") or ""))
+    verification = verify_archive(archive, manifest, expected_archive_sha256=str(storage.get("archive_sha256") or ""))
     zstd = _zstandard()
     restore_prefix = f".r_{hashlib.sha256(run_id.encode('utf-8')).hexdigest()[:8]}_"
     for stale in run_dir.parent.glob(f"{restore_prefix}*"):
@@ -830,39 +1398,42 @@ def _restore_run_unlocked(run_dir: Path, *, run_id: str, reapply_ntfs: bool = Tr
     temp_root = Path(tempfile.mkdtemp(prefix=restore_prefix, dir=str(run_dir.parent))).resolve()
     expected = {str(item["name"]): item for item in manifest.get("files", [])}
     try:
-        with archive.open("rb") as raw:
-            with zstd.ZstdDecompressor().stream_reader(raw) as reader:
-                with tarfile.open(fileobj=reader, mode="r|") as tar:
-                    for member in tar:
-                        if member.name == ARCHIVE_MEMBER_MANIFEST:
-                            continue
-                        name = _safe_relative_name(member.name)
-                        if name not in expected or not member.isfile():
-                            raise ArtifactStorageError(f"unexpected restore member: {member.name}")
-                        handle = tar.extractfile(member)
-                        if handle is None:
-                            raise ArtifactStorageError(f"restore member unreadable: {name}")
-                        target = (temp_root / Path(*PurePosixPath(name).parts)).resolve()
-                        try:
-                            target.relative_to(temp_root)
-                        except ValueError as exc:
-                            raise ArtifactStorageError(f"restore target escapes temporary root: {name}") from exc
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        digest = hashlib.sha256()
-                        size = 0
-                        with target.open("wb") as out:
-                            for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-                                out.write(chunk)
-                                size += len(chunk)
-                                digest.update(chunk)
-                        if size != int(expected[name]["size_bytes"]) or digest.hexdigest() != str(expected[name]["sha256"]):
-                            raise ArtifactStorageError(f"restored artifact verification failed: {name}")
-        for name in expected:
+        if verification.get("archive_layout") == DEDUP_ARCHIVE_LAYOUT:
+            _materialize_dedup_archive_to_temp(archive, temp_root, manifest)
+        else:
+            with archive.open("rb") as raw:
+                with zstd.ZstdDecompressor().stream_reader(raw) as reader:
+                    with tarfile.open(fileobj=reader, mode="r|") as tar:
+                        for member in tar:
+                            if member.name == ARCHIVE_MEMBER_MANIFEST:
+                                continue
+                            name = _safe_relative_name(member.name)
+                            if name not in expected or not member.isfile():
+                                raise ArtifactStorageError(f"unexpected restore member: {member.name}")
+                            handle = tar.extractfile(member)
+                            if handle is None:
+                                raise ArtifactStorageError(f"restore member unreadable: {name}")
+                            target = (temp_root / Path(*PurePosixPath(name).parts)).resolve()
+                            try:
+                                target.relative_to(temp_root)
+                            except ValueError as exc:
+                                raise ArtifactStorageError(f"restore target escapes temporary root: {name}") from exc
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            digest = hashlib.sha256()
+                            size = 0
+                            with target.open("wb") as out:
+                                for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+                                    out.write(chunk)
+                                    size += len(chunk)
+                                    digest.update(chunk)
+                            if size != int(expected[name]["size_bytes"]) or digest.hexdigest() != str(expected[name]["sha256"]):
+                                raise ArtifactStorageError(f"restored artifact verification failed: {name}")
+        for name, item in expected.items():
+            source = (temp_root / Path(*PurePosixPath(name).parts)).resolve()
+            if not source.is_file() or int(source.stat().st_size) != int(item["size_bytes"]) or _sha256_file(source) != str(item["sha256"]):
+                raise ArtifactStorageError(f"verified restore file invalid before commit: {name}")
             if _is_preserved_shell_member(name):
                 continue
-            source = (temp_root / Path(*PurePosixPath(name).parts)).resolve()
-            if not source.is_file():
-                raise ArtifactStorageError(f"verified restore file missing from temporary root: {name}")
             target = (run_dir / Path(*PurePosixPath(name).parts)).resolve()
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists():
@@ -870,7 +1441,6 @@ def _restore_run_unlocked(run_dir: Path, *, run_id: str, reapply_ntfs: bool = Tr
             os.replace(source, target)
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
-
     restored = measure_online_tree(run_dir)
     payload = _write_storage_summary(run_dir, {
         **storage,
@@ -897,6 +1467,11 @@ def _restore_run_unlocked(run_dir: Path, *, run_id: str, reapply_ntfs: bool = Tr
             "archive_relative_path": storage.get("archive_relative_path"),
             "archive_manifest_relative_path": storage.get("archive_manifest_relative_path"),
             "archive_checksum_relative_path": storage.get("archive_checksum_relative_path"),
+            "archive_layout": storage.get("archive_layout"),
+            "archive_dedup_schema": storage.get("archive_dedup_schema"),
+            "archive_unique_object_count": storage.get("archive_unique_object_count"),
+            "archive_unique_object_bytes": storage.get("archive_unique_object_bytes"),
+            "archive_duplicate_logical_bytes": storage.get("archive_duplicate_logical_bytes"),
             "current_effective_bytes": effective,
             "saved_bytes": saved,
             "saving_ratio": (saved / original) if original else 0.0,
