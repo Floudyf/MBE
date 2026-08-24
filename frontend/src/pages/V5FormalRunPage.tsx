@@ -29,7 +29,7 @@ import {
 import WorkloadPreviewPanel from "../components/v5/WorkloadPreviewPanel";
 import WorkloadSourceEditor, { type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
 import { backendLabel, blockerLabel, faultModeLabel, statusLabel, suiteLabel } from "../v5Labels";
-import { BATCH_SI_ABLATION_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
+import { BATCH_SI_ABLATION_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
 import { V5_BUILTIN_METHODS, V5_DEFAULT_METHOD_IDS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
 import { buildThetaSweepPoints, compactCount, thetaOptionsForDataset, type SkewExperimentPreset } from "../v5SkewExperiment"; // V5_SKEW_MAIN_PRESET_V1
 import "../v5UiPolish.css";
@@ -54,6 +54,10 @@ function topologyWithNodes(current: Topology, nodes: number): Topology {
 
 function topologyWithShards(current: Topology, shards: number): Topology {
   return { ...current, shards, validators_per_shard: deriveValidatorsPerShard(current.nodes, shards, current.validators_per_shard) };
+}
+
+function workerScalingTopologyPoints(current: Topology): TopologyPoint[] {
+  return WORKER_SCALING_OPTIONS.map((worker_count) => ({ ...current, worker_count }));
 }
 type WorkloadPoint = { tx_count: number; cross_shard_ratio?: number; timeout_every?: number; target_alpha?: number; target_theta?: number };
 type FaultMode = "disabled" | "delay_only" | "network_drop";
@@ -405,8 +409,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       if (typeof base.target_theta === "number") second.target_theta = Math.min(1.2, Math.round((base.target_theta + 0.2) * 10) / 10);
       setWorkloadPoints([base, second]);
     }
-    if (suite === "topology_scaling" && topologyPoints.length < 2) {
-      setTopologyPoints([{ ...topology, worker_count: 1 }, { ...topology, worker_count: workerCount }]);
+    if (suite === "topology_scaling") {
+      setTopologyPoints(workerScalingTopologyPoints(topology));
     }
     if (suite === "fault_recovery_experiment" && faultPoints.length < 2) {
       setFaultPoints([{ mode: "disabled" }, { mode: "delay_only", delay_ms: 5 }]);
@@ -419,6 +423,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     } else if (suite === "fault_recovery_experiment") {
       const current = selectedMethods.find((methodId) => methodDefinition(methodId)?.comparisonVisible);
       setSelectedMethods([current ?? "hash_batch_si"]);
+    } else if (suite === "topology_scaling") {
+      setSelectedMethods([...BATCH_SI_WORKER_SCALING_METHOD_IDS]);
     } else {
       const visible = selectedMethods.filter((methodId) => methodDefinition(methodId)?.comparisonVisible);
       setSelectedMethods(visible.length ? visible : [...V5_DEFAULT_METHOD_IDS]);
@@ -788,10 +794,10 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         <div><span>节点内 Worker</span><strong data-testid="v5-worker-count">{workerCount}</strong><small>并行方法使用；Serial 有效并发度固定为 1</small></div>
       </div>
       <div className="worker-option-group" data-testid="v5-worker-options">
-        <span>节点内执行并发度（Workers）</span>
+        <span>节点内执行并发度（Worker 数）</span>
         <div className="segmented-control">{PARALLEL_WORKER_OPTIONS.map((value) => <button type="button" key={value} aria-pressed={workerCount === value} className={workerCount === value ? "selected" : ""} onClick={() => update(() => setWorkerCount(value))}>{value}</button>)}</div>
       </div>
-      <p className="muted">普通方法对比和消融使用同一 Worker 上限保证公平；拓扑与资源扩展实验可在扫描点中分别设置 1、2、4、8。</p>
+      <p className="muted">普通方法对比和消融仍使用 1、2、4、8；拓扑与资源扩展中的 Worker 扫描使用 2、4、8、16、32。</p>
     </article>
 
     <WorkloadPreviewPanel preview={workloadPreview} dirty={workloadPreviewDirty} error={workloadPreviewError} onPreview={() => void previewWorkload()} disabled={busy} />
@@ -806,11 +812,11 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       <button type="button" onClick={() => update(() => setWorkloadPoints(workloadPoints.filter((_, item) => item !== index)))}>删除点</button>
     </div>)}</PointEditor>}
 
-    {selectedSuite === "topology_scaling" && <PointEditor title="拓扑与 Worker 扫描点" onAdd={() => update(() => setTopologyPoints((items) => [...items, { ...topology, worker_count: workerCount }]))}>{topologyPoints.map((point, index) => <div key={index} className="experiment-condition-grid topology-point-row">
+    {selectedSuite === "topology_scaling" && <PointEditor title="拓扑与 Worker 扫描点" onAdd={() => update(() => setTopologyPoints((items) => [...items, { ...topology, worker_count: workerCount === 1 ? 2 : workerCount }]))}>{topologyPoints.map((point, index) => <div key={index} className="experiment-condition-grid topology-point-row">
       <NumericInput label="节点数" value={point.nodes} min={1} onChange={(value) => update(() => setTopologyPoints(replace(topologyPoints, index, topologyWithNodes(point, boundedInteger(value, 1, 128)))))} />
       <NumericInput label="分片数" value={point.shards} min={1} onChange={(value) => update(() => setTopologyPoints(replace(topologyPoints, index, topologyWithShards(point, boundedInteger(value, 1, 64)))))} />
       <NumericInput label="每片验证节点数" value={point.validators_per_shard} min={1} onChange={(value) => update(() => setTopologyPoints(replace(topologyPoints, index, { ...point, validators_per_shard: boundedInteger(value, 1, 128) })))} />
-      <label><span>节点内 Workers</span><select value={point.worker_count ?? workerCount} onChange={(event) => update(() => setTopologyPoints(replace(topologyPoints, index, { ...point, worker_count: globalThis.Number(event.target.value) })))}>{PARALLEL_WORKER_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+      <label><span>节点内 Worker 数</span><select value={point.worker_count ?? (workerCount === 1 ? 2 : workerCount)} onChange={(event) => update(() => setTopologyPoints(replace(topologyPoints, index, { ...point, worker_count: globalThis.Number(event.target.value) })))}>{WORKER_SCALING_OPTIONS.map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
       <div className="readonly-field"><span>预计进程</span><strong>{point.nodes}</strong></div>
       <button type="button" onClick={() => update(() => setTopologyPoints(topologyPoints.filter((_, item) => item !== index)))}>删除点</button>
     </div>)}</PointEditor>}
@@ -1182,8 +1188,8 @@ function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; s
   if (input.selectedSuite === "workload_sensitivity" && input.workloadPoints.length < 2) return "负载敏感性实验至少需要两个负载扫描点。";
   if (input.selectedSuite === "topology_scaling") {
     if (input.topologyPoints.length < 2) return "拓扑与资源扩展实验至少需要两个扫描点。";
-    const invalid = input.topologyPoints.find((point) => point.nodes < 1 || point.shards < 1 || point.validators_per_shard < 1 || point.nodes !== point.shards * point.validators_per_shard || !PARALLEL_WORKER_OPTIONS.includes((point.worker_count ?? input.workerCount) as (typeof PARALLEL_WORKER_OPTIONS)[number]));
-    if (invalid) return "拓扑扫描点必须满足节点数=分片数×每片验证节点数，Worker 为 1、2、4 或 8。";
+    const invalid = input.topologyPoints.find((point) => point.nodes < 1 || point.shards < 1 || point.validators_per_shard < 1 || point.nodes !== point.shards * point.validators_per_shard || !WORKER_SCALING_OPTIONS.includes((point.worker_count ?? (input.workerCount === 1 ? 2 : input.workerCount)) as (typeof WORKER_SCALING_OPTIONS)[number]));
+    if (invalid) return "拓扑扫描点必须满足节点数=分片数×每片验证节点数，Worker 为 2、4、8、16 或 32。";
   }
   if (input.selectedSuite === "fault_recovery_experiment" && (input.faultPoints.length < 2 || !input.faultPoints.some((item) => item.mode === "disabled") || !input.faultPoints.some((item) => item.mode !== "disabled"))) return "故障实验需要无故障基准点和至少一个故障点。";
   if (input.estimatedChildren > MAX_FORMAL_CHILD_RUNS) return `正式矩阵超过 ${MAX_FORMAL_CHILD_RUNS} 个子实验硬上限。`;

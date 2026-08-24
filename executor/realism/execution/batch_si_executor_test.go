@@ -279,7 +279,7 @@ func TestBatchSIWorkerCountsProduceSameStateRoot(t *testing.T) {
 	}
 	b.ExecutionPlan = &block.ExecutionPlanEnvelope{AlgorithmID: BatchSIPlanAlgorithmID, PayloadDigest: batchSITextDigest(string(raw)), PlanDigest: planned.Plan.PlanDigest, Payload: raw}
 	roots := map[string]bool{}
-	for _, workers := range []int{1, 2, 4, 8} {
+	for _, workers := range []int{1, 2, 4, 8, 16, 32} {
 		cfg := config
 		cfg.WorkerCount = workers
 		result, err := NewBatchSIExecutor(cfg).ExecuteBlock(context.Background(), b, map[string]string{})
@@ -326,9 +326,9 @@ func TestBatchSIAblationsRemainDeterministic(t *testing.T) {
 
 func TestBatchSIRejectsInvalidPrivateConfiguration(t *testing.T) {
 	invalidWorkers := DefaultBatchSIConfig()
-	invalidWorkers.WorkerCount = 9
+	invalidWorkers.WorkerCount = 33
 	if _, err := BuildBatchSIPlan(batchSITestBlock(batchSITestTx("T1", nil, []string{"k"})), invalidWorkers); err == nil {
-		t.Fatal("worker_count greater than eight must be rejected")
+		t.Fatal("worker_count greater than thirty-two must be rejected")
 	}
 	invalidMode := DefaultBatchSIConfig()
 	invalidMode.OrderingMode = "other_scheme"

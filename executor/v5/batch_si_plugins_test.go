@@ -142,7 +142,7 @@ func TestBatchSIPluginPairingAndPlannerConfigAreEnforced(t *testing.T) {
 
 func TestBatchSIPluginConfigValidationRejectsInvalidWorkersAndModes(t *testing.T) {
 	registry := BuiltinRegistry()
-	invalidWorkers := batchSITestPluginConfig(9)
+	invalidWorkers := batchSITestPluginConfig(33)
 	if _, err := registry.Create("block_executor", execution.BatchSIBlockExecutorID, invalidWorkers); err == nil || !strings.Contains(err.Error(), "worker_count") {
 		t.Fatalf("expected invalid worker_count rejection, got %v", err)
 	}

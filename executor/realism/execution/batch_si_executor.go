@@ -79,8 +79,8 @@ func (c BatchSIConfig) Normalized() BatchSIConfig {
 
 func (c BatchSIConfig) Validate() error {
 	c = c.Normalized()
-	if c.WorkerCount < 1 || c.WorkerCount > 8 {
-		return fmt.Errorf("batch-si worker_count must be between 1 and 8")
+	if c.WorkerCount < 1 || c.WorkerCount > 32 {
+		return fmt.Errorf("batch-si worker_count must be between 1 and 32")
 	}
 	switch c.PartitionMode {
 	case BatchSIPartitionWRBP, BatchSIPartitionSequential:

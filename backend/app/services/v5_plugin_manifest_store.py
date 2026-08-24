@@ -221,7 +221,7 @@ _MANIFESTS = [
             "retry_nonce_gaps": True,
         },
         schema=_schema({
-            "worker_count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
+            "worker_count": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4},
             "reordering": {"type": "boolean", "default": True},
             "read_only_optimization": {"type": "boolean", "default": True},
             "retry_nonce_gaps": {"type": "boolean", "default": True},
@@ -256,7 +256,7 @@ _MANIFESTS = [
         "Reimplements Groundhog unordered-block execution over MBE transaction semantics using one block-start snapshot, typed commutative modifications, reserve/rollback validation, deterministic materialization, and no serial fallback.",
         config={"worker_count": 4, "ordered_set_limit": 64},
         schema=_schema({
-            "worker_count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
+            "worker_count": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4},
             "ordered_set_limit": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 64},
         }),
         capabilities=["groundhog", "unordered_block", "block_start_snapshot", "typed_commutative_modifications", "nonnegative_int64_set_add", "bytes_set", "ordered_set", "concurrent_reserve_commit_rollback", "transactional_reservation_rewind", "deterministic_materialization", "no_serial_fallback", "execution_plan_digest"],
@@ -304,7 +304,7 @@ _MANIFESTS = [
         "Executes the committed Batch-SI plan with sequential batches, one immutable snapshot per batch, parallel transactions inside a batch, and deterministic state materialization using Batch-SI-owned transaction semantics.",
         config={"worker_count": 4, "partition_mode": "wrbp", "ordering_mode": "ofas", "priority_mode": "paper", "execution_mode": "snapshot_parallel"},
         schema=_schema({
-            "worker_count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
+            "worker_count": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4},
             "partition_mode": {"type": "string", "enum": ["wrbp", "sequential"], "default": "wrbp"},
             "ordering_mode": {"type": "string", "enum": ["ofas", "dependency_graph"], "default": "ofas"},
             "priority_mode": {"type": "string", "enum": ["paper", "txid"], "default": "paper"},

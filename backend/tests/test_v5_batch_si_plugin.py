@@ -83,7 +83,7 @@ def test_batch_si_manifests_are_private_and_paired() -> None:
     assert "execution:batch_si_execution" in scheduler.requirements
     assert "execution:batch_si_execution" in executor.requirements
     assert executor.default_config["worker_count"] == 4
-    assert executor.config_schema["properties"]["worker_count"]["maximum"] == 8
+    assert executor.config_schema["properties"]["worker_count"]["maximum"] == 32
     assert STORE.get("metatrack_block_executor").config_schema["properties"]["worker_count"]["maximum"] == 8
 
 

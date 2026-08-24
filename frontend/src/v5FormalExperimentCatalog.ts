@@ -56,6 +56,17 @@ export const BATCH_SI_ABLATION_METHOD_IDS = [
 
 export const PARALLEL_WORKER_OPTIONS = [1, 2, 4, 8] as const;
 
+export const WORKER_SCALING_OPTIONS = [2, 4, 8, 16, 32] as const;
+
+export const BATCH_SI_WORKER_SCALING_METHOD_IDS = [
+  "hash_batch_si",
+  "hash_cg",
+  "hash_acg",
+  "hash_bsx",
+  "hash_aria",
+  "hash_groundhog",
+] as const;
+
 export function methodDefinition(methodId: string): FormalMethodDefinition | undefined {
   return FORMAL_METHOD_DEFINITIONS.find((item) => item.methodId === methodId);
 }
