@@ -22,14 +22,17 @@ type literatureTxAccess struct {
 }
 
 type literatureGraphMetrics struct {
-	TransactionCount    int `json:"transaction_count"`
-	EdgeCount           int `json:"edge_count"`
-	WaveCount           int `json:"wave_count"`
-	MaximumWaveWidth    int `json:"maximum_wave_width"`
-	ColorCount          int `json:"color_count,omitempty"`
-	PairChecks          int `json:"pair_checks,omitempty"`
-	PlanningWorkerCount int `json:"planning_worker_count,omitempty"`
-	AbortCount          int `json:"abort_count,omitempty"`
+	TransactionCount     int   `json:"transaction_count"`
+	EdgeCount            int   `json:"edge_count"`
+	WaveCount            int   `json:"wave_count"`
+	MaximumWaveWidth     int   `json:"maximum_wave_width"`
+	ColorCount           int   `json:"color_count,omitempty"`
+	PairChecks           int   `json:"pair_checks,omitempty"`
+	PlanningWorkerCount  int   `json:"planning_worker_count,omitempty"`
+	AbortCount           int   `json:"abort_count,omitempty"`
+	CycleResolutionCount int   `json:"cycle_resolution_count,omitempty"`
+	GraphConstructionMS  int64 `json:"graph_construction_ms,omitempty"`
+	SortingMS            int64 `json:"sorting_ms,omitempty"`
 }
 
 type literatureGraphEdge struct {
@@ -57,6 +60,8 @@ type literatureGraphPlan struct {
 func literaturePlanDigest(plan literatureGraphPlan) string {
 	clone := plan
 	clone.PlanDigest = ""
+	clone.Metrics.GraphConstructionMS = 0
+	clone.Metrics.SortingMS = 0
 	return stableDigest(clone)
 }
 

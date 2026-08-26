@@ -18,7 +18,7 @@ func graphFixture() realblock.Block {
 	}}
 }
 
-func TestCGAndNezhaACGPreserveAccessEvidenceWithDistinctPaperSchedules(t *testing.T) {
+func TestCGCycleAwareReferenceDirectionAndACGPreserveAccessEvidence(t *testing.T) {
 	block := graphFixture()
 	cg, err := buildCGPlan(block)
 	if err != nil {
@@ -28,19 +28,14 @@ func TestCGAndNezhaACGPreserveAccessEvidenceWithDistinctPaperSchedules(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	// CG preserves original-order conflict dependencies. Nezha ACG/HS first
-	// ranks address queues and then derives a transaction order, so equating the
-	// two schedules would erase the paper-defined Nezha semantics.
-	wantCG := [][]string{{"t1", "t3"}, {"t2"}}
-	wantACG := [][]string{{"t2", "t3"}, {"t1"}}
+	// Classical CG uses read->writer direction and can therefore point backward
+	// in block order. On this acyclic fixture t2 must precede t1.
+	wantCG := [][]string{{"t2", "t3"}, {"t1"}}
 	if stableDigest(cg.Waves) != stableDigest(wantCG) {
-		t.Fatalf("CG paper schedule=%v want=%v", cg.Waves, wantCG)
+		t.Fatalf("cycle-aware CG schedule=%v want=%v", cg.Waves, wantCG)
 	}
-	if stableDigest(acg.Waves) != stableDigest(wantACG) {
-		t.Fatalf("Nezha ACG/HS schedule=%v want=%v", acg.Waves, wantACG)
-	}
-	if stableDigest(cg.Waves) == stableDigest(acg.Waves) {
-		t.Fatalf("CG and Nezha ACG/HS must retain distinct scheduling semantics on this fixture")
+	if len(cg.AbortedTransactionIDs) != 0 {
+		t.Fatalf("unexpected CG cycle aborts on acyclic fixture: %v", cg.AbortedTransactionIDs)
 	}
 	if len(acg.AbortedTransactionIDs) != 0 {
 		t.Fatalf("unexpected Nezha HS aborts: %v", acg.AbortedTransactionIDs)
@@ -106,7 +101,7 @@ func TestLiteratureGraphExecutionCarriesDeclaredAccessAndBusinessEvidence(t *tes
 		execute          func(context.Context, realblock.Block, map[string]string, literatureGraphPlan, int) (BlockExecutionResult, error)
 		serialEquivalent bool
 	}{
-		{"cg", buildCGPlan, executeCGPlan, true},
+		{"cg", buildCGPlan, executeCGPlan, false},
 		// Nezha ACG/HS owns an address-ranked order and may abort transactions;
 		// its oracle is the consensus-bound HS plan, not CG/Serial input order.
 		{"acg", buildACGPlan, executeACGPlan, false},

@@ -114,6 +114,22 @@ func executeCGPlanWithCommitment(ctx context.Context, block realblock.Block, bas
 			}
 		}
 	}
+
+	// Cycle victims are excluded from state materialization and represented as
+	// deterministic failed no-op terminal outcomes. This preserves one terminal
+	// lifecycle result per admitted logical transaction while keeping the abort
+	// visible to throughput/abort-rate analysis.
+	for _, id := range plan.AbortedTransactionIDs {
+		item, ok := byID[id]
+		if !ok {
+			return BlockExecutionResult{}, fmt.Errorf("cg plan abort references unknown transaction %s", id)
+		}
+		receipt := execution.Receipt{TxID: item.TxID, BlockHash: block.BlockHash, Height: block.Height, Success: false, Error: "cg_cycle_aborted", ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...), StateRootAfterTx: commitment.Root()}
+		delta := execution.TxDelta{TxID: item.TxID, OriginalIndex: indexByID[id], WriteSet: map[string]string{}, Receipt: receipt, Success: false, Error: receipt.Error}
+		allReceipts = append(allReceipts, receipt)
+		allDeltas = append(allDeltas, delta)
+		result.FailedTxs++
+	}
 	result.Receipts = allReceipts
 	result.TxDeltas = allDeltas
 	result.StateRootAfter = commitment.Root()
@@ -145,19 +161,30 @@ func executeCGPlanWithCommitment(ctx context.Context, block realblock.Block, bas
 		DeterministicApplyMS: result.DeterministicMaterializationMS, StateCommitmentMS: result.StateCommitmentMS,
 	}
 	actual := map[string]any{
-		"literature_graph_metrics":         metrics,
-		"maximum_parallel_width":           maximumObserved,
-		"dependency_edge_count":            plan.Metrics.EdgeCount,
-		"wave_count":                       plan.Metrics.WaveCount,
-		"maximum_wave_width":               plan.Metrics.MaximumWaveWidth,
-		"graph_color_count":                plan.Metrics.ColorCount,
-		"pairwise_conflict_check_count":    plan.Metrics.PairChecks,
+		"literature_graph_metrics":       metrics,
+		"maximum_parallel_width":         maximumObserved,
+		"dependency_edge_count":          plan.Metrics.EdgeCount,
+		"wave_count":                     plan.Metrics.WaveCount,
+		"maximum_wave_width":             plan.Metrics.MaximumWaveWidth,
+		"graph_color_count":              plan.Metrics.ColorCount,
+		"pairwise_conflict_check_count":  plan.Metrics.PairChecks,
+		"graph_table_construction_ms":    plan.Metrics.GraphConstructionMS,
+		"sorting_ms":                     plan.Metrics.SortingMS,
+		"cg_candidate_transaction_count": plan.Metrics.TransactionCount,
+		"cg_cycle_abort_count":           plan.Metrics.AbortCount,
+		"cg_cycle_resolution_count":      plan.Metrics.CycleResolutionCount,
+		"cg_cycle_abort_rate": func() float64 {
+			if plan.Metrics.TransactionCount == 0 {
+				return 0
+			}
+			return float64(plan.Metrics.AbortCount) / float64(plan.Metrics.TransactionCount)
+		}(),
 		"cg_planning_worker_count":         plan.Metrics.PlanningWorkerCount,
 		"cg_validator_mode":                plan.ValidatorMode,
 		"worker_pool_create_count":         1,
 		"worker_pool_setup_ms":             poolSetupDuration.Milliseconds(),
 		"wave_barrier_count":               len(plan.Waves),
-		"abort_count":                      0,
+		"abort_count":                      plan.Metrics.AbortCount,
 		"reexecution_count":                0,
 		"serializable":                     true,
 		"literature_plan_algorithm_id":     plan.AlgorithmID,
@@ -169,7 +196,11 @@ func executeCGPlanWithCommitment(ctx context.Context, block realblock.Block, bas
 	}
 	businessAttempts := make([]BusinessExecutionAttempt, 0, len(allDeltas))
 	for _, delta := range allDeltas {
-		businessAttempts = append(businessAttempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: delta.TxID, Track: cgBlockExecutorID, Attempt: 1, Reason: "literature_graph_wave_execution", Success: delta.Success, FinalCompletion: true})
+		reason := "literature_graph_wave_execution"
+		if delta.Error == "cg_cycle_aborted" {
+			reason = "cg_cycle_aborted"
+		}
+		businessAttempts = append(businessAttempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: delta.TxID, Track: cgBlockExecutorID, Attempt: 1, Reason: reason, Success: delta.Success, FinalCompletion: true})
 	}
 	return BlockExecutionResult{
 		ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: plan.PlanDigest,

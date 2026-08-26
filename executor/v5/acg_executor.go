@@ -166,6 +166,8 @@ func executeACGPlanWithCommitment(ctx context.Context, block realblock.Block, ba
 		"maximum_wave_width":               plan.Metrics.MaximumWaveWidth,
 		"graph_color_count":                plan.Metrics.ColorCount,
 		"pairwise_conflict_check_count":    plan.Metrics.PairChecks,
+		"graph_table_construction_ms":      plan.Metrics.GraphConstructionMS,
+		"sorting_ms":                       plan.Metrics.SortingMS,
 		"worker_pool_create_count":         1,
 		"worker_pool_setup_ms":             poolSetupDuration.Milliseconds(),
 		"wave_barrier_count":               len(plan.Waves),

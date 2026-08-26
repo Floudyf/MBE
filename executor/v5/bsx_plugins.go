@@ -89,6 +89,7 @@ func (p bsxBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecution
 }
 
 func buildBSXPlan(block realblock.Block) (literatureGraphPlan, error) {
+	constructionStarted := time.Now()
 	items, err := literatureAccessDescriptors(block.TxList, block.ShardID)
 	if err != nil {
 		return literatureGraphPlan{}, err
@@ -110,6 +111,9 @@ func buildBSXPlan(block realblock.Block) (literatureGraphPlan, error) {
 			edgeCount++
 		}
 	}
+	constructionMS := time.Since(constructionStarted).Milliseconds()
+
+	sortingStarted := time.Now()
 	colors := make([]int, len(items))
 	for i := range colors {
 		colors[i] = -1
@@ -165,7 +169,8 @@ func buildBSXPlan(block realblock.Block) (literatureGraphPlan, error) {
 			waves[color] = append(waves[color], items[index].TxID)
 		}
 	}
-	plan := literatureGraphPlan{AlgorithmID: bsxPlanAlgorithmID, BlockHeight: block.Height, DeclaredAccessSetDigest: accessDigest, DeclaredReadKeyCount: readKeyCount, DeclaredWriteKeyCount: writeKeyCount, Metrics: literatureGraphMetrics{TransactionCount: len(items), EdgeCount: edgeCount, PairChecks: pairChecks, ColorCount: maxColor + 1}, Waves: waves}
+	sortingMS := time.Since(sortingStarted).Milliseconds()
+	plan := literatureGraphPlan{AlgorithmID: bsxPlanAlgorithmID, BlockHeight: block.Height, DeclaredAccessSetDigest: accessDigest, DeclaredReadKeyCount: readKeyCount, DeclaredWriteKeyCount: writeKeyCount, Metrics: literatureGraphMetrics{TransactionCount: len(items), EdgeCount: edgeCount, PairChecks: pairChecks, ColorCount: maxColor + 1, GraphConstructionMS: constructionMS, SortingMS: sortingMS}, Waves: waves}
 	for _, item := range items {
 		plan.CandidateTransactionIDs = append(plan.CandidateTransactionIDs, item.TxID)
 	}

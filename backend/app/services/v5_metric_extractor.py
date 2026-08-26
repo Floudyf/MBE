@@ -576,6 +576,10 @@ def _apply_batch_si_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "planning_iteration_count": total("planning_iteration_count"),
         "batch_snapshot_count": total("batch_snapshot_count"),
         "batch_snapshot_create_ms": total("batch_snapshot_create_ms"),
+        "graph_table_construction_ms": total("graph_table_construction_ms"),
+        "sorting_ms": total("sorting_ms"),
+        "batch_si_table_construction_ms": total("batch_si_table_construction_ms"),
+        "batch_si_sorting_ms": total("batch_si_sorting_ms"),
         "transaction_execution_ms": total("transaction_execution_ms"),
         "deterministic_materialization_ms": total("deterministic_materialization_ms"),
         "state_commitment_ms": total("state_commitment_ms"),
@@ -639,11 +643,21 @@ def _apply_literature_graph_metrics(metrics: dict[str, Any], run_dir: Path) -> N
         "dependency_edge_count": total("dependency_edge_count"),
         "pairwise_conflict_check_count": total("pairwise_conflict_check_count"),
         "graph_color_count": total("graph_color_count"),
+        "graph_table_construction_ms": total("graph_table_construction_ms"),
+        "sorting_ms": total("sorting_ms"),
         "transaction_execution_ms": total("transaction_execution_ms"),
         "deterministic_materialization_ms": total("deterministic_materialization_ms"),
         "state_commitment_ms": total("state_commitment_ms"),
         "cg_planning_worker_count": max((_int(block.get("cg_planning_worker_count")) for block in blocks), default=0),
     })
+    if executor_ids == ["cg_block_executor"]:
+        cg_candidates = total("cg_candidate_transaction_count")
+        cg_aborts = total("cg_cycle_abort_count")
+        metrics["abort_count"] = cg_aborts
+        metrics["cg_candidate_transaction_count"] = cg_candidates
+        metrics["cg_cycle_abort_count"] = cg_aborts
+        metrics["cg_cycle_resolution_count"] = total("cg_cycle_resolution_count")
+        metrics["cg_cycle_abort_rate"] = (cg_aborts / cg_candidates) if cg_candidates else 0
     if executor_ids == ["acg_block_executor"]:
         # Nezha HS aborts are part of the authors' algorithm semantics. Keep the
         # successful-finalization throughput numerator unchanged, but export the
@@ -763,6 +777,8 @@ def _apply_groundhog_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             "groundhog_proposal_reservation_count": proposal_reservation_count,
             "groundhog_proposal_constraint_conflict_count": proposal_constraint_conflict_count,
             "groundhog_proposal_reservation_rollback_count": proposal_reservation_rollback_count,
+            "groundhog_conflict_abort_count": proposal_constraint_conflict_count,
+            "groundhog_conflict_abort_rate": (proposal_constraint_conflict_count / proposal_candidate_count) if proposal_candidate_count else 0,
         })
         for path in proposal_paths:
             if path.is_file():
@@ -952,7 +968,7 @@ def _literature_graph_required_metrics(method_id: str | None) -> list[str]:
         "deterministic_materialization_ms",
     ]
     if normalized == "hash_cg":
-        required.append("pairwise_conflict_check_count")
+        required.extend(["pairwise_conflict_check_count", "abort_count", "cg_candidate_transaction_count", "cg_cycle_abort_count", "cg_cycle_resolution_count", "cg_cycle_abort_rate"])
     if normalized == "hash_acg":
         required.extend(["abort_count", "nezha_hs_abort_count"])
     if normalized == "hash_bsx":

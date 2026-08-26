@@ -111,19 +111,21 @@ type BatchSIBatch struct {
 }
 
 type BatchSIPlanMetrics struct {
-	TransactionCount                     int `json:"transaction_count"`
-	CandidateTransactionCount            int `json:"candidate_transaction_count"`
-	AcceptedTransactionCount             int `json:"accepted_transaction_count"`
-	FirstPassOFASAbortedTransactionCount int `json:"first_pass_ofas_aborted_transaction_count"`
-	ReadOnlyTransactionCount             int `json:"read_only_transaction_count"`
-	AWRTAddressCount                     int `json:"awrt_address_count"`
-	AWRTWriteReferenceCount              int `json:"awrt_write_reference_count"`
-	BatchCount                           int `json:"batch_count"`
-	MaximumBatchWidth                    int `json:"maximum_batch_width"`
-	WriteOpportunityReuseCount           int `json:"write_opportunity_reuse_count"`
-	DependencyEdgeCount                  int `json:"dependency_edge_count"`
-	OFASAbortedTransactionCount          int `json:"ofas_aborted_transaction_count"`
-	PlanningIterationCount               int `json:"planning_iteration_count"`
+	TransactionCount                     int   `json:"transaction_count"`
+	CandidateTransactionCount            int   `json:"candidate_transaction_count"`
+	AcceptedTransactionCount             int   `json:"accepted_transaction_count"`
+	FirstPassOFASAbortedTransactionCount int   `json:"first_pass_ofas_aborted_transaction_count"`
+	ReadOnlyTransactionCount             int   `json:"read_only_transaction_count"`
+	AWRTAddressCount                     int   `json:"awrt_address_count"`
+	AWRTWriteReferenceCount              int   `json:"awrt_write_reference_count"`
+	BatchCount                           int   `json:"batch_count"`
+	MaximumBatchWidth                    int   `json:"maximum_batch_width"`
+	WriteOpportunityReuseCount           int   `json:"write_opportunity_reuse_count"`
+	DependencyEdgeCount                  int   `json:"dependency_edge_count"`
+	OFASAbortedTransactionCount          int   `json:"ofas_aborted_transaction_count"`
+	PlanningIterationCount               int   `json:"planning_iteration_count"`
+	TableConstructionMS                  int64 `json:"table_construction_ms,omitempty"`
+	SortingMS                            int64 `json:"sorting_ms,omitempty"`
 }
 
 type BatchSIOrderEvidence struct {
@@ -255,6 +257,7 @@ func BuildBatchSIPlanWithOrdinals(b block.Block, config BatchSIConfig, ordinals 
 	if err != nil {
 		return BatchSIPlanningResult{}, err
 	}
+	constructionStarted := time.Now()
 	awrt, awrtReferences := batchSIBuildAWRT(descriptors)
 	var partitions []batchSIPartition
 	var opportunityReuse int
@@ -265,6 +268,8 @@ func BuildBatchSIPlanWithOrdinals(b block.Block, config BatchSIConfig, ordinals 
 		partitions, opportunityReuse = batchSIWRBPPartition(descriptors)
 	}
 
+	tableConstructionMS := time.Since(constructionStarted).Milliseconds()
+	sortingStarted := time.Now()
 	deferredByID := map[string]batchSITxDescriptor{}
 	dependencyEdges := 0
 	for index := range partitions {
@@ -295,6 +300,7 @@ func BuildBatchSIPlanWithOrdinals(b block.Block, config BatchSIConfig, ordinals 
 		}
 		finalPartitions = append(finalPartitions, partition)
 	}
+	sortingMS := time.Since(sortingStarted).Milliseconds()
 	readOnlyCount := 0
 	for _, item := range descriptors {
 		if len(item.WriteKeys) == 0 {
@@ -316,6 +322,8 @@ func BuildBatchSIPlanWithOrdinals(b block.Block, config BatchSIConfig, ordinals 
 		DependencyEdgeCount:                  dependencyEdges,
 		OFASAbortedTransactionCount:          len(deferredByID),
 		PlanningIterationCount:               1,
+		TableConstructionMS:                  tableConstructionMS,
+		SortingMS:                            sortingMS,
 	}
 
 	plan := BatchSIPlan{
@@ -663,6 +671,8 @@ func batchSIOrderEvidence(ordinals map[string]int, batches []BatchSIBatch) []Bat
 func batchSIPlanDigest(plan BatchSIPlan) string {
 	clone := plan
 	clone.PlanDigest = ""
+	clone.Metrics.TableConstructionMS = 0
+	clone.Metrics.SortingMS = 0
 	return batchSIStableDigest(clone)
 }
 

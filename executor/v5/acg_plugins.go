@@ -113,6 +113,7 @@ type nezhaQueue struct {
 // Transactions that the reference HS marks aborted are carried explicitly in the
 // consensus-bound plan and terminalized as failed no-op outcomes by the executor.
 func buildACGPlan(block realblock.Block) (literatureGraphPlan, error) {
+	constructionStarted := time.Now()
 	items, err := literatureAccessDescriptors(block.TxList, block.ShardID)
 	if err != nil {
 		return literatureGraphPlan{}, err
@@ -138,7 +139,6 @@ func buildACGPlan(block realblock.Block) (literatureGraphPlan, error) {
 				q = &nezhaQueue{}
 				queues[key] = q
 			}
-			// The official RW capture can contain both an r-node and w-node for one key.
 			if readSet[key] {
 				n := &nezhaRWNode{txIndex: i, key: key}
 				edge.nodes = append(edge.nodes, n)
@@ -151,12 +151,14 @@ func buildACGPlan(block realblock.Block) (literatureGraphPlan, error) {
 			}
 		}
 		if len(edge.nodes) == 0 {
-			// Keep an access-free transaction representable and deterministic.
 			n := &nezhaRWNode{txIndex: i, key: "", sequence: nezhaInitialSequence, assigned: true}
 			edge.nodes = []*nezhaRWNode{n}
 		}
 		edges[i] = edge
 	}
+	constructionMS := time.Since(constructionStarted).Milliseconds()
+
+	sortingStarted := time.Now()
 	queueOrder, dependencyCount := nezhaQueueOrder(queues, edges)
 	for _, key := range queueOrder {
 		nezhaSortInQueue(queues[key], edges)
@@ -191,7 +193,8 @@ func buildACGPlan(block realblock.Block) (literatureGraphPlan, error) {
 		}
 		waves = append(waves, wave)
 	}
-	plan := literatureGraphPlan{AlgorithmID: acgPlanAlgorithmID, BlockHeight: block.Height, DeclaredAccessSetDigest: accessDigest, DeclaredReadKeyCount: readKeyCount, DeclaredWriteKeyCount: writeKeyCount, Waves: waves, AbortedTransactionIDs: aborted, Metrics: literatureGraphMetrics{TransactionCount: len(items), EdgeCount: dependencyCount, AbortCount: len(aborted)}}
+	sortingMS := time.Since(sortingStarted).Milliseconds()
+	plan := literatureGraphPlan{AlgorithmID: acgPlanAlgorithmID, BlockHeight: block.Height, DeclaredAccessSetDigest: accessDigest, DeclaredReadKeyCount: readKeyCount, DeclaredWriteKeyCount: writeKeyCount, Waves: waves, AbortedTransactionIDs: aborted, Metrics: literatureGraphMetrics{TransactionCount: len(items), EdgeCount: dependencyCount, AbortCount: len(aborted), GraphConstructionMS: constructionMS, SortingMS: sortingMS}}
 	for _, item := range items {
 		plan.CandidateTransactionIDs = append(plan.CandidateTransactionIDs, item.TxID)
 	}

@@ -17,10 +17,10 @@ const (
 	cgExecutionID     = "cg_execution"
 	cgSchedulerID     = "cg_scheduler"
 	cgBlockExecutorID = "cg_block_executor"
-	cgPlanAlgorithmID = "cg_full_pairwise_dependency_dag_v1"
+	cgPlanAlgorithmID = "cg_cycle_aware_conflict_graph_v4"
 )
 
-const cgSmartValidatorMode = "paper_smart_validator_address_lists_v1"
+const cgSmartValidatorMode = "cycle_aware_full_recompute_v1"
 
 type cgExecution struct{ basicPlugin }
 type cgScheduler struct{ basicPlugin }
@@ -118,6 +118,7 @@ func buildCGPlan(block realblock.Block) (literatureGraphPlan, error) {
 // workers claim transaction i independently and compare only against j>i.
 // The RW/WR/WW dependency definition and i->j direction are unchanged.
 func buildCGPlanWithWorkers(block realblock.Block, workerCount int) (literatureGraphPlan, error) {
+	constructionStarted := time.Now()
 	items, err := literatureAccessDescriptors(block.TxList, block.ShardID)
 	if err != nil {
 		return literatureGraphPlan{}, err
@@ -133,7 +134,19 @@ func buildCGPlanWithWorkers(block realblock.Block, workerCount int) (literatureG
 		workerCount = 1
 	}
 
-	edgeTargets := make([][]int, len(items))
+	// Batch-SI's experimental CG baseline requires a cycle-capable conflict
+	// graph.  The direction below follows the public classical-CG construction
+	// used by the Nezha/MorphDAG reference: read->writer dependencies may point
+	// either forward or backward in block order, while WW dependencies preserve
+	// the original block order.  Unlike the old i<j-only DAG, this graph can
+	// contain cycles and therefore needs deterministic cycle resolution.
+	reads := make([]map[string]bool, len(items))
+	writes := make([]map[string]bool, len(items))
+	for index, item := range items {
+		reads[index] = literatureStringSet(item.ReadKeys)
+		writes[index] = literatureStringSet(item.WriteKeys)
+	}
+	pairEdges := make([][]literatureGraphEdge, len(items))
 	var next int64 = -1
 	var wg sync.WaitGroup
 	for worker := 0; worker < workerCount; worker++ {
@@ -145,13 +158,18 @@ func buildCGPlanWithWorkers(block realblock.Block, workerCount int) (literatureG
 				if i >= len(items) {
 					return
 				}
-				children := make([]int, 0)
+				local := make([]literatureGraphEdge, 0)
 				for j := i + 1; j < len(items); j++ {
-					if literatureConflicts(items[i], items[j]) {
-						children = append(children, j)
+					// Classical r-w dependency: the reader must precede the
+					// transaction that writes the value it observed.
+					if literatureSetIntersects(reads[i], writes[j]) || literatureSetIntersects(writes[i], writes[j]) {
+						local = append(local, literatureGraphEdge{From: i, To: j})
+					}
+					if literatureSetIntersects(reads[j], writes[i]) {
+						local = append(local, literatureGraphEdge{From: j, To: i})
 					}
 				}
-				edgeTargets[i] = children
+				pairEdges[i] = local
 			}
 		}()
 	}
@@ -159,32 +177,222 @@ func buildCGPlanWithWorkers(block realblock.Block, workerCount int) (literatureG
 
 	edges := map[int]map[int]bool{}
 	edgeList := make([]literatureGraphEdge, 0)
-	for i, children := range edgeTargets {
-		if len(children) == 0 {
-			continue
-		}
-		edges[i] = map[int]bool{}
-		for _, j := range children {
-			edges[i][j] = true
-			edgeList = append(edgeList, literatureGraphEdge{From: i, To: j})
+	seen := map[uint64]bool{}
+	for _, row := range pairEdges {
+		for _, edge := range row {
+			code := cgEdgeCode(edge.From, edge.To)
+			if seen[code] {
+				continue
+			}
+			seen[code] = true
+			if edges[edge.From] == nil {
+				edges[edge.From] = map[int]bool{}
+			}
+			edges[edge.From][edge.To] = true
+			edgeList = append(edgeList, edge)
 		}
 	}
-	waves, err := literatureWavesFromEdges(items, edges)
+	sort.Slice(edgeList, func(i, j int) bool {
+		if edgeList[i].From != edgeList[j].From {
+			return edgeList[i].From < edgeList[j].From
+		}
+		return edgeList[i].To < edgeList[j].To
+	})
+	constructionMS := time.Since(constructionStarted).Milliseconds()
+
+	sortingStarted := time.Now()
+	waves, abortedIndexes, err := cgResolveCyclesAndWaves(items, edges)
 	if err != nil {
 		return literatureGraphPlan{}, err
 	}
+	sortingMS := time.Since(sortingStarted).Milliseconds()
+	abortedIDs := make([]string, 0, len(abortedIndexes))
+	for _, index := range abortedIndexes {
+		abortedIDs = append(abortedIDs, items[index].TxID)
+	}
 	pairChecks := len(items) * (len(items) - 1) / 2
 	plan := literatureGraphPlan{
-		AlgorithmID: cgPlanAlgorithmID, BlockHeight: block.Height,
-		DeclaredAccessSetDigest: accessDigest, DeclaredReadKeyCount: readKeyCount, DeclaredWriteKeyCount: writeKeyCount,
-		Edges: edgeList, ValidatorMode: cgSmartValidatorMode,
-		Metrics: literatureGraphMetrics{TransactionCount: len(items), EdgeCount: len(edgeList), PairChecks: pairChecks, PlanningWorkerCount: workerCount},
-		Waves:   waves,
+		AlgorithmID:             cgPlanAlgorithmID,
+		BlockHeight:             block.Height,
+		DeclaredAccessSetDigest: accessDigest,
+		DeclaredReadKeyCount:    readKeyCount,
+		DeclaredWriteKeyCount:   writeKeyCount,
+		Edges:                   edgeList,
+		ValidatorMode:           cgSmartValidatorMode,
+		AbortedTransactionIDs:   abortedIDs,
+		Metrics: literatureGraphMetrics{
+			TransactionCount:     len(items),
+			EdgeCount:            len(edgeList),
+			PairChecks:           pairChecks,
+			PlanningWorkerCount:  workerCount,
+			AbortCount:           len(abortedIDs),
+			CycleResolutionCount: len(abortedIDs),
+			GraphConstructionMS:  constructionMS,
+			SortingMS:            sortingMS,
+		},
+		Waves: waves,
 	}
 	for _, item := range items {
 		plan.CandidateTransactionIDs = append(plan.CandidateTransactionIDs, item.TxID)
 	}
 	return literatureFinalizePlan(plan), nil
+}
+
+// cgResolveCyclesAndWaves implements the Batch-SI paper-level CG cycle-abort
+// semantics without elementary-cycle enumeration. The paper defines CG as a DAG
+// in Definition 2, while Section 5.2/5.7 also reports dependency-cycle handling
+// and CG aborts; it does not publish a cycle-victim rule. The cited Piduguralla
+// ConcSawtooth implementation constructs conflict edges from earlier to later
+// transactions and therefore supplies no cycle-victim policy either.
+//
+// MBE therefore uses a deliberately non-performance-tuned deterministic closure:
+// detect cyclic strongly connected components, abort the lowest original
+// transaction ordinal that is actually inside a cyclic SCC, and repeat until
+// the remaining graph is acyclic. This keeps victim choice consensus-safe and
+// bounded by graph traversal; it does not enumerate elementary cycles and does
+// not consult TPS, latency, worker count, or any runtime feedback.
+func cgResolveCyclesAndWaves(items []literatureTxAccess, edges map[int]map[int]bool) ([][]string, []int, error) {
+	active := make([]bool, len(items))
+	for i := range active {
+		active[i] = true
+	}
+
+	aborted := make([]int, 0)
+	for {
+		components := cgCyclicSCCs(len(items), edges, active)
+		if len(components) == 0 {
+			break
+		}
+
+		// cgCyclicSCCs sorts each component and then sorts components by their
+		// lowest original ordinal. Selecting components[0][0] is therefore a
+		// deterministic rule restricted to vertices proven to be cyclic.
+		victim := components[0][0]
+		active[victim] = false
+		aborted = append(aborted, victim)
+	}
+
+	sort.Ints(aborted)
+	waves, err := cgWavesForActive(items, edges, active)
+	if err != nil {
+		return nil, nil, err
+	}
+	return waves, aborted, nil
+}
+
+func cgCyclicSCCs(vertexCount int, edges map[int]map[int]bool, active []bool) [][]int {
+	indices := make([]int, vertexCount)
+	lowlink := make([]int, vertexCount)
+	onStack := make([]bool, vertexCount)
+	for i := range indices {
+		indices[i] = -1
+	}
+	stack := make([]int, 0, vertexCount)
+	index := 0
+	components := make([][]int, 0)
+	var strongConnect func(int)
+	strongConnect = func(v int) {
+		indices[v] = index
+		lowlink[v] = index
+		index++
+		stack = append(stack, v)
+		onStack[v] = true
+		children := make([]int, 0, len(edges[v]))
+		for child := range edges[v] {
+			if active[child] {
+				children = append(children, child)
+			}
+		}
+		sort.Ints(children)
+		for _, child := range children {
+			if indices[child] < 0 {
+				strongConnect(child)
+				if lowlink[child] < lowlink[v] {
+					lowlink[v] = lowlink[child]
+				}
+			} else if onStack[child] && indices[child] < lowlink[v] {
+				lowlink[v] = indices[child]
+			}
+		}
+		if lowlink[v] != indices[v] {
+			return
+		}
+		component := []int{}
+		for len(stack) > 0 {
+			last := len(stack) - 1
+			w := stack[last]
+			stack = stack[:last]
+			onStack[w] = false
+			component = append(component, w)
+			if w == v {
+				break
+			}
+		}
+		sort.Ints(component)
+		cyclic := len(component) > 1
+		if len(component) == 1 && edges[component[0]][component[0]] {
+			cyclic = true
+		}
+		if cyclic {
+			components = append(components, component)
+		}
+	}
+	for v := 0; v < vertexCount; v++ {
+		if active[v] && indices[v] < 0 {
+			strongConnect(v)
+		}
+	}
+	sort.Slice(components, func(i, j int) bool { return components[i][0] < components[j][0] })
+	return components
+}
+
+func cgWavesForActive(items []literatureTxAccess, edges map[int]map[int]bool, active []bool) ([][]string, error) {
+	indegree := make([]int, len(items))
+	remaining := 0
+	for i := range items {
+		if active[i] {
+			remaining++
+		}
+	}
+	for from, children := range edges {
+		if !active[from] {
+			continue
+		}
+		for child := range children {
+			if active[child] {
+				indegree[child]++
+			}
+		}
+	}
+	done := make([]bool, len(items))
+	waves := make([][]string, 0)
+	for remaining > 0 {
+		ready := make([]int, 0)
+		for index := range items {
+			if active[index] && !done[index] && indegree[index] == 0 {
+				ready = append(ready, index)
+			}
+		}
+		if len(ready) == 0 {
+			return nil, fmt.Errorf("cg cycle resolution left a cyclic dependency graph")
+		}
+		sort.Ints(ready)
+		wave := make([]string, 0, len(ready))
+		for _, index := range ready {
+			done[index] = true
+			remaining--
+			wave = append(wave, items[index].TxID)
+		}
+		for _, index := range ready {
+			for child := range edges[index] {
+				if active[child] && !done[child] {
+					indegree[child]--
+				}
+			}
+		}
+		waves = append(waves, wave)
+	}
+	return waves, nil
 }
 
 type cgAddressAccess struct {
@@ -196,171 +404,22 @@ type cgAddressAccess struct {
 // read/write lists. It detects missing and extra edges without rerunning the
 // producer's full n^2 transaction-pair CreateDAG pass on every validator.
 func verifyCGPlanSmart(block realblock.Block, plan literatureGraphPlan, workerCount int) error {
-	if block.ExecutionPlan == nil || block.ExecutionPlan.AlgorithmID != cgPlanAlgorithmID {
-		return fmt.Errorf("%s execution plan is missing", cgPlanAlgorithmID)
-	}
-	if block.ExecutionPlan.PlanDigest != plan.PlanDigest || block.ExecutionPlan.PayloadDigest != stableTextDigest(string(block.ExecutionPlan.Payload)) {
-		return fmt.Errorf("%s execution plan envelope mismatch", cgPlanAlgorithmID)
-	}
+	// The producer's planning-worker count is observability evidence, not a
+	// scheduling semantic. Validators may use a different local worker count.
+	// Rebuild with the producer-recorded count so semantic verification remains
+	// independent from validator-local parallelism.
 	if plan.ValidatorMode != cgSmartValidatorMode {
-		return fmt.Errorf("cg smart-validator mode mismatch: %s", plan.ValidatorMode)
+		return fmt.Errorf("cg cycle-aware validator mode mismatch: %s", plan.ValidatorMode)
 	}
-	items, err := literatureAccessDescriptors(block.TxList, block.ShardID)
-	if err != nil {
-		return err
+	recordedWorkers := plan.Metrics.PlanningWorkerCount
+	if recordedWorkers < 1 {
+		return fmt.Errorf("cg plan missing planning worker evidence")
 	}
-	if len(plan.CandidateTransactionIDs) != len(items) {
-		return fmt.Errorf("cg candidate transaction count mismatch")
+	_ = workerCount
+	rebuild := func(candidate realblock.Block) (literatureGraphPlan, error) {
+		return buildCGPlanWithWorkers(candidate, recordedWorkers)
 	}
-	for i, item := range items {
-		if plan.CandidateTransactionIDs[i] != item.TxID {
-			return fmt.Errorf("cg candidate transaction mismatch at index %d", i)
-		}
-	}
-	accessDigest, readKeyCount, writeKeyCount := literatureDeclaredAccessSummary(items)
-	if plan.DeclaredAccessSetDigest != accessDigest || plan.DeclaredReadKeyCount != readKeyCount || plan.DeclaredWriteKeyCount != writeKeyCount {
-		return fmt.Errorf("cg declared access summary mismatch")
-	}
-
-	planEdges := map[uint64]bool{}
-	edges := map[int]map[int]bool{}
-	for _, edge := range plan.Edges {
-		if edge.From < 0 || edge.To < 0 || edge.From >= len(items) || edge.To >= len(items) || edge.From >= edge.To {
-			return fmt.Errorf("cg plan contains invalid edge %d->%d", edge.From, edge.To)
-		}
-		code := cgEdgeCode(edge.From, edge.To)
-		if planEdges[code] {
-			return fmt.Errorf("cg plan contains duplicate edge %d->%d", edge.From, edge.To)
-		}
-		planEdges[code] = true
-		if edges[edge.From] == nil {
-			edges[edge.From] = map[int]bool{}
-		}
-		edges[edge.From][edge.To] = true
-	}
-	if len(planEdges) != plan.Metrics.EdgeCount {
-		return fmt.Errorf("cg plan edge metric mismatch: plan=%d metrics=%d", len(planEdges), plan.Metrics.EdgeCount)
-	}
-	if plan.Metrics.TransactionCount != len(items) || plan.Metrics.PairChecks != len(items)*(len(items)-1)/2 {
-		return fmt.Errorf("cg plan construction metric mismatch")
-	}
-	if plan.Metrics.PlanningWorkerCount < 1 {
-		return fmt.Errorf("cg plan missing paper parallel planning worker evidence")
-	}
-
-	byKey := map[string]*cgAddressAccess{}
-	for index, item := range items {
-		for _, key := range item.ReadKeys {
-			entry := byKey[key]
-			if entry == nil {
-				entry = &cgAddressAccess{}
-				byKey[key] = entry
-			}
-			entry.readers = append(entry.readers, index)
-		}
-		for _, key := range item.WriteKeys {
-			entry := byKey[key]
-			if entry == nil {
-				entry = &cgAddressAccess{}
-				byKey[key] = entry
-			}
-			entry.writers = append(entry.writers, index)
-		}
-	}
-	keys := make([]string, 0, len(byKey))
-	for key := range byKey {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	if workerCount < 1 {
-		workerCount = 1
-	}
-	if workerCount > len(keys) && len(keys) > 0 {
-		workerCount = len(keys)
-	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
-	perKey := make([][]uint64, len(keys))
-	var nextKey int64 = -1
-	var wg sync.WaitGroup
-	for worker := 0; worker < workerCount; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				ki := int(atomic.AddInt64(&nextKey, 1))
-				if ki >= len(keys) {
-					return
-				}
-				entry := byKey[keys[ki]]
-				local := map[uint64]bool{}
-				for _, writer := range entry.writers {
-					for _, reader := range entry.readers {
-						if writer == reader {
-							continue
-						}
-						from, to := cgOrderedPair(writer, reader)
-						local[cgEdgeCode(from, to)] = true
-					}
-					for _, otherWriter := range entry.writers {
-						if writer == otherWriter {
-							continue
-						}
-						from, to := cgOrderedPair(writer, otherWriter)
-						local[cgEdgeCode(from, to)] = true
-					}
-				}
-				row := make([]uint64, 0, len(local))
-				for code := range local {
-					row = append(row, code)
-				}
-				perKey[ki] = row
-			}
-		}()
-	}
-	wg.Wait()
-	expected := map[uint64]bool{}
-	for _, row := range perKey {
-		for _, code := range row {
-			expected[code] = true
-		}
-	}
-	if len(expected) != len(planEdges) {
-		return fmt.Errorf("cg smart validator edge count mismatch: expected=%d plan=%d", len(expected), len(planEdges))
-	}
-	for code := range expected {
-		if !planEdges[code] {
-			from, to := cgDecodeEdge(code)
-			return fmt.Errorf("cg smart validator missing dependency edge %d->%d", from, to)
-		}
-	}
-	for code := range planEdges {
-		if !expected[code] {
-			from, to := cgDecodeEdge(code)
-			return fmt.Errorf("cg smart validator extra dependency edge %d->%d", from, to)
-		}
-	}
-
-	waves, err := literatureWavesFromEdges(items, edges)
-	if err != nil {
-		return err
-	}
-	if !cgSameWaves(waves, plan.Waves) {
-		return fmt.Errorf("cg smart validator wave schedule mismatch")
-	}
-	serialization := make([]string, 0, len(items))
-	maxWidth := 0
-	for _, wave := range waves {
-		serialization = append(serialization, wave...)
-		if len(wave) > maxWidth {
-			maxWidth = len(wave)
-		}
-	}
-	if !sameStringList(serialization, plan.SerializationOrder) || plan.Metrics.WaveCount != len(waves) || plan.Metrics.MaximumWaveWidth != maxWidth {
-		return fmt.Errorf("cg smart validator derived schedule metrics mismatch")
-	}
-	return nil
+	return literatureVerifyPlan(block, plan, cgPlanAlgorithmID, rebuild)
 }
 
 func cgOrderedPair(left, right int) (int, int) {

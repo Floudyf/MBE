@@ -256,20 +256,23 @@ def _individual_result_reasons(child: dict) -> list[str]:
     incomplete = _first_number(metrics, finality, name="incomplete_unique_tx_count")
     cross_failed = _first_number(metrics, finality, name="cross_shard_failed_unique_count")
     lifecycle_complete = _first_bool(metrics, summary, finality, name="lifecycle_complete")
-    terminal_abort_semantics = str(child.get("comparison_semantics_class") or "") == "nezha_acg_hs_abortable_v1"
+    semantic_class = str(child.get("comparison_semantics_class") or "")
+    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4"}
     abort_count = _first_number(metrics, summary, name="abort_count")
     nezha_hs_abort_count = _first_number(metrics, summary, name="nezha_hs_abort_count")
+    cg_cycle_abort_count = _first_number(metrics, summary, name="cg_cycle_abort_count")
+    semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4"} else None
 
     if submitted is None or terminal is None or submitted != terminal:
         reasons.append("terminal_not_equal_submitted")
     if terminal_abort_semantics:
-        if finalized is None or abort_count is None or nezha_hs_abort_count is None:
-            reasons.append("nezha_abort_accounting_missing")
+        if finalized is None or abort_count is None or semantic_abort_count is None:
+            reasons.append("terminal_abort_accounting_missing")
         else:
             if terminal is None or finalized + abort_count != terminal:
                 reasons.append("finalized_plus_abort_not_equal_terminal")
-            if abort_count != nezha_hs_abort_count:
-                reasons.append("nezha_hs_abort_count_mismatch")
+            if abort_count != semantic_abort_count:
+                reasons.append("semantic_abort_count_mismatch")
     elif submitted is None or finalized is None or submitted != finalized:
         reasons.append("finalized_not_equal_submitted")
     if incomplete is None or incomplete != 0:
