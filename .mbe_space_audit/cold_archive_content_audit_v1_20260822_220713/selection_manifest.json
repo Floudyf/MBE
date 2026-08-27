@@ -1,0 +1,15 @@
+{
+  "repository": "C:\\Projects\\Metaverse_Blockchain_Env",
+  "formal_root": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_formal_runs",
+  "real_cluster_root": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs",
+  "current_child_record_count": 954,
+  "current_run_id_count": 954,
+  "current_archive_count": 332,
+  "current_archive_compressed_bytes_discovered": 321771889741,
+  "excluded_noncurrent_archive_count": 0,
+  "excluded_noncurrent_archive_bytes": 0,
+  "malformed_child_json_count": 0,
+  "ambiguous_child_json_count": 0,
+  "malformed_child_json_examples": [],
+  "ambiguous_child_json_examples": []
+}

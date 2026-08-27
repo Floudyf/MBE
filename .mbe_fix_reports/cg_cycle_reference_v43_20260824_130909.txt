@@ -1,0 +1,21 @@
+﻿MBE V5 CG Reference-Fidelity Cycle Closure V4.3
+AppliedAt=2026-08-24T13:09:13.4801259+08:00
+Branch=main
+HeadBefore=8b2f4fb1a6e885be41debb70fca42e6061e8b899
+ReviewedFloor=daed72f9420b7d4fb7d60cde5eec74012c80df60
+Backup=C:\Projects\Metaverse_Blockchain_Env\.mbe_fix_backups\cg_cycle_reference_v43_20260824_130909
+Prerequisite=cg_cycle_aware_conflict_graph_v2 / cg_cycle_abortable_v2
+Installed=cg_cycle_aware_conflict_graph_v3 / cg_cycle_abortable_v3
+VictimPolicy=max_elementary_cycle_membership_then_lowest_original_ordinal_tie_break
+ReferenceRepo=https://github.com/CGCL-codes/MorphDAG
+ReferenceCommit=b1f3eefcaa1ef307d1cbefea5430eda2bd44d50c
+ReferenceFile=nezha/classical_graph.go
+
+Changed files:
+ M backend/app/services/v5_formal_scheduler.py
+ M backend/app/services/v5_paper_exporter.py
+ M backend/app/services/v5_plugin_manifest_store.py
+ M backend/tests/test_v5_literature_baseline_registry.py
+ M executor/v5/cg_plugins.go
+?? backend/tests/test_v5_fig14_fig15_metric_closure.py
+?? executor/v5/cg_cycle_aware_fidelity_test.go

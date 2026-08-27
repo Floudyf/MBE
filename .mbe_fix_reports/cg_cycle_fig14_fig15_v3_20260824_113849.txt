@@ -1,0 +1,25 @@
+﻿MBE V5 CG Cycle + Figure 14/15 Fidelity Closure V3
+AppliedAt=2026-08-24T11:38:53.1232079+08:00
+Branch=main
+HeadBefore=8b2f4fb1a6e885be41debb70fca42e6061e8b899
+ReviewedFloor=daed72f9420b7d4fb7d60cde5eec74012c80df60
+Backup=C:\Projects\Metaverse_Blockchain_Env\.mbe_fix_backups\cg_cycle_fig14_fig15_v3_20260824_113849
+
+Changed files:
+ M backend/app/services/v5_formal_scheduler.py
+ M backend/app/services/v5_metric_extractor.py
+ M backend/app/services/v5_paper_exporter.py
+ M backend/app/services/v5_plugin_manifest_store.py
+ M backend/tests/test_v5_literature_baseline_registry.py
+ M executor/realism/execution/batch_si_executor.go
+ M executor/v5/acg_executor.go
+ M executor/v5/acg_plugins.go
+ M executor/v5/batch_si_plugins.go
+ M executor/v5/bsx_executor.go
+ M executor/v5/bsx_plugins.go
+ M executor/v5/cg_executor.go
+ M executor/v5/cg_plugins.go
+ M executor/v5/literature_baselines_regression_test.go
+ M executor/v5/literature_graph_common.go
+?? backend/tests/test_v5_fig14_fig15_metric_closure.py
+?? executor/v5/cg_cycle_aware_fidelity_test.go

@@ -1,0 +1,31 @@
+{
+  "current_child_record_count": 954,
+  "current_run_id_count": 954,
+  "current_archive_count": 332,
+  "excluded_noncurrent_archive_count": 0,
+  "malformed_child_json_count": 0,
+  "ambiguous_child_json_count": 0,
+  "selected": [
+    {
+      "run_id": "v5_20260821_023450_f69653bf",
+      "archive_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_023450_f69653bf\\_cold_archive\\v5_20260821_023450_f69653bf.tar.zst",
+      "manifest_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_023450_f69653bf\\_cold_archive\\v5_20260821_023450_f69653bf.manifest.json",
+      "compressed_bytes": 16822479466,
+      "logical_bytes": 22773820094
+    },
+    {
+      "run_id": "v5_20260821_051621_00fdd0f7",
+      "archive_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_051621_00fdd0f7\\_cold_archive\\v5_20260821_051621_00fdd0f7.tar.zst",
+      "manifest_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_051621_00fdd0f7\\_cold_archive\\v5_20260821_051621_00fdd0f7.manifest.json",
+      "compressed_bytes": 16796691068,
+      "logical_bytes": 22739241686
+    },
+    {
+      "run_id": "v5_20260821_035541_033cebaf",
+      "archive_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.tar.zst",
+      "manifest_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.manifest.json",
+      "compressed_bytes": 16688055935,
+      "logical_bytes": 22591296744
+    }
+  ]
+}

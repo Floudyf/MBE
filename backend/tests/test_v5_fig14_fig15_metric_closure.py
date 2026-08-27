@@ -86,11 +86,11 @@ def test_cg_cycle_abort_semantics_is_its_own_valid_terminal_cohort() -> None:
         {"routing": "hash_routing_baseline", "block_executor": "cg_block_executor"},
         "hash_cg",
     )
-    assert semantics["comparison_semantics_class"] == "cg_cycle_abortable_v4"
+    assert semantics["comparison_semantics_class"] == "nezha_cg_johnson_abortable_v2"
     child = {
         "status": "completed",
         "execution_status": "completed",
-        "comparison_semantics_class": "cg_cycle_abortable_v4",
+        "comparison_semantics_class": "nezha_cg_johnson_abortable_v2",
         "metrics": {
             "submitted_unique_tx_count": 10,
             "terminal_unique_tx_count": 10,
@@ -141,6 +141,42 @@ def test_cg_v2_smoke_terminal_cohort_remains_readable_after_v4() -> None:
             "state_root_consistent": True,
             "receipt_root_consistent": True,
             "plan_digest_consistent": True,
+            "end_to_end_tps": 100.0,
+            "logical_finality_tps": 100.0,
+            "p95_finality_ms": 10.0,
+            "p99_finality_ms": 12.0,
+        },
+        "result": {"summary": {"finality_evidence": {
+            "submitted_unique_tx_count": 10,
+            "terminal_unique_tx_count": 10,
+            "finalized_unique_logical_tx_count": 8,
+            "incomplete_unique_tx_count": 0,
+            "cross_shard_failed_unique_count": 0,
+            "lifecycle_complete": True,
+        }}},
+    }
+    assert _state_equivalence_individual_reasons(child) == []
+    assert _individual_result_reasons(child) == []
+
+def test_cg_johnson_v1_terminal_cohort_remains_readable_after_v2() -> None:
+    child = {
+        "status": "completed",
+        "execution_status": "completed",
+        "comparison_semantics_class": "nezha_cg_johnson_abortable_v1",
+        "metrics": {
+            "submitted_unique_tx_count": 10,
+            "terminal_unique_tx_count": 10,
+            "finalized_unique_logical_tx_count": 8,
+            "incomplete_unique_tx_count": 0,
+            "cross_shard_failed_unique_count": 0,
+            "abort_count": 2,
+            "cg_cycle_abort_count": 2,
+            "lifecycle_complete": True,
+            "no_fallback": True,
+            "state_root_consistent": True,
+            "receipt_root_consistent": True,
+            "plan_digest_consistent": True,
+            "metric_completeness": "complete",
             "end_to_end_tps": 100.0,
             "logical_finality_tps": 100.0,
             "p95_finality_ms": 10.0,

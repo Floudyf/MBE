@@ -1,0 +1,109 @@
+{
+  "schema_version": "mbe_dedup_full_restore_roundtrip_closure_v1",
+  "created_at_utc": "2026-08-22T16:06:53.357124+00:00",
+  "selection": {
+    "current_child_record_count": 954,
+    "current_run_id_count": 954,
+    "current_archive_count": 332,
+    "excluded_noncurrent_archive_count": 0,
+    "malformed_child_json_count": 0,
+    "ambiguous_child_json_count": 0,
+    "selected": [
+      {
+        "run_id": "v5_20260821_023450_f69653bf",
+        "archive_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_023450_f69653bf\\_cold_archive\\v5_20260821_023450_f69653bf.tar.zst",
+        "manifest_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_023450_f69653bf\\_cold_archive\\v5_20260821_023450_f69653bf.manifest.json",
+        "compressed_bytes": 16822479466,
+        "logical_bytes": 22773820094
+      },
+      {
+        "run_id": "v5_20260821_051621_00fdd0f7",
+        "archive_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_051621_00fdd0f7\\_cold_archive\\v5_20260821_051621_00fdd0f7.tar.zst",
+        "manifest_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_051621_00fdd0f7\\_cold_archive\\v5_20260821_051621_00fdd0f7.manifest.json",
+        "compressed_bytes": 16796691068,
+        "logical_bytes": 22739241686
+      },
+      {
+        "run_id": "v5_20260821_035541_033cebaf",
+        "archive_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.tar.zst",
+        "manifest_path": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.manifest.json",
+        "compressed_bytes": 16688055935,
+        "logical_bytes": 22591296744
+      }
+    ]
+  },
+  "results": [
+    {
+      "run_id": "v5_20260821_023450_f69653bf",
+      "source_archive_bytes": 16822479466,
+      "error": "",
+      "source_logical_bytes": 22773820094,
+      "dedup_build_seconds": 121.57799999997951,
+      "dedup_archive_bytes": 3927420955,
+      "dedup_verified": true,
+      "dedup_matches_production_manifest": true,
+      "dedup_restore_file_count": 146,
+      "dedup_restore_seconds": 31.53200000000652,
+      "dedup_restored_tree_verified": true,
+      "current_mbe_archive_verified": true,
+      "current_mbe_explicit_verify": true,
+      "current_mbe_restore_verified": true,
+      "current_mbe_restore_probe": "nodes/n0/node_process.log",
+      "current_mbe_generated_archive_bytes": 15677165444,
+      "current_mbe_generated_archive_sha256": "409772c237560401650f6d06436e43613e9fa895b1773d9a6d289c8781624bf8",
+      "current_mbe_generated_manifest_contract_equal": true,
+      "current_mbe_post_restore_file_count": 146,
+      "current_mbe_roundtrip_seconds": 575.4689999999246,
+      "source_archive_unchanged": true,
+      "source_compressed_sha256": "8d8e63a475a657068a1c8cc637f1804410e622ff9603eb7fd385dd551a6fefff"
+    },
+    {
+      "run_id": "v5_20260821_051621_00fdd0f7",
+      "source_archive_bytes": 16796691068,
+      "error": "",
+      "source_logical_bytes": 22739241686,
+      "dedup_build_seconds": 152.35900000005495,
+      "dedup_archive_bytes": 5873213321,
+      "dedup_verified": true,
+      "dedup_matches_production_manifest": true,
+      "dedup_restore_file_count": 146,
+      "dedup_restore_seconds": 43.81200000003446,
+      "dedup_restored_tree_verified": true,
+      "current_mbe_archive_verified": true,
+      "current_mbe_explicit_verify": true,
+      "current_mbe_restore_verified": true,
+      "current_mbe_restore_probe": "nodes/n0/node_process.log",
+      "current_mbe_generated_archive_bytes": 15653744528,
+      "current_mbe_generated_archive_sha256": "d6403ed58532ad6c93f8a2cfdfef70b0f4df7b22f10e505e0db0f16a48acbe87",
+      "current_mbe_generated_manifest_contract_equal": true,
+      "current_mbe_post_restore_file_count": 146,
+      "current_mbe_roundtrip_seconds": 574.2029999999795,
+      "source_archive_unchanged": true,
+      "source_compressed_sha256": "03bed900981bab9735092f7e196be77785774dfa4ca6fe18164291deea68e970"
+    },
+    {
+      "run_id": "v5_20260821_035541_033cebaf",
+      "source_archive_bytes": 16688055935,
+      "error": "",
+      "source_logical_bytes": 22591296744,
+      "dedup_build_seconds": 90.09399999992456,
+      "dedup_archive_bytes": 1954316201,
+      "dedup_verified": true,
+      "dedup_matches_production_manifest": true,
+      "dedup_restore_file_count": 146,
+      "dedup_restore_seconds": 18.43700000003446,
+      "dedup_restored_tree_verified": true,
+      "current_mbe_archive_verified": true,
+      "current_mbe_explicit_verify": true,
+      "current_mbe_restore_verified": true,
+      "current_mbe_restore_probe": "nodes/n0/node_process.log",
+      "current_mbe_generated_archive_bytes": 15552490473,
+      "current_mbe_generated_archive_sha256": "00e385526810454595a0c99d14b3557e19ac0e03bb91d07e5554f768fc02aa23",
+      "current_mbe_generated_manifest_contract_equal": true,
+      "current_mbe_post_restore_file_count": 146,
+      "current_mbe_roundtrip_seconds": 565.045999999973,
+      "source_archive_unchanged": true,
+      "source_compressed_sha256": "61263108ae8c4efddbeedc0b8ea5848663094fe3899d88b7a71d3b54ea10968a"
+    }
+  ]
+}

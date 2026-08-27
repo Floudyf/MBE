@@ -3,10 +3,7 @@ package v5
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sort"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	realblock "metaverse-chainlab/executor/realism/block"
@@ -17,10 +14,10 @@ const (
 	cgExecutionID     = "cg_execution"
 	cgSchedulerID     = "cg_scheduler"
 	cgBlockExecutorID = "cg_block_executor"
-	cgPlanAlgorithmID = "cg_cycle_aware_conflict_graph_v4"
+	cgPlanAlgorithmID = "nezha_cg_johnson_conflict_graph_v2"
 )
 
-const cgSmartValidatorMode = "cycle_aware_full_recompute_v1"
+const cgSmartValidatorMode = "nezha_cg_reference_full_recompute_v2"
 
 type cgExecution struct{ basicPlugin }
 type cgScheduler struct{ basicPlugin }
@@ -93,105 +90,85 @@ func (p cgBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionI
 	return result, nil
 }
 
-func cgPlanningWorkerCount(config map[string]any) int {
-	if value := intValue(config["worker_count"]); value > 0 {
-		if value > 8 {
-			return 8
-		}
-		return value
-	}
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > 8 {
-		workers = 8
-	}
-	return workers
+// Nezha's published CG testing path constructs the conflict graph sequentially.
+// Worker-count experiments therefore vary only the executor parallelism, not the
+// reference CG planner itself.
+func cgPlanningWorkerCount(_ map[string]any) int {
+	return 1
 }
 
 func buildCGPlan(block realblock.Block) (literatureGraphPlan, error) {
 	return buildCGPlanWithWorkers(block, cgPlanningWorkerCount(nil))
 }
 
-// buildCGPlanWithWorkers follows the paper's parallel CreateDAG structure:
-// workers claim transaction i independently and compare only against j>i.
-// The RW/WR/WW dependency definition and i->j direction are unchanged.
-func buildCGPlanWithWorkers(block realblock.Block, workerCount int) (literatureGraphPlan, error) {
+// buildCGPlanWithWorkers is a semantic port of the conventional CG baseline
+// shipped with the official Nezha artifact (CGCL-codes/Nezha):
+// core/classical_graph.go::NewBuildConflictGraph + test.go::TestConflictGraph.
+//
+// The reference constructs WW edges from the earlier writer to the later writer
+// and RW edges from every reader to every other writer of the same address. RW
+// edges may therefore point either forward or backward in block order, so the
+// graph can contain directed cycles. The requested worker count is deliberately
+// ignored here because the published CG graph-construction path is sequential;
+// execution worker count still controls parallel execution of residual DAG waves.
+func buildCGPlanWithWorkers(block realblock.Block, _ int) (literatureGraphPlan, error) {
 	constructionStarted := time.Now()
 	items, err := literatureAccessDescriptors(block.TxList, block.ShardID)
 	if err != nil {
 		return literatureGraphPlan{}, err
 	}
 	accessDigest, readKeyCount, writeKeyCount := literatureDeclaredAccessSummary(items)
-	if workerCount < 1 {
-		workerCount = 1
-	}
-	if workerCount > len(items) && len(items) > 0 {
-		workerCount = len(items)
-	}
-	if workerCount < 1 {
-		workerCount = 1
-	}
 
-	// Batch-SI's experimental CG baseline requires a cycle-capable conflict
-	// graph.  The direction below follows the public classical-CG construction
-	// used by the Nezha/MorphDAG reference: read->writer dependencies may point
-	// either forward or backward in block order, while WW dependencies preserve
-	// the original block order.  Unlike the old i<j-only DAG, this graph can
-	// contain cycles and therefore needs deterministic cycle resolution.
 	reads := make([]map[string]bool, len(items))
 	writes := make([]map[string]bool, len(items))
+	writeOwners := map[string][]int{}
 	for index, item := range items {
 		reads[index] = literatureStringSet(item.ReadKeys)
 		writes[index] = literatureStringSet(item.WriteKeys)
+		for key := range writes[index] {
+			writeOwners[key] = append(writeOwners[key], index)
+		}
 	}
-	pairEdges := make([][]literatureGraphEdge, len(items))
-	var next int64 = -1
-	var wg sync.WaitGroup
-	for worker := 0; worker < workerCount; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				i := int(atomic.AddInt64(&next, 1))
-				if i >= len(items) {
-					return
-				}
-				local := make([]literatureGraphEdge, 0)
-				for j := i + 1; j < len(items); j++ {
-					// Classical r-w dependency: the reader must precede the
-					// transaction that writes the value it observed.
-					if literatureSetIntersects(reads[i], writes[j]) || literatureSetIntersects(writes[i], writes[j]) {
-						local = append(local, literatureGraphEdge{From: i, To: j})
-					}
-					if literatureSetIntersects(reads[j], writes[i]) {
-						local = append(local, literatureGraphEdge{From: j, To: i})
-					}
-				}
-				pairEdges[i] = local
-			}
-		}()
-	}
-	wg.Wait()
 
 	edges := map[int]map[int]bool{}
 	edgeList := make([]literatureGraphEdge, 0)
 	seen := map[uint64]bool{}
-	for _, row := range pairEdges {
-		for _, edge := range row {
-			code := cgEdgeCode(edge.From, edge.To)
-			if seen[code] {
-				continue
+	addEdge := func(from, to int) {
+		if from == to {
+			return
+		}
+		code := cgEdgeCode(from, to)
+		if seen[code] {
+			return
+		}
+		seen[code] = true
+		if edges[from] == nil {
+			edges[from] = map[int]bool{}
+		}
+		edges[from][to] = true
+		edgeList = append(edgeList, literatureGraphEdge{From: from, To: to})
+	}
+
+	// Official NewBuildConflictGraph: preserve block order for write/write edges.
+	for i := 0; i < len(items); i++ {
+		for j := i + 1; j < len(items); j++ {
+			if literatureSetIntersects(writes[i], writes[j]) {
+				addEdge(i, j)
 			}
-			seen[code] = true
-			if edges[edge.From] == nil {
-				edges[edge.From] = map[int]bool{}
-			}
-			edges[edge.From][edge.To] = true
-			edgeList = append(edgeList, edge)
 		}
 	}
+	// Official NewBuildConflictGraph: each reader precedes every other writer of
+	// the value it observed, regardless of the writer's original block position.
+	for reader := range items {
+		for key := range reads[reader] {
+			for _, writer := range writeOwners[key] {
+				if writer != reader {
+					addEdge(reader, writer)
+				}
+			}
+		}
+	}
+
 	sort.Slice(edgeList, func(i, j int) bool {
 		if edgeList[i].From != edgeList[j].From {
 			return edgeList[i].From < edgeList[j].From
@@ -224,7 +201,7 @@ func buildCGPlanWithWorkers(block realblock.Block, workerCount int) (literatureG
 			TransactionCount:     len(items),
 			EdgeCount:            len(edgeList),
 			PairChecks:           pairChecks,
-			PlanningWorkerCount:  workerCount,
+			PlanningWorkerCount:  1,
 			AbortCount:           len(abortedIDs),
 			CycleResolutionCount: len(abortedIDs),
 			GraphConstructionMS:  constructionMS,
@@ -238,38 +215,36 @@ func buildCGPlanWithWorkers(block realblock.Block, workerCount int) (literatureG
 	return literatureFinalizePlan(plan), nil
 }
 
-// cgResolveCyclesAndWaves implements the Batch-SI paper-level CG cycle-abort
-// semantics without elementary-cycle enumeration. The paper defines CG as a DAG
-// in Definition 2, while Section 5.2/5.7 also reports dependency-cycle handling
-// and CG aborts; it does not publish a cycle-victim rule. The cited Piduguralla
-// ConcSawtooth implementation constructs conflict edges from earlier to later
-// transactions and therefore supplies no cycle-victim policy either.
+// cgResolveCyclesAndWaves follows the Nezha reference path:
+// Tarjan SCC -> one Johnson elementary-cycle enumeration per original SCC ->
+// BreakCycles maximum-membership victim selection -> residual topological DAG.
 //
-// MBE therefore uses a deliberately non-performance-tuned deterministic closure:
-// detect cyclic strongly connected components, abort the lowest original
-// transaction ordinal that is actually inside a cyclic SCC, and repeat until
-// the remaining graph is acyclic. This keeps victim choice consensus-safe and
-// bounded by graph traversal; it does not enumerate elementary cycles and does
-// not consult TPS, latency, worker count, or any runtime feedback.
+// V1 re-enumerated all remaining elementary cycles after every selected victim.
+// Although that kept the victim set equivalent, it multiplied the expensive
+// Johnson work and caused the 10k/theta=0.6 real-cluster smoke to stall PBFT
+// validation. V2 enumerates each SCC exactly once, as graph/johnsonce.go does.
 func cgResolveCyclesAndWaves(items []literatureTxAccess, edges map[int]map[int]bool) ([][]string, []int, error) {
 	active := make([]bool, len(items))
 	for i := range active {
 		active[i] = true
 	}
 
+	adjacency := cgNezhaAdjacency(len(items), edges)
+	components := cgCyclicSCCs(len(items), edges, active)
 	aborted := make([]int, 0)
-	for {
-		components := cgCyclicSCCs(len(items), edges, active)
-		if len(components) == 0 {
-			break
+	for _, component := range components {
+		cycleSet, err := cgNezhaFindCycles(component, adjacency)
+		if err != nil {
+			return nil, nil, err
 		}
-
-		// cgCyclicSCCs sorts each component and then sorts components by their
-		// lowest original ordinal. Selecting components[0][0] is therefore a
-		// deterministic rule restricted to vertices proven to be cyclic.
-		victim := components[0][0]
-		active[victim] = false
-		aborted = append(aborted, victim)
+		victims, err := cgNezhaBreakCycles(cycleSet)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, victim := range victims {
+			active[victim] = false
+			aborted = append(aborted, victim)
+		}
 	}
 
 	sort.Ints(aborted)
@@ -278,6 +253,213 @@ func cgResolveCyclesAndWaves(items []literatureTxAccess, edges map[int]map[int]b
 		return nil, nil, err
 	}
 	return waves, aborted, nil
+}
+
+// cgNezhaCycleSet is a sparse representation of the official JohnsonCE
+// boolMap. The reference allocates one n-vertex membership row per cycle. MBE
+// stores only the vertices actually present in each cycle plus a per-vertex
+// index of containing cycles. This changes representation only: cycle identity,
+// membership counts, victim choice, and residual commit set are identical.
+type cgNezhaCycleSet struct {
+	offsets             []int
+	members             []int
+	membershipCount     []int
+	cyclesByVertex      [][]int
+	activeCycle         []bool
+	remainingMembership int
+}
+
+func cgNewNezhaCycleSet(vertexCount int) *cgNezhaCycleSet {
+	return &cgNezhaCycleSet{
+		offsets:         []int{0},
+		membershipCount: make([]int, vertexCount),
+	}
+}
+
+func (set *cgNezhaCycleSet) addCycle(path []int) {
+	if len(path) == 0 {
+		return
+	}
+	set.members = append(set.members, path...)
+	set.offsets = append(set.offsets, len(set.members))
+	for _, vertex := range path {
+		set.membershipCount[vertex]++
+		set.remainingMembership++
+	}
+}
+
+func (set *cgNezhaCycleSet) cycleCount() int {
+	if len(set.offsets) == 0 {
+		return 0
+	}
+	return len(set.offsets) - 1
+}
+
+func (set *cgNezhaCycleSet) cycleMembers(cycleIndex int) []int {
+	return set.members[set.offsets[cycleIndex]:set.offsets[cycleIndex+1]]
+}
+
+func (set *cgNezhaCycleSet) buildSparseIndex() {
+	set.cyclesByVertex = make([][]int, len(set.membershipCount))
+	set.activeCycle = make([]bool, set.cycleCount())
+	for cycleIndex := 0; cycleIndex < set.cycleCount(); cycleIndex++ {
+		set.activeCycle[cycleIndex] = true
+		for _, vertex := range set.cycleMembers(cycleIndex) {
+			set.cyclesByVertex[vertex] = append(set.cyclesByVertex[vertex], cycleIndex)
+		}
+	}
+}
+
+func cgNezhaAdjacency(vertexCount int, edges map[int]map[int]bool) [][]int {
+	adjacency := make([][]int, vertexCount)
+	for from, children := range edges {
+		if from < 0 || from >= vertexCount {
+			continue
+		}
+		for child := range children {
+			if child >= 0 && child < vertexCount {
+				adjacency[from] = append(adjacency[from], child)
+			}
+		}
+		sort.Ints(adjacency[from])
+	}
+	return adjacency
+}
+
+// cgNezhaFindCycles is a direct semantic port of
+// graph/johnsonce.go::FindCycles/FindCyclesRecur/Unblock at official commit
+// 85eaf541591e5f3020dd520cf3b8ee35009d296a. Each elementary directed cycle
+// is emitted once. No victim is removed and no SCC is re-enumerated here.
+func cgNezhaFindCycles(component []int, adjacency [][]int) (*cgNezhaCycleSet, error) {
+	vertexCount := len(adjacency)
+	cycleSet := cgNewNezhaCycleSet(vertexCount)
+	vertices := append([]int(nil), component...)
+	sort.Ints(vertices)
+	if len(vertices) < 2 {
+		cycleSet.buildSparseIndex()
+		return cycleSet, nil
+	}
+	for _, vertex := range vertices {
+		if vertex < 0 || vertex >= vertexCount {
+			return nil, fmt.Errorf("nezha cg SCC vertex out of range: %d", vertex)
+		}
+	}
+
+	// The reference has an explicit two-vertex SCC fast path and records one
+	// two-vertex cycle. A two-vertex SCC in this simple graph necessarily has
+	// both directions, because duplicate/self edges are excluded by construction.
+	if len(vertices) == 2 {
+		cycleSet.addCycle([]int{vertices[0], vertices[1]})
+		cycleSet.buildSparseIndex()
+		return cycleSet, nil
+	}
+
+	explore := make([]bool, vertexCount)
+	for _, vertex := range vertices {
+		explore[vertex] = true
+	}
+
+	for _, start := range vertices {
+		blocked := make([]bool, vertexCount)
+		blockedMap := make([][]int, vertexCount)
+		stack := make([]int, 0, len(vertices))
+
+		var unblock func(int)
+		unblock = func(vertex int) {
+			blocked[vertex] = false
+			for _, dependency := range blockedMap[vertex] {
+				if blocked[dependency] {
+					unblock(dependency)
+				}
+			}
+			blockedMap[vertex] = nil
+		}
+
+		var findCyclesRecur func(int) bool
+		findCyclesRecur = func(current int) bool {
+			foundCycle := false
+			stack = append(stack, current)
+			blocked[current] = true
+
+			for _, next := range adjacency[current] {
+				if !explore[next] {
+					continue
+				}
+				if next == start {
+					foundCycle = true
+					cycleSet.addCycle(stack)
+				} else if !blocked[next] {
+					if findCyclesRecur(next) {
+						foundCycle = true
+					}
+				}
+			}
+
+			if foundCycle {
+				unblock(current)
+			} else {
+				for _, next := range adjacency[current] {
+					if explore[next] {
+						blockedMap[next] = append(blockedMap[next], current)
+					}
+				}
+			}
+
+			stack = stack[:len(stack)-1]
+			return foundCycle
+		}
+
+		findCyclesRecur(start)
+		explore[start] = false
+	}
+
+	cycleSet.buildSparseIndex()
+	return cycleSet, nil
+}
+
+// cgNezhaBreakCycles ports graph/johnsonce.go::BreakCycles. The reference scans
+// vertex ordinals with strict '>' when choosing the maximum membership count,
+// so the lowest original ordinal wins ties. Clearing a selected victim removes
+// every still-active cycle that contains it and decrements all membership counts.
+func cgNezhaBreakCycles(cycleSet *cgNezhaCycleSet) ([]int, error) {
+	if cycleSet == nil {
+		return nil, fmt.Errorf("nezha cg cycle set is nil")
+	}
+	invalid := make([]bool, len(cycleSet.membershipCount))
+	for cycleSet.remainingMembership != 0 {
+		victim := 0
+		for vertex := 1; vertex < len(cycleSet.membershipCount); vertex++ {
+			if cycleSet.membershipCount[vertex] > cycleSet.membershipCount[victim] {
+				victim = vertex
+			}
+		}
+		if len(cycleSet.membershipCount) == 0 || cycleSet.membershipCount[victim] <= 0 {
+			return nil, fmt.Errorf("nezha cg BreakCycles has remaining membership without a selectable victim")
+		}
+
+		for _, cycleIndex := range cycleSet.cyclesByVertex[victim] {
+			if !cycleSet.activeCycle[cycleIndex] {
+				continue
+			}
+			cycleSet.activeCycle[cycleIndex] = false
+			for _, member := range cycleSet.cycleMembers(cycleIndex) {
+				cycleSet.remainingMembership--
+				cycleSet.membershipCount[member]--
+				if cycleSet.membershipCount[member] < 0 {
+					return nil, fmt.Errorf("nezha cg cycle membership underflow for vertex %d", member)
+				}
+			}
+		}
+		invalid[victim] = true
+	}
+
+	victims := make([]int, 0)
+	for vertex, aborted := range invalid {
+		if aborted {
+			victims = append(victims, vertex)
+		}
+	}
+	return victims, nil
 }
 
 func cgCyclicSCCs(vertexCount int, edges map[int]map[int]bool, active []bool) [][]int {

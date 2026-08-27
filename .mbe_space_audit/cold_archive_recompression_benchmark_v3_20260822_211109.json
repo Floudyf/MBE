@@ -1,0 +1,158 @@
+{
+  "schema_version": "mbe_cold_archive_recompression_benchmark_v3",
+  "created_at_local": "2026-08-22 21:11:09",
+  "repo": "C:\\Projects\\Metaverse_Blockchain_Env",
+  "zstandard_version": "0.25.0",
+  "candidate_count": 332,
+  "preflight": {
+    "level6": {
+      "supported": true,
+      "error": "",
+      "level": 6,
+      "ldm": false,
+      "threads": -1,
+      "preflight_input_bytes": 1507328,
+      "preflight_output_bytes": 421
+    },
+    "level10": {
+      "supported": true,
+      "error": "",
+      "level": 10,
+      "ldm": false,
+      "threads": -1,
+      "preflight_input_bytes": 1507328,
+      "preflight_output_bytes": 421
+    },
+    "level12_ldm": {
+      "supported": true,
+      "error": "",
+      "level": 12,
+      "ldm": true,
+      "threads": -1,
+      "preflight_input_bytes": 1507328,
+      "preflight_output_bytes": 421
+    }
+  },
+  "supported_modes": [
+    "level6",
+    "level10",
+    "level12_ldm"
+  ],
+  "selected_samples": [
+    {
+      "run_id": "v5_20260820_220714_3e2f4c83",
+      "archive": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_220714_3e2f4c83\\_cold_archive\\v5_20260820_220714_3e2f4c83.tar.zst",
+      "bytes": 9421035070
+    },
+    {
+      "run_id": "v5_20260821_035541_033cebaf",
+      "archive": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.tar.zst",
+      "bytes": 16688055935
+    }
+  ],
+  "original_archives_modified": false,
+  "results": [
+    {
+      "run_id": "v5_20260820_220714_3e2f4c83",
+      "source_archive": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_220714_3e2f4c83\\_cold_archive\\v5_20260820_220714_3e2f4c83.tar.zst",
+      "mode": "level6",
+      "level": 6,
+      "ldm": false,
+      "threads": -1,
+      "original_archive_bytes": 9421035070,
+      "recompressed_archive_bytes": 9299138313,
+      "saved_bytes": 121896757,
+      "saving_ratio": 0.01293878603511026,
+      "elapsed_seconds": 33.51987449999433,
+      "compression_mib_per_second": 552.5083265341024,
+      "decompressed_tar_bytes": 19419637760,
+      "decompressed_tar_sha256": "5164ec80d0bfa0196a5b3fa2ae0e750d8969525cb0018e59c7aea6de7c9f844b",
+      "roundtrip_verified": true
+    },
+    {
+      "run_id": "v5_20260820_220714_3e2f4c83",
+      "source_archive": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_220714_3e2f4c83\\_cold_archive\\v5_20260820_220714_3e2f4c83.tar.zst",
+      "mode": "level10",
+      "level": 10,
+      "ldm": false,
+      "threads": -1,
+      "original_archive_bytes": 9421035070,
+      "recompressed_archive_bytes": 8892625701,
+      "saved_bytes": 528409369,
+      "saving_ratio": 0.0560882498657337,
+      "elapsed_seconds": 142.03248709999025,
+      "compression_mib_per_second": 130.392772412603,
+      "decompressed_tar_bytes": 19419637760,
+      "decompressed_tar_sha256": "5164ec80d0bfa0196a5b3fa2ae0e750d8969525cb0018e59c7aea6de7c9f844b",
+      "roundtrip_verified": true
+    },
+    {
+      "run_id": "v5_20260820_220714_3e2f4c83",
+      "source_archive": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_220714_3e2f4c83\\_cold_archive\\v5_20260820_220714_3e2f4c83.tar.zst",
+      "mode": "level12_ldm",
+      "level": 12,
+      "ldm": true,
+      "threads": -1,
+      "original_archive_bytes": 9421035070,
+      "recompressed_archive_bytes": 8865237591,
+      "saved_bytes": 555797479,
+      "saving_ratio": 0.058995373106067846,
+      "elapsed_seconds": 162.13098289992195,
+      "compression_mib_per_second": 114.22868988006311,
+      "decompressed_tar_bytes": 19419637760,
+      "decompressed_tar_sha256": "5164ec80d0bfa0196a5b3fa2ae0e750d8969525cb0018e59c7aea6de7c9f844b",
+      "roundtrip_verified": true
+    },
+    {
+      "run_id": "v5_20260821_035541_033cebaf",
+      "source_archive": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.tar.zst",
+      "mode": "level6",
+      "level": 6,
+      "ldm": false,
+      "threads": -1,
+      "original_archive_bytes": 16688055935,
+      "recompressed_archive_bytes": 16488022455,
+      "saved_bytes": 200033480,
+      "saving_ratio": 0.011986625690801294,
+      "elapsed_seconds": 56.81832399999257,
+      "compression_mib_per_second": 379.18898861752444,
+      "decompressed_tar_bytes": 22591447040,
+      "decompressed_tar_sha256": "c3875e546f64c6684dec0238c547b116061d47c66479aac024becc624ba9abf7",
+      "roundtrip_verified": true
+    },
+    {
+      "run_id": "v5_20260821_035541_033cebaf",
+      "source_archive": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.tar.zst",
+      "mode": "level10",
+      "level": 10,
+      "ldm": false,
+      "threads": -1,
+      "original_archive_bytes": 16688055935,
+      "recompressed_archive_bytes": 15552490641,
+      "saved_bytes": 1135565294,
+      "saving_ratio": 0.06804658963410887,
+      "elapsed_seconds": 243.61848689999897,
+      "compression_mib_per_second": 88.43697818935962,
+      "decompressed_tar_bytes": 22591447040,
+      "decompressed_tar_sha256": "c3875e546f64c6684dec0238c547b116061d47c66479aac024becc624ba9abf7",
+      "roundtrip_verified": true
+    },
+    {
+      "run_id": "v5_20260821_035541_033cebaf",
+      "source_archive": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.tar.zst",
+      "mode": "level12_ldm",
+      "level": 12,
+      "ldm": true,
+      "threads": -1,
+      "original_archive_bytes": 16688055935,
+      "recompressed_archive_bytes": 15508108883,
+      "saved_bytes": 1179947052,
+      "saving_ratio": 0.07070608203830904,
+      "elapsed_seconds": 278.64899880008306,
+      "compression_mib_per_second": 77.3190749124399,
+      "decompressed_tar_bytes": 22591447040,
+      "decompressed_tar_sha256": "c3875e546f64c6684dec0238c547b116061d47c66479aac024becc624ba9abf7",
+      "roundtrip_verified": true
+    }
+  ]
+}

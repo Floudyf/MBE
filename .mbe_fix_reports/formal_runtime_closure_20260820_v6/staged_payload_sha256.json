@@ -1,0 +1,42 @@
+﻿[
+    {
+        "Path":  "backend\\app\\services\\v5_real_cluster_runner.py",
+        "SHA256":  "7fdb0ec1266ee89de3607f3cb71bd86fac11bfab0cdb914472057f3a6f0fdb18",
+        "Bytes":  45988
+    },
+    {
+        "Path":  "backend\\app\\services\\v5_formal_scheduler.py",
+        "SHA256":  "38750c36eb2823c59214fe9fb4c15206251b3705af8bc1b288a2b7ef4cbc915f",
+        "Bytes":  75687
+    },
+    {
+        "Path":  "backend\\app\\services\\v5_formal_run_store.py",
+        "SHA256":  "a33be8b617124d9b0d4b64cc59bfab6788ae5fa70681cb7c95a7c903af0dcd89",
+        "Bytes":  4253
+    },
+    {
+        "Path":  "backend\\app\\services\\v5_formal_dto.py",
+        "SHA256":  "b20ed412ceab6e10eec5f64851e9feeb07223d770efcc3f94e63d96b76df1a3d",
+        "Bytes":  9107
+    },
+    {
+        "Path":  "backend\\app\\services\\v5_reproducibility_bundle.py",
+        "SHA256":  "936eb8a230ab5b757f6edaa4d1680081723ad80c5a2f0d8f0f1aba1de1924795",
+        "Bytes":  5070
+    },
+    {
+        "Path":  "scripts\\start_v0_dev.ps1",
+        "SHA256":  "a35d98467f527842d509bc2bad476597b99dc194bae0a93daacf5f9c66315557",
+        "Bytes":  21199
+    },
+    {
+        "Path":  "executor\\v5\\runtime.go",
+        "SHA256":  "e287b6cbb29408e0d573578d6941c189f3f3b3395d4d18b87cac4ec96aca9090",
+        "Bytes":  269255
+    },
+    {
+        "Path":  "frontend\\src\\api.ts",
+        "SHA256":  "2e6bd9d11c91004c00063023ee725544c6f336f37106bdd6621ac6f65b923955",
+        "Bytes":  84950
+    }
+]

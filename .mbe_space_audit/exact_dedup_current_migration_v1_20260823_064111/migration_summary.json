@@ -1,0 +1,3335 @@
+{
+  "schema_version": "mbe_v5_exact_dedup_current_migration_summary_v1",
+  "created_at": "2026-08-23T01:13:46.132375+00:00",
+  "candidate_count": 332,
+  "migrated_count": 332,
+  "already_dedup_count": 0,
+  "failed_count": 0,
+  "metadata_sync_warning_count": 0,
+  "old_archive_bytes_successful": 321771889741,
+  "new_archive_bytes_successful": 81913764037,
+  "reclaimed_bytes": 239858125704,
+  "reclaimed_gib": 223.38528717309237,
+  "results": [
+    {
+      "run_id": "v5_20260821_023450_f69653bf",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 16822479466,
+      "status": "migrated",
+      "new_bytes": 3927403811,
+      "reclaimed_bytes": 12895075655,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_051621_00fdd0f7",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 16796691068,
+      "status": "migrated",
+      "new_bytes": 5873210191,
+      "reclaimed_bytes": 10923480877,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_035541_033cebaf",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 16688055935,
+      "status": "migrated",
+      "new_bytes": 1954333051,
+      "reclaimed_bytes": 14733722884,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_232019_b76f3673",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 13994258904,
+      "status": "migrated",
+      "new_bytes": 1866668066,
+      "reclaimed_bytes": 12127590838,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_012940_61b6c61f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 13993399113,
+      "status": "migrated",
+      "new_bytes": 1866637195,
+      "reclaimed_bytes": 12126761918,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_002553_b0b8c55f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 13991709738,
+      "status": "migrated",
+      "new_bytes": 1866539294,
+      "reclaimed_bytes": 12125170444,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_031416_3c974c62",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 11593894440,
+      "status": "migrated",
+      "new_bytes": 2743777837,
+      "reclaimed_bytes": 8850116603,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_043501_36c45faf",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 11590907663,
+      "status": "migrated",
+      "new_bytes": 1378318485,
+      "reclaimed_bytes": 10212589178,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_055553_f57ce32d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 11495924250,
+      "status": "migrated",
+      "new_bytes": 2722520705,
+      "reclaimed_bytes": 8773403545,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_142635_664ecf7f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10415006751,
+      "status": "migrated",
+      "new_bytes": 1571835178,
+      "reclaimed_bytes": 8843171573,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_135315_00b73836",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10399554086,
+      "status": "migrated",
+      "new_bytes": 1563422096,
+      "reclaimed_bytes": 8836131990,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_235048_14ba233f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10304189156,
+      "status": "migrated",
+      "new_bytes": 1566296455,
+      "reclaimed_bytes": 8737892701,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_015936_f8faab48",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10290930501,
+      "status": "migrated",
+      "new_bytes": 1564365353,
+      "reclaimed_bytes": 8726565148,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_103745_9722b101",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10259964325,
+      "status": "migrated",
+      "new_bytes": 1559714393,
+      "reclaimed_bytes": 8700249932,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_224345_89e27513",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 9422046713,
+      "status": "migrated",
+      "new_bytes": 1307087373,
+      "reclaimed_bytes": 8114959340,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_213024_ae919486",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 9421067880,
+      "status": "migrated",
+      "new_bytes": 1306883767,
+      "reclaimed_bytes": 8114184113,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_220714_3e2f4c83",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 9421035070,
+      "status": "migrated",
+      "new_bytes": 1306905815,
+      "reclaimed_bytes": 8114129255,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_202031_92868db3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 5879158672,
+      "status": "migrated",
+      "new_bytes": 863409916,
+      "reclaimed_bytes": 5015748756,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_204342_125f042a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 5879075903,
+      "status": "migrated",
+      "new_bytes": 863346484,
+      "reclaimed_bytes": 5015729419,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_210700_ddc0a56a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 5876144706,
+      "status": "migrated",
+      "new_bytes": 863322370,
+      "reclaimed_bytes": 5012822336,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_214955_60525cef",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 5343678779,
+      "status": "migrated",
+      "new_bytes": 873352467,
+      "reclaimed_bytes": 4470326312,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_222632_ed5a809c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 5316955607,
+      "status": "migrated",
+      "new_bytes": 867164588,
+      "reclaimed_bytes": 4449791019,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_230257_87509941",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 5314535026,
+      "status": "migrated",
+      "new_bytes": 867660423,
+      "reclaimed_bytes": 4446874603,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_193531_6a9e73e3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 3340529136,
+      "status": "migrated",
+      "new_bytes": 542376671,
+      "reclaimed_bytes": 2798152465,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_195034_7d2c8d7b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 3340400328,
+      "status": "migrated",
+      "new_bytes": 541736482,
+      "reclaimed_bytes": 2798663846,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_200528_00275eca",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 3340271070,
+      "status": "migrated",
+      "new_bytes": 541765687,
+      "reclaimed_bytes": 2798505383,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_211912_1a1f4549",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 2473303501,
+      "status": "migrated",
+      "new_bytes": 460613445,
+      "reclaimed_bytes": 2012690056,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_205552_c4752c86",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 2458352342,
+      "status": "migrated",
+      "new_bytes": 458694902,
+      "reclaimed_bytes": 1999657440,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_203242_cc37d9d6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 2444375972,
+      "status": "migrated",
+      "new_bytes": 455738528,
+      "reclaimed_bytes": 1988637444,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_190440_c7188062",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 1765021058,
+      "status": "migrated",
+      "new_bytes": 338889325,
+      "reclaimed_bytes": 1426131733,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_192511_d14d5fed",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 1761086386,
+      "status": "migrated",
+      "new_bytes": 338288060,
+      "reclaimed_bytes": 1422798326,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_191459_2a0191db",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 1761033943,
+      "status": "migrated",
+      "new_bytes": 338256180,
+      "reclaimed_bytes": 1422777763,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_195739_a417a209",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 1096278346,
+      "status": "migrated",
+      "new_bytes": 263351879,
+      "reclaimed_bytes": 832926467,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_194238_2b33d204",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 1093130872,
+      "status": "migrated",
+      "new_bytes": 262981491,
+      "reclaimed_bytes": 830149381,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_201234_4d67c583",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 1089680261,
+      "status": "migrated",
+      "new_bytes": 262079010,
+      "reclaimed_bytes": 827601251,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185651_b395c7ae",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 882786846,
+      "status": "migrated",
+      "new_bytes": 223918725,
+      "reclaimed_bytes": 658868121,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184116_42344020",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 878776768,
+      "status": "migrated",
+      "new_bytes": 222795915,
+      "reclaimed_bytes": 655980853,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184904_a1c63181",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 877657949,
+      "status": "migrated",
+      "new_bytes": 222141925,
+      "reclaimed_bytes": 655516024,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_191849_110163b2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 534757644,
+      "status": "migrated",
+      "new_bytes": 181717723,
+      "reclaimed_bytes": 353039921,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_192907_c3cf2d83",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 529789624,
+      "status": "migrated",
+      "new_bytes": 180616770,
+      "reclaimed_bytes": 349172854,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_190836_05235b70",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 524303507,
+      "status": "migrated",
+      "new_bytes": 180126700,
+      "reclaimed_bytes": 344176807,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182101_92d4c745",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 449879224,
+      "status": "migrated",
+      "new_bytes": 179733142,
+      "reclaimed_bytes": 270146082,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182745_ad3f5c12",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 448822425,
+      "status": "migrated",
+      "new_bytes": 178913259,
+      "reclaimed_bytes": 269909166,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183427_5779b203",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 444401108,
+      "status": "migrated",
+      "new_bytes": 177750583,
+      "reclaimed_bytes": 266650525,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184325_4efbfc14",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 320460709,
+      "status": "migrated",
+      "new_bytes": 149260648,
+      "reclaimed_bytes": 171200061,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185857_ee84a5a5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 319614519,
+      "status": "migrated",
+      "new_bytes": 148972869,
+      "reclaimed_bytes": 170641650,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185112_bce1da3e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 316510987,
+      "status": "migrated",
+      "new_bytes": 148036745,
+      "reclaimed_bytes": 168474242,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181442_f05c8a2f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 290978003,
+      "status": "migrated",
+      "new_bytes": 156231494,
+      "reclaimed_bytes": 134746509,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180206_ebf2406c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 289868639,
+      "status": "migrated",
+      "new_bytes": 156519776,
+      "reclaimed_bytes": 133348863,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180827_27d46d95",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 289418608,
+      "status": "migrated",
+      "new_bytes": 155819953,
+      "reclaimed_bytes": 133598655,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182216_1ffbeff8",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 268286626,
+      "status": "migrated",
+      "new_bytes": 156136471,
+      "reclaimed_bytes": 112150155,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165339_728f68c0",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 262962048,
+      "status": "migrated",
+      "new_bytes": 152628988,
+      "reclaimed_bytes": 110333060,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182900_148bb401",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 261857893,
+      "status": "migrated",
+      "new_bytes": 154574603,
+      "reclaimed_bytes": 107283290,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165947_fb0ee342",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 261840644,
+      "status": "migrated",
+      "new_bytes": 151072852,
+      "reclaimed_bytes": 110767792,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_164733_7b75f737",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 260955101,
+      "status": "migrated",
+      "new_bytes": 149901175,
+      "reclaimed_bytes": 111053926,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183542_ed40e264",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 260904735,
+      "status": "migrated",
+      "new_bytes": 154314929,
+      "reclaimed_bytes": 106589806,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174333_c421f83d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 259539186,
+      "status": "migrated",
+      "new_bytes": 153388034,
+      "reclaimed_bytes": 106151152,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175548_f28ed84f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 258585637,
+      "status": "migrated",
+      "new_bytes": 153130708,
+      "reclaimed_bytes": 105454929,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174941_e6bccfeb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 257834902,
+      "status": "migrated",
+      "new_bytes": 151740523,
+      "reclaimed_bytes": 106094379,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173721_07e8e901",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 254073794,
+      "status": "migrated",
+      "new_bytes": 152091570,
+      "reclaimed_bytes": 101982224,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171836_acd2b03e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 252837612,
+      "status": "migrated",
+      "new_bytes": 148492349,
+      "reclaimed_bytes": 104345263,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173112_0c5997a4",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 252692853,
+      "status": "migrated",
+      "new_bytes": 149930543,
+      "reclaimed_bytes": 102762310,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171218_36d6d452",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 252494552,
+      "status": "migrated",
+      "new_bytes": 148480554,
+      "reclaimed_bytes": 104013998,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170605_6df30709",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 251844785,
+      "status": "migrated",
+      "new_bytes": 150856349,
+      "reclaimed_bytes": 100988436,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172503_9a0d09a6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 251691033,
+      "status": "migrated",
+      "new_bytes": 148801904,
+      "reclaimed_bytes": 102889129,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180303_578680d5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 248625334,
+      "status": "migrated",
+      "new_bytes": 153294699,
+      "reclaimed_bytes": 95330635,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175639_d712eb35",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 245824196,
+      "status": "migrated",
+      "new_bytes": 152513670,
+      "reclaimed_bytes": 93310526,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180919_699bbe4a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 244814305,
+      "status": "migrated",
+      "new_bytes": 151704116,
+      "reclaimed_bytes": 93110189,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170039_24ea2d49",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 244609467,
+      "status": "migrated",
+      "new_bytes": 152037391,
+      "reclaimed_bytes": 92572076,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181534_82b42c8e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 242284151,
+      "status": "migrated",
+      "new_bytes": 150554773,
+      "reclaimed_bytes": 91729378,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_164824_160368e0",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 241810597,
+      "status": "migrated",
+      "new_bytes": 151874920,
+      "reclaimed_bytes": 89935677,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173204_203fac71",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 241160382,
+      "status": "migrated",
+      "new_bytes": 151587200,
+      "reclaimed_bytes": 89573182,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165432_f92a3dfe",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 240465310,
+      "status": "migrated",
+      "new_bytes": 149462152,
+      "reclaimed_bytes": 91003158,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171929_9070c1df",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 239118771,
+      "status": "migrated",
+      "new_bytes": 151033678,
+      "reclaimed_bytes": 88085093,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175032_ce3b7086",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 238817683,
+      "status": "migrated",
+      "new_bytes": 149899701,
+      "reclaimed_bytes": 88917982,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173812_59435e21",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 237893992,
+      "status": "migrated",
+      "new_bytes": 150446256,
+      "reclaimed_bytes": 87447736,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170657_cfd25465",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 237228083,
+      "status": "migrated",
+      "new_bytes": 150372995,
+      "reclaimed_bytes": 86855088,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172555_c533d1b5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 237103279,
+      "status": "migrated",
+      "new_bytes": 149507806,
+      "reclaimed_bytes": 87595473,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174424_d374c28b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 236170387,
+      "status": "migrated",
+      "new_bytes": 148840090,
+      "reclaimed_bytes": 87330297,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171311_99c8f3cd",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 235349523,
+      "status": "migrated",
+      "new_bytes": 149106421,
+      "reclaimed_bytes": 86243102,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170914_6f723c69",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 186156981,
+      "status": "migrated",
+      "new_bytes": 135773948,
+      "reclaimed_bytes": 50383033,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171619_b9b3e6fe",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 186060321,
+      "status": "migrated",
+      "new_bytes": 130661953,
+      "reclaimed_bytes": 55398368,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173508_0d2f1beb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 185795240,
+      "status": "migrated",
+      "new_bytes": 129744803,
+      "reclaimed_bytes": 56050437,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165039_9420bf1f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 185427860,
+      "status": "migrated",
+      "new_bytes": 135716917,
+      "reclaimed_bytes": 49710943,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171529_a59db2b2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 185414208,
+      "status": "migrated",
+      "new_bytes": 135568444,
+      "reclaimed_bytes": 49845764,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165646_b899a7cf",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 185314053,
+      "status": "migrated",
+      "new_bytes": 135858885,
+      "reclaimed_bytes": 49455168,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175858_fab40e89",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 185270110,
+      "status": "migrated",
+      "new_bytes": 135355227,
+      "reclaimed_bytes": 49914883,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172148_47a1e693",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 185251523,
+      "status": "migrated",
+      "new_bytes": 135011528,
+      "reclaimed_bytes": 50239995,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180524_a23ae0f9",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 185123626,
+      "status": "migrated",
+      "new_bytes": 135325323,
+      "reclaimed_bytes": 49798303,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181229_f1c8d10c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 185091867,
+      "status": "migrated",
+      "new_bytes": 130549034,
+      "reclaimed_bytes": 54542833,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173419_a5d62075",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184925010,
+      "status": "migrated",
+      "new_bytes": 135249618,
+      "reclaimed_bytes": 49675392,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174026_42251e5a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184814354,
+      "status": "migrated",
+      "new_bytes": 134240530,
+      "reclaimed_bytes": 50573824,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174638_1a04ce70",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184545762,
+      "status": "migrated",
+      "new_bytes": 134508177,
+      "reclaimed_bytes": 50037585,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175948_90793f78",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184521668,
+      "status": "migrated",
+      "new_bytes": 129673051,
+      "reclaimed_bytes": 54848617,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172809_d9490e34",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184401847,
+      "status": "migrated",
+      "new_bytes": 134959413,
+      "reclaimed_bytes": 49442434,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181844_b1447a71",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184323285,
+      "status": "migrated",
+      "new_bytes": 130079531,
+      "reclaimed_bytes": 54243754,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175245_ac772bbd",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184267474,
+      "status": "migrated",
+      "new_bytes": 134482805,
+      "reclaimed_bytes": 49784669,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182534_abc0f38a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184235874,
+      "status": "migrated",
+      "new_bytes": 129294662,
+      "reclaimed_bytes": 54941212,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174510_a26c8bc5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184151225,
+      "status": "migrated",
+      "new_bytes": 131522524,
+      "reclaimed_bytes": 52628701,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170345_49214195",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184150417,
+      "status": "migrated",
+      "new_bytes": 128947868,
+      "reclaimed_bytes": 55202549,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181754_37466ce5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184047383,
+      "status": "migrated",
+      "new_bytes": 134279138,
+      "reclaimed_bytes": 49768245,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182444_a6ab2c00",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 184003204,
+      "status": "migrated",
+      "new_bytes": 134912162,
+      "reclaimed_bytes": 49091042,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181139_b5f96a37",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 183656299,
+      "status": "migrated",
+      "new_bytes": 134423020,
+      "reclaimed_bytes": 49233279,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183127_2d4b4ed4",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 183548264,
+      "status": "migrated",
+      "new_bytes": 133233190,
+      "reclaimed_bytes": 50315074,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171750_faf0a645",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 183153524,
+      "status": "migrated",
+      "new_bytes": 130426803,
+      "reclaimed_bytes": 52726721,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170256_0a6be557",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 183097732,
+      "status": "migrated",
+      "new_bytes": 132876507,
+      "reclaimed_bytes": 50221225,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174856_45531e38",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182976432,
+      "status": "migrated",
+      "new_bytes": 130695681,
+      "reclaimed_bytes": 52280751,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174116_298e9231",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182658107,
+      "status": "migrated",
+      "new_bytes": 128478731,
+      "reclaimed_bytes": 54179376,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172859_909bfeaf",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182600088,
+      "status": "migrated",
+      "new_bytes": 127618563,
+      "reclaimed_bytes": 54981525,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174727_fa688140",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182359664,
+      "status": "migrated",
+      "new_bytes": 127700931,
+      "reclaimed_bytes": 54658733,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180122_15acd2c4",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182357358,
+      "status": "migrated",
+      "new_bytes": 129512563,
+      "reclaimed_bytes": 52844795,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172240_2a01c755",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182339334,
+      "status": "migrated",
+      "new_bytes": 127338340,
+      "reclaimed_bytes": 55000994,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185350_5af830f9",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182335173,
+      "status": "migrated",
+      "new_bytes": 133166140,
+      "reclaimed_bytes": 49169033,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183809_b7a2825e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182182550,
+      "status": "migrated",
+      "new_bytes": 133129830,
+      "reclaimed_bytes": 49052720,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173251_bb998ca3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182173850,
+      "status": "migrated",
+      "new_bytes": 128763153,
+      "reclaimed_bytes": 53410697,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180614_24f53747",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182147622,
+      "status": "migrated",
+      "new_bytes": 128122111,
+      "reclaimed_bytes": 54025511,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180743_8801b60a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182138025,
+      "status": "migrated",
+      "new_bytes": 129601457,
+      "reclaimed_bytes": 52536568,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184603_e3e26aae",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182093672,
+      "status": "migrated",
+      "new_bytes": 133414059,
+      "reclaimed_bytes": 48679613,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171004_65a0f2e4",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182015920,
+      "status": "migrated",
+      "new_bytes": 127329771,
+      "reclaimed_bytes": 54686149,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181357_7687e34d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 182002881,
+      "status": "migrated",
+      "new_bytes": 129781401,
+      "reclaimed_bytes": 52221480,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175118_cca16032",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181979701,
+      "status": "migrated",
+      "new_bytes": 128730915,
+      "reclaimed_bytes": 53248786,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183217_10c45061",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181804552,
+      "status": "migrated",
+      "new_bytes": 127481510,
+      "reclaimed_bytes": 54323042,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181011_707ec41d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181796456,
+      "status": "migrated",
+      "new_bytes": 128705210,
+      "reclaimed_bytes": 53091246,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175334_aa462d71",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181795656,
+      "status": "migrated",
+      "new_bytes": 127409385,
+      "reclaimed_bytes": 54386271,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_190137_f426cad8",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181654608,
+      "status": "migrated",
+      "new_bytes": 133067421,
+      "reclaimed_bytes": 48587187,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181626_130f073f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181608450,
+      "status": "migrated",
+      "new_bytes": 128639991,
+      "reclaimed_bytes": 52968459,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173858_12889c5a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181352675,
+      "status": "migrated",
+      "new_bytes": 128038190,
+      "reclaimed_bytes": 53314485,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171359_a4fde0f6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181328066,
+      "status": "migrated",
+      "new_bytes": 128377981,
+      "reclaimed_bytes": 52950085,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172642_dcca0f12",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 181160455,
+      "status": "migrated",
+      "new_bytes": 127834501,
+      "reclaimed_bytes": 53325954,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180356_6aa1cafd",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180811112,
+      "status": "migrated",
+      "new_bytes": 127514942,
+      "reclaimed_bytes": 53296170,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_193229_7fa3fa50",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180781430,
+      "status": "migrated",
+      "new_bytes": 131971297,
+      "reclaimed_bytes": 48810133,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182959_4f0100d2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180779200,
+      "status": "migrated",
+      "new_bytes": 128258322,
+      "reclaimed_bytes": 52520878,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165735_52c22fcb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180753899,
+      "status": "migrated",
+      "new_bytes": 126420160,
+      "reclaimed_bytes": 54333739,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171048_14ce06ba",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180686785,
+      "status": "migrated",
+      "new_bytes": 128046271,
+      "reclaimed_bytes": 52640514,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172018_9e192b72",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180645513,
+      "status": "migrated",
+      "new_bytes": 127089251,
+      "reclaimed_bytes": 53556262,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_164911_4a1133d3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180630685,
+      "status": "migrated",
+      "new_bytes": 128024534,
+      "reclaimed_bytes": 52606151,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170745_35748e20",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180437553,
+      "status": "migrated",
+      "new_bytes": 127296751,
+      "reclaimed_bytes": 53140802,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165128_0a434027",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180428868,
+      "status": "migrated",
+      "new_bytes": 126592227,
+      "reclaimed_bytes": 53836641,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182315_2ea7b582",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180398846,
+      "status": "migrated",
+      "new_bytes": 127348101,
+      "reclaimed_bytes": 53050745,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183858_5609f99a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180296877,
+      "status": "migrated",
+      "new_bytes": 126531506,
+      "reclaimed_bytes": 53765371,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175731_159874e3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180263180,
+      "status": "migrated",
+      "new_bytes": 128161055,
+      "reclaimed_bytes": 52102125,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_164955_5b5d24f3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 180107575,
+      "status": "migrated",
+      "new_bytes": 126869251,
+      "reclaimed_bytes": 53238324,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165519_6dbd7ba8",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179957355,
+      "status": "migrated",
+      "new_bytes": 126481449,
+      "reclaimed_bytes": 53475906,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173027_bd361f6d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179822849,
+      "status": "migrated",
+      "new_bytes": 127824879,
+      "reclaimed_bytes": 51997970,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174248_c2ea3097",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179817230,
+      "status": "migrated",
+      "new_bytes": 127871771,
+      "reclaimed_bytes": 51945459,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165902_403960b3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179704708,
+      "status": "migrated",
+      "new_bytes": 128878604,
+      "reclaimed_bytes": 50826104,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170520_d8adf040",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179676490,
+      "status": "migrated",
+      "new_bytes": 127625167,
+      "reclaimed_bytes": 52051323,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171133_e9b5f461",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179606737,
+      "status": "migrated",
+      "new_bytes": 127546927,
+      "reclaimed_bytes": 52059810,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172417_b4c97a06",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179602506,
+      "status": "migrated",
+      "new_bytes": 128095352,
+      "reclaimed_bytes": 51507154,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165254_2639eede",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179566312,
+      "status": "migrated",
+      "new_bytes": 128312052,
+      "reclaimed_bytes": 51254260,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_191157_0ae7fb81",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179486687,
+      "status": "migrated",
+      "new_bytes": 131473487,
+      "reclaimed_bytes": 48013200,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175503_d18346e5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179433270,
+      "status": "migrated",
+      "new_bytes": 128286523,
+      "reclaimed_bytes": 51146747,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173636_026b071f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179369331,
+      "status": "migrated",
+      "new_bytes": 127154560,
+      "reclaimed_bytes": 52214771,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170127_b6661df2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179354725,
+      "status": "migrated",
+      "new_bytes": 127492364,
+      "reclaimed_bytes": 51862361,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_192210_4d859cf4",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179152364,
+      "status": "migrated",
+      "new_bytes": 131907446,
+      "reclaimed_bytes": 47244918,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172326_9009fb1e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179066237,
+      "status": "migrated",
+      "new_bytes": 127118213,
+      "reclaimed_bytes": 51948024,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173552_84f531a1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 179017776,
+      "status": "migrated",
+      "new_bytes": 126830361,
+      "reclaimed_bytes": 52187415,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185439_f3f9e3e5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178978661,
+      "status": "migrated",
+      "new_bytes": 125509521,
+      "reclaimed_bytes": 53469140,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183641_8f8fba1c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178959457,
+      "status": "migrated",
+      "new_bytes": 126545250,
+      "reclaimed_bytes": 52414207,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170430_75937342",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178828923,
+      "status": "migrated",
+      "new_bytes": 127426638,
+      "reclaimed_bytes": 51402285,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182018_c753703f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178822607,
+      "status": "migrated",
+      "new_bytes": 126942309,
+      "reclaimed_bytes": 51880298,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_200228_299ec0c2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178744940,
+      "status": "migrated",
+      "new_bytes": 130549610,
+      "reclaimed_bytes": 48195330,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184653_a2337717",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178742015,
+      "status": "migrated",
+      "new_bytes": 125079192,
+      "reclaimed_bytes": 53662823,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_190225_1e2cbf4d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178565956,
+      "status": "migrated",
+      "new_bytes": 125148222,
+      "reclaimed_bytes": 53417734,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_164650_68606798",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178528422,
+      "status": "migrated",
+      "new_bytes": 127167537,
+      "reclaimed_bytes": 51360885,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_201723_2a6dcea4",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178508322,
+      "status": "migrated",
+      "new_bytes": 129999368,
+      "reclaimed_bytes": 48508954,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174200_acd68e8d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178499165,
+      "status": "migrated",
+      "new_bytes": 126210096,
+      "reclaimed_bytes": 52289069,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174812_6778e873",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178406047,
+      "status": "migrated",
+      "new_bytes": 125727264,
+      "reclaimed_bytes": 52678783,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182702_85108ea4",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178382957,
+      "status": "migrated",
+      "new_bytes": 126720882,
+      "reclaimed_bytes": 51662075,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175419_7da4c03b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178377538,
+      "status": "migrated",
+      "new_bytes": 126224974,
+      "reclaimed_bytes": 52152564,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172943_3140d75b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178319934,
+      "status": "migrated",
+      "new_bytes": 126838224,
+      "reclaimed_bytes": 51481710,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_051123_731885c6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178276718,
+      "status": "migrated",
+      "new_bytes": 121333795,
+      "reclaimed_bytes": 56942923,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171705_2f01cd4e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178201717,
+      "status": "migrated",
+      "new_bytes": 126866943,
+      "reclaimed_bytes": 51334774,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_190009_cb754c0b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178090108,
+      "status": "migrated",
+      "new_bytes": 126453440,
+      "reclaimed_bytes": 51636668,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183344_2a3f0070",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 178025353,
+      "status": "migrated",
+      "new_bytes": 127183233,
+      "reclaimed_bytes": 50842120,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_035043_a6600ed0",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177879848,
+      "status": "migrated",
+      "new_bytes": 121076636,
+      "reclaimed_bytes": 56803212,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184437_c1a6fe06",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177826821,
+      "status": "migrated",
+      "new_bytes": 126692401,
+      "reclaimed_bytes": 51134420,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181313_61ad8bf6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177713278,
+      "status": "migrated",
+      "new_bytes": 125701717,
+      "reclaimed_bytes": 52011561,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180032_fc5b2ce4",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177572971,
+      "status": "migrated",
+      "new_bytes": 125560420,
+      "reclaimed_bytes": 52012551,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185223_9cef871b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177554888,
+      "status": "migrated",
+      "new_bytes": 125904688,
+      "reclaimed_bytes": 51650200,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_191247_a1ce2561",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177388477,
+      "status": "migrated",
+      "new_bytes": 124033056,
+      "reclaimed_bytes": 53355421,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_193319_516a62db",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177360150,
+      "status": "migrated",
+      "new_bytes": 123901098,
+      "reclaimed_bytes": 53459052,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184820_b283e7b6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177320960,
+      "status": "migrated",
+      "new_bytes": 127385245,
+      "reclaimed_bytes": 49935715,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_194732_cb7fc0d7",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177308417,
+      "status": "migrated",
+      "new_bytes": 128555723,
+      "reclaimed_bytes": 48752694,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181928_503f14ca",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177062963,
+      "status": "migrated",
+      "new_bytes": 125743700,
+      "reclaimed_bytes": 51319263,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_164552_f7c973d8",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 177008822,
+      "status": "migrated",
+      "new_bytes": 126006729,
+      "reclaimed_bytes": 51002093,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_192300_352164eb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176893408,
+      "status": "migrated",
+      "new_bytes": 124235114,
+      "reclaimed_bytes": 52658294,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184031_1d9aa3ae",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176846115,
+      "status": "migrated",
+      "new_bytes": 126345523,
+      "reclaimed_bytes": 50500592,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_193101_a28847e9",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176754935,
+      "status": "migrated",
+      "new_bytes": 124950378,
+      "reclaimed_bytes": 51804557,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_212718_dee794a9",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176739082,
+      "status": "migrated",
+      "new_bytes": 130153909,
+      "reclaimed_bytes": 46585173,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_190357_fb9081b6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176573227,
+      "status": "migrated",
+      "new_bytes": 126329555,
+      "reclaimed_bytes": 50243672,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183301_63b0a4e8",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176369554,
+      "status": "migrated",
+      "new_bytes": 124584801,
+      "reclaimed_bytes": 51784753,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_192044_484c008c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176251562,
+      "status": "migrated",
+      "new_bytes": 125087478,
+      "reclaimed_bytes": 51164084,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182619_63d09a25",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176161850,
+      "status": "migrated",
+      "new_bytes": 124859962,
+      "reclaimed_bytes": 51301888,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185607_df8c5476",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176073458,
+      "status": "migrated",
+      "new_bytes": 126504528,
+      "reclaimed_bytes": 49568930,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_201813_7a7326eb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176017136,
+      "status": "migrated",
+      "new_bytes": 122621381,
+      "reclaimed_bytes": 53395755,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_191028_b199a1c6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 176010219,
+      "status": "migrated",
+      "new_bytes": 125359631,
+      "reclaimed_bytes": 50650588,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180659_f8651148",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175944227,
+      "status": "migrated",
+      "new_bytes": 124761642,
+      "reclaimed_bytes": 51182585,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_204040_b1bbcd1c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175833829,
+      "status": "migrated",
+      "new_bytes": 129713455,
+      "reclaimed_bytes": 46120374,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184736_97d8edf9",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175716541,
+      "status": "migrated",
+      "new_bytes": 124711250,
+      "reclaimed_bytes": 51005291,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_210357_5deaacca",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175542177,
+      "status": "migrated",
+      "new_bytes": 129516643,
+      "reclaimed_bytes": 46025534,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165211_e79ef6f7",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175476222,
+      "status": "migrated",
+      "new_bytes": 124148857,
+      "reclaimed_bytes": 51327365,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183942_eed299e2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175473760,
+      "status": "migrated",
+      "new_bytes": 124255153,
+      "reclaimed_bytes": 51218607,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185523_e7dfcd7b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175407064,
+      "status": "migrated",
+      "new_bytes": 124377394,
+      "reclaimed_bytes": 51029670,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_002118_fac6ab11",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175363981,
+      "status": "migrated",
+      "new_bytes": 120983691,
+      "reclaimed_bytes": 54380290,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165819_2fce6728",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175172518,
+      "status": "migrated",
+      "new_bytes": 124815408,
+      "reclaimed_bytes": 50357110,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_191415_49a3c98f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 175024424,
+      "status": "migrated",
+      "new_bytes": 124960240,
+      "reclaimed_bytes": 50064184,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_063221_27185b57",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 174936673,
+      "status": "migrated",
+      "new_bytes": 118421125,
+      "reclaimed_bytes": 56515548,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_194604_4b28ab33",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 174635206,
+      "status": "migrated",
+      "new_bytes": 123835865,
+      "reclaimed_bytes": 50799341,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_192427_bff3fd0e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 174418090,
+      "status": "migrated",
+      "new_bytes": 124212033,
+      "reclaimed_bytes": 50206057,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_210230_b0b6d42b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 174408131,
+      "status": "migrated",
+      "new_bytes": 122289531,
+      "reclaimed_bytes": 52118600,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_201555_b8e1f87d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 174150713,
+      "status": "migrated",
+      "new_bytes": 123125021,
+      "reclaimed_bytes": 51025692,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_012505_f922e5b3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 174051291,
+      "status": "migrated",
+      "new_bytes": 120214469,
+      "reclaimed_bytes": 53836822,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_220251_cb0dd5ba",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 173929116,
+      "status": "migrated",
+      "new_bytes": 121460367,
+      "reclaimed_bytes": 52468749,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_023009_d2161585",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 173809323,
+      "status": "migrated",
+      "new_bytes": 120451894,
+      "reclaimed_bytes": 53357429,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_212551_79fa66aa",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 173689442,
+      "status": "migrated",
+      "new_bytes": 122509926,
+      "reclaimed_bytes": 51179516,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_192343_ccb42b66",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 173576250,
+      "status": "migrated",
+      "new_bytes": 123819750,
+      "reclaimed_bytes": 49756500,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_203913_ddb2a8e7",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 173344866,
+      "status": "migrated",
+      "new_bytes": 122177325,
+      "reclaimed_bytes": 51167541,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_231707_21317407",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 173107584,
+      "status": "migrated",
+      "new_bytes": 130198707,
+      "reclaimed_bytes": 42908877,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_200100_41a2f5f1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 173052341,
+      "status": "migrated",
+      "new_bytes": 122160116,
+      "reclaimed_bytes": 50892225,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_194822_f1e43bb0",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 172900764,
+      "status": "migrated",
+      "new_bytes": 121305724,
+      "reclaimed_bytes": 51595040,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_200317_9cc97688",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 172758550,
+      "status": "migrated",
+      "new_bytes": 121591434,
+      "reclaimed_bytes": 51167116,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_231546_659fd67e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 172669627,
+      "status": "migrated",
+      "new_bytes": 120409106,
+      "reclaimed_bytes": 52260521,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_190309_740a740c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 172554798,
+      "status": "migrated",
+      "new_bytes": 122628597,
+      "reclaimed_bytes": 49926201,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_191332_646efba6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 172209709,
+      "status": "migrated",
+      "new_bytes": 121939834,
+      "reclaimed_bytes": 50269875,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_212808_80a25e4e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 172010838,
+      "status": "migrated",
+      "new_bytes": 121429048,
+      "reclaimed_bytes": 50581790,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_220412_fa5e3126",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171978300,
+      "status": "migrated",
+      "new_bytes": 129334577,
+      "reclaimed_bytes": 42643723,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_223923_f6a819f8",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171959350,
+      "status": "migrated",
+      "new_bytes": 119624788,
+      "reclaimed_bytes": 52334562,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_165603_db25e64e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171826073,
+      "status": "migrated",
+      "new_bytes": 118211763,
+      "reclaimed_bytes": 53614310,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_194950_a2d4cac2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171739929,
+      "status": "migrated",
+      "new_bytes": 122916193,
+      "reclaimed_bytes": 48823736,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_193447_af782bb2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171620331,
+      "status": "migrated",
+      "new_bytes": 122749034,
+      "reclaimed_bytes": 48871297,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_002240_7d40168b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171491225,
+      "status": "migrated",
+      "new_bytes": 130224514,
+      "reclaimed_bytes": 41266711,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_224044_2e98638f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171480599,
+      "status": "migrated",
+      "new_bytes": 128627903,
+      "reclaimed_bytes": 42852696,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_200444_47005a9a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171264097,
+      "status": "migrated",
+      "new_bytes": 122877970,
+      "reclaimed_bytes": 48386127,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173943_dbc33a71",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 171140104,
+      "status": "migrated",
+      "new_bytes": 117435526,
+      "reclaimed_bytes": 53704578,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_193403_4e359de5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 170877198,
+      "status": "migrated",
+      "new_bytes": 121807853,
+      "reclaimed_bytes": 49069345,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_023131_2d138f8d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 170745072,
+      "status": "migrated",
+      "new_bytes": 130153140,
+      "reclaimed_bytes": 40591932,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_204129_bc081919",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 170648247,
+      "status": "migrated",
+      "new_bytes": 119641567,
+      "reclaimed_bytes": 51006680,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181710_a5dd5f94",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 170626101,
+      "status": "migrated",
+      "new_bytes": 117203656,
+      "reclaimed_bytes": 53422445,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172103_d3041491",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 170523489,
+      "status": "migrated",
+      "new_bytes": 117111006,
+      "reclaimed_bytes": 53412483,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_200401_5f2ac059",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 170310026,
+      "status": "migrated",
+      "new_bytes": 122028101,
+      "reclaimed_bytes": 48281925,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_210447_455113d1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169959837,
+      "status": "migrated",
+      "new_bytes": 118884786,
+      "reclaimed_bytes": 51075051,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_181055_f2f204bf",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169950910,
+      "status": "migrated",
+      "new_bytes": 116835104,
+      "reclaimed_bytes": 53115806,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_051251_1f398bb3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169597133,
+      "status": "migrated",
+      "new_bytes": 130800451,
+      "reclaimed_bytes": 38796682,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175202_3dfb3307",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169535686,
+      "status": "migrated",
+      "new_bytes": 117431378,
+      "reclaimed_bytes": 52104308,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_012627_1b363342",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169528936,
+      "status": "migrated",
+      "new_bytes": 129246553,
+      "reclaimed_bytes": 40282383,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_174554_163ca5d0",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169323277,
+      "status": "migrated",
+      "new_bytes": 117293687,
+      "reclaimed_bytes": 52029590,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_063350_42193c6d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169222467,
+      "status": "migrated",
+      "new_bytes": 130675418,
+      "reclaimed_bytes": 38547049,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_180440_48d7c652",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169132141,
+      "status": "migrated",
+      "new_bytes": 116833930,
+      "reclaimed_bytes": 52298211,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_175815_48ca3b6d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 169033792,
+      "status": "migrated",
+      "new_bytes": 116438050,
+      "reclaimed_bytes": 52595742,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_035208_1ca5534c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 168853313,
+      "status": "migrated",
+      "new_bytes": 128621840,
+      "reclaimed_bytes": 40231473,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_194906_eaf6d9e1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 168831153,
+      "status": "migrated",
+      "new_bytes": 120090743,
+      "reclaimed_bytes": 48740410,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_210615_c1adde19",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 168662338,
+      "status": "migrated",
+      "new_bytes": 120649453,
+      "reclaimed_bytes": 48012885,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_171444_004f7cd1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 168662149,
+      "status": "migrated",
+      "new_bytes": 116338798,
+      "reclaimed_bytes": 52323351,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_204258_261d22b6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 168528114,
+      "status": "migrated",
+      "new_bytes": 121235093,
+      "reclaimed_bytes": 47293021,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_201947_99276fc0",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 168239836,
+      "status": "migrated",
+      "new_bytes": 121249870,
+      "reclaimed_bytes": 46989966,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170212_cf3fd2b0",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 168188898,
+      "status": "migrated",
+      "new_bytes": 115719776,
+      "reclaimed_bytes": 52469122,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_173335_d9b46d85",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 168039847,
+      "status": "migrated",
+      "new_bytes": 116260792,
+      "reclaimed_bytes": 51779055,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_231802_dfba8011",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 167931437,
+      "status": "migrated",
+      "new_bytes": 117972760,
+      "reclaimed_bytes": 49958677,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_170830_a588232a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 167367699,
+      "status": "migrated",
+      "new_bytes": 115151031,
+      "reclaimed_bytes": 52216668,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_182400_aa52f214",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 167363189,
+      "status": "migrated",
+      "new_bytes": 114979666,
+      "reclaimed_bytes": 52383523,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_220502_b80f8084",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 167323579,
+      "status": "migrated",
+      "new_bytes": 117570942,
+      "reclaimed_bytes": 49752637,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183043_322168ae",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 167273008,
+      "status": "migrated",
+      "new_bytes": 115549962,
+      "reclaimed_bytes": 51723046,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_224134_c2369397",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 167264807,
+      "status": "migrated",
+      "new_bytes": 117242103,
+      "reclaimed_bytes": 50022704,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_183726_31f044ed",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 166961670,
+      "status": "migrated",
+      "new_bytes": 115065400,
+      "reclaimed_bytes": 51896270,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_172726_90cb3cc1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 166685837,
+      "status": "migrated",
+      "new_bytes": 114677674,
+      "reclaimed_bytes": 52008163,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_210531_5d104b15",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 166475350,
+      "status": "migrated",
+      "new_bytes": 118771046,
+      "reclaimed_bytes": 47704304,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_204214_5739d033",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 166409902,
+      "status": "migrated",
+      "new_bytes": 119164774,
+      "reclaimed_bytes": 47245128,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_224301_f50beb59",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 165832779,
+      "status": "migrated",
+      "new_bytes": 118797429,
+      "reclaimed_bytes": 47035350,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_201858_b1f1f01a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 165573440,
+      "status": "migrated",
+      "new_bytes": 117928822,
+      "reclaimed_bytes": 47644618,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_002340_1bc368bb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 164920790,
+      "status": "migrated",
+      "new_bytes": 116413937,
+      "reclaimed_bytes": 48506853,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_220630_89a1e370",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 164861313,
+      "status": "migrated",
+      "new_bytes": 118596897,
+      "reclaimed_bytes": 46264416,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_224218_8a99f089",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 164417783,
+      "status": "migrated",
+      "new_bytes": 117545331,
+      "reclaimed_bytes": 46872452,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_184521_ba465aeb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 164337342,
+      "status": "migrated",
+      "new_bytes": 113021757,
+      "reclaimed_bytes": 51315585,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_023231_beca6942",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 164125639,
+      "status": "migrated",
+      "new_bytes": 115539998,
+      "reclaimed_bytes": 48585641,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_012728_7e02530d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 164122933,
+      "status": "migrated",
+      "new_bytes": 115144598,
+      "reclaimed_bytes": 48978335,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_185307_f1ce0b4d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 163636299,
+      "status": "migrated",
+      "new_bytes": 112641703,
+      "reclaimed_bytes": 50994596,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_191113_e04a536f",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 163302937,
+      "status": "migrated",
+      "new_bytes": 112554021,
+      "reclaimed_bytes": 50748916,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_220546_655bd296",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 163019535,
+      "status": "migrated",
+      "new_bytes": 117128722,
+      "reclaimed_bytes": 45890813,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_212941_fb30363a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 162446764,
+      "status": "migrated",
+      "new_bytes": 116396148,
+      "reclaimed_bytes": 46050616,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_051412_26759657",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 162114760,
+      "status": "migrated",
+      "new_bytes": 114563477,
+      "reclaimed_bytes": 47551283,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_035328_92cad79b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 161966732,
+      "status": "migrated",
+      "new_bytes": 113878740,
+      "reclaimed_bytes": 48087992,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_063512_24fbaeeb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 161667931,
+      "status": "migrated",
+      "new_bytes": 114184762,
+      "reclaimed_bytes": 47483169,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_231936_51447433",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 161096015,
+      "status": "migrated",
+      "new_bytes": 116187216,
+      "reclaimed_bytes": 44908799,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_002509_74df308d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 160846409,
+      "status": "migrated",
+      "new_bytes": 115511271,
+      "reclaimed_bytes": 45335138,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_212852_258d2507",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 160654168,
+      "status": "migrated",
+      "new_bytes": 115148953,
+      "reclaimed_bytes": 45505215,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_190053_39f044f8",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 160334490,
+      "status": "migrated",
+      "new_bytes": 111398867,
+      "reclaimed_bytes": 48935623,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_192128_96ec3d5c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 159310056,
+      "status": "migrated",
+      "new_bytes": 109378913,
+      "reclaimed_bytes": 49931143,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_012856_29c50340",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 158789279,
+      "status": "migrated",
+      "new_bytes": 113635355,
+      "reclaimed_bytes": 45153924,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_193146_5413d9c6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 158421654,
+      "status": "migrated",
+      "new_bytes": 109071818,
+      "reclaimed_bytes": 49349836,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_023405_7ff32322",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 158195452,
+      "status": "migrated",
+      "new_bytes": 114037103,
+      "reclaimed_bytes": 44158349,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_051539_d79583b9",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 157492318,
+      "status": "migrated",
+      "new_bytes": 112582184,
+      "reclaimed_bytes": 44910134,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_002425_7d720249",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 157486415,
+      "status": "migrated",
+      "new_bytes": 113302416,
+      "reclaimed_bytes": 44183999,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_035456_64a37f69",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 156996430,
+      "status": "migrated",
+      "new_bytes": 112368892,
+      "reclaimed_bytes": 44627538,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_231846_e279112a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 155952526,
+      "status": "migrated",
+      "new_bytes": 113002653,
+      "reclaimed_bytes": 42949873,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_012812_ebd2aa43",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 155679805,
+      "status": "migrated",
+      "new_bytes": 112747607,
+      "reclaimed_bytes": 42932198,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_023315_77ab50b6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 154819774,
+      "status": "migrated",
+      "new_bytes": 111333262,
+      "reclaimed_bytes": 43486512,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_035412_8bb161cb",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 154482375,
+      "status": "migrated",
+      "new_bytes": 111022421,
+      "reclaimed_bytes": 43459954,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_200144_51c0bb11",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 152505441,
+      "status": "migrated",
+      "new_bytes": 105765116,
+      "reclaimed_bytes": 46740325,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_194648_c7b30134",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 152419671,
+      "status": "migrated",
+      "new_bytes": 104388926,
+      "reclaimed_bytes": 48030745,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_201639_460970d2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 152285049,
+      "status": "migrated",
+      "new_bytes": 105131331,
+      "reclaimed_bytes": 47153718,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_051456_a79d90a3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 150142820,
+      "status": "migrated",
+      "new_bytes": 110221243,
+      "reclaimed_bytes": 39921577,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_203957_38b903f5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 140118544,
+      "status": "migrated",
+      "new_bytes": 97235712,
+      "reclaimed_bytes": 42882832,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_210314_fa22737a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 139996238,
+      "status": "migrated",
+      "new_bytes": 96748340,
+      "reclaimed_bytes": 43247898,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_212635_1bc2107a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 137771771,
+      "status": "migrated",
+      "new_bytes": 96206993,
+      "reclaimed_bytes": 41564778,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_231630_3eee66c2",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 128399772,
+      "status": "migrated",
+      "new_bytes": 89604745,
+      "reclaimed_bytes": 38795027,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_220336_50ba33e1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 127175927,
+      "status": "migrated",
+      "new_bytes": 89384607,
+      "reclaimed_bytes": 37791320,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260820_224007_5df82419",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 127168962,
+      "status": "migrated",
+      "new_bytes": 89249834,
+      "reclaimed_bytes": 37919128,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_023054_261cc3cc",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 123922131,
+      "status": "migrated",
+      "new_bytes": 88540974,
+      "reclaimed_bytes": 35381157,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_002203_9c1f9e0d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 122108280,
+      "status": "migrated",
+      "new_bytes": 86968747,
+      "reclaimed_bytes": 35139533,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_012551_98499df5",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 120546107,
+      "status": "migrated",
+      "new_bytes": 85328059,
+      "reclaimed_bytes": 35218048,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_035133_4b26d9f3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 114774875,
+      "status": "migrated",
+      "new_bytes": 80853038,
+      "reclaimed_bytes": 33921837,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_051215_271a2a6b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 113378375,
+      "status": "migrated",
+      "new_bytes": 79474995,
+      "reclaimed_bytes": 33903380,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260821_063313_63af035e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 113311531,
+      "status": "migrated",
+      "new_bytes": 79515391,
+      "reclaimed_bytes": 33796140,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_091240_ed0c0ab6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 15801079,
+      "status": "migrated",
+      "new_bytes": 13157628,
+      "reclaimed_bytes": 2643451,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_091336_d03b84b1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 15771797,
+      "status": "migrated",
+      "new_bytes": 13124393,
+      "reclaimed_bytes": 2647404,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_091259_2b1f36f8",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 15752972,
+      "status": "migrated",
+      "new_bytes": 13097887,
+      "reclaimed_bytes": 2655085,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_091317_f2fddf0b",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 15720035,
+      "status": "migrated",
+      "new_bytes": 13100612,
+      "reclaimed_bytes": 2619423,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_091327_4c2ccd7c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10851131,
+      "status": "migrated",
+      "new_bytes": 9021202,
+      "reclaimed_bytes": 1829929,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_091250_12c3b04d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10820030,
+      "status": "migrated",
+      "new_bytes": 9022708,
+      "reclaimed_bytes": 1797322,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_091346_78da3b78",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10808746,
+      "status": "migrated",
+      "new_bytes": 9192414,
+      "reclaimed_bytes": 1616332,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_091308_53c1f3e1",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 10793692,
+      "status": "migrated",
+      "new_bytes": 9021476,
+      "reclaimed_bytes": 1772216,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_095123_f9400764",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7413718,
+      "status": "migrated",
+      "new_bytes": 7100956,
+      "reclaimed_bytes": 312762,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_095051_490dae72",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7412346,
+      "status": "migrated",
+      "new_bytes": 7101702,
+      "reclaimed_bytes": 310644,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_094551_eded5bc6",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7412127,
+      "status": "migrated",
+      "new_bytes": 7100595,
+      "reclaimed_bytes": 311532,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_100020_2b964cb3",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7410234,
+      "status": "migrated",
+      "new_bytes": 7100573,
+      "reclaimed_bytes": 309661,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_095948_3249201c",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7410054,
+      "status": "migrated",
+      "new_bytes": 7099460,
+      "reclaimed_bytes": 310594,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_094606_0dc5593a",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7408606,
+      "status": "migrated",
+      "new_bytes": 7099180,
+      "reclaimed_bytes": 309426,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_095922_d16fe761",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7348498,
+      "status": "migrated",
+      "new_bytes": 7046633,
+      "reclaimed_bytes": 301865,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_094951_9e8ef0aa",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7347705,
+      "status": "migrated",
+      "new_bytes": 7046288,
+      "reclaimed_bytes": 301417,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_100005_c2c1333d",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7344603,
+      "status": "migrated",
+      "new_bytes": 7044212,
+      "reclaimed_bytes": 300391,
+      "archive_layout": "content_addressed_exact_v1"
+    },
+    {
+      "run_id": "v5_20260817_095108_20580a7e",
+      "error": "",
+      "metadata_sync_warning": "",
+      "old_bytes": 7344355,
+      "status": "migrated",
+      "new_bytes": 7044008,
+      "reclaimed_bytes": 300347,
+      "archive_layout": "content_addressed_exact_v1"
+    }
+  ]
+}

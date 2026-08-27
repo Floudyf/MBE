@@ -467,12 +467,12 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
 def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[str, object]:
     if method_id == "hash_cg" or snapshot.get("block_executor") == "cg_block_executor":
         return {
-            "comparison_semantics_class": "cg_cycle_abortable_v4",
-            "state_access_semantics": "stateful_local_cycle_aware_cg_abortable",
+            "comparison_semantics_class": "nezha_cg_johnson_abortable_v2",
+            "state_access_semantics": "stateful_local_nezha_cg_johnson_abortable",
             "state_home_mapping_policy": "execution_shard_local_namespace",
             "remote_fetch_policy": "none",
             "remote_writeback_policy": "none",
-            "proof_policy": "consensus_bound_cg_cycle_aware_plan_digest",
+            "proof_policy": "consensus_bound_nezha_cg_johnson_plan_digest",
             "legacy_cross_shard_protocol": True,
             "measurement_boundary": "client_submit_to_cg_terminal",
         }
@@ -1075,8 +1075,8 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
     nezha_hs_abort_count = number("nezha_hs_abort_count")
     cg_cycle_abort_count = number("cg_cycle_abort_count")
     semantic_class = str(item.get("comparison_semantics_class") or "")
-    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4"}
-    semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4"} else None
+    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2"}
+    semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2"} else None
     if submitted is None or terminal != submitted:
         reasons.append("terminal_not_equal_submitted")
     # Nezha's HS may abort transactions as explicit terminal failed no-ops.

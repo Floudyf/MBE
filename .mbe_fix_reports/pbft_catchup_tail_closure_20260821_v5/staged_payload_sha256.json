@@ -1,0 +1,61 @@
+{
+    "tests":  [
+                  {
+                      "Path":  "executor\\realism\\storage\\block_store_marker_index_closure_test.go",
+                      "SHA256":  "e5352327ba68c2cdc4be1f4ac040b5e420a89736b3a2dc10bd725ae14065de7d",
+                      "Bytes":  8044
+                  },
+                  {
+                      "Path":  "executor\\realism\\p2p\\transport_catchup_lane_closure_test.go",
+                      "SHA256":  "cdeb8b06e86dd5642b7797a954af5e9a2e67338e190526370508aee911c91528",
+                      "Bytes":  483
+                  },
+                  {
+                      "Path":  "executor\\v5\\runtime_pbft_catchup_tail_closure_test.go",
+                      "SHA256":  "b4d86574b5b5762bd118b85d7fb01a47ef0ab574da0027e2aedf169dfe831d28",
+                      "Bytes":  4929
+                  },
+                  {
+                      "Path":  "executor\\cmd\\mbe-supervisor\\drain_evidence_monotonic_closure_test.go",
+                      "SHA256":  "243c3a827f160f119dc7da425d009ec78938ac981a9f872b912c79c1a65d48b1",
+                      "Bytes":  3162
+                  }
+              ],
+    "production":  [
+                       {
+                           "Path":  "executor\\realism\\storage\\block_store.go",
+                           "SHA256":  "aec829aff174ffa164b054bf09b19310ff80886652256af23a7c87ceb180e063",
+                           "Bytes":  9461
+                       },
+                       {
+                           "Path":  "executor\\realism\\storage\\durable_commit.go",
+                           "SHA256":  "d5f3406558e15b85e4ded7f93b12cb7cfac5083e11bd314285a3b8f98d1a6871",
+                           "Bytes":  12799
+                       },
+                       {
+                           "Path":  "executor\\realism\\storage\\block_store_range.go",
+                           "SHA256":  "7c5245911d76a36556ce4ef07d3740f89e12cb89b06a1a65f050d467bea00b32",
+                           "Bytes":  8688
+                       },
+                       {
+                           "Path":  "executor\\realism\\p2p\\transport.go",
+                           "SHA256":  "179d09cdd05089ace519fc9b2ddfc492c71175c04b20ce10d3ce2f6ddc69366b",
+                           "Bytes":  10459
+                       },
+                       {
+                           "Path":  "executor\\v5\\runtime.go",
+                           "SHA256":  "af70aa81961c51b120600ae9b1ce5dd8664e6f4c863f2e0f5320357fc039a57f",
+                           "Bytes":  271176
+                       },
+                       {
+                           "Path":  "executor\\v5\\runtime_pbft.go",
+                           "SHA256":  "28b9d41ae0dab326c4695ab65c877464dd6964240e6269ab8ff7fd4f73837b04",
+                           "Bytes":  37568
+                       },
+                       {
+                           "Path":  "executor\\cmd\\mbe-supervisor\\main.go",
+                           "SHA256":  "89fb43b651a5dc6ed92543075ad2d981fed18ea85831b6c523f2faa0f87d3dd8",
+                           "Bytes":  117784
+                       }
+                   ]
+}

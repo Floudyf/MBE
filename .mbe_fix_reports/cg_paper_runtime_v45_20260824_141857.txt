@@ -1,0 +1,39 @@
+﻿MBE V5 CG Paper/Runtime Fidelity Closure V4.5
+AppliedAt=2026-08-24T14:19:02.6517809+08:00
+Branch=main
+HeadBefore=8b2f4fb1a6e885be41debb70fca42e6061e8b899
+ReviewedFloor=daed72f9420b7d4fb7d60cde5eec74012c80df60
+Backup=C:\Projects\Metaverse_Blockchain_Env\.mbe_fix_backups\cg_paper_runtime_v45_20260824_141857
+Prerequisite=cg_cycle_aware_conflict_graph_v3 / cg_cycle_abortable_v3
+Installed=cg_cycle_aware_conflict_graph_v4 / cg_cycle_abortable_v4
+InstallerRevision=V4.5 fixes V4.4 metric-fixture anchor only; semantic target remains v4
+Removed=elementary_directed_cycle_enumeration_and_membership_materialization
+CyclePolicy=cyclic_SCC_detection_then_lowest_original_ordinal_inside_proven_cyclic_SCC
+PolicyBoundary=paper-level deterministic completion; no published Batch-SI victim rule; no TPS/latency/worker feedback
+CitedCGReference=https://github.com/PDCRL/ConcSawtooth@1d6dedb6cfb483c49d68429c5c6b328d44c0603e validator/DAG/DAG_module.cpp
+Isolation=protected files byte-identical before/after
+
+Changed target status:
+ M backend/app/services/v5_formal_scheduler.py
+ M backend/app/services/v5_paper_exporter.py
+ M backend/app/services/v5_plugin_manifest_store.py
+ M backend/tests/test_v5_literature_baseline_registry.py
+ M executor/v5/cg_plugins.go
+?? backend/tests/test_v5_fig14_fig15_metric_closure.py
+?? executor/v5/cg_cycle_aware_fidelity_test.go
+
+Protected SHA256 after:
+F3DF2AE3503FE4B5C6A2DDDDEB5D154313FE52120EBBA879E7FD6FF696848CBC  backend/app/services/v5_formal_plan_validator.py
+99049A0E36480DCD3372B8BC4FE2B74D49F3D1D0E545EB6CBA1F8C3F67F495D8  executor/realism/execution/batch_si_executor.go
+C1A7A99684CA8C665CC609AAB33419D1223C49762AAC76337D8CDA117B652B82  executor/v5/acg_executor.go
+3AAB8B1373E4EF238532EBE6C057574F848B61341A635EF21DD498D5B83E6ACF  executor/v5/acg_plugins.go
+1D0141D3CCF9CA95A6AA181CD9C79E8C0BF3C0E40BF54A865D728ADD8EAEA156  executor/v5/aria_plugins.go
+C6CA273E2E38E54FCE33FC7B87439672DD84FA7942DE92ABED7310D045B9C7A9  executor/v5/batch_si_plugins.go
+5F3A5E93F0216F862618A288355744661C3684BD2D28859A93F492457AC5C3C4  executor/v5/bsx_executor.go
+8ABF1739535692C8075761615553B8AE49E3BB76C713263707AB3C90A7C9F58B  executor/v5/bsx_plugins.go
+4D7779A88371CE5E37C5B801347F63CF1F455B2A261E95C9EC97EA9D32883EDB  executor/v5/cg_executor.go
+78707FA396F9DB6DFBDD9BF445FC9FD30AACB7519C72CD17530413BFEBC8183A  executor/v5/groundhog_plugins.go
+4BEDFC8D5A2D2D9F1837DA8F4D823F5FCBF08DB289B95A28535928BCD6746DAD  executor/v5/literature_baseline_plugins.go
+03F8D49B0411EE6DB7304BBF954E562848F653BB6465A8A22F82F9697FCDF35C  executor/v5/literature_graph_common.go
+53A0DC6A2547E6213D39BB080BD6F257E1497C2FEEF101865951A59511FE4C5A  executor/v5/registry.go
+0BE23981E014B8B284E143F3CF79A2DEBD5BD2A56FB48250CAC4D26958701A31  frontend/src/v5MethodProfile.ts

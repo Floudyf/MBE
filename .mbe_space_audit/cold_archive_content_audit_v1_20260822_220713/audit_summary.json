@@ -1,0 +1,288 @@
+{
+  "schema_version": "mbe_cold_archive_content_audit_v1",
+  "created_at_utc": "2026-08-22T14:39:45.215854+00:00",
+  "read_only_source_policy": true,
+  "source": {
+    "repository": "C:\\Projects\\Metaverse_Blockchain_Env",
+    "formal_root": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_formal_runs",
+    "real_cluster_root": "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs",
+    "current_child_record_count": 954,
+    "current_run_id_count": 954,
+    "current_archive_count": 332,
+    "current_archive_compressed_bytes_discovered": 321771889741,
+    "excluded_noncurrent_archive_count": 0,
+    "excluded_noncurrent_archive_bytes": 0,
+    "malformed_child_json_count": 0,
+    "ambiguous_child_json_count": 0,
+    "malformed_child_json_examples": [],
+    "ambiguous_child_json_examples": []
+  },
+  "scan": {
+    "successful_archive_count": 332,
+    "failed_archive_count": 0,
+    "regular_file_count": 107242,
+    "compressed_archive_bytes": 321771889741,
+    "compressed_archive_gib": 299.673424792476,
+    "decompressed_logical_bytes": 889661306407,
+    "decompressed_logical_gib": 828.5616584187374
+  },
+  "deduplication": {
+    "exact_unique_content_bytes": 535842414432,
+    "exact_unique_content_gib": 499.0421369969845,
+    "total_duplicate_logical_bytes": 353818891975,
+    "total_duplicate_logical_gib": 329.51952142175287,
+    "total_duplicate_logical_percent": 39.7700663642368,
+    "cross_run_duplicate_logical_bytes": 6023703399,
+    "cross_run_duplicate_logical_gib": 5.610010958276689,
+    "cross_run_duplicate_logical_percent": 0.6770782718793764,
+    "aggregate_compressed_to_logical_ratio": 0.3616790877873659,
+    "naive_cross_run_duplicate_compressed_equivalent_bytes": 2178647550,
+    "naive_cross_run_duplicate_compressed_equivalent_gib": 2.0290236454457045,
+    "compressed_equivalent_warning": "This is only cross-run duplicate logical bytes multiplied by the aggregate archive/logical ratio. It is NOT a measured reclaimable disk-space figure and must not be used as a deletion target."
+  },
+  "top_level": [
+    {
+      "name": "nodes",
+      "file_count": 86856,
+      "logical_bytes": 782082114807,
+      "logical_gib": 728.3707287227735
+    },
+    {
+      "name": "transaction_lifecycle.jsonl",
+      "file_count": 326,
+      "logical_bytes": 64255290223,
+      "logical_gib": 59.842402323149145
+    },
+    {
+      "name": "transaction_lifecycle.csv",
+      "file_count": 326,
+      "logical_bytes": 34109434037,
+      "logical_gib": 31.766885926015675
+    },
+    {
+      "name": "bin",
+      "file_count": 664,
+      "logical_bytes": 4569035776,
+      "logical_gib": 4.255246162414551
+    },
+    {
+      "name": "client",
+      "file_count": 3360,
+      "logical_bytes": 3443092047,
+      "logical_gib": 3.206629349850118
+    },
+    {
+      "name": "transaction_finality.csv",
+      "file_count": 326,
+      "logical_bytes": 390454889,
+      "logical_gib": 0.3636394524946809
+    },
+    {
+      "name": "client_receipt_log.csv",
+      "file_count": 326,
+      "logical_bytes": 328681421,
+      "logical_gib": 0.306108427233994
+    },
+    {
+      "name": "workload_manifest_snapshot.json",
+      "file_count": 314,
+      "logical_bytes": 132550704,
+      "logical_gib": 0.1234474629163742
+    },
+    {
+      "name": "height_root_matrix.csv",
+      "file_count": 326,
+      "logical_bytes": 95923464,
+      "logical_gib": 0.08933568745851517
+    },
+    {
+      "name": "artifact_catalog.json",
+      "file_count": 332,
+      "logical_bytes": 51681826,
+      "logical_gib": 0.04813245125114918
+    },
+    {
+      "name": "physical_remote_state_operations.csv",
+      "file_count": 326,
+      "logical_bytes": 23764408,
+      "logical_gib": 0.022132329642772675
+    },
+    {
+      "name": "mbe_archive_manifest.json",
+      "file_count": 332,
+      "logical_bytes": 18304065,
+      "logical_gib": 0.01704698894172907
+    },
+    {
+      "name": "real_cluster_summary.json",
+      "file_count": 332,
+      "logical_bytes": 16720587,
+      "logical_gib": 0.0155722601339221
+    },
+    {
+      "name": "node_config_n0.json",
+      "file_count": 332,
+      "logical_bytes": 13058793,
+      "logical_gib": 0.012161948718130589
+    },
+    {
+      "name": "node_config_n1.json",
+      "file_count": 332,
+      "logical_bytes": 13058793,
+      "logical_gib": 0.012161948718130589
+    },
+    {
+      "name": "node_config_n2.json",
+      "file_count": 332,
+      "logical_bytes": 13058793,
+      "logical_gib": 0.012161948718130589
+    },
+    {
+      "name": "node_config_n3.json",
+      "file_count": 332,
+      "logical_bytes": 13058793,
+      "logical_gib": 0.012161948718130589
+    },
+    {
+      "name": "node_config_n4.json",
+      "file_count": 328,
+      "logical_bytes": 12963445,
+      "logical_gib": 0.012073148973286152
+    },
+    {
+      "name": "node_config_n5.json",
+      "file_count": 328,
+      "logical_bytes": 12963445,
+      "logical_gib": 0.012073148973286152
+    },
+    {
+      "name": "node_config_n6.json",
+      "file_count": 328,
+      "logical_bytes": 12963445,
+      "logical_gib": 0.012073148973286152
+    },
+    {
+      "name": "node_config_n7.json",
+      "file_count": 328,
+      "logical_bytes": 12963445,
+      "logical_gib": 0.012073148973286152
+    },
+    {
+      "name": "compiled_run_plan.json",
+      "file_count": 332,
+      "logical_bytes": 12099247,
+      "logical_gib": 0.011268301866948605
+    },
+    {
+      "name": "drain_progress.csv",
+      "file_count": 332,
+      "logical_bytes": 10874532,
+      "logical_gib": 0.010127697139978409
+    },
+    {
+      "name": "aggregate",
+      "file_count": 1956,
+      "logical_bytes": 5397902,
+      "logical_gib": 0.005027187988162041
+    },
+    {
+      "name": "workload_materialization_summary.json",
+      "file_count": 314,
+      "logical_bytes": 3413776,
+      "logical_gib": 0.00317932665348053
+    },
+    {
+      "name": "resource_usage_timeseries.csv",
+      "file_count": 326,
+      "logical_bytes": 1820997,
+      "logical_gib": 0.0016959356144070625
+    },
+    {
+      "name": "compiled_workload_plan.json",
+      "file_count": 314,
+      "logical_bytes": 1105376,
+      "logical_gib": 0.0010294616222381592
+    },
+    {
+      "name": "network_metrics_summary.json",
+      "file_count": 332,
+      "logical_bytes": 986864,
+      "logical_gib": 0.0009190887212753296
+    },
+    {
+      "name": "workload_replay_summary.json",
+      "file_count": 332,
+      "logical_bytes": 854511,
+      "logical_gib": 0.0007958253845572472
+    },
+    {
+      "name": "workload_selection.json",
+      "file_count": 314,
+      "logical_bytes": 673010,
+      "logical_gib": 0.0006267894059419632
+    }
+  ],
+  "categories": [
+    {
+      "name": "node_trace",
+      "file_count": 54040,
+      "logical_bytes": 756632045980,
+      "logical_gib": 704.6685050986707
+    },
+    {
+      "name": "other",
+      "file_count": 10790,
+      "logical_bytes": 103959780840,
+      "logical_gib": 96.8200907483697
+    },
+    {
+      "name": "node_other",
+      "file_count": 16056,
+      "logical_bytes": 20431675617,
+      "logical_gib": 19.028480739332736
+    },
+    {
+      "name": "metrics_summary",
+      "file_count": 19674,
+      "logical_bytes": 4245146502,
+      "logical_gib": 3.9536007698625326
+    },
+    {
+      "name": "client_artifacts",
+      "file_count": 2028,
+      "logical_bytes": 2830389504,
+      "logical_gib": 2.6360056400299072
+    },
+    {
+      "name": "state_storage",
+      "file_count": 704,
+      "logical_bytes": 819816800,
+      "logical_gib": 0.7635138928890228
+    },
+    {
+      "name": "workload_dataset",
+      "file_count": 646,
+      "logical_bytes": 742314734,
+      "logical_gib": 0.6913344692438841
+    },
+    {
+      "name": "logs",
+      "file_count": 3304,
+      "logical_bytes": 136430,
+      "logical_gib": 0.00012706033885478973
+    }
+  ],
+  "report_files": [
+    "selection_manifest.json",
+    "audit_summary.json",
+    "AUDIT_REPORT.md",
+    "archive_summary.csv",
+    "top_level_summary.csv",
+    "category_summary.csv",
+    "extension_summary.csv",
+    "duplicate_groups_top500.csv",
+    "repeated_paths_top500.csv",
+    "scan_errors.csv",
+    "member_inventory.sqlite3"
+  ]
+}

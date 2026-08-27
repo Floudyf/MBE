@@ -1,0 +1,53 @@
+﻿MBE V5 Nezha CG Official Fidelity Fix V2
+AppliedAt=2026-08-27T07:44:08.8725550+08:00
+Branch=main
+HeadBefore=a37942c52683b66edb05376ece040a5cb3fd186a
+ReviewedFloor=a37942c52683b66edb05376ece040a5cb3fd186a
+Backup=C:\Projects\Metaverse_Blockchain_Env\.mbe_fix_backups\nezha_cg_official_v2_20260827_074403
+FailureEvidence=artifacts (39): theta=0.6 CG drain no-progress, terminal=8439/10000, 1561 incomplete, leader/validator height divergence; no OOM/fatal execution/persistence error
+RootCauseFixed=V1 re-enumerated remaining elementary cycles after each victim and used a non-reference canonical DFS; V2 ports Johnson blocked/unblock once per SCC and consumes one stored cycle set
+InstalledPlanAlgorithm=nezha_cg_johnson_conflict_graph_v2
+InstalledSemanticClass=nezha_cg_johnson_abortable_v2
+TruthBoundary=nezha_cg_official_reference_johnson_v2
+OfficialRepo=CGCL-codes/Nezha@85eaf541591e5f3020dd520cf3b8ee35009d296a
+OfficialFiles=core/classical_graph.go; graph/tarjanscc.go; graph/johnsonce.go; test.go
+CyclePolicy=one JohnsonCE enumeration per original SCC; maximum remaining cycle membership; lowest original ordinal on ties
+CycleStorage=sparse exact boolMap representation; no victim-triggered re-enumeration
+RetryPolicy=reference benchmark excludes aborted CG transactions from commit order; no retry
+PlannerWorkerPolicy=official CG graph construction sequential; worker_count only affects residual DAG execution
+Isolation=CG executor + all other algorithms + PBFT/runtime/mempool/shared protected files byte-identical before/after
+
+Changed targets:
+ M backend/app/services/v5_formal_scheduler.py
+ M backend/app/services/v5_paper_exporter.py
+ M backend/app/services/v5_plugin_manifest_store.py
+ M backend/tests/test_v5_fig14_fig15_metric_closure.py
+ M backend/tests/test_v5_literature_baseline_registry.py
+ M executor/v5/cg_cycle_aware_fidelity_test.go
+ M executor/v5/cg_plugins.go
+
+Protected SHA256 after:
+F3DF2AE3503FE4B5C6A2DDDDEB5D154313FE52120EBBA879E7FD6FF696848CBC  backend/app/services/v5_formal_plan_validator.py
+15E0548A3FA13753AFCF38FB53DE771062AAF457F64E1EB8EB5057400E637DB8  executor/realism/consensus/pbft/auth.go
+608E5D5F5E21C7FE0CEE9DA0B966EA990A24C1CE80AF97FF894E3E99DE13BA03  executor/realism/consensus/pbft/certificate.go
+D8EB69E34BE3CC1A0E391D3119AFB4A75C4355A2E27F8E3DD5CD87F52CF3D28F  executor/realism/consensus/pbft/log.go
+92764FB3A4258A3BDC6AD10505123458D3538C160E64D813FA2DDE86B8C9CC25  executor/realism/consensus/pbft/message.go
+B9EBF5B6DCC44DC4F0C7B0EAAFA2D0853A80329FEDF1BF21477BC66D55A66DBC  executor/realism/consensus/pbft/quorum.go
+5BDAABE4923EE6B2CD0DC1E29627EB5E99E75135588D6D7B81AEC48672DA8AC8  executor/realism/consensus/pbft/state.go
+99049A0E36480DCD3372B8BC4FE2B74D49F3D1D0E545EB6CBA1F8C3F67F495D8  executor/realism/execution/batch_si_executor.go
+4CD4D98515DC55414E05D54AD482E5C50BE5B7751482DD70AB065884BE8E78E5  executor/realism/mempool/mempool.go
+C1A7A99684CA8C665CC609AAB33419D1223C49762AAC76337D8CDA117B652B82  executor/v5/acg_executor.go
+3AAB8B1373E4EF238532EBE6C057574F848B61341A635EF21DD498D5B83E6ACF  executor/v5/acg_plugins.go
+1D0141D3CCF9CA95A6AA181CD9C79E8C0BF3C0E40BF54A865D728ADD8EAEA156  executor/v5/aria_plugins.go
+C6CA273E2E38E54FCE33FC7B87439672DD84FA7942DE92ABED7310D045B9C7A9  executor/v5/batch_si_plugins.go
+5F3A5E93F0216F862618A288355744661C3684BD2D28859A93F492457AC5C3C4  executor/v5/bsx_executor.go
+8ABF1739535692C8075761615553B8AE49E3BB76C713263707AB3C90A7C9F58B  executor/v5/bsx_plugins.go
+4D7779A88371CE5E37C5B801347F63CF1F455B2A261E95C9EC97EA9D32883EDB  executor/v5/cg_executor.go
+78806A57E8A45072224D470C9E36CF617D52BEADDECEE24C4138D300BF4BFEBB  executor/v5/cg_paper_fidelity_regression_test.go
+78707FA396F9DB6DFBDD9BF445FC9FD30AACB7519C72CD17530413BFEBC8183A  executor/v5/groundhog_plugins.go
+4BEDFC8D5A2D2D9F1837DA8F4D823F5FCBF08DB289B95A28535928BCD6746DAD  executor/v5/literature_baseline_plugins.go
+03F8D49B0411EE6DB7304BBF954E562848F653BB6465A8A22F82F9697FCDF35C  executor/v5/literature_graph_common.go
+53A0DC6A2547E6213D39BB080BD6F257E1497C2FEEF101865951A59511FE4C5A  executor/v5/registry.go
+CD32E4EAC123129941AC7285D457CC81D1ACA29B20C85E721C02A66EDC2BDD50  executor/v5/runtime.go
+1DE8F3F075A5FEDA65215607A1CB724310E1372DC71702734A9E00F0CEBB6DE6  executor/v5/runtime_pbft.go
+0BE23981E014B8B284E143F3CF79A2DEBD5BD2A56FB48250CAC4D26958701A31  frontend/src/v5MethodProfile.ts

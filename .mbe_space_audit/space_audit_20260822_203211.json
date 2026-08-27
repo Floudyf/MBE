@@ -1,0 +1,430 @@
+﻿{
+    "schema_version":  "mbe_space_audit_v1",
+    "created_at":  "2026-08-22T20:32:11.1109391+08:00",
+    "repo":  "C:\\Projects\\Metaverse_Blockchain_Env",
+    "drive":  "C:\\",
+    "drive_free_before_bytes":  236808081408,
+    "drive_free_before_human":  "220.54 GB",
+    "safe_disposable_bytes":  807484,
+    "safe_disposable_human":  "788.56 KB",
+    "source_cache_bytes":  27135393,
+    "source_cache_human":  "25.88 MB",
+    "top_level":  [
+                      {
+                          "name":  ".cache",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache",
+                          "bytes":  392047000813,
+                          "human":  "365.12 GB"
+                      },
+                      {
+                          "name":  "paper_evidence",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\paper_evidence",
+                          "bytes":  4967566031,
+                          "human":  "4.63 GB"
+                      },
+                      {
+                          "name":  "dataset",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\dataset",
+                          "bytes":  1143571233,
+                          "human":  "1.07 GB"
+                      },
+                      {
+                          "name":  ".git",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.git",
+                          "bytes":  149114492,
+                          "human":  "142.21 MB"
+                      },
+                      {
+                          "name":  "frontend",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\frontend",
+                          "bytes":  86992239,
+                          "human":  "82.96 MB"
+                      },
+                      {
+                          "name":  "chain",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\chain",
+                          "bytes":  48350563,
+                          "human":  "46.11 MB"
+                      },
+                      {
+                          "name":  ".venv",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.venv",
+                          "bytes":  47382624,
+                          "human":  "45.19 MB"
+                      },
+                      {
+                          "name":  ".mbe_fix_backups",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.mbe_fix_backups",
+                          "bytes":  13580251,
+                          "human":  "12.95 MB"
+                      },
+                      {
+                          "name":  "backend",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\backend",
+                          "bytes":  10001514,
+                          "human":  "9.54 MB"
+                      },
+                      {
+                          "name":  "executor",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\executor",
+                          "bytes":  2541546,
+                          "human":  "2.42 MB"
+                      },
+                      {
+                          "name":  "data",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\data",
+                          "bytes":  1643653,
+                          "human":  "1.57 MB"
+                      },
+                      {
+                          "name":  "experiments",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\experiments",
+                          "bytes":  1252079,
+                          "human":  "1.19 MB"
+                      },
+                      {
+                          "name":  "docs",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\docs",
+                          "bytes":  832164,
+                          "human":  "812.66 KB"
+                      },
+                      {
+                          "name":  "scripts",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\scripts",
+                          "bytes":  535093,
+                          "human":  "522.55 KB"
+                      },
+                      {
+                          "name":  ".mbe_fix_logs",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.mbe_fix_logs",
+                          "bytes":  395609,
+                          "human":  "386.34 KB"
+                      },
+                      {
+                          "name":  "tests",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\tests",
+                          "bytes":  249540,
+                          "human":  "243.69 KB"
+                      },
+                      {
+                          "name":  "configs",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\configs",
+                          "bytes":  106982,
+                          "human":  "104.47 KB"
+                      },
+                      {
+                          "name":  ".agents",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.agents",
+                          "bytes":  101750,
+                          "human":  "99.37 KB"
+                      },
+                      {
+                          "name":  "trace",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\trace",
+                          "bytes":  92603,
+                          "human":  "90.43 KB"
+                      },
+                      {
+                          "name":  ".pytest_cache",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.pytest_cache",
+                          "bytes":  84608,
+                          "human":  "82.63 KB"
+                      },
+                      {
+                          "name":  ".mbe_fix_reports",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.mbe_fix_reports",
+                          "bytes":  78460,
+                          "human":  "76.62 KB"
+                      },
+                      {
+                          "name":  ".codex-remote-attachments",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.codex-remote-attachments",
+                          "bytes":  58474,
+                          "human":  "57.10 KB"
+                      },
+                      {
+                          "name":  "workload",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\workload",
+                          "bytes":  49172,
+                          "human":  "48.02 KB"
+                      },
+                      {
+                          "name":  ".serena",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.serena",
+                          "bytes":  15667,
+                          "human":  "15.30 KB"
+                      },
+                      {
+                          "name":  ".idea",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.idea",
+                          "bytes":  6845,
+                          "human":  "6.68 KB"
+                      },
+                      {
+                          "name":  ".github",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.github",
+                          "bytes":  1821,
+                          "human":  "1.78 KB"
+                      },
+                      {
+                          "name":  ".mbe_fix_staging",
+                          "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.mbe_fix_staging",
+                          "bytes":  0,
+                          "human":  "0 B"
+                      }
+                  ],
+    "large_files":  [
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_023450_f69653bf\\_cold_archive\\v5_20260821_023450_f69653bf.tar.zst",
+                            "bytes":  16822479466,
+                            "human":  "15.67 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_051621_00fdd0f7\\_cold_archive\\v5_20260821_051621_00fdd0f7.tar.zst",
+                            "bytes":  16796691068,
+                            "human":  "15.64 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_035541_033cebaf\\_cold_archive\\v5_20260821_035541_033cebaf.tar.zst",
+                            "bytes":  16688055935,
+                            "human":  "15.54 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_232019_b76f3673\\_cold_archive\\v5_20260820_232019_b76f3673.tar.zst",
+                            "bytes":  13994258904,
+                            "human":  "13.03 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_012940_61b6c61f\\_cold_archive\\v5_20260821_012940_61b6c61f.tar.zst",
+                            "bytes":  13993399113,
+                            "human":  "13.03 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_002553_b0b8c55f\\_cold_archive\\v5_20260821_002553_b0b8c55f.tar.zst",
+                            "bytes":  13991709738,
+                            "human":  "13.03 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_031416_3c974c62\\_cold_archive\\v5_20260821_031416_3c974c62.tar.zst",
+                            "bytes":  11593894440,
+                            "human":  "10.80 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_043501_36c45faf\\_cold_archive\\v5_20260821_043501_36c45faf.tar.zst",
+                            "bytes":  11590907663,
+                            "human":  "10.79 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_055553_f57ce32d\\_cold_archive\\v5_20260821_055553_f57ce32d.tar.zst",
+                            "bytes":  11495924250,
+                            "human":  "10.71 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_142635_664ecf7f\\_cold_archive\\v5_20260821_142635_664ecf7f.tar.zst",
+                            "bytes":  10415006751,
+                            "human":  "9.70 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_135315_00b73836\\_cold_archive\\v5_20260821_135315_00b73836.tar.zst",
+                            "bytes":  10399554086,
+                            "human":  "9.69 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_235048_14ba233f\\_cold_archive\\v5_20260820_235048_14ba233f.tar.zst",
+                            "bytes":  10304189156,
+                            "human":  "9.60 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_015936_f8faab48\\_cold_archive\\v5_20260821_015936_f8faab48.tar.zst",
+                            "bytes":  10290930501,
+                            "human":  "9.58 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_103745_9722b101\\_cold_archive\\v5_20260821_103745_9722b101.tar.zst",
+                            "bytes":  10259964325,
+                            "human":  "9.56 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_224345_89e27513\\_cold_archive\\v5_20260820_224345_89e27513.tar.zst",
+                            "bytes":  9422046713,
+                            "human":  "8.77 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_213024_ae919486\\_cold_archive\\v5_20260820_213024_ae919486.tar.zst",
+                            "bytes":  9421067880,
+                            "human":  "8.77 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_220714_3e2f4c83\\_cold_archive\\v5_20260820_220714_3e2f4c83.tar.zst",
+                            "bytes":  9421035070,
+                            "human":  "8.77 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_123021_a3ce08bc\\_cold_archive\\v5_20260821_123021_a3ce08bc.tar.zst",
+                            "bytes":  9152241223,
+                            "human":  "8.52 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_120412_6c0a30ab\\_cold_archive\\v5_20260821_120412_6c0a30ab.tar.zst",
+                            "bytes":  9147054182,
+                            "human":  "8.52 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_005520_ac61d023\\_cold_archive\\v5_20260821_005520_ac61d023.tar.zst",
+                            "bytes":  8988040276,
+                            "human":  "8.37 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260821_074745_d9d21a75\\_cold_archive\\v5_20260821_074745_d9d21a75.tar.zst",
+                            "bytes":  8986109087,
+                            "human":  "8.37 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_202031_92868db3\\_cold_archive\\v5_20260820_202031_92868db3.tar.zst",
+                            "bytes":  5879158672,
+                            "human":  "5.48 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_204342_125f042a\\_cold_archive\\v5_20260820_204342_125f042a.tar.zst",
+                            "bytes":  5879075903,
+                            "human":  "5.48 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_210700_ddc0a56a\\_cold_archive\\v5_20260820_210700_ddc0a56a.tar.zst",
+                            "bytes":  5876144706,
+                            "human":  "5.47 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_214955_60525cef\\_cold_archive\\v5_20260820_214955_60525cef.tar.zst",
+                            "bytes":  5343678779,
+                            "human":  "4.98 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_222632_ed5a809c\\_cold_archive\\v5_20260820_222632_ed5a809c.tar.zst",
+                            "bytes":  5316955607,
+                            "human":  "4.95 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_230257_87509941\\_cold_archive\\v5_20260820_230257_87509941.tar.zst",
+                            "bytes":  5314535026,
+                            "human":  "4.95 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_193531_6a9e73e3\\_cold_archive\\v5_20260820_193531_6a9e73e3.tar.zst",
+                            "bytes":  3340529136,
+                            "human":  "3.11 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_195034_7d2c8d7b\\_cold_archive\\v5_20260820_195034_7d2c8d7b.tar.zst",
+                            "bytes":  3340400328,
+                            "human":  "3.11 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_200528_00275eca\\_cold_archive\\v5_20260820_200528_00275eca.tar.zst",
+                            "bytes":  3340271070,
+                            "human":  "3.11 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_211912_1a1f4549\\_cold_archive\\v5_20260820_211912_1a1f4549.tar.zst",
+                            "bytes":  2473303501,
+                            "human":  "2.30 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_205552_c4752c86\\_cold_archive\\v5_20260820_205552_c4752c86.tar.zst",
+                            "bytes":  2458352342,
+                            "human":  "2.29 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_203242_cc37d9d6\\_cold_archive\\v5_20260820_203242_cc37d9d6.tar.zst",
+                            "bytes":  2444375972,
+                            "human":  "2.28 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_111208_e86bcf09\\nodes\\n4\\blocks.jsonl",
+                            "bytes":  2366849380,
+                            "human":  "2.20 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_111208_e86bcf09\\nodes\\n5\\blocks.jsonl",
+                            "bytes":  2366849380,
+                            "human":  "2.20 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_111208_e86bcf09\\nodes\\n2\\blocks.jsonl",
+                            "bytes":  2366849380,
+                            "human":  "2.20 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_111208_e86bcf09\\nodes\\n3\\blocks.jsonl",
+                            "bytes":  2366849380,
+                            "human":  "2.20 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_111208_e86bcf09\\nodes\\n6\\blocks.jsonl",
+                            "bytes":  2366849380,
+                            "human":  "2.20 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_111208_e86bcf09\\nodes\\n0\\blocks.jsonl",
+                            "bytes":  2366849380,
+                            "human":  "2.20 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_111208_e86bcf09\\nodes\\n7\\blocks.jsonl",
+                            "bytes":  2366849380,
+                            "human":  "2.20 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_111208_e86bcf09\\nodes\\n1\\blocks.jsonl",
+                            "bytes":  2260502373,
+                            "human":  "2.11 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_190440_c7188062\\_cold_archive\\v5_20260820_190440_c7188062.tar.zst",
+                            "bytes":  1765021058,
+                            "human":  "1.64 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_192511_d14d5fed\\_cold_archive\\v5_20260820_192511_d14d5fed.tar.zst",
+                            "bytes":  1761086386,
+                            "human":  "1.64 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_191459_2a0191db\\_cold_archive\\v5_20260820_191459_2a0191db.tar.zst",
+                            "bytes":  1761033943,
+                            "human":  "1.64 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_195739_a417a209\\_cold_archive\\v5_20260820_195739_a417a209.tar.zst",
+                            "bytes":  1096278346,
+                            "human":  "1.02 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_194238_2b33d204\\_cold_archive\\v5_20260820_194238_2b33d204.tar.zst",
+                            "bytes":  1093130872,
+                            "human":  "1.02 GB"
+                        },
+                        {
+                            "path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.cache\\v5_real_cluster_runs\\v5_20260820_201234_4d67c583\\_cold_archive\\v5_20260820_201234_4d67c583.tar.zst",
+                            "bytes":  1089680261,
+                            "human":  "1.01 GB"
+                        }
+                    ],
+    "protected_review":  [
+                             {
+                                 "Size":  "12.95 MB",
+                                 "Path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.mbe_fix_backups",
+                                 "Classification":  "KEEP / REVIEW MANUALLY"
+                             },
+                             {
+                                 "Size":  "76.62 KB",
+                                 "Path":  "C:\\Projects\\Metaverse_Blockchain_Env\\.mbe_fix_reports",
+                                 "Classification":  "KEEP / REVIEW MANUALLY"
+                             },
+                             {
+                                 "Size":  "4.63 GB",
+                                 "Path":  "C:\\Projects\\Metaverse_Blockchain_Env\\paper_evidence",
+                                 "Classification":  "KEEP / REVIEW MANUALLY"
+                             }
+                         ]
+}

@@ -8,7 +8,7 @@ import (
 	"metaverse-chainlab/executor/realism/tx"
 )
 
-func TestCGParallelCreateDAGDeterministicAcrossWorkerCounts(t *testing.T) {
+func TestCGOfficialConstructionDeterministicAcrossRequestedWorkerCounts(t *testing.T) {
 	block := graphFixture()
 	one, err := buildCGPlanWithWorkers(block, 1)
 	if err != nil {
@@ -18,14 +18,14 @@ func TestCGParallelCreateDAGDeterministicAcrossWorkerCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stableDigest(one.Edges) != stableDigest(eight.Edges) || stableDigest(one.Waves) != stableDigest(eight.Waves) {
-		t.Fatalf("parallel CreateDAG changed dependency semantics: one=%+v eight=%+v", one, eight)
+	if stableDigest(one.Edges) != stableDigest(eight.Edges) || stableDigest(one.Waves) != stableDigest(eight.Waves) || stableDigest(one.AbortedTransactionIDs) != stableDigest(eight.AbortedTransactionIDs) {
+		t.Fatalf("requested worker count changed official-reference CG semantics: one=%+v eight=%+v", one, eight)
 	}
 	if one.Metrics.PairChecks != 3 || eight.Metrics.PairChecks != 3 {
-		t.Fatalf("CG pairwise comparison semantics changed: one=%d eight=%d", one.Metrics.PairChecks, eight.Metrics.PairChecks)
+		t.Fatalf("CG pairwise comparison accounting changed: one=%d eight=%d", one.Metrics.PairChecks, eight.Metrics.PairChecks)
 	}
-	if one.Metrics.PlanningWorkerCount != 1 || eight.Metrics.PlanningWorkerCount != 3 {
-		t.Fatalf("planning worker evidence mismatch: one=%d eight=%d", one.Metrics.PlanningWorkerCount, eight.Metrics.PlanningWorkerCount)
+	if one.Metrics.PlanningWorkerCount != 1 || eight.Metrics.PlanningWorkerCount != 1 {
+		t.Fatalf("Nezha official CG graph construction is sequential: one=%d eight=%d", one.Metrics.PlanningWorkerCount, eight.Metrics.PlanningWorkerCount)
 	}
 }
 
