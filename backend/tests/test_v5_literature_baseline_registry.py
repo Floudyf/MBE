@@ -24,8 +24,8 @@ def test_cg_acg_bsx_builtins_and_manifests_are_registered():
 
 
 def test_truth_boundaries_disclose_reimplementation_scope():
-    assert STORE.get("cg_scheduler").truth_boundary == "nezha_cg_official_reference_johnson_v2"
-    assert STORE.get("acg_scheduler").truth_boundary == "nezha_acg_hs_official_reference_v1"
+    assert STORE.get("cg_scheduler").truth_boundary == "nezha_cg_official_multigraph_bounded_johnson_retry_mbe_worker_v4"
+    assert STORE.get("acg_scheduler").truth_boundary == "nezha_acg_hs_official_reference_mbe_retry_v2"
     assert STORE.get("bsx_scheduler").truth_boundary == "bsx_homogeneous_conflict_graph_coloring_dsatur_v1"
 
 
@@ -88,8 +88,8 @@ def test_literature_baselines_validate_as_independent_real_cluster_methods():
     assert [row["method_config_id"] for row in checked.rows] == list(EXPECTED)
     assert all(row["runnable"] for row in checked.rows)
     semantics = {row["method_config_id"]: row["comparison_semantics_class"] for row in checked.rows}
-    assert semantics["hash_cg"] == "nezha_cg_johnson_abortable_v2"
-    assert semantics["hash_acg"] == "nezha_acg_hs_abortable_v1"
+    assert semantics["hash_cg"] == "nezha_cg_johnson_retryable_v4"
+    assert semantics["hash_acg"] == "nezha_acg_hs_retryable_v2"
     # BSX may realize a different deterministic serializable order than the
     # consensus input order, so its correctness oracle is its own bound plan.
     assert semantics["hash_bsx"] == "bsx_deterministic_coloring_serializable_v1"

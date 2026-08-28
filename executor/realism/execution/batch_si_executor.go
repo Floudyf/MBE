@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"container/heap"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -763,30 +764,109 @@ func batchSIDeclaredAccess(item tx.SignedTransaction, shardID string) ([]string,
 	return batchSISortedKeys(reads), batchSISortedKeys(writes)
 }
 
-func batchSIBuildAWRT(items []batchSITxDescriptor) (map[string][]string, int) {
-	awrt := map[string][]string{}
+// MBE_BATCH_SI_EQUIVALENT_ENGINEERING_OPT_V1: representation/allocation optimizations only; WRBP/OFAS decisions are unchanged.
+func batchSIBuildAWRT(items []batchSITxDescriptor) (map[string][]int, int) {
+	// Paper AWRT references transactions by T.id. Store the deterministic paper
+	// ordinal instead of duplicating TxID strings; ordering and counts are identical.
+	awrt := map[string][]int{}
 	references := 0
 	for _, item := range items {
 		for _, key := range item.WriteKeys {
-			awrt[key] = append(awrt[key], item.TxID)
+			awrt[key] = append(awrt[key], item.IDRank)
 			references++
 		}
 	}
 	for key := range awrt {
-		sort.Strings(awrt[key])
+		sort.Ints(awrt[key])
 	}
 	return awrt, references
 }
 
-func batchSIWRBPPartition(items []batchSITxDescriptor) ([]batchSIPartition, int) {
+func batchSIDescriptorLess(left, right batchSITxDescriptor) bool {
+	if left.IDRank != right.IDRank {
+		return left.IDRank < right.IDRank
+	}
+	return left.TxID < right.TxID
+}
+
+func batchSIOrderedDescriptors(items []batchSITxDescriptor) []batchSITxDescriptor {
+	if sort.SliceIsSorted(items, func(i, j int) bool { return batchSIDescriptorLess(items[i], items[j]) }) {
+		return items
+	}
 	ordered := append([]batchSITxDescriptor(nil), items...)
-	// Algorithm 1 consumes the ordering node's deterministic paper T.id order.
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].IDRank != ordered[j].IDRank {
-			return ordered[i].IDRank < ordered[j].IDRank
+	sort.SliceStable(ordered, func(i, j int) bool { return batchSIDescriptorLess(ordered[i], ordered[j]) })
+	return ordered
+}
+
+func batchSIWRBPCandidateAvailable(opportunity map[int]bool, currentBatch, maximumBatch, candidate int) bool {
+	if opportunity[candidate] {
+		return true
+	}
+	if currentBatch < 1 {
+		currentBatch = 1
+	}
+	if currentBatch == maximumBatch {
+		return candidate == maximumBatch
+	}
+	return candidate >= currentBatch && candidate < maximumBatch
+}
+
+func batchSIWRBPMinIntersection(keys []string, current map[string]int, opportunities map[string]map[int]bool, maximumBatch int) int {
+	if len(keys) == 0 {
+		return 1
+	}
+	first := keys[0]
+	firstCurrent := current[first]
+	if firstCurrent < 1 {
+		firstCurrent = 1
+	}
+	best := 0
+	consider := func(candidate int) {
+		if candidate < 1 || (best > 0 && candidate >= best) {
+			return
 		}
-		return ordered[i].TxID < ordered[j].TxID
-	})
+		for _, key := range keys {
+			value := current[key]
+			if value < 1 {
+				value = 1
+			}
+			if !batchSIWRBPCandidateAvailable(opportunities[key], value, maximumBatch, candidate) {
+				return
+			}
+		}
+		best = candidate
+	}
+	for candidate := range opportunities[first] {
+		consider(candidate)
+	}
+	if firstCurrent == maximumBatch {
+		consider(maximumBatch)
+	} else {
+		for candidate := firstCurrent; candidate < maximumBatch; candidate++ {
+			consider(candidate)
+		}
+	}
+	return best
+}
+
+type batchSIReadyHeap struct {
+	ids  []string
+	less func(string, string) bool
+}
+
+func (h batchSIReadyHeap) Len() int           { return len(h.ids) }
+func (h batchSIReadyHeap) Less(i, j int) bool { return h.less(h.ids[i], h.ids[j]) }
+func (h batchSIReadyHeap) Swap(i, j int)      { h.ids[i], h.ids[j] = h.ids[j], h.ids[i] }
+func (h *batchSIReadyHeap) Push(value any)    { h.ids = append(h.ids, value.(string)) }
+func (h *batchSIReadyHeap) Pop() any {
+	last := len(h.ids) - 1
+	value := h.ids[last]
+	h.ids = h.ids[:last]
+	return value
+}
+
+func batchSIWRBPPartition(items []batchSITxDescriptor) ([]batchSIPartition, int) {
+	ordered := batchSIOrderedDescriptors(items)
 	currentBatch := map[string]int{}
 	opportunities := map[string]map[int]bool{}
 	batches := map[int][]batchSITxDescriptor{}
@@ -806,23 +886,9 @@ func batchSIWRBPPartition(items []batchSITxDescriptor) ([]batchSIPartition, int)
 				maxBatch = value
 			}
 		}
-		available := []map[int]bool{}
-		for _, key := range item.WriteKeys {
-			value := currentBatch[key]
-			if value < 1 {
-				value = 1
-			}
-			set := batchSICloneIntSet(opportunities[key])
-			if value == maxBatch {
-				set[maxBatch] = true
-			} else {
-				for candidate := value; candidate < maxBatch; candidate++ {
-					set[candidate] = true
-				}
-			}
-			available = append(available, set)
-		}
-		assigned := batchSIMinIntersection(available)
+		// Exact Algorithm-1 intersection, but query the per-key opportunity sets
+		// in place instead of cloning one map per write key and sorting a copy.
+		assigned := batchSIWRBPMinIntersection(item.WriteKeys, currentBatch, opportunities, maxBatch)
 		if assigned < 1 {
 			assigned = maxBatch
 		}
@@ -844,8 +910,8 @@ func batchSIWRBPPartition(items []batchSITxDescriptor) ([]batchSIPartition, int)
 					opportunities[key][candidate] = true
 				}
 			}
-			// Advancing on equality is required to preserve the WRBP invariant
-			// that each address has at most one writer in a batch.
+			// Advancing on equality preserves the WRBP invariant that each
+			// address has at most one writer in a batch.
 			currentBatch[key] = assigned + 1
 		}
 		batches[assigned] = append(batches[assigned], item)
@@ -854,13 +920,7 @@ func batchSIWRBPPartition(items []batchSITxDescriptor) ([]batchSIPartition, int)
 }
 
 func batchSISequentialPartition(items []batchSITxDescriptor) []batchSIPartition {
-	ordered := append([]batchSITxDescriptor(nil), items...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		if ordered[i].IDRank != ordered[j].IDRank {
-			return ordered[i].IDRank < ordered[j].IDRank
-		}
-		return ordered[i].TxID < ordered[j].TxID
-	})
+	ordered := batchSIOrderedDescriptors(items)
 	nextBatch := map[string]int{}
 	batches := map[int][]batchSITxDescriptor{}
 	for _, item := range ordered {
@@ -902,21 +962,18 @@ func batchSICompactPartitions(batches map[int][]batchSITxDescriptor) []batchSIPa
 }
 
 func batchSIOFASOrder(items []batchSITxDescriptor, priorityMode string) ([]batchSITxDescriptor, []batchSITxDescriptor, int) {
-	// WRBP guarantees that each logical key has at most one writer in a batch.
-	// The implementation below follows Algorithm 2's state directly:
-	//   tRNum  = reads performed by the transaction (excluding its own writes)
-	//   kRNum  = reads observed on the transaction's written keys
-	//   kMaxR  = maximum current reader order for those written keys
-	//   sort   = the transaction's serial order label
-	// Transactions are visited by the paper priority and Rule 2 defers a
-	// transaction when a previously ordered writer cannot be moved behind it.
+	// Algorithm 2 state and decisions are unchanged. This implementation only
+	// reuses immutable write membership and uses a deterministic heap where the
+	// reference implementation repeatedly sorted the entire ready slice.
 	byID := make(map[string]batchSITxDescriptor, len(items))
 	writerByKey := map[string]string{}
+	ownWritesByID := make(map[string]map[string]bool, len(items))
 	transactionReadCount := map[string]int{}
 	writerReadCount := map[string]int{}
 	maximumReaderOrder := map[string]int{}
 	for _, item := range items {
 		byID[item.TxID] = item
+		ownWritesByID[item.TxID] = batchSIStringSet(item.WriteKeys)
 		for _, key := range item.WriteKeys {
 			writerByKey[key] = item.TxID
 		}
@@ -924,7 +981,7 @@ func batchSIOFASOrder(items []batchSITxDescriptor, priorityMode string) ([]batch
 
 	dependencyEdges := map[string]map[string]bool{}
 	for _, reader := range items {
-		ownWrites := batchSIStringSet(reader.WriteKeys)
+		ownWrites := ownWritesByID[reader.TxID]
 		for _, key := range reader.ReadKeys {
 			if ownWrites[key] {
 				continue
@@ -983,7 +1040,7 @@ func batchSIOFASOrder(items []batchSITxDescriptor, priorityMode string) ([]batch
 			sortOrder[item.TxID] = maximumReaderOrder[item.TxID]
 		}
 		abortCurrent := false
-		ownWrites := batchSIStringSet(item.WriteKeys)
+		ownWrites := ownWritesByID[item.TxID]
 		for _, key := range item.ReadKeys {
 			if ownWrites[key] {
 				continue
@@ -992,9 +1049,6 @@ func batchSIOFASOrder(items []batchSITxDescriptor, priorityMode string) ([]batch
 			if writerID == "" || writerID == item.TxID || isAborted[writerID] || !isSorted[writerID] {
 				continue
 			}
-			// Algorithm 2, Rule 2: the already ordered writer cannot be
-			// shifted behind the current reader without reversing an earlier
-			// dependency when the reader's raised order exceeds kMaxR.
 			if sortOrder[item.TxID] > maximumReaderOrder[writerID] {
 				isAborted[item.TxID] = true
 				abortCurrent = true
@@ -1039,26 +1093,25 @@ func batchSIOFASOrder(items []batchSITxDescriptor, priorityMode string) ([]batch
 				}
 			}
 		}
-		ready := make([]string, 0)
+		readyLess := func(left, right string) bool {
+			if sortOrder[left] != sortOrder[right] {
+				return sortOrder[left] < sortOrder[right]
+			}
+			if priorityIndex[left] != priorityIndex[right] {
+				return priorityIndex[left] < priorityIndex[right]
+			}
+			return left < right
+		}
+		ready := &batchSIReadyHeap{less: readyLess}
+		heap.Init(ready)
 		for id, degree := range indegree {
 			if degree == 0 {
-				ready = append(ready, id)
+				heap.Push(ready, id)
 			}
 		}
 		orderedIDs := make([]string, 0, len(active))
-		for len(ready) > 0 {
-			sort.SliceStable(ready, func(i, j int) bool {
-				left, right := ready[i], ready[j]
-				if sortOrder[left] != sortOrder[right] {
-					return sortOrder[left] < sortOrder[right]
-				}
-				if priorityIndex[left] != priorityIndex[right] {
-					return priorityIndex[left] < priorityIndex[right]
-				}
-				return left < right
-			})
-			id := ready[0]
-			ready = ready[1:]
+		for ready.Len() > 0 {
+			id := heap.Pop(ready).(string)
 			orderedIDs = append(orderedIDs, id)
 			children := make([]string, 0, len(dependencyEdges[id]))
 			for child := range dependencyEdges[id] {
@@ -1070,7 +1123,7 @@ func batchSIOFASOrder(items []batchSITxDescriptor, priorityMode string) ([]batch
 			for _, child := range children {
 				indegree[child]--
 				if indegree[child] == 0 {
-					ready = append(ready, child)
+					heap.Push(ready, child)
 				}
 			}
 		}
@@ -1091,13 +1144,18 @@ func batchSIOFASOrder(items []batchSITxDescriptor, priorityMode string) ([]batch
 				cycleIDs = append(cycleIDs, id)
 			}
 		}
-		// Rule 2 must remove at least one transaction from a remaining cycle.
-		// Keep higher-priority writers and defer the lowest-priority participant.
-		sort.SliceStable(cycleIDs, func(i, j int) bool {
-			left, right := byID[cycleIDs[i]], byID[cycleIDs[j]]
-			return higherPriority(right, left)
-		})
+		if len(cycleIDs) == 0 {
+			break
+		}
+		// The reference sorted all remaining cycle participants only to take the
+		// lowest-priority first element. A linear arg-min under the same strict
+		// total priority relation is exactly equivalent.
 		victimID := cycleIDs[0]
+		for _, candidate := range cycleIDs[1:] {
+			if higherPriority(byID[victimID], byID[candidate]) {
+				victimID = candidate
+			}
+		}
 		isAborted[victimID] = true
 		aborted = append(aborted, byID[victimID])
 		delete(active, victimID)

@@ -93,3 +93,32 @@ def test_v5_results_dashboard_truth_fallback_evidence_and_cn_contract() -> None:
         'body["runtime_artifact_bytes"]',
     ):
         assert token in dto
+
+
+def test_v5_cross_method_serial_oracle_ui_and_dto_contract() -> None:
+    root = Path(__file__).resolve().parents[2]
+    dashboard = (root / "frontend/src/components/v5/V5ResultsDashboard.tsx").read_text(encoding="utf-8")
+    group_summary = (root / "frontend/src/components/v5/V5GroupSummary.tsx").read_text(encoding="utf-8")
+    api = (root / "frontend/src/api.ts").read_text(encoding="utf-8")
+    dto = (root / "backend/app/services/v5_formal_dto.py").read_text(encoding="utf-8")
+
+    for token in (
+        "Serial Oracle",
+        "不同合法串行化顺序不要求产生相同最终 state digest",
+        "cross_method_serial_order_oracle_valid",
+    ):
+        assert token in dashboard
+    assert "Serial Oracle" in group_summary
+    assert "cross_method_serial_order_oracle_valid" in group_summary
+    for token in (
+        "cross_method_serial_order_oracle_valid?:",
+        "serial_order_replay_equivalent?:",
+        "serial_order_replay_input_digest?:",
+    ):
+        assert token in api
+    for token in (
+        '"cross_method_serial_order_oracle_valid"',
+        '"serial_order_replay_equivalent"',
+        '"serial_order_replay_input_digest"',
+    ):
+        assert token in dto

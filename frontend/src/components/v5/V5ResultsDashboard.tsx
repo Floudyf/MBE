@@ -124,7 +124,7 @@ function Overview({ group, aggregate, analysis, children }: { group: V5FormalRun
         <GateRow label="无静默回退" state={allTrue(children, "no_fallback")} evidence="未发生静默回退" />
         <GateRow label="产物契约完整" state={children.length > 0 && children.every((child) => child.artifact_status === "complete")} evidence={children.length ? children.map((child) => artifactStatusText(child.artifact_status)).filter((value, index, values) => values.indexOf(value) === index).join("、") : "—"} />
         <GateRow label="公平性校验" state={group.fairness_validation?.passed !== false} evidence={group.fairness_validation?.passed === false ? "未通过" : "已通过 / 未阻断"} />
-        <GateRow label="状态等价性" state={group.within_semantic_cohort_state_equivalence_valid !== false && group.pairwise_logical_state_equivalent !== false} evidence="同语义组内校验" />
+        <GateRow label="执行正确性 / 串行重放" state={group.within_semantic_cohort_state_equivalence_valid !== false && group.pairwise_logical_state_equivalent !== false && group.cross_method_serial_order_oracle_valid !== false} evidence={group.cross_method_serial_order_oracle_valid === true ? "跨方法各自提交顺序均通过 Serial Oracle" : "同语义组内校验；跨方法比较需 Serial Oracle"} />
       </tbody></table></div>
     </section>
     <div className="v5-overview-two-column">
@@ -168,7 +168,7 @@ function Performance({ group, analysis, children }: { group: V5FormalRunGroup; a
   const directComparable = directComparisonStatus(group, analysis);
   const cohorts = semanticCohorts(group, children);
   return <div className="v5-dashboard-performance">
-    {directComparable !== true && <section className="notice v5-comparison-scope-banner" data-testid="v5-cross-semantic-comparison-warning"><strong>{directComparable === false ? "直接跨语义性能比较：受限" : "直接跨语义性能比较：未判定"}</strong><span>所有完成且通过有效性门禁的子实验仍可作为独立结果；只有同一执行语义组内可以直接计算性能提升、排名或加速比。跨语义组数值仅用于并列观察与机制解释。</span><ul>{cohorts.map((cohort) => <li key={cohort.id}><strong>{cohort.label}</strong>：{cohort.methods.join("、")}</li>)}</ul></section>}
+    {directComparable !== true && <section className="notice v5-comparison-scope-banner" data-testid="v5-cross-semantic-comparison-warning"><strong>{directComparable === false ? "直接跨语义性能比较：受限" : "直接跨语义性能比较：未判定"}</strong><span>所有完成且通过有效性门禁的子实验仍可作为独立结果；跨内部执行语义的直接性能比较只有在后端确认共同外部性能合同，并证明每种方法的实际最终状态都等于其自身观测提交顺序的 Serial Oracle 重放结果后才有效；不同合法串行化顺序不要求产生相同最终 state digest。</span><ul>{cohorts.map((cohort) => <li key={cohort.id}><strong>{cohort.label}</strong>：{cohort.methods.join("、")}</li>)}</ul></section>}
     <V5AnalysisPanel analysis={analysis} />
     {sensitivity && <V5SkewTpsChart children={children} plannedThetaValues={(group.plan?.workload_points ?? []).map((point) => Number(point.target_theta)).filter((value) => Number.isFinite(value))} />}
     <div className="v5-diagnostic-chart-grid">
@@ -330,7 +330,10 @@ function semanticClassForChild(group: V5FormalRunGroup, child: V5FormalChildRun)
 function semanticClassLabel(value: string): string {
   return ({
     stateful_local_legacy_v1: "有状态本地串行化语义",
-    nezha_acg_hs_abortable_v1: "Nezha/ACG HS 可中止语义",
+    nezha_acg_hs_abortable_v1: "Nezha/ACG HS 历史终态中止语义",
+    nezha_acg_hs_retryable_v2: "ACG/Nezha HS 中止后重试语义",
+    nezha_cg_johnson_abortable_v2: "CG/Nezha JohnsonCE 中止语义",
+    nezha_cg_johnson_abortable_v3: "CG/Nezha 官方多重图 JohnsonCE + MBE Worker 执行适配",
     bsx_deterministic_coloring_serializable_v1: "BSX 确定性图着色串行化语义",
     batch_si_common_batch_snapshot_v1: "Batch-SI 共享批快照语义",
     groundhog_typed_commutative_snapshot_v1: "Groundhog 类型化可交换快照语义",
@@ -351,7 +354,7 @@ function shortMethodLabel(methodId: string, value: string): string {
   if (id === "hash_block_stm") return "Block-STM";
   if (id === "hash_aria") return "Aria";
   if (id === "hash_groundhog") return "Groundhog";
-  if (id === "hash_cg") return "CG";
+  if (id === "hash_cg") return "CG/Nezha";
   if (id === "hash_acg") return "ACG/Nezha";
   if (id === "hash_bsx") return "BSX";
   if (id === "hash_batch_si") return "Batch-SI";

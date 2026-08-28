@@ -92,6 +92,7 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
         f"Individually valid completed: {overall.get('individually_valid_completed_count', 0)}\n"
         f"Within-semantic paper candidates: {overall.get('paper_valid_count', overall['completed_count'])}\n"
         f"Direct cross-semantic performance comparison valid: {str(overall.get('direct_cross_semantic_performance_comparison_valid', False)).lower()}\n"
+        f"Cross-method Serial Oracle valid: {str(group.get('cross_method_serial_order_oracle_valid', False)).lower()}\n"
         f"Observed completed: {overall.get('observed_completed_count', 0)}\n"
         f"Completed invalid: {overall.get('completed_invalid_count', 0)}\n"
         f"Blocked: {overall.get('blocked_count', 0)}\n"
@@ -196,7 +197,7 @@ def paper_result_analysis(group: dict, children: list[dict]) -> dict:
         "comparison_note": (
             "workload sensitivity is reported per scan point; cross-theta method means/CI are intentionally suppressed"
             if sensitivity_mode
-            else ("" if performance_valid else "execution semantics, fairness, or cross-method logical-state equivalence differs; direct performance uplift is prohibited")
+            else ("" if performance_valid else "execution semantics, fairness, within-semantic logical-state equivalence, or per-method observed-order Serial Oracle evidence is insufficient; direct performance uplift is prohibited")
         ),
         "metrics": metrics,
         "observed_metrics": observed_metrics,
@@ -257,11 +258,14 @@ def _individual_result_reasons(child: dict) -> list[str]:
     cross_failed = _first_number(metrics, finality, name="cross_shard_failed_unique_count")
     lifecycle_complete = _first_bool(metrics, summary, finality, name="lifecycle_complete")
     semantic_class = str(child.get("comparison_semantics_class") or "")
-    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2"}
+    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3", "fabricpp_cg_cycle_abortable_v1"}
     abort_count = _first_number(metrics, summary, name="abort_count")
     nezha_hs_abort_count = _first_number(metrics, summary, name="nezha_hs_abort_count")
     cg_cycle_abort_count = _first_number(metrics, summary, name="cg_cycle_abort_count")
-    semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2"} else None
+    fabricpp_cycle_abort_count = _first_number(metrics, summary, name="fabricpp_cycle_abort_count")
+    semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3"} else None
+    if semantic_class == "fabricpp_cg_cycle_abortable_v1":
+        semantic_abort_count = fabricpp_cycle_abort_count
 
     if submitted is None or terminal is None or submitted != terminal:
         reasons.append("terminal_not_equal_submitted")
@@ -272,7 +276,11 @@ def _individual_result_reasons(child: dict) -> list[str]:
             if terminal is None or finalized + abort_count != terminal:
                 reasons.append("finalized_plus_abort_not_equal_terminal")
             if abort_count != semantic_abort_count:
-                reasons.append("semantic_abort_count_mismatch")
+                reasons.append(
+                    "nezha_hs_abort_count_mismatch"
+                    if semantic_class == "nezha_acg_hs_abortable_v1"
+                    else "semantic_abort_count_mismatch"
+                )
     elif submitted is None or finalized is None or submitted != finalized:
         reasons.append("finalized_not_equal_submitted")
     if incomplete is None or incomplete != 0:
@@ -742,7 +750,7 @@ def _requires_block_stm(child: dict) -> bool:
 
 
 def _requires_nezha_acg(child: dict) -> bool:
-    if str(child.get("comparison_semantics_class") or "") == "nezha_acg_hs_abortable_v1":
+    if str(child.get("comparison_semantics_class") or "") in {"nezha_acg_hs_abortable_v1", "nezha_acg_hs_retryable_v2"}:
         return True
     method_id = str(child.get("method_config_id") or "")
     method = child.get("method") or {}

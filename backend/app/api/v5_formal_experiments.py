@@ -462,9 +462,9 @@ def _formal_experiment_profile(plan: dict, rows: list[dict]) -> dict:
             topology_point = row.get("topology_point") if isinstance(row.get("topology_point"), dict) else {}
             row_workers = topology_point.get("worker_count", requested_worker_count)
             if isinstance(row_workers, int) and not isinstance(row_workers, bool) and row_workers > 0:
-                counts.add(1 if executor_id == "serial_block_executor" else row_workers)
+                counts.add(1 if executor_id in {"serial_block_executor", "fabricpp_cg_block_executor"} else row_workers)
         if not counts:
-            counts.add(1 if executor_id == "serial_block_executor" else requested_worker_count)
+            counts.add(1 if executor_id in {"serial_block_executor", "fabricpp_cg_block_executor"} else requested_worker_count)
         effective_counts = sorted(counts)
         worker_execution_truth[method_id] = {
             "registered_default_worker_count": registered.get("worker_count"),

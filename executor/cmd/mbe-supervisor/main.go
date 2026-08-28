@@ -414,7 +414,7 @@ func observeDrainProgress(previous progressSnapshot, initialized bool, current p
 	if !initialized || current.Mempool != previous.Mempool || current.Reserved != previous.Reserved {
 		out.MempoolProgress = true
 	}
-	if !initialized || current.Pending != previous.Pending || current.ProposalInFlight != previous.ProposalInFlight {
+	if !initialized || current.Pending != previous.Pending || current.ProposalInFlight != previous.ProposalInFlight || current.ProposalPlanningInFlight != previous.ProposalPlanningInFlight {
 		out.PendingProgress = true
 	}
 	out.Snapshot = current
@@ -615,6 +615,10 @@ type progressSnapshot struct {
 	Reserved                       int   `json:"reserved"`
 	Pending                        int   `json:"pending"`
 	ProposalInFlight               bool  `json:"proposal_in_flight"`
+	ProposalPlanningInFlight       bool  `json:"proposal_planning_in_flight"`
+	ProposalPlanningProgressAtMS   int64 `json:"proposal_planning_progress_at_ms"`
+	ProposalPlanningWorkUnits      int   `json:"proposal_planning_work_units"`
+	ProposalPlanningDetailCount    int   `json:"proposal_planning_detail_count"`
 	BlockExecutionHeight           int   `json:"block_execution_height"`
 	BlockExecutionProgressAtMS     int64 `json:"block_execution_progress_at_ms"`
 	BlockExecutionTaskCount        int   `json:"block_execution_task_count"`
@@ -735,6 +739,12 @@ func makeProgressSnapshot(terminal int, statuses []map[string]any, heights map[s
 		result.Reserved += number(status["reserved_tx_count"])
 		result.Pending += number(status["pending_commit_count"]) + number(status["pending_future_block_count"]) + number(status["pending_cross_shard_count"]) + number(status["pending_state_delta_count"]) + number(status["pending_state_delta_key_count"]) + number(status["ready_state_delta_count"])
 		result.ProposalInFlight = result.ProposalInFlight || boolValue(status["proposal_in_flight"])
+		result.ProposalPlanningInFlight = result.ProposalPlanningInFlight || boolValue(status["proposal_planning_in_flight"])
+		if value := int64(number(status["proposal_planning_progress_at_ms"])); value > result.ProposalPlanningProgressAtMS {
+			result.ProposalPlanningProgressAtMS = value
+		}
+		result.ProposalPlanningWorkUnits += number(status["proposal_planning_work_units"])
+		result.ProposalPlanningDetailCount += number(status["proposal_planning_detail_count"])
 		if value := number(status["block_execution_height"]); value > result.BlockExecutionHeight {
 			result.BlockExecutionHeight = value
 		}
@@ -758,6 +768,7 @@ func progressChanged(previous, current progressSnapshot) bool {
 		current.Mempool < previous.Mempool ||
 		current.Reserved < previous.Reserved ||
 		current.Pending < previous.Pending ||
+		current.ProposalPlanningProgressAtMS > previous.ProposalPlanningProgressAtMS ||
 		current.BlockExecutionHeight > previous.BlockExecutionHeight ||
 		(current.BlockExecutionHeight == previous.BlockExecutionHeight && current.BlockExecutionTaskCount > previous.BlockExecutionTaskCount) ||
 		(current.BlockExecutionHeight == previous.BlockExecutionHeight && current.BlockValidationTaskCount > previous.BlockValidationTaskCount) ||

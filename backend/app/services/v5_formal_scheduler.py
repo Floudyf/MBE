@@ -17,6 +17,7 @@ from backend.app.services import v5_formal_artifact_storage, v5_real_cluster_run
 from backend.app.services.v5_formal_run_store import children, group_dir, read_group, write_attempt, write_child, write_group
 from backend.app.services.v5_fairness_validator import validate as validate_fairness, write_artifacts as write_fairness_artifacts
 from backend.app.services.v5_metric_extractor import extract as extract_metrics
+from backend.app.services.v5_serial_order_oracle import evaluate as evaluate_serial_order_oracle
 from backend.app.services.v5_compatibility_engine import V5CompatibilityError, _cross_shard_fault_unsupported
 from backend.app.services.v5_plugin_manifest_store import STORE
 from backend.app.services.v5_paper_exporter import export as export_paper
@@ -465,27 +466,38 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
 
 
 def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[str, object]:
-    if method_id == "hash_cg" or snapshot.get("block_executor") == "cg_block_executor":
+    if method_id == "hash_fabricpp_cg" or snapshot.get("block_executor") == "fabricpp_cg_block_executor":
         return {
-            "comparison_semantics_class": "nezha_cg_johnson_abortable_v2",
-            "state_access_semantics": "stateful_local_nezha_cg_johnson_abortable",
+            "comparison_semantics_class": "fabricpp_cg_cycle_abortable_v1",
+            "state_access_semantics": "stateful_local_fabricpp_sigmod2019_cycle_abortable",
             "state_home_mapping_policy": "execution_shard_local_namespace",
             "remote_fetch_policy": "none",
             "remote_writeback_policy": "none",
-            "proof_policy": "consensus_bound_nezha_cg_johnson_plan_digest",
+            "proof_policy": "consensus_bound_fabricpp_sigmod2019_plan_digest",
             "legacy_cross_shard_protocol": True,
-            "measurement_boundary": "client_submit_to_cg_terminal",
+            "measurement_boundary": "client_submit_to_fabricpp_cg_terminal",
+        }
+    if method_id == "hash_cg" or snapshot.get("block_executor") == "cg_block_executor":
+        return {
+            "comparison_semantics_class": "nezha_cg_johnson_retryable_v4",
+            "state_access_semantics": "stateful_local_nezha_cg_johnson_retryable",
+            "state_home_mapping_policy": "execution_shard_local_namespace",
+            "remote_fetch_policy": "none",
+            "remote_writeback_policy": "none",
+            "proof_policy": "consensus_bound_nezha_cg_retry_projection_v4",
+            "legacy_cross_shard_protocol": True,
+            "measurement_boundary": "client_submit_to_nezha_cg_eventual_finality",
         }
     if method_id == "hash_acg" or snapshot.get("block_executor") == "acg_block_executor":
         return {
-            "comparison_semantics_class": "nezha_acg_hs_abortable_v1",
-            "state_access_semantics": "stateful_local_nezha_hs_abortable",
+            "comparison_semantics_class": "nezha_acg_hs_retryable_v2",
+            "state_access_semantics": "stateful_local_nezha_hs_retryable",
             "state_home_mapping_policy": "execution_shard_local_namespace",
             "remote_fetch_policy": "none",
             "remote_writeback_policy": "none",
-            "proof_policy": "consensus_bound_nezha_hs_plan_digest",
+            "proof_policy": "consensus_bound_nezha_hs_retry_projection_v2",
             "legacy_cross_shard_protocol": True,
-            "measurement_boundary": "client_submit_to_nezha_terminal",
+            "measurement_boundary": "client_submit_to_nezha_eventual_finality",
         }
     if method_id == "hash_bsx" or snapshot.get("block_executor") == "bsx_block_executor":
         return {
@@ -784,6 +796,13 @@ def _run_worker(group_id: str) -> None:
                 else:
                     result_dir = _physical_result_dir(result)
                     metrics = extract_metrics(result_dir, method_id=row.get("method_config_id"))
+                    serial_oracle = evaluate_serial_order_oracle(
+                        result_dir,
+                        result_summary=result.get("summary") if isinstance(result.get("summary"), dict) else {},
+                    )
+                    metrics |= serial_oracle
+                    if isinstance(result.get("summary"), dict):
+                        result["summary"] = {**result["summary"], **serial_oracle}
                 child.update(
                     {
                         "status": result["status"],
@@ -1012,6 +1031,9 @@ def finalize(group_id: str) -> dict:
     group["within_semantic_cohort_state_equivalence_valid"] = equivalence.get(
         "within_semantic_cohort_state_equivalence_valid"
     )
+    group["cross_method_serial_order_oracle_valid"] = equivalence.get(
+        "cross_method_serial_order_oracle_valid"
+    )
     group["performance_comparison_valid"] = bool(
         group.get("fairness_validation", {}).get(
             "performance_comparison_valid", False
@@ -1040,6 +1062,36 @@ def finalize(group_id: str) -> dict:
     _try_build_bundle(directory, group)
 
     return group
+
+
+def _worker_truth_reasons(item: dict) -> list[str]:
+    method_id = str(item.get("method_config_id") or "")
+    metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+    topology = item.get("topology_point") if isinstance(item.get("topology_point"), dict) else {}
+    requested = topology.get("worker_count")
+    if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
+        return []
+
+    effective = metrics.get("configured_worker_count", metrics.get("worker_count"))
+    reasons: list[str] = []
+    if isinstance(effective, bool) or not isinstance(effective, (int, float)) or int(effective) != requested:
+        reasons.append("effective_worker_not_equal_requested")
+
+    if method_id == "hash_cg":
+        execution_worker = metrics.get("cg_execution_worker_count")
+        planning_worker = metrics.get("cg_planning_worker_count")
+        if isinstance(execution_worker, bool) or not isinstance(execution_worker, (int, float)) or int(execution_worker) != requested:
+            reasons.append("cg_execution_worker_not_equal_requested")
+        if isinstance(planning_worker, bool) or not isinstance(planning_worker, (int, float)) or int(planning_worker) != 1:
+            reasons.append("cg_planning_worker_not_one")
+        maximum_parallel = metrics.get("maximum_parallel_width")
+        if (
+            isinstance(maximum_parallel, (int, float))
+            and not isinstance(maximum_parallel, bool)
+            and int(maximum_parallel) > requested
+        ):
+            reasons.append("cg_parallel_width_exceeds_execution_workers")
+    return reasons
 
 
 def _state_equivalence_individual_reasons(item: dict) -> list[str]:
@@ -1074,14 +1126,17 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
     abort_count = number("abort_count")
     nezha_hs_abort_count = number("nezha_hs_abort_count")
     cg_cycle_abort_count = number("cg_cycle_abort_count")
+    fabricpp_cycle_abort_count = number("fabricpp_cycle_abort_count")
     semantic_class = str(item.get("comparison_semantics_class") or "")
-    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2"}
-    semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2"} else None
+    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3", "fabricpp_cg_cycle_abortable_v1"}
+    semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3"} else None
+    if semantic_class == "fabricpp_cg_cycle_abortable_v1":
+        semantic_abort_count = fabricpp_cycle_abort_count
     if submitted is None or terminal != submitted:
         reasons.append("terminal_not_equal_submitted")
-    # Nezha's HS may abort transactions as explicit terminal failed no-ops.
-    # For that semantic cohort, successful finalization plus HS aborts must
-    # account exactly for every terminal transaction.
+    # Legacy abortable cohorts may represent algorithmic aborts as terminal
+    # failed no-ops. Retryable CG/ACG classes intentionally stay outside this
+    # set and therefore require finalized == submitted.
     if terminal_abort_semantics:
         if finalized is None or abort_count is None or semantic_abort_count is None:
             reasons.append("terminal_abort_accounting_missing")
@@ -1089,7 +1144,11 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
             if terminal is None or finalized + abort_count != terminal:
                 reasons.append("finalized_plus_abort_not_equal_terminal")
             if abort_count != semantic_abort_count:
-                reasons.append("semantic_abort_count_mismatch")
+                reasons.append(
+                    "nezha_hs_abort_count_mismatch"
+                    if semantic_class == "nezha_acg_hs_abortable_v1"
+                    else "semantic_abort_count_mismatch"
+                )
     elif submitted is None or finalized != submitted:
         reasons.append("finalized_not_equal_submitted")
     if incomplete != 0:
@@ -1098,7 +1157,8 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
         reasons.append("cross_shard_failed_not_zero")
     if boolean("lifecycle_complete") is not True:
         reasons.append("lifecycle_complete_not_true")
-    return reasons
+    reasons.extend(_worker_truth_reasons(item))
+    return list(dict.fromkeys(reasons))
 
 
 def _state_equivalence_family(item: dict) -> str:
@@ -1219,17 +1279,114 @@ def _build_stateless_reference_report(
     }
 
 
+def _build_external_performance_contract_reports(items: list[dict]) -> tuple[list[dict], bool]:
+    groups: dict[str, list[dict]] = {}
+    for item in items:
+        if item.get("status") != "completed" or item.get("individual_result_valid") is not True:
+            continue
+        groups.setdefault(str(item.get("comparison_group_id") or ""), []).append(item)
+
+    reports: list[dict] = []
+    comparable_flags: list[bool] = []
+    for comparison_group_id, group_items in sorted(groups.items()):
+        semantic_classes = sorted({str(item.get("comparison_semantics_class") or "custom_unknown") for item in group_items})
+        if len(semantic_classes) <= 1:
+            continue
+        contract_classes = sorted({str(item.get("performance_contract_class") or "unsupported") for item in group_items})
+        method_ids = sorted({str(item.get("method_config_id") or "") for item in group_items})
+        contract_supported = (
+            len(contract_classes) == 1
+            and contract_classes[0] == "single_shard_stateful_eventual_completion_v1"
+            and len(method_ids) >= 2
+        )
+
+        missing: dict[str, list[str]] = {}
+        mismatches: dict[str, list[str]] = {}
+        oracle_failures: dict[str, list[str]] = {}
+
+        # The common external contract requires the same initial state and the
+        # same logical workload/access semantics. It intentionally does NOT
+        # require different serializable schedulers to choose the same final
+        # state digest when the transaction semantics are order-sensitive.
+        for field in ("initial_state_digest", "serial_order_replay_input_digest"):
+            missing_ids = [
+                str(item.get("child_run_id") or "")
+                for item in group_items
+                if not str(item.get(field) or "")
+            ]
+            if missing_ids:
+                missing[field] = missing_ids
+                continue
+            values = sorted({str(item.get(field)) for item in group_items})
+            if len(values) != 1:
+                mismatches[field] = values
+
+        for item in group_items:
+            child_id = str(item.get("child_run_id") or "")
+            if item.get("serial_order_replay_equivalent") is not True:
+                oracle_failures[child_id] = list(item.get("serial_order_replay_blockers") or ["serial_order_replay_not_equivalent"])
+
+        passed = contract_supported and not missing and not mismatches and not oracle_failures
+        comparable_flags.append(passed)
+        observed_final_state_digests = sorted({
+            str(item.get("global_final_state_digest") or "")
+            for item in group_items
+            if str(item.get("global_final_state_digest") or "")
+        })
+        observed_business_state_digests = sorted({
+            str(item.get("serial_order_actual_global_business_state_digest") or "")
+            for item in group_items
+            if str(item.get("serial_order_actual_global_business_state_digest") or "")
+        })
+        reports.append({
+            "comparison_group_id": comparison_group_id,
+            "performance_contract_class": contract_classes[0] if len(contract_classes) == 1 else "mixed",
+            "semantic_classes": semantic_classes,
+            "method_config_ids": method_ids,
+            "status": "passed" if passed else "failed",
+            "required_evidence": [
+                "initial_state_digest",
+                "serial_order_replay_input_digest",
+                "serial_order_replay_equivalent",
+            ],
+            "missing_evidence": missing,
+            "mismatched_evidence": mismatches,
+            "serial_order_oracle_failures": oracle_failures,
+            "cross_method_serial_order_oracle_valid": passed,
+            "final_state_digest_equality_required": False,
+            "observed_final_state_digests": observed_final_state_digests,
+            "observed_global_business_state_digests": observed_business_state_digests,
+            "cross_method_final_state_digest_equal": len(observed_final_state_digests) <= 1,
+            # Kept as a diagnostic only. Different legal serializations can
+            # legitimately produce different order-sensitive final values.
+            "cross_method_logical_state_equivalent": len(observed_final_state_digests) <= 1,
+        })
+    return reports, bool(comparable_flags) and all(comparable_flags)
+
+
 def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
     cohorts: dict[tuple[str, str], list[dict]] = {}
     enriched: list[dict] = []
     for item in items:
         summary = ((item.get("result") or {}).get("summary") or {})
         validity_reasons = _state_equivalence_individual_reasons(item)
+        metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
         next_item = {
             **item,
             "initial_state_digest": summary.get("initial_state_digest", ""),
             "state_home_mapping_digest": summary.get("state_home_mapping_digest", ""),
             "global_final_state_digest": summary.get("global_final_state_digest", ""),
+            "serial_order_oracle_status": metrics.get("serial_order_oracle_status", summary.get("serial_order_oracle_status")),
+            "serial_order_replay_equivalent": metrics.get("serial_order_replay_equivalent", summary.get("serial_order_replay_equivalent")),
+            "serial_order_replay_blockers": metrics.get("serial_order_replay_blockers", summary.get("serial_order_replay_blockers", [])),
+            "serial_order_replay_input_digest": metrics.get("serial_order_replay_input_digest", summary.get("serial_order_replay_input_digest", "")),
+            "serial_order_replay_commit_order_digest": metrics.get("serial_order_replay_commit_order_digest", summary.get("serial_order_replay_commit_order_digest", "")),
+            "serial_order_replay_transaction_count": metrics.get("serial_order_replay_transaction_count", summary.get("serial_order_replay_transaction_count")),
+            "serial_order_replay_business_state_digest": metrics.get("serial_order_replay_business_state_digest", summary.get("serial_order_replay_business_state_digest", "")),
+            "serial_order_actual_business_state_digest": metrics.get("serial_order_actual_business_state_digest", summary.get("serial_order_actual_business_state_digest", "")),
+            "serial_order_replay_global_business_state_digest": metrics.get("serial_order_replay_global_business_state_digest", summary.get("serial_order_replay_global_business_state_digest", "")),
+            "serial_order_actual_global_business_state_digest": metrics.get("serial_order_actual_global_business_state_digest", summary.get("serial_order_actual_global_business_state_digest", "")),
+            "serial_order_replay_replica_order_consistent": metrics.get("serial_order_replay_replica_order_consistent", summary.get("serial_order_replay_replica_order_consistent")),
             "individual_result_valid": not validity_reasons,
             "individual_result_validity_reasons": validity_reasons,
         }
@@ -1375,10 +1532,33 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
         str(report.get("comparison_semantics_class") or "custom_unknown")
         for report in comparable_reports
     }
+    external_contract_reports, external_contract_valid = _build_external_performance_contract_reports(enriched)
+    external_report_by_group = {
+        str(report.get("comparison_group_id") or ""): report
+        for report in external_contract_reports
+    }
+    for item in enriched:
+        report = external_report_by_group.get(str(item.get("comparison_group_id") or ""))
+        if report is None:
+            continue
+        allowed = report.get("status") == "passed"
+        item["external_performance_contract_valid"] = allowed
+        item["cross_method_serial_order_oracle_valid"] = report.get("cross_method_serial_order_oracle_valid") is True
+        item["direct_cross_semantic_performance_comparison_valid"] = allowed
+        item["performance_comparison_valid"] = allowed
+        if allowed and report.get("cross_method_final_state_digest_equal") is False:
+            item["comparison_warning"] = (
+                "internal execution semantics choose different legal serial orders; "
+                "cross-method performance comparison is valid because every method "
+                "matches its own observed-order serial replay under the common external contract"
+            )
+
     direct_cross_semantic_valid = (
         within_semantic_valid
-        and len(semantic_classes) == 1
-        and "custom_unknown" not in semantic_classes
+        and (
+            (len(semantic_classes) == 1 and "custom_unknown" not in semantic_classes)
+            or external_contract_valid
+        )
     )
     return enriched, {
         "passed": within_semantic_valid,
@@ -1398,6 +1578,9 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
         "cohort_count": len(reports),
         "comparable_cohort_count": len(comparable_reports),
         "cohorts": reports,
+        "external_performance_contract_reports": external_contract_reports,
+        "external_performance_contract_valid": external_contract_valid,
+        "cross_method_serial_order_oracle_valid": external_contract_valid,
     }
 
 
@@ -1421,15 +1604,36 @@ def _write_state_equivalence_artifacts(root: Path, result: dict) -> None:
         "missing_digests",
         "mismatched_digests",
         "pairwise_logical_state_equivalent",
+        "performance_contract_class",
+        "semantic_classes",
+        "method_config_ids",
+        "required_evidence",
+        "missing_evidence",
+        "mismatched_evidence",
+        "serial_order_oracle_failures",
+        "cross_method_serial_order_oracle_valid",
+        "final_state_digest_equality_required",
+        "observed_final_state_digests",
+        "observed_global_business_state_digests",
+        "cross_method_final_state_digest_equal",
     ]
     import csv
+
+    rows = list(result.get("cohorts", []))
+    for report in result.get("external_performance_contract_reports", []):
+        rows.append({
+            **report,
+            "comparison_semantics_class": "cross_semantic_external_contract",
+            "equivalence_scope": "external_performance_contract",
+            "method_family": "cross_method",
+        })
 
     with (root / "state_equivalence_validation.csv").open(
         "w", newline="", encoding="utf-8"
     ) as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
-        for row in result.get("cohorts", []):
+        for row in rows:
             writer.writerow(
                 {
                     key: json.dumps(row.get(key), sort_keys=True)
@@ -1554,7 +1758,11 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
             config["migrated_default"] = True
         config |= dict(config_overrides.get(item.category, {}))
         if item.category == "block_executor" and worker_count_override is not None:
-            config["worker_count"] = 1 if plugin_id == "serial_block_executor" else worker_count_override
+            # worker_count is the MBE execution-resource dimension. Nezha CG's
+            # planner remains fixed at one planning worker, while its MBE
+            # dependency-ready executor participates in the same worker sweep as
+            # the other parallel-capable baselines.
+            config["worker_count"] = 1 if plugin_id in {"serial_block_executor", "fabricpp_cg_block_executor"} else worker_count_override
         next_selections.append(V5PluginSelection(category=item.category, plugin_id=plugin_id, config=config))
     spec.plugin_selections = next_selections
     spec.saved_config_id = plan.saved_config_id or spec.saved_config_id

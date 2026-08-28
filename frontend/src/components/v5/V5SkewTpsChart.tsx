@@ -145,7 +145,7 @@ function shortMethodName(methodId: string, value: string): string {
   if (id === "hash_block_stm") return "Block-STM";
   if (id === "hash_aria") return "Aria";
   if (id === "hash_groundhog") return "Groundhog";
-  if (id === "hash_cg") return "CG";
+  if (id === "hash_cg") return "CG/Nezha";
   if (id === "hash_acg") return "ACG/Nezha";
   if (id === "hash_bsx") return "BSX";
   if (id === "hash_batch_si") return "Batch-SI";

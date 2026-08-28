@@ -28,21 +28,43 @@ const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; met
     ],
   },
   {
-    match: (id) => id === "hash_cg" || id.includes("_cg"), title: "CG",
+    match: (id) => id === "hash_cg", title: "CG / Nezha",
     metrics: [
-      { key: "dependency_edge_count", label: "依赖边数", help: "CG 冲突依赖图边数。" },
-      { key: "dependency_edges_per_tx", label: "每交易依赖边数", help: "依赖边数 ÷ 已提交交易数。" },
-      { key: "pairwise_conflict_check_count", label: "冲突检查次数", help: "CG 两两冲突检查原始计数。" },
-      { key: "conflict_checks_per_tx", label: "每交易冲突检查次数", help: "两两冲突检查次数 ÷ 已提交交易数。" },
-      { key: "wave_count", label: "Wave 数", help: "依赖图分层后的 Wave 总数。" },
-      { key: "maximum_wave_width", label: "最大 Wave 宽度", help: "单个 Wave 的最大交易宽度。" },
+      { key: "cg_candidate_transaction_count", label: "候选出现次数", help: "所有 CG 规划尝试中的候选事务出现次数；Deferred 事务重试后会再次成为候选。" },
+      { key: "cg_cycle_abort_decision_count", label: "周期延期决策次数", help: "JohnsonCE/BreakCycles 作出的 victim 延期决策总次数；这是尝试级证据，不是永久失败交易数。" },
+      { key: "cg_cycle_attempt_abort_rate", label: "尝试级延期率", help: "周期延期决策次数 ÷ 候选出现次数。" },
+      { key: "cg_cycle_deferred_retry_count", label: "Deferred 重试事件数", help: "cycle victim 被放回 FIFO mempool 等待后续区块的事件次数。" },
+      { key: "cg_cycle_unique_deferred_tx_count", label: "唯一 Deferred 交易数", help: "至少经历过一次 CG Deferred 的唯一逻辑交易数。" },
+      { key: "cg_cycle_unique_deferred_rate", label: "唯一 Deferred 比例", help: "唯一 Deferred 逻辑交易数 ÷ submitted unique。" },
+      { key: "dependency_edge_count", label: "冲突弧数", help: "Nezha NewBuildConflictGraph 邻接多重图弧数。" },
+      { key: "pairwise_conflict_check_count", label: "候选交易对数", help: "CG 候选交易对检查规模。" },
+      { key: "cg_planning_worker_count", label: "规划线程数", help: "传统 CG 的构图 / Tarjan / JohnsonCE / BreakCycles 路径固定为 1。" },
+      { key: "cg_execution_worker_count", label: "执行工作线程数", help: "Figure 13 扫描的真实执行 Worker 数（2/4/8/16/32）；不改变 CG 规划算法。" },
+      { key: "cg_worker_truth_valid", label: "线程证据一致", help: "请求 Worker、执行器实际 Worker、规划 Worker=1 及观测并行宽度的交叉验证结果。" },
+      { key: "literature_plan_parse_ms", label: "计划解析耗时", unit: "ms", help: "各提交区块执行器解析共识绑定 CG 计划的累计耗时。" },
+      { key: "literature_plan_verify_ms", label: "计划验证耗时", unit: "ms", help: "各提交区块验证共识绑定 CG 计划的累计耗时。" },
+      { key: "cg_validator_mode", label: "CG 验证模式", help: "运行时使用的 CG 计划验证模式。" },
+      { key: "cg_johnson_cycle_budget", label: "Johnson cycle budget", help: "单次 SCC 精确 Johnson 枚举允许的 cycle occurrence 上限。" },
+      { key: "cg_johnson_traversal_work_budget", label: "Johnson traversal budget", help: "单次 Johnson 调用的确定性 traversal work 上限。" },
+      { key: "cg_johnson_plan_work_budget", label: "Johnson plan budget", help: "整个 CG 规划阶段的确定性 Johnson traversal work 上限。" },
+      { key: "cg_cycle_space_policy", label: "周期空间策略", help: "精确 Johnson 与确定性 bounded fallback 的运行策略标识。" },
+      { key: "cg_large_rmw_clique_policy", label: "大 RMW 团策略", help: "高冲突同键 RMW clique 的确定性规约策略。" },
+      { key: "cg_large_rmw_clique_threshold", label: "大 RMW 团阈值", help: "触发大 RMW clique 规约的阈值。" },
+      { key: "cg_cycle_retry_lifecycle", label: "周期 victim 生命周期", help: "应为 FIFO deferred-to-later-block；victim 不作为终态失败交易。" },
+      { key: "cg_reference_commit_order_count", label: "参考提交序列累计长度", help: "各区块 Nezha BasicTopologicalSort 参考 commitOrder 的累计交易数。" },
+      { key: "wave_count", label: "执行前沿数", help: "残余无环依赖图派生的 dependency-ready frontiers 数。" },
+      { key: "maximum_wave_width", label: "最大执行前沿宽度", help: "可并发 ready-set 的最大宽度；实际并行度仍受执行 Worker 限制。" },
     ],
   },
   {
     match: (id) => id.includes("acg"), title: "ACG / Nezha",
     metrics: [
-      { key: "nezha_hs_abort_count", label: "HS 中止数", help: "Nezha/ACG HS 合法终态中止数。" },
-      { key: "nezha_hs_abort_rate", label: "HS 中止率", help: "HS 中止数 ÷ 已提交逻辑交易数。" },
+      { key: "nezha_hs_abort_decision_count", label: "HS 中止决策次数", help: "Nezha HS 在各次候选尝试中作出的中止决策总次数；同一逻辑交易可出现多次。" },
+      { key: "nezha_hs_candidate_transaction_count", label: "候选出现次数", help: "所有 ACG first-pass 候选出现次数，包含后续重试再次成为候选的次数。" },
+      { key: "nezha_hs_attempt_abort_rate", label: "HS 尝试中止率", help: "HS 中止决策次数 ÷ 候选出现次数，对应算法尝试层面的 abort 口径。" },
+      { key: "nezha_hs_deferred_retry_count", label: "Deferred 重试次数", help: "HS victim 被放回 FIFO mempool 等待后续区块的事件次数。" },
+      { key: "nezha_hs_unique_deferred_tx_count", label: "唯一 Deferred 交易数", help: "至少经历过一次 HS Deferred 的唯一逻辑交易数。" },
+      { key: "nezha_hs_unique_deferred_rate", label: "唯一 Deferred 比例", help: "唯一 Deferred 交易数 ÷ submitted unique；与尝试中止率不是同一口径。" },
       { key: "dependency_edge_count", label: "依赖边数", help: "ACG 依赖边原始计数。" },
       { key: "dependency_edges_per_tx", label: "每交易依赖边数", help: "依赖边数 ÷ 已提交交易数。" },
       { key: "wave_count", label: "Wave 数", help: "ACG Wave 数。" },
@@ -193,14 +215,14 @@ function shortMethodName(methodId: string, value: string): string {
   if (id === "hash_block_stm") return "Block-STM";
   if (id === "hash_aria") return "Aria";
   if (id === "hash_groundhog") return "Groundhog";
-  if (id === "hash_cg") return "CG";
+  if (id === "hash_cg") return "CG/Nezha";
   if (id === "hash_acg") return "ACG/Nezha";
   if (id === "hash_bsx") return "BSX";
   if (id === "hash_batch_si") return "Batch-SI";
   const lower = value.toLowerCase();
   if (lower.includes("address conflict graph")) return "ACG/Nezha";
   if (lower.includes("batch-schedule-execute")) return "BSX";
-  if (lower.includes("conflict graph") && !lower.includes("address")) return "CG";
+  if (lower.includes("conflict graph") && !lower.includes("address")) return "CG/Nezha";
   if (lower.includes("block-stm")) return "Block-STM";
   if (lower.includes("batch-si")) return "Batch-SI";
   if (lower.includes("groundhog")) return "Groundhog";

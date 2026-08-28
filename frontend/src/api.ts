@@ -1353,6 +1353,19 @@ export type V5FormalMatrixRow = {
   direct_cross_semantic_performance_comparison_valid?: boolean;
   within_semantic_cohort_state_equivalence_valid?: boolean | null;
   pairwise_logical_state_equivalent?: boolean | null;
+  cross_method_serial_order_oracle_valid?: boolean | null;
+  external_performance_contract_valid?: boolean | null;
+  serial_order_oracle_status?: string;
+  serial_order_replay_equivalent?: boolean | null;
+  serial_order_replay_blockers?: string[];
+  serial_order_replay_input_digest?: string;
+  serial_order_replay_commit_order_digest?: string;
+  serial_order_replay_transaction_count?: number;
+  serial_order_replay_business_state_digest?: string;
+  serial_order_actual_business_state_digest?: string;
+  serial_order_replay_global_business_state_digest?: string;
+  serial_order_actual_global_business_state_digest?: string;
+  serial_order_replay_replica_order_consistent?: boolean | null;
   initial_state_digest?: string;
   state_home_mapping_digest?: string;
   global_final_state_digest?: string;
@@ -1449,12 +1462,16 @@ export type V5FormalRunGroup = {
   direct_cross_semantic_performance_comparison_valid?: boolean;
   within_semantic_cohort_state_equivalence_valid?: boolean | null;
   pairwise_logical_state_equivalent?: boolean | null;
+  cross_method_serial_order_oracle_valid?: boolean | null;
   fairness_validation?: { passed?: boolean; performance_comparison_valid?: boolean; direct_cross_semantic_performance_comparison_valid?: boolean; incomparable_groups?: Array<Record<string, unknown>>; semantic_classes?: string[] };
   state_equivalence_validation?: {
     passed?: boolean;
     performance_comparison_valid?: boolean;
     within_semantic_cohort_state_equivalence_valid?: boolean;
     pairwise_logical_state_equivalent?: boolean | null;
+    cross_method_serial_order_oracle_valid?: boolean | null;
+    external_performance_contract_valid?: boolean | null;
+    external_performance_contract_reports?: Array<Record<string, unknown>>;
     comparable_cohort_count?: number;
     cohorts?: Array<Record<string, unknown>>;
   };

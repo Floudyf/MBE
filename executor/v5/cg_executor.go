@@ -35,7 +35,7 @@ type cgWaveResult struct {
 
 // executeCGPlan is intentionally owned by the CG implementation. CG, ACG and
 // BSX no longer share a runtime executor; future changes to one algorithm's
-// wave/materialization semantics cannot silently alter the other two.
+// execution-frontier/materialization semantics cannot silently alter the other two.
 func executeCGPlan(ctx context.Context, block realblock.Block, base map[string]string, plan literatureGraphPlan, workerCount int) (BlockExecutionResult, error) {
 	return executeCGPlanWithCommitment(ctx, block, base, nil, plan, workerCount)
 }
@@ -115,21 +115,9 @@ func executeCGPlanWithCommitment(ctx context.Context, block realblock.Block, bas
 		}
 	}
 
-	// Cycle victims are excluded from state materialization and represented as
-	// deterministic failed no-op terminal outcomes. This preserves one terminal
-	// lifecycle result per admitted logical transaction while keeping the abort
-	// visible to throughput/abort-rate analysis.
-	for _, id := range plan.AbortedTransactionIDs {
-		item, ok := byID[id]
-		if !ok {
-			return BlockExecutionResult{}, fmt.Errorf("cg plan abort references unknown transaction %s", id)
-		}
-		receipt := execution.Receipt{TxID: item.TxID, BlockHash: block.BlockHash, Height: block.Height, Success: false, Error: "cg_cycle_aborted", ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...), StateRootAfterTx: commitment.Root()}
-		delta := execution.TxDelta{TxID: item.TxID, OriginalIndex: indexByID[id], WriteSet: map[string]string{}, Receipt: receipt, Success: false, Error: receipt.Error}
-		allReceipts = append(allReceipts, receipt)
-		allDeltas = append(allDeltas, delta)
-		result.FailedTxs++
-	}
+	// Cycle victims are not part of this accepted block. The scheduler has
+	// released them back to the FIFO mempool for a later retry, so no terminal
+	// failed receipt or state delta is materialized here.
 	result.Receipts = allReceipts
 	result.TxDeltas = allDeltas
 	result.StateRootAfter = commitment.Root()
@@ -172,6 +160,10 @@ func executeCGPlanWithCommitment(ctx context.Context, block realblock.Block, bas
 		"sorting_ms":                     plan.Metrics.SortingMS,
 		"cg_candidate_transaction_count": plan.Metrics.TransactionCount,
 		"cg_cycle_abort_count":           plan.Metrics.AbortCount,
+		"cg_cycle_abort_decision_count":  plan.Metrics.AbortCount,
+		"cg_cycle_deferred_retry_count":  plan.Metrics.AbortCount,
+		"deferred_transaction_count":     plan.Metrics.AbortCount,
+		"cg_accepted_transaction_count":  plan.Metrics.TransactionCount - plan.Metrics.AbortCount,
 		"cg_cycle_resolution_count":      plan.Metrics.CycleResolutionCount,
 		"cg_cycle_abort_rate": func() float64 {
 			if plan.Metrics.TransactionCount == 0 {
@@ -180,7 +172,19 @@ func executeCGPlanWithCommitment(ctx context.Context, block realblock.Block, bas
 			return float64(plan.Metrics.AbortCount) / float64(plan.Metrics.TransactionCount)
 		}(),
 		"cg_planning_worker_count":         plan.Metrics.PlanningWorkerCount,
+		"cg_execution_worker_count":        workerCount,
 		"cg_validator_mode":                plan.ValidatorMode,
+		"cg_execution_adaptation_mode":     cgExecutionAdaptationMode,
+		"cg_cycle_space_policy":            cgBoundedJohnsonResolutionMode,
+		"cg_large_rmw_clique_policy":       cgLargeRMWCliqueReductionMode,
+		"cg_johnson_cycle_budget":          cgJohnsonCycleOccurrenceBudget,
+		"cg_johnson_traversal_work_budget": cgJohnsonTraversalWorkBudget,
+		"cg_johnson_plan_work_budget":      cgJohnsonPlanTraversalWorkBudget,
+		"cg_cycle_retry_lifecycle":         cgRetryLifecycleMode,
+		"cg_large_rmw_clique_threshold":    cgIntrinsicRMWCliqueGuardSize,
+		"cg_reference_commit_order_count":  len(plan.SerializationOrder),
+		"cg_execution_frontier_count":      len(plan.Waves),
+		"cg_execution_frontier_max_width":  plan.Metrics.MaximumWaveWidth,
 		"worker_pool_create_count":         1,
 		"worker_pool_setup_ms":             poolSetupDuration.Milliseconds(),
 		"wave_barrier_count":               len(plan.Waves),
@@ -196,11 +200,9 @@ func executeCGPlanWithCommitment(ctx context.Context, block realblock.Block, bas
 	}
 	businessAttempts := make([]BusinessExecutionAttempt, 0, len(allDeltas))
 	for _, delta := range allDeltas {
-		reason := "literature_graph_wave_execution"
-		if delta.Error == "cg_cycle_aborted" {
-			reason = "cg_cycle_aborted"
-		}
-		businessAttempts = append(businessAttempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: delta.TxID, Track: cgBlockExecutorID, Attempt: 1, Reason: reason, Success: delta.Success, FinalCompletion: true})
+		// Only accepted transactions execute in this block. Deferred cycle victims
+		// re-enter a later proposal and become terminal only when eventually executed.
+		businessAttempts = append(businessAttempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: delta.TxID, Track: cgBlockExecutorID, Attempt: 1, Reason: "mbe_dependency_ready_execution", Success: delta.Success, FinalCompletion: true})
 	}
 	return BlockExecutionResult{
 		ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: plan.PlanDigest,

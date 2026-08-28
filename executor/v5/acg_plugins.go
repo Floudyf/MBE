@@ -14,10 +14,14 @@ const (
 	acgExecutionID     = "acg_execution"
 	acgSchedulerID     = "acg_scheduler"
 	acgBlockExecutorID = "acg_block_executor"
-	// This profile follows the authors' published Nezha reference implementation:
-	// CreateGraph -> QueuesSort (address-rank division) -> DeSS hierarchical sorting.
-	acgPlanAlgorithmID   = "nezha_acg_hs_official_reference_v1"
-	nezhaInitialSequence = 10
+	// acgPlanAlgorithmID identifies the unmodified Nezha CreateGraph -> QueuesSort
+	// -> DeSS graph/HS algorithm. acgConsensusPlanAlgorithmID is an MBE-only
+	// lifecycle wrapper that consensus-binds the first-pass HS decision while
+	// deferring HS-aborted transactions to the existing FIFO mempool retry path.
+	acgPlanAlgorithmID          = "nezha_acg_hs_official_reference_v1"
+	acgConsensusPlanAlgorithmID = "nezha_acg_hs_retry_consensus_v2"
+	acgConsensusPlanVersion     = "mbe_nezha_acg_retry_plan_v2"
+	nezhaInitialSequence        = 10
 )
 
 type acgExecution struct{ basicPlugin }
@@ -34,33 +38,61 @@ func (p acgScheduler) Schedule(items []tx.SignedTransaction, _ ExecutionPlugin) 
 	return ScheduleResult{Ordered: append([]tx.SignedTransaction(nil), items...)}
 }
 func (p acgScheduler) PlanBlock(block realblock.Block) (ConsensusExecutionPlanningResult, error) {
-	plan, err := buildACGPlan(block)
+	// Run the Nezha algorithm exactly once on the original candidate set. The
+	// algorithmic HS abort decision is preserved in graphPlan; MBE changes only
+	// the experiment lifecycle of those victims from terminal failure to FIFO
+	// deferral/retry in a later block.
+	graphPlan, err := buildACGPlan(block)
 	if err != nil {
 		return ConsensusExecutionPlanningResult{}, err
 	}
-	raw, err := literatureMarshalPlan(plan)
+	accepted, deferred, err := splitACGFirstPassCandidates(block.TxList, graphPlan)
 	if err != nil {
 		return ConsensusExecutionPlanningResult{}, err
 	}
-	block.ExecutionPlan = &realblock.ExecutionPlanEnvelope{AlgorithmID: acgPlanAlgorithmID, PayloadDigest: stableTextDigest(string(raw)), PlanDigest: plan.PlanDigest, Payload: raw}
-	return ConsensusExecutionPlanningResult{Block: block}, nil
+	if len(block.TxList) > 0 && len(accepted) == 0 {
+		return ConsensusExecutionPlanningResult{}, fmt.Errorf("nezha acg planning deferred every candidate transaction")
+	}
+
+	block.TxList = accepted
+	block.TxIDs = transactionIDs(accepted)
+	consensusPlan := acgConsensusPlan{
+		Version:              acgConsensusPlanVersion,
+		GraphPlan:            graphPlan,
+		DeferredTransactions: append([]tx.SignedTransaction(nil), deferred...),
+	}
+	raw, err := marshalACGConsensusPlan(consensusPlan)
+	if err != nil {
+		return ConsensusExecutionPlanningResult{}, err
+	}
+	block.ExecutionPlan = &realblock.ExecutionPlanEnvelope{
+		AlgorithmID:   acgConsensusPlanAlgorithmID,
+		PayloadDigest: stableTextDigest(string(raw)),
+		PlanDigest:    graphPlan.PlanDigest,
+		Payload:       raw,
+	}
+	return ConsensusExecutionPlanningResult{
+		Block:    block,
+		Deferred: append([]tx.SignedTransaction(nil), deferred...),
+		Events:   acgFirstPassScheduleEvents(graphPlan),
+	}, nil
 }
 func (p acgScheduler) VerifyBlockPlan(block realblock.Block) error {
-	if block.ExecutionPlan == nil {
-		return fmt.Errorf("acg execution plan missing")
+	if block.ExecutionPlan == nil || block.ExecutionPlan.AlgorithmID != acgConsensusPlanAlgorithmID {
+		return fmt.Errorf("acg retry execution plan missing or has the wrong algorithm id")
 	}
-	plan, err := literatureParsePlan(block.ExecutionPlan.Payload, acgPlanAlgorithmID)
+	plan, err := parseACGConsensusPlan(block.ExecutionPlan.Payload)
 	if err != nil {
 		return err
 	}
-	return literatureVerifyPlan(block, plan, acgPlanAlgorithmID, buildACGPlan)
+	return verifyACGConsensusPlan(block, plan, true)
 }
 func (p acgBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
-	if input.Block.ExecutionPlan == nil {
-		return BlockExecutionResult{}, fmt.Errorf("acg execution plan missing")
+	if input.Block.ExecutionPlan == nil || input.Block.ExecutionPlan.AlgorithmID != acgConsensusPlanAlgorithmID {
+		return BlockExecutionResult{}, fmt.Errorf("acg retry execution plan missing before execution")
 	}
 	parseStarted := time.Now()
-	plan, err := literatureParsePlan(input.Block.ExecutionPlan.Payload, acgPlanAlgorithmID)
+	consensusPlan, err := parseACGConsensusPlan(input.Block.ExecutionPlan.Payload)
 	parseMS := time.Since(parseStarted).Milliseconds()
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -69,15 +101,15 @@ func (p acgBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecution
 	verifyMode := "full_recompute"
 	if input.ExecutionPlanVerified {
 		verifyMode = "preverified_projection"
-		err = verifyPreverifiedLiteratureGraphProjection(input.Block, plan, acgPlanAlgorithmID)
+		err = verifyACGConsensusPlan(input.Block, consensusPlan, false)
 	} else {
-		err = literatureVerifyPlan(input.Block, plan, acgPlanAlgorithmID, buildACGPlan)
+		err = verifyACGConsensusPlan(input.Block, consensusPlan, true)
 	}
 	verifyMS := time.Since(verifyStarted).Milliseconds()
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
-	result, err := executeACGPlanWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, configuredWorkerCount(p.config, input.WorkerCount))
+	result, err := executeACGPlanWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, consensusPlan.GraphPlan, configuredWorkerCount(p.config, input.WorkerCount))
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
@@ -88,7 +120,189 @@ func (p acgBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecution
 	result.ActualMetrics["literature_plan_verify_ms"] = verifyMS
 	result.ActualMetrics["literature_plan_verify_mode"] = verifyMode
 	result.ActualMetrics["literature_plan_preverified"] = input.ExecutionPlanVerified
+	result.ActualMetrics["nezha_hs_retry_consensus_plan_version"] = consensusPlan.Version
 	return result, nil
+}
+
+// acgConsensusPlan is deliberately ACG-owned. It keeps the unmodified Nezha HS
+// plan over the full first-pass candidate set and carries only the signed
+// transactions that HS rejected. Accepted transactions remain in the block body.
+// The wrapper is therefore sufficient for every validator to reconstruct and
+// verify the exact same first-pass CreateGraph -> QueuesSort -> DeSS decision.
+type acgConsensusPlan struct {
+	Version              string                 `json:"version"`
+	GraphPlan            literatureGraphPlan    `json:"graph_plan"`
+	DeferredTransactions []tx.SignedTransaction `json:"deferred_transactions,omitempty"`
+}
+
+func marshalACGConsensusPlan(plan acgConsensusPlan) ([]byte, error) {
+	return literatureJSONMarshal(plan)
+}
+
+func parseACGConsensusPlan(raw []byte) (acgConsensusPlan, error) {
+	var plan acgConsensusPlan
+	if err := literatureJSONUnmarshal(raw, &plan); err != nil {
+		return plan, fmt.Errorf("decode acg retry consensus plan: %w", err)
+	}
+	if plan.Version != acgConsensusPlanVersion {
+		return plan, fmt.Errorf("unsupported acg retry consensus plan version %q", plan.Version)
+	}
+	graphRaw, err := literatureMarshalPlan(plan.GraphPlan)
+	if err != nil {
+		return plan, err
+	}
+	parsed, err := literatureParsePlan(graphRaw, acgPlanAlgorithmID)
+	if err != nil {
+		return plan, err
+	}
+	plan.GraphPlan = parsed
+	return plan, nil
+}
+
+func splitACGFirstPassCandidates(items []tx.SignedTransaction, plan literatureGraphPlan) ([]tx.SignedTransaction, []tx.SignedTransaction, error) {
+	if !sameStringList(transactionIDs(items), plan.CandidateTransactionIDs) {
+		return nil, nil, fmt.Errorf("nezha acg first-pass candidate identity mismatch")
+	}
+	aborted := make(map[string]bool, len(plan.AbortedTransactionIDs))
+	for _, id := range plan.AbortedTransactionIDs {
+		if id == "" || aborted[id] {
+			return nil, nil, fmt.Errorf("nezha acg first-pass abort set contains duplicate/empty transaction id")
+		}
+		aborted[id] = true
+	}
+	accepted := make([]tx.SignedTransaction, 0, len(items)-len(aborted))
+	deferred := make([]tx.SignedTransaction, 0, len(aborted))
+	seenAborted := map[string]bool{}
+	for _, item := range items {
+		if aborted[item.TxID] {
+			deferred = append(deferred, item)
+			seenAborted[item.TxID] = true
+		} else {
+			accepted = append(accepted, item)
+		}
+	}
+	if len(seenAborted) != len(aborted) {
+		return nil, nil, fmt.Errorf("nezha acg first-pass abort set references a transaction outside the candidate block")
+	}
+	return accepted, deferred, nil
+}
+
+func acgFirstPassScheduleEvents(plan literatureGraphPlan) []ScheduleEvent {
+	aborted := make(map[string]bool, len(plan.AbortedTransactionIDs))
+	for _, id := range plan.AbortedTransactionIDs {
+		aborted[id] = true
+	}
+	waveByID := map[string]int{}
+	for waveIndex, wave := range plan.Waves {
+		for _, id := range wave {
+			waveByID[id] = waveIndex
+		}
+	}
+	events := make([]ScheduleEvent, 0, len(plan.CandidateTransactionIDs))
+	for _, id := range plan.CandidateTransactionIDs {
+		if aborted[id] {
+			events = append(events, ScheduleEvent{TxID: id, Track: "acg", QueueName: "mempool_deferred", DecisionReason: "nezha_hs_abort_deferred_retry", Blocked: true})
+			continue
+		}
+		events = append(events, ScheduleEvent{TxID: id, Track: "acg", QueueName: fmt.Sprintf("hs_wave_%d", waveByID[id]), DecisionReason: "nezha_hs_accepted", LocalExecution: true})
+	}
+	return events
+}
+
+func verifyACGConsensusPlan(block realblock.Block, plan acgConsensusPlan, fullRecompute bool) error {
+	if block.ExecutionPlan == nil || block.ExecutionPlan.AlgorithmID != acgConsensusPlanAlgorithmID {
+		return fmt.Errorf("acg retry execution plan is missing")
+	}
+	if block.ExecutionPlan.PayloadDigest != stableTextDigest(string(block.ExecutionPlan.Payload)) || block.ExecutionPlan.PlanDigest != plan.GraphPlan.PlanDigest {
+		return fmt.Errorf("acg retry execution plan envelope mismatch")
+	}
+	if plan.GraphPlan.BlockHeight != block.Height {
+		return fmt.Errorf("acg retry graph plan block height mismatch")
+	}
+
+	deferredIDs := transactionIDs(plan.DeferredTransactions)
+	if !sameStringList(deferredIDs, plan.GraphPlan.AbortedTransactionIDs) {
+		return fmt.Errorf("acg retry deferred identity does not match the Nezha HS abort set")
+	}
+	aborted := make(map[string]bool, len(deferredIDs))
+	for _, id := range deferredIDs {
+		if id == "" || aborted[id] {
+			return fmt.Errorf("acg retry deferred set contains duplicate/empty transaction id")
+		}
+		aborted[id] = true
+	}
+	expectedAccepted := make([]string, 0, len(plan.GraphPlan.CandidateTransactionIDs)-len(aborted))
+	for _, id := range plan.GraphPlan.CandidateTransactionIDs {
+		if !aborted[id] {
+			expectedAccepted = append(expectedAccepted, id)
+		}
+	}
+	if !sameStringList(transactionIDs(block.TxList), expectedAccepted) {
+		return fmt.Errorf("acg retry accepted block is not the exact first-pass HS projection")
+	}
+
+	acceptedByID := make(map[string]tx.SignedTransaction, len(block.TxList))
+	for _, item := range block.TxList {
+		if item.TxID == "" {
+			return fmt.Errorf("acg retry accepted block contains empty transaction id")
+		}
+		if _, exists := acceptedByID[item.TxID]; exists {
+			return fmt.Errorf("acg retry accepted block contains duplicate transaction %s", item.TxID)
+		}
+		acceptedByID[item.TxID] = item
+	}
+	deferredByID := make(map[string]tx.SignedTransaction, len(plan.DeferredTransactions))
+	for _, item := range plan.DeferredTransactions {
+		if item.TxID == "" {
+			return fmt.Errorf("acg retry deferred plan contains empty transaction id")
+		}
+		if _, exists := deferredByID[item.TxID]; exists {
+			return fmt.Errorf("acg retry deferred plan contains duplicate transaction %s", item.TxID)
+		}
+		deferredByID[item.TxID] = item
+	}
+
+	fullItems := make([]tx.SignedTransaction, 0, len(plan.GraphPlan.CandidateTransactionIDs))
+	for _, id := range plan.GraphPlan.CandidateTransactionIDs {
+		if item, ok := acceptedByID[id]; ok {
+			if _, alsoDeferred := deferredByID[id]; alsoDeferred {
+				return fmt.Errorf("acg retry transaction %s appears in both accepted and deferred projections", id)
+			}
+			fullItems = append(fullItems, item)
+			continue
+		}
+		item, ok := deferredByID[id]
+		if !ok {
+			return fmt.Errorf("acg retry candidate %s cannot be reconstructed", id)
+		}
+		fullItems = append(fullItems, item)
+	}
+	if len(acceptedByID)+len(deferredByID) != len(fullItems) {
+		return fmt.Errorf("acg retry plan contains transaction identities outside the original candidate set")
+	}
+
+	reconstructed := block
+	reconstructed.TxList = fullItems
+	reconstructed.TxIDs = transactionIDs(fullItems)
+	graphRaw, err := literatureMarshalPlan(plan.GraphPlan)
+	if err != nil {
+		return err
+	}
+	reconstructed.ExecutionPlan = &realblock.ExecutionPlanEnvelope{AlgorithmID: acgPlanAlgorithmID, PayloadDigest: stableTextDigest(string(graphRaw)), PlanDigest: plan.GraphPlan.PlanDigest, Payload: graphRaw}
+	if err := verifyPreverifiedLiteratureGraphProjection(reconstructed, plan.GraphPlan, acgPlanAlgorithmID); err != nil {
+		return err
+	}
+	if !fullRecompute {
+		return nil
+	}
+	recomputed, err := buildACGPlan(reconstructed)
+	if err != nil {
+		return err
+	}
+	if recomputed.PlanDigest != plan.GraphPlan.PlanDigest {
+		return fmt.Errorf("acg retry deterministic first-pass plan mismatch")
+	}
+	return nil
 }
 
 type nezhaRWNode struct {
@@ -110,8 +324,9 @@ type nezhaQueue struct {
 // buildACGPlan is a direct semantic adaptation of CGCL-codes/Nezha's published
 // core/conflict_queue.go. One queue is built per state address, queue dependencies
 // are ranked first, then DeSS assigns transaction sequence numbers queue-by-queue.
-// Transactions that the reference HS marks aborted are carried explicitly in the
-// consensus-bound plan and terminalized as failed no-op outcomes by the executor.
+// Transactions that the reference HS marks aborted remain explicit algorithmic
+// evidence. The ACG-owned consensus wrapper defers those signed transactions to
+// MBE's existing FIFO retry lifecycle without changing CreateGraph/QueuesSort/DeSS.
 func buildACGPlan(block realblock.Block) (literatureGraphPlan, error) {
 	constructionStarted := time.Now()
 	items, err := literatureAccessDescriptors(block.TxList, block.ShardID)

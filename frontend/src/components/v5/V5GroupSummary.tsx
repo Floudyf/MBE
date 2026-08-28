@@ -12,6 +12,7 @@ export default function V5GroupSummary({ group, aggregate, children }: Props) {
   const completedValid = children.filter((item) => item.status === "completed" && item.individual_result_valid !== false).length;
   const performanceComparisonValid = group.direct_cross_semantic_performance_comparison_valid ?? group.performance_comparison_valid ?? group.fairness_validation?.performance_comparison_valid;
   const stateEquivalent = group.within_semantic_cohort_state_equivalence_valid ?? group.pairwise_logical_state_equivalent ?? group.state_equivalence_validation?.within_semantic_cohort_state_equivalence_valid ?? group.state_equivalence_validation?.pairwise_logical_state_equivalent;
+  const serialOracleValid = group.cross_method_serial_order_oracle_valid ?? group.state_equivalence_validation?.cross_method_serial_order_oracle_valid;
   const partialRun = children.length < group.total_child_runs || group.completed_child_runs < group.total_child_runs || failedOrBlocked > 0 || completedInvalid > 0 || group.status !== "completed";
   return <section className="final-card wide" data-testid="v5-group-summary">
     <h2>实验组摘要</h2>
@@ -30,8 +31,9 @@ export default function V5GroupSummary({ group, aggregate, children }: Props) {
       <Metric label="跨片交易比例" value={workload?.config.cross_shard_ratio} /><Metric label="超时间隔" value={workload?.config.timeout_every} />
     </dl>
     {partialRun && <div className="notice" data-testid="v5-partial-run-warning"><strong>部分完成 / 尚未达到论文完整结果要求</strong><span>正式矩阵尚未全部成功完成；图表会保留计划中的缺失点，但本组不能作为完整论文结果。</span></div>}
-    {performanceComparisonValid === false && <div className="notice" data-testid="v5-performance-incomparable"><strong>性能比较不可直接使用</strong><span>直接跨语义性能比较受限。只有同一执行语义组且满足公平性、初始状态、状态归属映射和最终全局状态等价时，才可计算直接性能提升、排名或加速比；跨语义组只用于并列观察与机制解释。</span></div>}
-    {stateEquivalent === false && <div className="notice" data-testid="v5-state-incomparable"><strong>跨方法状态不等价</strong><span>至少一个可比较方法组的初始状态、状态归属映射或最终全局状态摘要不一致，本轮性能结论已被禁止进入论文分析。</span></div>}
+    {performanceComparisonValid === false && <div className="notice" data-testid="v5-performance-incomparable"><strong>性能比较不可直接使用</strong><span>直接跨语义性能比较受限。共同外部合同要求相同初始状态、相同逻辑工作负载，并要求每种方法的实际最终状态都等于其自身观测提交顺序的 Serial Oracle 重放结果；不同合法串行化顺序不要求最终 state digest 相同。</span></div>}
+    {stateEquivalent === false && <div className="notice" data-testid="v5-state-incomparable"><strong>同语义状态等价性未通过</strong><span>至少一个相同内部执行语义的可比较方法组未通过既有状态等价性检查。</span></div>}
+    {serialOracleValid === false && <div className="notice" data-testid="v5-serial-oracle-incomparable"><strong>跨方法 Serial Oracle 未通过</strong><span>至少一种方法不能由其实际提交顺序的串行重放精确复现，因此跨内部执行语义的性能比较被禁止。</span></div>}
     <p className="muted">本地多进程、localhost TCP、PBFT 风格共识消息、签名交易、持久化本地状态，并且无静默回退。本实验环境不声明为生产级区块链或生产级 PBFT 实现。</p>
     <div data-testid="v5-group-aggregate"><h3>论文有效结果聚合</h3><p className="muted">平均值、置信区间和图表默认只使用论文有效（paper_eligible）样本。完成但无效和兼容性阻止的结果保留为原始观察证据，不进入论文比较。</p><dl className="stage-flow-kpis">
       <Metric label="同语义论文候选数" value={aggregate?.paper_valid_count ?? aggregate?.count} /><Metric label="跨语义汇总平均 TPS" value={performanceComparisonValid ? aggregate?.mean : undefined} /><Metric label="跨语义汇总中位 TPS" value={performanceComparisonValid ? aggregate?.median : undefined} />

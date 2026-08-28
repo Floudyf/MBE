@@ -21,6 +21,7 @@ _GROUP_TRUTH_KEYS = (
     "direct_cross_semantic_performance_comparison_valid",
     "within_semantic_cohort_state_equivalence_valid",
     "pairwise_logical_state_equivalent",
+    "cross_method_serial_order_oracle_valid",
     "fairness_validation",
     "state_equivalence_validation",
 )
@@ -36,6 +37,12 @@ _CHILD_KEYS = (
     "pairwise_logical_state_equivalent", "comparison_semantic_classes", "comparison_warning", "initial_state_digest",
     "state_home_mapping_digest", "global_final_state_digest", "individual_result_valid",
     "individual_result_validity_reasons", "comparison_eligibility_status",
+    "external_performance_contract_valid", "cross_method_serial_order_oracle_valid",
+    "serial_order_oracle_status", "serial_order_replay_equivalent", "serial_order_replay_blockers",
+    "serial_order_replay_input_digest", "serial_order_replay_commit_order_digest",
+    "serial_order_replay_transaction_count", "serial_order_replay_business_state_digest",
+    "serial_order_actual_business_state_digest", "serial_order_replay_global_business_state_digest",
+    "serial_order_actual_global_business_state_digest", "serial_order_replay_replica_order_consistent",
 )
 _ARTIFACT_KEYS = (
     "name", "size_bytes", "truth_category", "artifact_role", "truth_scope", "producer", "schema_version", "sha256",

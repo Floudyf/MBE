@@ -81,20 +81,20 @@ def test_groundhog_conflict_abort_alias_excludes_candidate_limit_deferrals(tmp_p
     assert metrics["groundhog_conflict_abort_rate"] == 0.2
 
 
-def test_cg_cycle_abort_semantics_is_its_own_valid_terminal_cohort() -> None:
+def test_cg_cycle_retry_semantics_requires_eventual_logical_completion() -> None:
     semantics = _execution_semantics(
         {"routing": "hash_routing_baseline", "block_executor": "cg_block_executor"},
         "hash_cg",
     )
-    assert semantics["comparison_semantics_class"] == "nezha_cg_johnson_abortable_v2"
+    assert semantics["comparison_semantics_class"] == "nezha_cg_johnson_retryable_v4"
     child = {
         "status": "completed",
         "execution_status": "completed",
-        "comparison_semantics_class": "nezha_cg_johnson_abortable_v2",
+        "comparison_semantics_class": "nezha_cg_johnson_retryable_v4",
         "metrics": {
             "submitted_unique_tx_count": 10,
             "terminal_unique_tx_count": 10,
-            "finalized_unique_logical_tx_count": 8,
+            "finalized_unique_logical_tx_count": 10,
             "incomplete_unique_tx_count": 0,
             "cross_shard_failed_unique_count": 0,
             "abort_count": 2,
@@ -113,7 +113,7 @@ def test_cg_cycle_abort_semantics_is_its_own_valid_terminal_cohort() -> None:
         "result": {"summary": {"finality_evidence": {
             "submitted_unique_tx_count": 10,
             "terminal_unique_tx_count": 10,
-            "finalized_unique_logical_tx_count": 8,
+            "finalized_unique_logical_tx_count": 10,
             "incomplete_unique_tx_count": 0,
             "cross_shard_failed_unique_count": 0,
             "lifecycle_complete": True,

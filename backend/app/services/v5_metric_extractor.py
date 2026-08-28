@@ -175,9 +175,9 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "actual_block_interval_mean_ms": cluster.get("actual_block_interval_mean_ms"),
         "actual_block_interval_p95_ms": cluster.get("actual_block_interval_p95_ms"),
         # Lifecycle completion is about every admitted logical transaction reaching
-        # a terminal outcome.  Nezha/ACG HS may legitimately terminate a
-        # transaction as `nezha_hs_aborted`; those terminal failed no-ops are not
-        # committed/finalized state updates, but they still close the lifecycle.
+        # a terminal outcome. Historical Nezha/ACG artifacts may contain terminal
+        # HS-abort no-ops; the retryable v2 lifecycle instead keeps HS victims
+        # non-terminal until a later block actually finalizes them.
         "lifecycle_complete": (
             finality.get("logical_transaction_count") == terminal
             and finality.get("incomplete_unique_tx_count") == 0
@@ -616,7 +616,7 @@ def _apply_literature_graph_metrics(metrics: dict[str, Any], run_dir: Path) -> N
     summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
     summaries = [
         item for item in summaries
-        if item.get("block_executor_id") in {"cg_block_executor", "acg_block_executor", "bsx_block_executor"}
+        if item.get("block_executor_id") in {"cg_block_executor", "acg_block_executor", "bsx_block_executor", "fabricpp_cg_block_executor"}
     ]
     if not summaries:
         return
@@ -636,6 +636,7 @@ def _apply_literature_graph_metrics(metrics: dict[str, Any], run_dir: Path) -> N
     metrics.update({
         "literature_graph_metrics_available": True,
         "literature_graph_block_executor_ids": executor_ids,
+        "configured_worker_count": max((_int(block.get("configured_worker_count") or block.get("worker_count")) for block in blocks), default=0),
         "worker_count": max((_int(block.get("configured_worker_count") or block.get("worker_count")) for block in blocks), default=0),
         "maximum_parallel_width": max((_int(block.get("maximum_parallel_width")) for block in blocks), default=0),
         "wave_count": total("wave_count"),
@@ -648,22 +649,111 @@ def _apply_literature_graph_metrics(metrics: dict[str, Any], run_dir: Path) -> N
         "transaction_execution_ms": total("transaction_execution_ms"),
         "deterministic_materialization_ms": total("deterministic_materialization_ms"),
         "state_commitment_ms": total("state_commitment_ms"),
+        "literature_plan_parse_ms": total("literature_plan_parse_ms"),
+        "literature_plan_verify_ms": total("literature_plan_verify_ms"),
         "cg_planning_worker_count": max((_int(block.get("cg_planning_worker_count")) for block in blocks), default=0),
     })
+    plan_verify_modes = sorted({
+        str(block.get("literature_plan_verify_mode"))
+        for block in blocks
+        if block.get("literature_plan_verify_mode")
+    })
+    if len(plan_verify_modes) == 1:
+        metrics["literature_plan_verify_mode"] = plan_verify_modes[0]
     if executor_ids == ["cg_block_executor"]:
+        # CG cycle victims are algorithmic abort decisions, but retryable-v4
+        # returns their signed transactions to the FIFO mempool. Keep attempt
+        # abort evidence separate from eventual logical finality.
         cg_candidates = total("cg_candidate_transaction_count")
         cg_aborts = total("cg_cycle_abort_count")
+        cg_deferred = total("cg_cycle_deferred_retry_count")
+        unique_deferred = {
+            str(tx_id)
+            for block in blocks
+            for tx_id in (block.get("cg_cycle_deferred_tx_ids") or [])
+            if str(tx_id)
+        }
         metrics["abort_count"] = cg_aborts
         metrics["cg_candidate_transaction_count"] = cg_candidates
         metrics["cg_cycle_abort_count"] = cg_aborts
+        metrics["cg_cycle_abort_decision_count"] = cg_aborts
         metrics["cg_cycle_resolution_count"] = total("cg_cycle_resolution_count")
+        metrics["deferred_transaction_count"] = cg_deferred
+        metrics["cg_cycle_deferred_retry_count"] = cg_deferred
+        metrics["cg_cycle_unique_deferred_tx_count"] = len(unique_deferred)
         metrics["cg_cycle_abort_rate"] = (cg_aborts / cg_candidates) if cg_candidates else 0
+        metrics["cg_cycle_attempt_abort_rate"] = (cg_aborts / cg_candidates) if cg_candidates else 0
+        submitted = _int(metrics.get("submitted_unique_tx_count"))
+        metrics["cg_cycle_unique_deferred_rate"] = (len(unique_deferred) / submitted) if submitted else 0
+        retry_lifecycles = sorted({
+            str(block.get("cg_cycle_retry_lifecycle"))
+            for block in blocks
+            if block.get("cg_cycle_retry_lifecycle")
+        })
+        metrics["cg_cycle_retry_lifecycle"] = (
+            retry_lifecycles[0] if len(retry_lifecycles) == 1 else "fifo_deferred_to_later_block"
+        )
+        metrics["cg_reference_commit_order_count"] = total("cg_reference_commit_order_count") or total("cg_serial_commit_count")
+        metrics["cg_execution_worker_count"] = max((_int(block.get("cg_execution_worker_count")) for block in blocks), default=0)
+        metrics["cg_johnson_cycle_budget"] = max((_int(block.get("cg_johnson_cycle_budget")) for block in blocks), default=0)
+        metrics["cg_johnson_traversal_work_budget"] = max((_int(block.get("cg_johnson_traversal_work_budget")) for block in blocks), default=0)
+        metrics["cg_johnson_plan_work_budget"] = max((_int(block.get("cg_johnson_plan_work_budget")) for block in blocks), default=0)
+        metrics["cg_large_rmw_clique_threshold"] = max((_int(block.get("cg_large_rmw_clique_threshold")) for block in blocks), default=0)
+        for source_key, target_key in (
+            ("cg_cycle_space_policy", "cg_cycle_space_policy"),
+            ("cg_large_rmw_clique_policy", "cg_large_rmw_clique_policy"),
+            ("cg_execution_adaptation_mode", "cg_execution_adaptation_mode"),
+        ):
+            values = sorted({str(block.get(source_key)) for block in blocks if block.get(source_key)})
+            if len(values) == 1:
+                metrics[target_key] = values[0]
+        requested = _int(metrics.get("configured_worker_count") or metrics.get("worker_count"))
+        execution_workers = _int(metrics.get("cg_execution_worker_count"))
+        planning_workers = _int(metrics.get("cg_planning_worker_count"))
+        max_parallel = _int(metrics.get("maximum_parallel_width"))
+        metrics["cg_worker_truth_valid"] = bool(
+            requested > 0
+            and execution_workers == requested
+            and planning_workers == 1
+            and 0 <= max_parallel <= execution_workers
+        )
+        commit_modes = sorted({str(block.get("cg_commit_mode")) for block in blocks if block.get("cg_commit_mode")})
+        if len(commit_modes) == 1:
+            metrics["cg_commit_mode"] = commit_modes[0]
+    if executor_ids == ["fabricpp_cg_block_executor"]:
+        fabricpp_candidates = total("fabricpp_candidate_transaction_count")
+        fabricpp_aborts = total("fabricpp_cycle_abort_count")
+        metrics["abort_count"] = fabricpp_aborts
+        metrics["fabricpp_candidate_transaction_count"] = fabricpp_candidates
+        metrics["fabricpp_conflict_edge_count"] = total("fabricpp_conflict_edge_count")
+        metrics["fabricpp_cycle_abort_count"] = fabricpp_aborts
+        metrics["fabricpp_cycle_resolution_count"] = total("fabricpp_cycle_resolution_count")
+        metrics["fabricpp_cycle_abort_rate"] = (fabricpp_aborts / fabricpp_candidates) if fabricpp_candidates else 0
     if executor_ids == ["acg_block_executor"]:
-        # Nezha HS aborts are part of the authors' algorithm semantics. Keep the
-        # successful-finalization throughput numerator unchanged, but export the
-        # explicit abort evidence so a lower finalized count is explainable.
-        metrics["abort_count"] = total("abort_count")
-        metrics["nezha_hs_abort_count"] = total("nezha_hs_abort_count")
+        # Nezha HS abort decisions remain algorithm evidence, but retryable-v2
+        # defers their signed transactions to a later block instead of counting
+        # them as terminal failures. Preserve both attempt and unique evidence.
+        hs_candidates = total("nezha_hs_candidate_transaction_count")
+        hs_aborts = total("nezha_hs_abort_count")
+        hs_deferred = total("nezha_hs_deferred_retry_count")
+        unique_deferred = {
+            str(tx_id)
+            for block in blocks
+            for tx_id in (block.get("nezha_hs_deferred_tx_ids") or [])
+            if str(tx_id)
+        }
+        metrics["abort_count"] = hs_aborts
+        metrics["nezha_hs_abort_count"] = hs_aborts
+        metrics["nezha_hs_abort_decision_count"] = hs_aborts
+        metrics["nezha_hs_candidate_transaction_count"] = hs_candidates
+        metrics["nezha_hs_accepted_transaction_count"] = total("nezha_hs_accepted_transaction_count")
+        metrics["deferred_transaction_count"] = hs_deferred
+        metrics["nezha_hs_deferred_retry_count"] = hs_deferred
+        metrics["nezha_hs_unique_deferred_tx_count"] = len(unique_deferred)
+        metrics["nezha_hs_attempt_abort_rate"] = (hs_aborts / hs_candidates) if hs_candidates else 0
+        submitted = _int(metrics.get("submitted_unique_tx_count"))
+        metrics["nezha_hs_unique_deferred_rate"] = (len(unique_deferred) / submitted) if submitted else 0
+        metrics["nezha_hs_retry_lifecycle"] = "fifo_deferred_to_later_block"
 
     validator_modes = sorted({str(block.get("cg_validator_mode")) for block in blocks if block.get("cg_validator_mode")})
     if len(validator_modes) == 1:
@@ -956,7 +1046,7 @@ def _apply_mechanism_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
 
 def _literature_graph_required_metrics(method_id: str | None) -> list[str]:
     normalized = str(method_id or "").lower()
-    if normalized not in {"hash_cg", "hash_acg", "hash_bsx"}:
+    if normalized not in {"hash_cg", "hash_acg", "hash_bsx", "hash_fabricpp_cg"}:
         return []
     required = [
         "worker_count",
@@ -967,8 +1057,30 @@ def _literature_graph_required_metrics(method_id: str | None) -> list[str]:
         "transaction_execution_ms",
         "deterministic_materialization_ms",
     ]
+    if normalized == "hash_fabricpp_cg":
+        required.extend(["pairwise_conflict_check_count", "abort_count", "fabricpp_candidate_transaction_count", "fabricpp_cycle_abort_count", "fabricpp_cycle_resolution_count", "fabricpp_cycle_abort_rate"])
     if normalized == "hash_cg":
-        required.extend(["pairwise_conflict_check_count", "abort_count", "cg_candidate_transaction_count", "cg_cycle_abort_count", "cg_cycle_resolution_count", "cg_cycle_abort_rate"])
+        required.extend([
+            "pairwise_conflict_check_count",
+            "abort_count",
+            "cg_candidate_transaction_count",
+            "cg_cycle_abort_count",
+            "cg_cycle_resolution_count",
+            "cg_cycle_abort_rate",
+            "cg_cycle_deferred_retry_count",
+            "cg_cycle_retry_lifecycle",
+            "cg_execution_worker_count",
+            "cg_planning_worker_count",
+            "cg_worker_truth_valid",
+            "literature_plan_parse_ms",
+            "literature_plan_verify_ms",
+            "cg_johnson_cycle_budget",
+            "cg_johnson_traversal_work_budget",
+            "cg_johnson_plan_work_budget",
+            "cg_cycle_space_policy",
+            "cg_large_rmw_clique_policy",
+            "cg_large_rmw_clique_threshold",
+        ])
     if normalized == "hash_acg":
         required.extend(["abort_count", "nezha_hs_abort_count"])
     if normalized == "hash_bsx":
@@ -1048,8 +1160,11 @@ def _derive_research_metrics(metrics: dict[str, Any]) -> None:
     submitted = metrics.get("submitted_unique_tx_count")
     if isinstance(submitted, (int, float)) and not isinstance(submitted, bool) and submitted:
         denominator = float(submitted)
+        if metrics.get("block_executor_id") == "block_stm_block_executor":
+            value = metrics.get("abort_count")
+            if metrics.get("block_stm_abort_events_per_tx") is None and isinstance(value, (int, float)) and not isinstance(value, bool):
+                metrics["block_stm_abort_events_per_tx"] = float(value) / denominator
         for source, target in (
-            ("abort_count", "block_stm_abort_events_per_tx"),
             ("reexecution_count", "reexecution_events_per_tx"),
             ("validation_failure_count", "validation_failures_per_tx"),
             ("dependency_wait_count", "dependency_waits_per_tx"),
@@ -1062,8 +1177,10 @@ def _derive_research_metrics(metrics: dict[str, Any]) -> None:
             value = metrics.get(source)
             if metrics.get(target) is None and isinstance(value, (int, float)) and not isinstance(value, bool):
                 metrics[target] = float(value) / denominator
-        if metrics.get("nezha_hs_abort_count") is not None:
-            metrics["nezha_hs_abort_rate"] = float(metrics.get("nezha_hs_abort_count") or 0) / denominator
+        if metrics.get("nezha_hs_abort_count") is not None and metrics.get("nezha_hs_abort_rate") is None:
+            hs_candidates = metrics.get("nezha_hs_candidate_transaction_count")
+            hs_denominator = float(hs_candidates) if isinstance(hs_candidates, (int, float)) and not isinstance(hs_candidates, bool) and hs_candidates else denominator
+            metrics["nezha_hs_abort_rate"] = float(metrics.get("nezha_hs_abort_count") or 0) / hs_denominator
 
     committed_blocks = metrics.get("actual_committed_block_count")
     if isinstance(committed_blocks, (int, float)) and not isinstance(committed_blocks, bool) and committed_blocks:

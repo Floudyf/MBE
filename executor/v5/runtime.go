@@ -264,6 +264,40 @@ type verifiedExecutionPlanRecord struct {
 	PlanDigest    string
 }
 
+type consensusPlanningProgress struct {
+	AlgorithmID string
+	Phase       string
+	WorkUnits   int64
+	DetailCount int64
+}
+
+// contextConsensusExecutionPlanner is an optional pre-consensus planning
+// extension used only by algorithms whose exact planner can be materially
+// expensive. It changes lifecycle/cancellation only: PlanBlockContext must
+// produce the same consensus-bound plan as PlanBlock when the context is not
+// cancelled.
+type contextConsensusExecutionPlanner interface {
+	PlanBlockContext(context.Context, realblock.Block, func(consensusPlanningProgress)) (ConsensusExecutionPlanningResult, error)
+}
+
+// fatalConsensusPlanningError is an opt-in planner failure contract. Normal
+// planner errors remain retryable exactly as before. A planner must explicitly
+// mark an error fatal when continuing would only repeat a deterministic,
+// evidence-backed impossibility (currently used only by Nezha CG intrinsic
+// cycle-space detection).
+type fatalConsensusPlanningError interface {
+	error
+	FatalConsensusPlanning() bool
+}
+
+func isFatalConsensusPlanningError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var fatal fatalConsensusPlanningError
+	return errors.As(err, &fatal) && fatal.FatalConsensusPlanning()
+}
+
 type prePrepareDeferralDisposition uint8
 
 const (
@@ -328,6 +362,19 @@ type NodeRuntime struct {
 	proposalLastBroadcastAt         time.Time
 	proposalRetransmitCount         int
 	proposalWorkUnits               atomic.Int64
+	proposalPlanningInFlight        bool
+	proposalPlanningView            uint64
+	proposalPlanningHeight          uint64
+	proposalPlanningAlgorithmID     string
+	proposalPlanningPhase           string
+	proposalPlanningStartedAt       time.Time
+	proposalPlanningProgressAt      time.Time
+	proposalPlanningWorkUnits       int64
+	proposalPlanningDetailCount     int64
+	proposalPlanningCancel          context.CancelFunc
+	proposalPlanningGeneration      uint64
+	proposalPlanningCancelReason    string
+	proposalPlanningWG              sync.WaitGroup
 	verifiedExecutionPlans          map[string]verifiedExecutionPlanRecord
 	viewChangeStartedAt             time.Time
 	viewChangeLastBroadcast         time.Time
@@ -337,6 +384,7 @@ type NodeRuntime struct {
 	lastCommitFailure               CommitFailure
 	fatalPersistenceError           string
 	fatalExecutionError             string
+	fatalPlanningError              string
 	blockExecutionProgress          execution.BlockSTMProgress
 	lastCatchupRequest              time.Time
 	catchupTargetHeight             uint64
@@ -440,6 +488,17 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 		case <-ticker.C:
 			r.retryPendingRelays()
 			r.retryPendingCrossShardMessages(ctx)
+			// Pre-consensus planning must never pin an obsolete primary after a
+			// NEW-VIEW is installed. Cancellation is lifecycle-only; the CG
+			// planner itself remains exact whenever its context stays live.
+			r.cancelStaleProposalPlanning()
+			r.mu.Lock()
+			fatalPlanning := r.fatalPlanningError
+			r.mu.Unlock()
+			if fatalPlanning != "" {
+				_ = r.writeRuntimeStatus()
+				return fmt.Errorf("fatal consensus planning: %s", fatalPlanning)
+			}
 			r.checkPBFTLiveness(ctx)
 			if r.isCurrentLeader() {
 				if r.catchupNeeded() {
@@ -1216,6 +1275,7 @@ func (r *NodeRuntime) Start(ctx context.Context) error {
 }
 
 func (r *NodeRuntime) Stop() error {
+	r.stopProposalPlanning()
 	r.stopCommitWorker()
 	r.stopStateFetchWorkers()
 	return r.transport.Stop()
@@ -1602,13 +1662,13 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		return
 	}
 	r.mu.Lock()
-	fatal := firstNonEmpty(r.fatalPersistenceError, r.fatalExecutionError)
+	fatal := firstNonEmpty(r.fatalPersistenceError, r.fatalExecutionError, r.fatalPlanningError)
 	r.mu.Unlock()
 	if fatal != "" {
 		return
 	}
 	r.mu.Lock()
-	if r.proposalInFlight {
+	if r.proposalInFlight || r.proposalPlanningInFlight {
 		r.mu.Unlock()
 		return
 	}
@@ -1685,6 +1745,16 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 			block = admitted
 		}
 	}
+	if planner, ok := r.plugins.Scheduler.(contextConsensusExecutionPlanner); ok && len(block.TxList) > 0 {
+		if r.startContextProposalPlanning(ctx, block, planner) {
+			return
+		}
+		// A planning task became active between candidate reservation and the
+		// transition above. Do not strand this independently reserved candidate.
+		r.pool.ReleaseReserved(block.TxList)
+		return
+	}
+
 	scheduledBlock, scheduleErr := r.scheduleBlock(block)
 	if scheduleErr != nil {
 		r.pool.ReleaseReserved(block.TxList)
@@ -1702,6 +1772,167 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		r.pool.ReleaseReserved(block.TxList)
 		r.setLastProposalError(err)
 	}
+}
+
+func (r *NodeRuntime) startContextProposalPlanning(ctx context.Context, block realblock.Block, planner contextConsensusExecutionPlanner) bool {
+	if planner == nil || len(block.TxList) == 0 {
+		return false
+	}
+	state := r.pbftState()
+	view := state.View()
+	if state.Leader() != r.node.NodeID {
+		return false
+	}
+	planCtx, cancel := context.WithCancel(ctx)
+	now := time.Now()
+	r.mu.Lock()
+	if r.proposalInFlight || r.proposalPlanningInFlight || r.committedHeight+1 != block.Height {
+		r.mu.Unlock()
+		cancel()
+		return false
+	}
+	r.proposalPlanningGeneration++
+	generation := r.proposalPlanningGeneration
+	r.proposalPlanningInFlight = true
+	r.proposalPlanningView = view
+	r.proposalPlanningHeight = block.Height
+	r.proposalPlanningAlgorithmID = r.plugins.Scheduler.ID()
+	r.proposalPlanningPhase = "started"
+	r.proposalPlanningStartedAt = now
+	r.proposalPlanningProgressAt = now
+	r.proposalPlanningWorkUnits = 1
+	r.proposalPlanningDetailCount = 0
+	r.proposalPlanningCancel = cancel
+	r.proposalPlanningCancelReason = ""
+	r.lastProgressAt = now.UnixMilli()
+	r.mu.Unlock()
+
+	r.proposalPlanningWG.Add(1)
+	go func() {
+		defer r.proposalPlanningWG.Done()
+		report := func(progress consensusPlanningProgress) {
+			r.recordProposalPlanningProgress(generation, progress)
+		}
+		planned, err := planner.PlanBlockContext(planCtx, block, report)
+		if err != nil {
+			r.pool.ReleaseReserved(block.TxList)
+			if isFatalConsensusPlanningError(err) {
+				r.markFatalPlanningError(err)
+			} else if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				r.setLastProposalError(err)
+			}
+			r.finishProposalPlanning(generation)
+			return
+		}
+		if !r.proposalPlanningStillCurrent(generation, view, block.Height) {
+			r.pool.ReleaseReserved(block.TxList)
+			r.finishProposalPlanning(generation)
+			return
+		}
+
+		if len(planned.Deferred) > 0 {
+			r.pool.ReleaseReserved(planned.Deferred)
+		}
+		scheduledBlock := planned.Block
+		scheduledBlock.SystemStateDeltas = r.readyRemoteStateDeltasForConsensus(scheduledBlock.Height)
+		realblock.AssignHash(&scheduledBlock)
+		if !r.proposalPlanningStillCurrent(generation, view, block.Height) {
+			r.pool.ReleaseReserved(scheduledBlock.TxList)
+			r.finishProposalPlanning(generation)
+			return
+		}
+
+		r.recordScheduleEvents(scheduledBlock, planned.Events, true)
+		r.rememberVerifiedExecutionPlan(scheduledBlock)
+		proposalWorkUnits := r.estimateProposalValidationWork(scheduledBlock)
+		for _, item := range scheduledBlock.TxList {
+			r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "proposed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: scheduledBlock.Height, Success: true})
+		}
+		if err := r.beginPBFTProposal(ctx, scheduledBlock, proposalWorkUnits); err != nil {
+			r.pool.ReleaseReserved(scheduledBlock.TxList)
+			r.setLastProposalError(err)
+		}
+		r.finishProposalPlanning(generation)
+	}()
+	return true
+}
+
+func (r *NodeRuntime) recordProposalPlanningProgress(generation uint64, progress consensusPlanningProgress) {
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.proposalPlanningInFlight || r.proposalPlanningGeneration != generation {
+		return
+	}
+	advanced := progress.WorkUnits > r.proposalPlanningWorkUnits || progress.DetailCount > r.proposalPlanningDetailCount || (progress.Phase != "" && progress.Phase != r.proposalPlanningPhase)
+	if !advanced {
+		return
+	}
+	if progress.AlgorithmID != "" {
+		r.proposalPlanningAlgorithmID = progress.AlgorithmID
+	}
+	if progress.Phase != "" {
+		r.proposalPlanningPhase = progress.Phase
+	}
+	if progress.WorkUnits > r.proposalPlanningWorkUnits {
+		r.proposalPlanningWorkUnits = progress.WorkUnits
+	}
+	if progress.DetailCount > r.proposalPlanningDetailCount {
+		r.proposalPlanningDetailCount = progress.DetailCount
+	}
+	r.proposalPlanningProgressAt = now
+	r.lastProgressAt = now.UnixMilli()
+}
+
+func (r *NodeRuntime) proposalPlanningStillCurrent(generation, view, height uint64) bool {
+	state := r.pbftState()
+	if state.View() != view || state.Leader() != r.node.NodeID {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.proposalPlanningInFlight && r.proposalPlanningGeneration == generation && r.proposalPlanningView == view && r.proposalPlanningHeight == height && r.committedHeight+1 == height
+}
+
+func (r *NodeRuntime) finishProposalPlanning(generation uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.proposalPlanningGeneration != generation {
+		return
+	}
+	r.proposalPlanningInFlight = false
+	r.proposalPlanningCancel = nil
+	r.proposalPlanningPhase = "idle"
+}
+
+func (r *NodeRuntime) cancelStaleProposalPlanning() {
+	state := r.pbftState()
+	view := state.View()
+	leader := state.Leader()
+	var cancel context.CancelFunc
+	r.mu.Lock()
+	if r.proposalPlanningInFlight && (r.proposalPlanningView != view || leader != r.node.NodeID) {
+		cancel = r.proposalPlanningCancel
+		r.proposalPlanningCancelReason = fmt.Sprintf("stale_view_or_leader:planned_view=%d current_view=%d current_leader=%s", r.proposalPlanningView, view, leader)
+	}
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (r *NodeRuntime) stopProposalPlanning() {
+	var cancel context.CancelFunc
+	r.mu.Lock()
+	if r.proposalPlanningInFlight {
+		cancel = r.proposalPlanningCancel
+		r.proposalPlanningCancelReason = "runtime_stop"
+	}
+	r.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	r.proposalPlanningWG.Wait()
 }
 
 type statelessVersionAdmissionRequirement struct {
@@ -2637,6 +2868,17 @@ func isDeterministicExecutionError(err error) bool {
 		}
 	}
 	return false
+}
+
+func (r *NodeRuntime) markFatalPlanningError(err error) {
+	if err == nil {
+		return
+	}
+	r.mu.Lock()
+	r.fatalPlanningError = err.Error()
+	r.lastProposalError = err.Error()
+	r.lastProgressAt = time.Now().UnixMilli()
+	r.mu.Unlock()
 }
 
 func (r *NodeRuntime) markFatalExecutionError(block realblock.Block, err error) {
@@ -5989,6 +6231,22 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	proposalInFlight := r.proposalInFlight
 	proposalInFlightHash := r.proposalInFlightHash
 	proposalRetransmitCount := r.proposalRetransmitCount
+	proposalPlanningInFlight := r.proposalPlanningInFlight
+	proposalPlanningView := r.proposalPlanningView
+	proposalPlanningHeight := r.proposalPlanningHeight
+	proposalPlanningAlgorithmID := r.proposalPlanningAlgorithmID
+	proposalPlanningPhase := r.proposalPlanningPhase
+	proposalPlanningWorkUnits := r.proposalPlanningWorkUnits
+	proposalPlanningDetailCount := r.proposalPlanningDetailCount
+	proposalPlanningCancelReason := r.proposalPlanningCancelReason
+	proposalPlanningStartedAtMS := int64(0)
+	if !r.proposalPlanningStartedAt.IsZero() {
+		proposalPlanningStartedAtMS = r.proposalPlanningStartedAt.UnixMilli()
+	}
+	proposalPlanningProgressAtMS := int64(0)
+	if !r.proposalPlanningProgressAt.IsZero() {
+		proposalPlanningProgressAtMS = r.proposalPlanningProgressAt.UnixMilli()
+	}
 	viewChangeTarget := r.viewChangeTarget
 	proposalWorkDetailsAvailable := true
 	proposalLogicalTxIDs := []string{}
@@ -6083,6 +6341,7 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	sort.Slice(pendingStateFetches, func(i, j int) bool { return pendingStateFetches[i].RequestID < pendingStateFetches[j].RequestID })
 	fatalPersistenceError := r.fatalPersistenceError
 	fatalExecutionError := r.fatalExecutionError
+	fatalPlanningError := r.fatalPlanningError
 	blockExecutionProgress := r.blockExecutionProgress
 	pendingCommitCount := len(r.pendingCommits)
 	pendingCommitHeights := mapKeys(r.pendingCommits)
@@ -6194,7 +6453,7 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 
 	mempoolIDs := r.pool.IDs()
 	sort.Strings(mempoolIDs)
-	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_in_flight_hash": proposalInFlightHash, "proposal_work_details_available": proposalWorkDetailsAvailable, "proposal_logical_tx_ids": proposalLogicalTxIDs, "proposal_system_state_delta_count": proposalSystemStateDeltaCount, "proposal_validation_work_units": proposalWorkUnits, "proposal_timeout_ms": proposalTimeoutMS, "proposal_vote_count": proposalVoteCount, "proposal_quorum": proposalQuorum, "proposal_quorum_reached": proposalQuorumReached, "proposal_age_ms": proposalAgeMS, "proposal_committing": proposalCommitting, "proposal_finalize_queued": proposalFinalizeQueued, "pbft_quorum_finalize_retry_count": pbftQuorumFinalizeRetryCount, "pbft_view": pbftSnapshot.View, "pbft_current_leader": pbftSnapshot.LeaderID, "pbft_stage": pbftSnapshot.Stage, "pbft_prepare_vote_count": pbftPrepareVoteCount, "pbft_prepare_quorum": pbftSnapshot.PrepareQuorum, "pbft_commit_vote_count": pbftCommitVoteCount, "pbft_commit_quorum": pbftSnapshot.CommitQuorum, "pbft_commit_certificate_count": pbftSnapshot.CommitCertificateCount, "pbft_last_consensus_progress_at_ms": pbftSnapshot.LastProgressAtMS, "pbft_preprepare_retransmit_count": proposalRetransmitCount, "pbft_view_change_target": viewChangeTarget, "pbft_view_change_vote_count": pbftViewChangeVoteCount, "pbft_low_watermark": pbftSnapshot.LowWatermark, "pbft_high_watermark": pbftSnapshot.HighWatermark, "pbft_stable_checkpoint_height": pbftSnapshot.StableCheckpointHeight, "pbft_catchup_target_height": catchupTargetHeight, "pbft_catchup_metrics": pbftCatchupMetrics, "commit_worker_running": commitWorkerRunning, "commit_task_queue_depth": commitTaskQueueDepth, "commit_task_queue_capacity": commitTaskQueueCapacity, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "last_commit_failure": lastCommitFailure, "last_state_fetch": lastStateFetch, "pending_state_fetch_count": len(pendingStateFetches), "pending_state_fetches": pendingStateFetches, "state_fetch_failures": stateFetchFailures, "last_state_fetch_service": lastStateFetchService, "state_fetch_service_errors": stateFetchServiceErrors, "fatal_persistence_error": fatalPersistenceError, "fatal_execution_error": fatalExecutionError, "block_execution_progress": blockExecutionProgress, "block_execution_height": blockExecutionProgress.BlockHeight, "block_execution_progress_at_ms": blockExecutionProgress.LastProgressAtMS, "block_execution_validated_count": blockExecutionProgress.ValidatedCount, "block_execution_task_count": blockExecutionProgress.ExecutionTaskCount, "block_validation_task_count": blockExecutionProgress.ValidationTaskCount, "block_execution_abort_count": blockExecutionProgress.AbortCount, "block_execution_reexecution_count": blockExecutionProgress.ReexecutionCount, "block_execution_scheduler_queue_length": blockExecutionProgress.SchedulerQueueLen, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": pendingFutureBlockCount, "pending_future_block_heights": pendingFutureBlockHeights, "pending_cross_shard_count": pendingCrossShardCount, "pending_cross_shard_ids": pendingCrossShardIDs, "pending_relay_source_count": pendingRelaySourceCount, "pending_relay_source_ids": pendingRelaySourceIDs, "pending_outbound_relay_count": pendingOutboundRelayCount, "pending_outbound_relay_ids": pendingOutboundRelayIDs, "pending_finalize_message_count": pendingFinalizeMessageCount, "pending_finalize_message_ids": pendingFinalizeMessageIDs, "outbound_relay_send_errors": outboundRelaySendErrors, "finalize_send_errors": finalizeSendErrors, "state_fetch_request_queue_depth": stateFetchRequestQueueDepth, "state_fetch_request_queue_capacity": stateFetchMailboxCapacity, "state_fetch_response_queue_depth": stateFetchResponseQueueDepth, "state_fetch_response_queue_capacity": stateFetchResponseMailboxCapacity, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(lifecycleSets.terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "execution_failed_logical_tx_ids": executionFailedIDs, "admission_rejected_logical_tx_ids": admissionRejectedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_in_flight_hash": proposalInFlightHash, "proposal_work_details_available": proposalWorkDetailsAvailable, "proposal_logical_tx_ids": proposalLogicalTxIDs, "proposal_system_state_delta_count": proposalSystemStateDeltaCount, "proposal_validation_work_units": proposalWorkUnits, "proposal_timeout_ms": proposalTimeoutMS, "proposal_planning_in_flight": proposalPlanningInFlight, "proposal_planning_view": proposalPlanningView, "proposal_planning_height": proposalPlanningHeight, "proposal_planning_algorithm_id": proposalPlanningAlgorithmID, "proposal_planning_phase": proposalPlanningPhase, "proposal_planning_started_at_ms": proposalPlanningStartedAtMS, "proposal_planning_progress_at_ms": proposalPlanningProgressAtMS, "proposal_planning_work_units": proposalPlanningWorkUnits, "proposal_planning_detail_count": proposalPlanningDetailCount, "proposal_planning_cancel_reason": proposalPlanningCancelReason, "proposal_vote_count": proposalVoteCount, "proposal_quorum": proposalQuorum, "proposal_quorum_reached": proposalQuorumReached, "proposal_age_ms": proposalAgeMS, "proposal_committing": proposalCommitting, "proposal_finalize_queued": proposalFinalizeQueued, "pbft_quorum_finalize_retry_count": pbftQuorumFinalizeRetryCount, "pbft_view": pbftSnapshot.View, "pbft_current_leader": pbftSnapshot.LeaderID, "pbft_stage": pbftSnapshot.Stage, "pbft_prepare_vote_count": pbftPrepareVoteCount, "pbft_prepare_quorum": pbftSnapshot.PrepareQuorum, "pbft_commit_vote_count": pbftCommitVoteCount, "pbft_commit_quorum": pbftSnapshot.CommitQuorum, "pbft_commit_certificate_count": pbftSnapshot.CommitCertificateCount, "pbft_last_consensus_progress_at_ms": pbftSnapshot.LastProgressAtMS, "pbft_preprepare_retransmit_count": proposalRetransmitCount, "pbft_view_change_target": viewChangeTarget, "pbft_view_change_vote_count": pbftViewChangeVoteCount, "pbft_low_watermark": pbftSnapshot.LowWatermark, "pbft_high_watermark": pbftSnapshot.HighWatermark, "pbft_stable_checkpoint_height": pbftSnapshot.StableCheckpointHeight, "pbft_catchup_target_height": catchupTargetHeight, "pbft_catchup_metrics": pbftCatchupMetrics, "commit_worker_running": commitWorkerRunning, "commit_task_queue_depth": commitTaskQueueDepth, "commit_task_queue_capacity": commitTaskQueueCapacity, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "last_commit_failure": lastCommitFailure, "last_state_fetch": lastStateFetch, "pending_state_fetch_count": len(pendingStateFetches), "pending_state_fetches": pendingStateFetches, "state_fetch_failures": stateFetchFailures, "last_state_fetch_service": lastStateFetchService, "state_fetch_service_errors": stateFetchServiceErrors, "fatal_persistence_error": fatalPersistenceError, "fatal_execution_error": fatalExecutionError, "fatal_planning_error": fatalPlanningError, "block_execution_progress": blockExecutionProgress, "block_execution_height": blockExecutionProgress.BlockHeight, "block_execution_progress_at_ms": blockExecutionProgress.LastProgressAtMS, "block_execution_validated_count": blockExecutionProgress.ValidatedCount, "block_execution_task_count": blockExecutionProgress.ExecutionTaskCount, "block_validation_task_count": blockExecutionProgress.ValidationTaskCount, "block_execution_abort_count": blockExecutionProgress.AbortCount, "block_execution_reexecution_count": blockExecutionProgress.ReexecutionCount, "block_execution_scheduler_queue_length": blockExecutionProgress.SchedulerQueueLen, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": pendingFutureBlockCount, "pending_future_block_heights": pendingFutureBlockHeights, "pending_cross_shard_count": pendingCrossShardCount, "pending_cross_shard_ids": pendingCrossShardIDs, "pending_relay_source_count": pendingRelaySourceCount, "pending_relay_source_ids": pendingRelaySourceIDs, "pending_outbound_relay_count": pendingOutboundRelayCount, "pending_outbound_relay_ids": pendingOutboundRelayIDs, "pending_finalize_message_count": pendingFinalizeMessageCount, "pending_finalize_message_ids": pendingFinalizeMessageIDs, "outbound_relay_send_errors": outboundRelaySendErrors, "finalize_send_errors": finalizeSendErrors, "state_fetch_request_queue_depth": stateFetchRequestQueueDepth, "state_fetch_request_queue_capacity": stateFetchMailboxCapacity, "state_fetch_response_queue_depth": stateFetchResponseQueueDepth, "state_fetch_response_queue_capacity": stateFetchResponseMailboxCapacity, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(lifecycleSets.terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "execution_failed_logical_tx_ids": executionFailedIDs, "admission_rejected_logical_tx_ids": admissionRejectedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
 }
 func mapIDs(items map[string]bool) []string {

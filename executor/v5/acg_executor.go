@@ -114,20 +114,10 @@ func executeACGPlanWithCommitment(ctx context.Context, block realblock.Block, ba
 			}
 		}
 	}
-	// Nezha's published HS can mark transactions aborted. They are excluded from
-	// state materialization and represented as deterministic failed no-op terminal
-	// outcomes so MBE preserves one terminal result per admitted logical tx.
-	for _, id := range plan.AbortedTransactionIDs {
-		item, ok := byID[id]
-		if !ok {
-			return BlockExecutionResult{}, fmt.Errorf("nezha plan abort references unknown transaction %s", id)
-		}
-		receipt := execution.Receipt{TxID: item.TxID, BlockHash: block.BlockHash, Height: block.Height, Success: false, Error: "nezha_hs_aborted", ExecutionCost: 1, StateKeys: append([]string(nil), item.StateKeys...), StateRootAfterTx: commitment.Root()}
-		delta := execution.TxDelta{TxID: item.TxID, OriginalIndex: indexByID[id], WriteSet: map[string]string{}, Receipt: receipt, Success: false, Error: receipt.Error}
-		allReceipts = append(allReceipts, receipt)
-		allDeltas = append(allDeltas, delta)
-		result.FailedTxs++
-	}
+	// HS-aborted transactions are not part of this block body. The ACG scheduler
+	// already returned them through ConsensusExecutionPlanningResult.Deferred, so
+	// they remain non-terminal and are retried from the existing FIFO mempool.
+	// Their first-pass abort decision stays visible through plan metrics below.
 	result.Receipts = allReceipts
 	result.TxDeltas = allDeltas
 	result.StateRootAfter = commitment.Root()
@@ -159,36 +149,43 @@ func executeACGPlanWithCommitment(ctx context.Context, block realblock.Block, ba
 		DeterministicApplyMS: result.DeterministicMaterializationMS, StateCommitmentMS: result.StateCommitmentMS,
 	}
 	actual := map[string]any{
-		"literature_graph_metrics":         metrics,
-		"maximum_parallel_width":           maximumObserved,
-		"dependency_edge_count":            plan.Metrics.EdgeCount,
-		"wave_count":                       plan.Metrics.WaveCount,
-		"maximum_wave_width":               plan.Metrics.MaximumWaveWidth,
-		"graph_color_count":                plan.Metrics.ColorCount,
-		"pairwise_conflict_check_count":    plan.Metrics.PairChecks,
-		"graph_table_construction_ms":      plan.Metrics.GraphConstructionMS,
-		"sorting_ms":                       plan.Metrics.SortingMS,
-		"worker_pool_create_count":         1,
-		"worker_pool_setup_ms":             poolSetupDuration.Milliseconds(),
-		"wave_barrier_count":               len(plan.Waves),
-		"abort_count":                      plan.Metrics.AbortCount,
-		"nezha_hs_abort_count":             plan.Metrics.AbortCount,
-		"reexecution_count":                0,
-		"serializable":                     true,
-		"literature_plan_algorithm_id":     plan.AlgorithmID,
-		"literature_plan_digest_verified":  true,
-		"transaction_execution_ms":         result.TransactionExecutionMS,
-		"deterministic_materialization_ms": result.DeterministicMaterializationMS,
-		"state_commitment_ms":              result.StateCommitmentMS,
-		"state_root_version":               state.CommitmentVersion,
+		"literature_graph_metrics":             metrics,
+		"maximum_parallel_width":               maximumObserved,
+		"dependency_edge_count":                plan.Metrics.EdgeCount,
+		"wave_count":                           plan.Metrics.WaveCount,
+		"maximum_wave_width":                   plan.Metrics.MaximumWaveWidth,
+		"graph_color_count":                    plan.Metrics.ColorCount,
+		"pairwise_conflict_check_count":        plan.Metrics.PairChecks,
+		"graph_table_construction_ms":          plan.Metrics.GraphConstructionMS,
+		"sorting_ms":                           plan.Metrics.SortingMS,
+		"worker_pool_create_count":             1,
+		"worker_pool_setup_ms":                 poolSetupDuration.Milliseconds(),
+		"wave_barrier_count":                   len(plan.Waves),
+		"abort_count":                          plan.Metrics.AbortCount,
+		"nezha_hs_abort_count":                 plan.Metrics.AbortCount,
+		"nezha_hs_abort_decision_count":        plan.Metrics.AbortCount,
+		"nezha_hs_candidate_transaction_count": plan.Metrics.TransactionCount,
+		"nezha_hs_accepted_transaction_count":  plan.Metrics.TransactionCount - plan.Metrics.AbortCount,
+		"deferred_transaction_count":           plan.Metrics.AbortCount,
+		"nezha_hs_deferred_retry_count":        plan.Metrics.AbortCount,
+		"nezha_hs_deferred_tx_ids":             append([]string(nil), plan.AbortedTransactionIDs...),
+		"nezha_hs_retry_lifecycle":             "fifo_deferred_to_later_block",
+		"reexecution_count":                    0,
+		"serializable":                         true,
+		"literature_plan_algorithm_id":         plan.AlgorithmID,
+		"literature_plan_digest_verified":      true,
+		"transaction_execution_ms":             result.TransactionExecutionMS,
+		"deterministic_materialization_ms":     result.DeterministicMaterializationMS,
+		"state_commitment_ms":                  result.StateCommitmentMS,
+		"state_root_version":                   state.CommitmentVersion,
 	}
 	businessAttempts := make([]BusinessExecutionAttempt, 0, len(allDeltas))
 	for _, delta := range allDeltas {
-		reason := "nezha_hs_wave_execution"
-		if delta.Error == "nezha_hs_aborted" {
-			reason = "nezha_hs_aborted"
-		}
-		businessAttempts = append(businessAttempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: delta.TxID, Track: acgBlockExecutorID, Attempt: 1, Reason: reason, Success: delta.Success, FinalCompletion: true})
+		// Only transactions actually present in this accepted block produce a
+		// terminal execution attempt. HS-deferred victims are represented by the
+		// scheduler event/plan evidence and will appear here only after a later
+		// block eventually accepts and executes them.
+		businessAttempts = append(businessAttempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: delta.TxID, Track: acgBlockExecutorID, Attempt: 1, Reason: "nezha_hs_wave_execution", Success: delta.Success, FinalCompletion: true})
 	}
 	return BlockExecutionResult{
 		ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: plan.PlanDigest,

@@ -94,6 +94,32 @@ def test_fairness_allows_stateless_hash_vs_metatrack_direct_comparison() -> None
     assert all(row["performance_comparison_valid"] is True for row in checked)
 
 
+def test_fairness_allows_single_shard_stateful_cross_method_comparison_under_common_external_contract() -> None:
+    rows = []
+    for method, semantic_class in (
+        ("hash_cg", "nezha_cg_johnson_retryable_v4"),
+        ("hash_acg", "nezha_acg_hs_retryable_v2"),
+        ("hash_batch_si", "batch_si_common_batch_snapshot_v1"),
+    ):
+        row = _fairness_row(method, semantic_class)
+        row.update({
+            "topology_point": {"nodes": 8, "shards": 1, "validators_per_shard": 8, "worker_count": 8},
+            "state_access_semantics": f"method_specific:{semantic_class}",
+            "state_home_mapping_policy": "execution_shard_local_namespace",
+            "remote_fetch_policy": "none",
+            "remote_writeback_policy": "none",
+            "proof_policy": f"method_specific:{semantic_class}",
+            "legacy_cross_shard_protocol": method != "hash_batch_si",
+            "measurement_boundary": f"client_submit_to_{method}_eventual_finality",
+        })
+        rows.append(row)
+    checked, result = validate_fairness(rows)
+    assert result["passed"] is True
+    assert result["performance_comparison_valid"] is True
+    assert all(row["performance_contract_class"] == "single_shard_stateful_eventual_completion_v1" for row in checked)
+    assert all(row["direct_cross_semantic_performance_comparison_valid"] is True for row in checked)
+
+
 def test_paper_analysis_marks_mixed_execution_semantics_incomparable() -> None:
     group = {
         "run_group_id": "v5grp_incomparable",

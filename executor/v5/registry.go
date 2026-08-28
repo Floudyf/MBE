@@ -3823,6 +3823,7 @@ func BuiltinRegistry() *Registry {
 	})
 	registerBatchSIPlugins(register)
 	registerLiteratureBaselinePlugins(register)
+	registerFabricPPCGPlugins(register)
 	register("block_executor", "serial_block_executor", func(c map[string]any) (Plugin, error) {
 		return serialBlockExecutor{makeBasic("block_executor", "serial_block_executor", c)}, nil
 	})
@@ -3967,6 +3968,9 @@ func InstantiatePlugins(profile map[string]PluginConfig) (RuntimePlugins, error)
 		return p, err
 	}
 	if err := validateBatchSIPluginCombination(p); err != nil {
+		return p, err
+	}
+	if err := validateFabricPPCGCombination(p); err != nil {
 		return p, err
 	}
 	if err := validateLiteratureBaselineCombination(p); err != nil {

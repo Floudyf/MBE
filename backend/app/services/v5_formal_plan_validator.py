@@ -161,8 +161,13 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
 }
 
 LITERATURE_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+    "hash_fabricpp_cg": V5FormalMethod(
+        method_id="hash_fabricpp_cg", display_name="Fabric++ Traditional CG (SIGMOD 2019)", role="baseline",
+        plugin_overrides={"routing":"hash_routing_baseline","execution":"fabricpp_cg_execution","scheduler":"fabricpp_cg_scheduler","block_executor":"fabricpp_cg_block_executor","commit":"normal_commit"},
+        plugin_config_overrides={"block_executor":{"worker_count":1}},
+    ),
     "hash_cg": V5FormalMethod(
-        method_id="hash_cg", display_name="Conflict Graph (CG)", role="baseline",
+        method_id="hash_cg", display_name="CG / Nezha", role="baseline",
         plugin_overrides={"routing":"hash_routing_baseline","execution":"cg_execution","scheduler":"cg_scheduler","block_executor":"cg_block_executor","commit":"normal_commit"},
         plugin_config_overrides={"block_executor":{"worker_count":4}},
     ),
