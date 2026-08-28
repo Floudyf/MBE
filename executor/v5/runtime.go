@@ -3636,7 +3636,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	delete(r.votes, block.BlockHash)
 	delete(r.verifiedExecutionPlans, block.BlockHash)
 	r.blockCount++
-	r.chainRows = append(r.chainRows, []string{r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), fmt.Sprint(commitView), block.BlockHash, block.PreviousHash, fmt.Sprint(len(block.TxList)), block.TxRoot, block.StateRootBefore, result.StateRootAfter, result.ReceiptRoot, fmt.Sprint(time.Now().UnixMilli()), fmt.Sprint(time.Now().UnixMilli())})
+	r.chainRows = append(r.chainRows, []string{r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), fmt.Sprint(commitView), block.BlockHash, block.PreviousHash, fmt.Sprint(len(block.TxList)), block.TxRoot, result.StateRootBefore, result.StateRootAfter, result.ReceiptRoot, fmt.Sprint(time.Now().UnixMilli()), fmt.Sprint(time.Now().UnixMilli())})
 	r.mu.Unlock()
 	r.mu.Lock()
 	r.committedHeight = block.Height
@@ -7039,10 +7039,11 @@ func compactProposalAuditPayload(payload map[string]any) {
 	// proposal evidence. Repeated candidate/selection vectors can therefore be
 	// represented by count+digest commitments in this secondary artifact.
 	// Keep the compact identity/selection vectors needed for direct audit and
-	// downstream evidence consumers. Only the two high-volume repeated payloads
-	// are compacted here: full signed candidate transactions (Aria) and the
-	// per-candidate trace (Aria/Groundhog).
-	fields := []string{"candidate_transactions", "trace"}
+	// downstream evidence consumers. Consensus Evidence Fidelity v1.1 changed
+	// Aria's wire from full candidate_transactions to deferred_transactions only;
+	// both are large signed-transaction payloads and must stay out of this
+	// secondary audit copy. The consensus-bound block payload remains untouched.
+	fields := []string{"candidate_transactions", "deferred_transactions", "trace"}
 	compacted := false
 	for _, key := range fields {
 		value, ok := payload[key]
@@ -7057,16 +7058,22 @@ func compactProposalAuditPayload(payload map[string]any) {
 		// Preserve the v6 audit contract used by runtime_resource_hardening_test.go
 		// and existing artifact consumers. The marker describes only the secondary
 		// proposal_selection_evidence.jsonl copy; consensus-bound evidence is intact.
-		if key == "candidate_transactions" {
+		switch key {
+		case "candidate_transactions":
 			payload["candidate_transactions_retained"] = false
 			if count, ok := payload["candidate_count"]; ok {
 				payload["candidate_transactions_omitted_count"] = count
+			}
+		case "deferred_transactions":
+			payload["deferred_transactions_retained"] = false
+			if ids, ok := payload["deferred_tx_ids"].([]any); ok {
+				payload["deferred_transactions_omitted_count"] = len(ids)
 			}
 		}
 		switch typed := value.(type) {
 		case []any:
 			payload[key+"_audit_count"] = len(typed)
-			if len(typed) > 0 {
+			if key != "deferred_transactions" && len(typed) > 0 {
 				limit := len(typed)
 				if limit > 16 {
 					limit = 16

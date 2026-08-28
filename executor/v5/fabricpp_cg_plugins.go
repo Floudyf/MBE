@@ -82,7 +82,7 @@ func (p fabricPPCGScheduler) PlanBlock(block realblock.Block) (ConsensusExecutio
 	if err != nil {
 		return ConsensusExecutionPlanningResult{}, err
 	}
-	raw, err := literatureMarshalPlan(plan)
+	raw, err := literatureMarshalConsensusPlan(plan)
 	if err != nil {
 		return ConsensusExecutionPlanningResult{}, err
 	}

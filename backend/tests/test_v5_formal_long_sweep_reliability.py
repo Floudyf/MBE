@@ -12,7 +12,7 @@ from backend.app.services.v5_formal_scheduler import (
 
 
 def test_default_policy_is_bounded_and_fixed_workload_strict() -> None:
-    assert DEFAULT_FORMAL_EXECUTION_POLICY["child_wall_timeout_seconds"] == 1800
+    assert DEFAULT_FORMAL_EXECUTION_POLICY["child_wall_timeout_seconds"] == 7200
     assert DEFAULT_FORMAL_EXECUTION_POLICY["worker_heartbeat_seconds"] == 5
     assert DEFAULT_FORMAL_EXECUTION_POLICY["stale_worker_timeout_seconds"] == 30
     assert DEFAULT_FORMAL_EXECUTION_POLICY["fixed_workload_completion_required_for_formal_tps"] is True

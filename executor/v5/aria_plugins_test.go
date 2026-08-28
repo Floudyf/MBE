@@ -65,18 +65,26 @@ func TestAriaProducerSelectsOneBatchAndPersistsSelectionEnvelope(t *testing.T) {
 	if stableTextDigest(string(candidate.ProposalEvidence.Payload)) != candidate.ProposalEvidence.PayloadDigest {
 		t.Fatal("Aria proposal evidence digest mismatch")
 	}
-	var evidence ariaCandidateSelectionEvidence
-	if err := json.Unmarshal(candidate.ProposalEvidence.Payload, &evidence); err != nil {
+	var wire ariaCandidateSelectionConsensusWire
+	if err := json.Unmarshal(candidate.ProposalEvidence.Payload, &wire); err != nil {
 		t.Fatal(err)
 	}
-	if evidence.CandidateCount != 3 || len(evidence.CandidateTransactions) != 3 || len(evidence.SelectedTxIDs) != 1 || len(evidence.DeferredTxIDs) != 2 {
-		t.Fatalf("incomplete Aria selection evidence: %#v", evidence)
+	if wire.WireVersion != ariaCandidateSelectionConsensusWireVersion || wire.CandidateCount != 3 || len(wire.SelectedTxIDs) != 1 || len(wire.DeferredTxIDs) != 2 || len(wire.DeferredTransactions) != 2 {
+		t.Fatalf("incomplete compact Aria selection evidence: %#v", wire)
 	}
-	if evidence.CandidatePayloadDigest == "" || evidence.SelectionResultDigest == "" || evidence.SelectionSemanticDigest == "" {
-		t.Fatalf("missing consensus-bound Aria digests: %#v", evidence)
+	if wire.CandidatePayloadDigest == "" || wire.SelectionResultDigest == "" || wire.SelectionSemanticDigest == "" {
+		t.Fatalf("missing consensus-bound Aria digests: %#v", wire)
 	}
-	if _, err := decodeAriaCandidateSelectionEvidence(candidate); err != nil {
-		t.Fatalf("complete evidence failed validation: %v", err)
+	payloadText := string(candidate.ProposalEvidence.Payload)
+	if strings.Contains(payloadText, "\"candidate_transactions\"") || strings.Contains(payloadText, "\"trace\"") {
+		t.Fatalf("compact Aria evidence still carries duplicate/diagnostic payload: %s", payloadText)
+	}
+	decoded, err := decodeAriaCandidateSelectionEvidence(candidate)
+	if err != nil {
+		t.Fatalf("compact evidence failed validation: %v", err)
+	}
+	if len(decoded.CandidateTransactions) != 3 {
+		t.Fatalf("compact Aria evidence did not reconstruct full candidate batch: %#v", decoded)
 	}
 	pool.ReleaseReserved(candidate.TxList)
 }

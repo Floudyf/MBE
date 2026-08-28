@@ -10,7 +10,7 @@ def test_long_sweep_source_contract() -> None:
     frontend_api = (root / "frontend/src/api.ts").read_text(encoding="utf-8")
     page = (root / "frontend/src/pages/V5FormalRunPage.tsx").read_text(encoding="utf-8")
 
-    assert '"child_wall_timeout_seconds": 1800' in scheduler
+    assert '"child_wall_timeout_seconds": 7200' in scheduler
     assert '"fixed_workload_completion_required_for_formal_tps": True' in scheduler
     assert 'return _timed_out_run_result' in runner
     assert '"formal_eligibility": False' in runner

@@ -89,7 +89,7 @@ func (p cgScheduler) PlanBlockContext(ctx context.Context, block realblock.Block
 	var raw []byte
 	if len(deferred) == 0 {
 		// No victim: preserve the original pure literatureGraphPlan payload.
-		raw, err = literatureMarshalPlan(graphPlan)
+		raw, err = literatureMarshalConsensusPlan(graphPlan)
 	} else {
 		raw, err = marshalCGConsensusPlan(consensusPlan)
 	}
@@ -159,7 +159,7 @@ func marshalCGConsensusPlan(plan cgConsensusPlan) ([]byte, error) {
 	// Keep literatureGraphPlan fields at the top level. Existing lifecycle code
 	// can parse this payload as an ordinary CG plan; retry metadata is additive
 	// and protected by the envelope PayloadDigest.
-	graphRaw, err := literatureMarshalPlan(plan.GraphPlan)
+	graphRaw, err := literatureMarshalConsensusPlan(plan.GraphPlan)
 	if err != nil {
 		return nil, err
 	}
@@ -329,11 +329,12 @@ func verifyCGConsensusPlan(block realblock.Block, plan cgConsensusPlan, fullProj
 	reconstructed := block
 	reconstructed.TxList = fullItems
 	reconstructed.TxIDs = transactionIDs(fullItems)
-	graphRaw, err := literatureMarshalPlan(plan.GraphPlan)
-	if err != nil {
-		return err
+	reconstructed.ExecutionPlan = &realblock.ExecutionPlanEnvelope{
+		AlgorithmID:   cgPlanAlgorithmID,
+		PayloadDigest: block.ExecutionPlan.PayloadDigest,
+		PlanDigest:    plan.GraphPlan.PlanDigest,
+		Payload:       append([]byte(nil), block.ExecutionPlan.Payload...),
 	}
-	reconstructed.ExecutionPlan = &realblock.ExecutionPlanEnvelope{AlgorithmID: cgPlanAlgorithmID, PayloadDigest: stableTextDigest(string(graphRaw)), PlanDigest: plan.GraphPlan.PlanDigest, Payload: graphRaw}
 	if fullProjection {
 		return verifyCGPlanSmart(reconstructed, plan.GraphPlan, 1)
 	}
@@ -1582,13 +1583,20 @@ func verifyCGPlanSmart(block realblock.Block, plan literatureGraphPlan, _ int) e
 	}
 
 	expectedAdjacency, expectedEdges := cgBuildOfficialConflictMultigraph(items)
-	if len(plan.Edges) != len(expectedEdges) || plan.Metrics.EdgeCount != len(expectedEdges) {
-		return fmt.Errorf("cg official multigraph edge-count mismatch: plan=%d expected=%d metrics=%d", len(plan.Edges), len(expectedEdges), plan.Metrics.EdgeCount)
+	if plan.Metrics.EdgeCount != len(expectedEdges) {
+		return fmt.Errorf("cg official multigraph edge-count mismatch: expected=%d metrics=%d", len(expectedEdges), plan.Metrics.EdgeCount)
 	}
-	for index := range expectedEdges {
-		if plan.Edges[index] != expectedEdges[index] {
-			return fmt.Errorf("cg official multigraph edge mismatch at %d: plan=%d->%d expected=%d->%d", index, plan.Edges[index].From, plan.Edges[index].To, expectedEdges[index].From, expectedEdges[index].To)
+	if plan.ConsensusWireVersion == "" {
+		if len(plan.Edges) != len(expectedEdges) {
+			return fmt.Errorf("cg legacy multigraph edge-count mismatch: plan=%d expected=%d", len(plan.Edges), len(expectedEdges))
 		}
+		for index := range expectedEdges {
+			if plan.Edges[index] != expectedEdges[index] {
+				return fmt.Errorf("cg official multigraph edge mismatch at %d: plan=%d->%d expected=%d->%d", index, plan.Edges[index].From, plan.Edges[index].To, expectedEdges[index].From, expectedEdges[index].To)
+			}
+		}
+	} else if err := literatureVerifyCompactEdgeCommitment(plan, expectedEdges); err != nil {
+		return err
 	}
 	if plan.Metrics.TransactionCount != len(items) || plan.Metrics.PairChecks != len(items)*(len(items)-1)/2 || plan.Metrics.PlanningWorkerCount != 1 {
 		return fmt.Errorf("cg official construction metric mismatch")

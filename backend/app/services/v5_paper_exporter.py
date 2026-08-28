@@ -57,8 +57,9 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     _write(group_dir / "sensitivity_summary.csv", _suite(grouped, "workload_sensitivity"), GROUP_FIELDS)
     _write(group_dir / "scaling_summary.csv", _suite(grouped, "topology_scaling"), GROUP_FIELDS)
     _write(group_dir / "fault_recovery_summary.csv", _suite(grouped, "fault_recovery_experiment"), GROUP_FIELDS)
-    _write(group_dir / "paper_figure_data.csv", _figure_rows(grouped), ["suite_type", "x_variable", "x_value", "series", "metric", "value", "ci95_low", "ci95_high"])
-    table_rows = _paper_table_rows(grouped)
+    paper_export_grouped = grouped if _paper_comparison_export_allowed(group, children, paper) else []
+    _write(group_dir / "paper_figure_data.csv", _figure_rows(paper_export_grouped), ["suite_type", "x_variable", "x_value", "series", "metric", "value", "ci95_low", "ci95_high"])
+    table_rows = _paper_table_rows(paper_export_grouped)
     _write(group_dir / "paper_table_data.csv", table_rows, list(table_rows[0]) if table_rows else PAPER_TABLE_FIELDS)
     classified = [(item, _sample_status_for_child(item)) for item in children]
     failures = [item for item, status in classified if status == "execution_failed"]
@@ -92,7 +93,7 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
         f"Individually valid completed: {overall.get('individually_valid_completed_count', 0)}\n"
         f"Within-semantic paper candidates: {overall.get('paper_valid_count', overall['completed_count'])}\n"
         f"Direct cross-semantic performance comparison valid: {str(overall.get('direct_cross_semantic_performance_comparison_valid', False)).lower()}\n"
-        f"Cross-method Serial Oracle valid: {str(group.get('cross_method_serial_order_oracle_valid', False)).lower()}\n"
+        f"Cross-method correctness oracle valid: {str(group.get('cross_method_correctness_oracle_valid', group.get('cross_method_serial_order_oracle_valid', False))).lower()}\n"
         f"Observed completed: {overall.get('observed_completed_count', 0)}\n"
         f"Completed invalid: {overall.get('completed_invalid_count', 0)}\n"
         f"Blocked: {overall.get('blocked_count', 0)}\n"
@@ -101,6 +102,23 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     )
     return overall
 
+
+
+def _paper_comparison_export_allowed(group: dict, children: list[dict], paper: dict) -> bool:
+    """Fail closed for multi-method paper-ready figure/table exports.
+
+    Raw, observed, sensitivity and diagnostic outputs remain available even when
+    the cross-method StateGate is not satisfied.  Only the two convenience
+    files intended for direct paper plotting/tabulation are suppressed.
+    """
+    completed_methods = {
+        str(item.get("method_config_id") or "").strip()
+        for item in children
+        if item.get("status") == "completed" and str(item.get("method_config_id") or "").strip()
+    }
+    if len(completed_methods) <= 1:
+        return True
+    return paper.get("performance_comparison_valid") is True
 
 def analysis(group: dict, children: list[dict]) -> dict:
     rows = _group_rows(group, children)

@@ -29,7 +29,7 @@ type groundhogCandidateSelectionEvidence struct {
 	DeferredLogicalIDs []string                              `json:"deferred_logical_ids"`
 	DeferredReasons    map[string]string                     `json:"deferred_reasons"`
 	Metrics            execution.GroundhogMetrics            `json:"metrics"`
-	Trace              []execution.GroundhogTransactionTrace `json:"trace"`
+	Trace              []execution.GroundhogTransactionTrace `json:"-"`
 }
 
 type groundhogBlockProducer struct{ basicPlugin }

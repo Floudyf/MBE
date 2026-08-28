@@ -29,7 +29,7 @@ SUPPORTED_DATASET_WORKLOAD_POINT_FIELDS = {"tx_count", "target_alpha", "target_t
 
 DEFAULT_FORMAL_EXECUTION_POLICY = {
     "schema_version": "mbe_v5_formal_execution_policy_v4",
-    "child_wall_timeout_seconds": 1800,
+    "child_wall_timeout_seconds": 7200,
     "worker_heartbeat_seconds": 5,
     "stale_worker_timeout_seconds": 30,
     "resource_recovery_wait_seconds": 30,
@@ -498,6 +498,17 @@ def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[
             "proof_policy": "consensus_bound_nezha_hs_retry_projection_v2",
             "legacy_cross_shard_protocol": True,
             "measurement_boundary": "client_submit_to_nezha_eventual_finality",
+        }
+    if method_id == "hash_aria" or snapshot.get("block_executor") == "aria_block_executor":
+        return {
+            "comparison_semantics_class": "aria_reordered_retryable_v1",
+            "state_access_semantics": "stateful_local_aria_deterministic_reordering_retryable",
+            "state_home_mapping_policy": "execution_shard_local_namespace",
+            "remote_fetch_policy": "none",
+            "remote_writeback_policy": "none",
+            "proof_policy": "consensus_bound_aria_candidate_selection_v2",
+            "legacy_cross_shard_protocol": True,
+            "measurement_boundary": "client_submit_to_aria_eventual_finality",
         }
     if method_id == "hash_bsx" or snapshot.get("block_executor") == "bsx_block_executor":
         return {
@@ -1072,9 +1083,27 @@ def _worker_truth_reasons(item: dict) -> list[str]:
     if isinstance(requested, bool) or not isinstance(requested, int) or requested < 1:
         return []
 
+    # Some literature baselines are deliberately fixed-width even when the
+    # formal topology sweep requests a larger worker count. _spec_for() already
+    # enforces Serial and Fabric++ traditional CG at one execution worker.
+    # Their result gate therefore validates the fixed method contract, not the
+    # global sweep request. Historical Serial artifacts do not expose a generic
+    # worker_count metric, so the method/executor contract itself is the source
+    # of truth unless an explicit contradictory effective-worker metric exists.
+    method = item.get("method") if isinstance(item.get("method"), dict) else {}
+    overrides = method.get("plugin_overrides") if isinstance(method.get("plugin_overrides"), dict) else {}
+    block_executor_id = str(overrides.get("block_executor") or metrics.get("block_executor_id") or "")
+    fixed_single_worker = (
+        block_executor_id in {"serial_block_executor", "fabricpp_cg_block_executor"}
+        or method_id in {"hash_serial", "stateless_hash_serial", "hash_fabricpp_cg"}
+    )
+
     effective = metrics.get("configured_worker_count", metrics.get("worker_count"))
     reasons: list[str] = []
-    if isinstance(effective, bool) or not isinstance(effective, (int, float)) or int(effective) != requested:
+    if fixed_single_worker:
+        if isinstance(effective, bool) or (isinstance(effective, (int, float)) and int(effective) != 1):
+            reasons.append("effective_worker_not_equal_requested")
+    elif isinstance(effective, bool) or not isinstance(effective, (int, float)) or int(effective) != requested:
         reasons.append("effective_worker_not_equal_requested")
 
     if method_id == "hash_cg":
@@ -1303,6 +1332,7 @@ def _build_external_performance_contract_reports(items: list[dict]) -> tuple[lis
         missing: dict[str, list[str]] = {}
         mismatches: dict[str, list[str]] = {}
         oracle_failures: dict[str, list[str]] = {}
+        correctness_oracle_failures: dict[str, list[str]] = {}
 
         # The common external contract requires the same initial state and the
         # same logical workload/access semantics. It intentionally does NOT
@@ -1323,10 +1353,42 @@ def _build_external_performance_contract_reports(items: list[dict]) -> tuple[lis
 
         for item in group_items:
             child_id = str(item.get("child_run_id") or "")
-            if item.get("serial_order_replay_equivalent") is not True:
-                oracle_failures[child_id] = list(item.get("serial_order_replay_blockers") or ["serial_order_replay_not_equivalent"])
+            serial_applicable = item.get("serial_order_replay_applicable") is not False
+            method_correctness = item.get("method_correctness_oracle_valid")
 
-        passed = contract_supported and not missing and not mismatches and not oracle_failures
+            if serial_applicable:
+                # Preserve the established StateGate contract for direct-state
+                # methods (CG/ACG/Batch-SI and historical artifacts): their
+                # correctness oracle is the observed-order serial replay. The
+                # additive method_correctness field may be absent on older
+                # results; an explicit False still fails closed.
+                if item.get("serial_order_replay_equivalent") is not True:
+                    oracle_failures[child_id] = list(
+                        item.get("serial_order_replay_blockers")
+                        or ["serial_order_replay_not_equivalent"]
+                    )
+                if method_correctness is False:
+                    correctness_oracle_failures[child_id] = list(
+                        item.get("method_correctness_oracle_blockers")
+                        or ["method_correctness_oracle_not_valid"]
+                    )
+            else:
+                # Groundhog intentionally has no direct-state serial-value
+                # replay. It must therefore present its method-appropriate,
+                # fail-closed replica determinism/completion oracle.
+                if method_correctness is not True:
+                    correctness_oracle_failures[child_id] = list(
+                        item.get("method_correctness_oracle_blockers")
+                        or ["method_correctness_oracle_not_valid"]
+                    )
+
+        passed = (
+            contract_supported
+            and not missing
+            and not mismatches
+            and not oracle_failures
+            and not correctness_oracle_failures
+        )
         comparable_flags.append(passed)
         observed_final_state_digests = sorted({
             str(item.get("global_final_state_digest") or "")
@@ -1347,11 +1409,16 @@ def _build_external_performance_contract_reports(items: list[dict]) -> tuple[lis
             "required_evidence": [
                 "initial_state_digest",
                 "serial_order_replay_input_digest",
-                "serial_order_replay_equivalent",
+                "method_appropriate_correctness_oracle",
             ],
             "missing_evidence": missing,
             "mismatched_evidence": mismatches,
             "serial_order_oracle_failures": oracle_failures,
+            "method_correctness_oracle_failures": correctness_oracle_failures,
+            "cross_method_correctness_oracle_valid": passed,
+            # Legacy compatibility alias. The external contract is now based on
+            # method-appropriate correctness: observed-order serial replay for
+            # direct-state methods, typed-commutative replica determinism for Groundhog.
             "cross_method_serial_order_oracle_valid": passed,
             "final_state_digest_equality_required": False,
             "observed_final_state_digests": observed_final_state_digests,
@@ -1371,12 +1438,36 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
         summary = ((item.get("result") or {}).get("summary") or {})
         validity_reasons = _state_equivalence_individual_reasons(item)
         metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+        old_validity_reasons = item.get("individual_result_validity_reasons")
+        worker_truth_reason_codes = {
+            "effective_worker_not_equal_requested",
+            "cg_execution_worker_not_equal_requested",
+            "cg_planning_worker_not_one",
+            "cg_parallel_width_exceeds_execution_workers",
+        }
+        stale_worker_truth_only = (
+            item.get("paper_candidate") is False
+            and item.get("individual_result_valid") is False
+            and isinstance(old_validity_reasons, list)
+            and bool(old_validity_reasons)
+            and all(str(reason) in worker_truth_reason_codes for reason in old_validity_reasons)
+            and not validity_reasons
+        )
+        recover_paper_candidate = (
+            stale_worker_truth_only
+            and _is_paper_candidate_result(
+                item.get("result") if isinstance(item.get("result"), dict) else {},
+                metrics,
+            )
+        )
         next_item = {
             **item,
+            **({"paper_candidate": True} if recover_paper_candidate else {}),
             "initial_state_digest": summary.get("initial_state_digest", ""),
             "state_home_mapping_digest": summary.get("state_home_mapping_digest", ""),
             "global_final_state_digest": summary.get("global_final_state_digest", ""),
             "serial_order_oracle_status": metrics.get("serial_order_oracle_status", summary.get("serial_order_oracle_status")),
+            "serial_order_replay_applicable": metrics.get("serial_order_replay_applicable", summary.get("serial_order_replay_applicable")),
             "serial_order_replay_equivalent": metrics.get("serial_order_replay_equivalent", summary.get("serial_order_replay_equivalent")),
             "serial_order_replay_blockers": metrics.get("serial_order_replay_blockers", summary.get("serial_order_replay_blockers", [])),
             "serial_order_replay_input_digest": metrics.get("serial_order_replay_input_digest", summary.get("serial_order_replay_input_digest", "")),
@@ -1387,6 +1478,10 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
             "serial_order_replay_global_business_state_digest": metrics.get("serial_order_replay_global_business_state_digest", summary.get("serial_order_replay_global_business_state_digest", "")),
             "serial_order_actual_global_business_state_digest": metrics.get("serial_order_actual_global_business_state_digest", summary.get("serial_order_actual_global_business_state_digest", "")),
             "serial_order_replay_replica_order_consistent": metrics.get("serial_order_replay_replica_order_consistent", summary.get("serial_order_replay_replica_order_consistent")),
+            "method_correctness_oracle_kind": metrics.get("method_correctness_oracle_kind", summary.get("method_correctness_oracle_kind", "")),
+            "method_correctness_oracle_status": metrics.get("method_correctness_oracle_status", summary.get("method_correctness_oracle_status")),
+            "method_correctness_oracle_valid": metrics.get("method_correctness_oracle_valid", summary.get("method_correctness_oracle_valid")),
+            "method_correctness_oracle_blockers": metrics.get("method_correctness_oracle_blockers", summary.get("method_correctness_oracle_blockers", [])),
             "individual_result_valid": not validity_reasons,
             "individual_result_validity_reasons": validity_reasons,
         }
@@ -1543,14 +1638,15 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
             continue
         allowed = report.get("status") == "passed"
         item["external_performance_contract_valid"] = allowed
+        item["cross_method_correctness_oracle_valid"] = report.get("cross_method_correctness_oracle_valid") is True
         item["cross_method_serial_order_oracle_valid"] = report.get("cross_method_serial_order_oracle_valid") is True
         item["direct_cross_semantic_performance_comparison_valid"] = allowed
         item["performance_comparison_valid"] = allowed
         if allowed and report.get("cross_method_final_state_digest_equal") is False:
             item["comparison_warning"] = (
-                "internal execution semantics choose different legal serial orders; "
-                "cross-method performance comparison is valid because every method "
-                "matches its own observed-order serial replay under the common external contract"
+                "internal execution semantics differ; cross-method performance comparison "
+                "is valid because every method passes its method-appropriate correctness oracle "
+                "under the common external completion contract"
             )
 
     direct_cross_semantic_valid = (
@@ -1580,6 +1676,7 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
         "cohorts": reports,
         "external_performance_contract_reports": external_contract_reports,
         "external_performance_contract_valid": external_contract_valid,
+        "cross_method_correctness_oracle_valid": external_contract_valid,
         "cross_method_serial_order_oracle_valid": external_contract_valid,
     }
 
@@ -1611,6 +1708,8 @@ def _write_state_equivalence_artifacts(root: Path, result: dict) -> None:
         "missing_evidence",
         "mismatched_evidence",
         "serial_order_oracle_failures",
+        "method_correctness_oracle_failures",
+        "cross_method_correctness_oracle_valid",
         "cross_method_serial_order_oracle_valid",
         "final_state_digest_equality_required",
         "observed_final_state_digests",

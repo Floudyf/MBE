@@ -14,6 +14,7 @@ import (
 const ariaBlockProducerID = "aria_block_producer"
 
 const ariaCandidateSelectionEvidenceID = "aria_candidate_selection_v2"
+const ariaCandidateSelectionConsensusWireVersion = "aria_candidate_selection_compact_wire_v1"
 
 type ariaBlockProducer struct{ basicPlugin }
 
@@ -78,6 +79,36 @@ type ariaCandidateSelectionEvidence struct {
 	SelectionSemanticDigest string                   `json:"selection_semantic_digest"`
 	Metrics                 execution.AriaMetrics    `json:"metrics"`
 	Trace                   execution.AriaEpochTrace `json:"trace"`
+}
+
+// ariaCandidateSelectionConsensusWire contains only data that is not already
+// present in the accepted block body. Deferred signed transactions are retained
+// because MBE's fixed-workload retry lifecycle must be able to reconstruct the
+// original Aria batch exactly on every validator.
+type ariaCandidateSelectionConsensusWire struct {
+	WireVersion             string                 `json:"wire_version"`
+	ShardID                 string                 `json:"shard_id"`
+	Height                  uint64                 `json:"height"`
+	CandidateCount          int                    `json:"candidate_count"`
+	ScanLimit               int                    `json:"scan_limit"`
+	SelectionLimit          int                    `json:"selection_limit"`
+	CandidateTxIDs          []string               `json:"candidate_tx_ids"`
+	CandidateLogicalIDs     []string               `json:"candidate_logical_ids"`
+	CandidatePayloadDigest  string                 `json:"candidate_payload_digest"`
+	SelectedTxIDs           []string               `json:"selected_tx_ids"`
+	SelectedLogicalIDs      []string               `json:"selected_logical_ids"`
+	DeferredTxIDs           []string               `json:"deferred_tx_ids"`
+	DeferredLogicalIDs      []string               `json:"deferred_logical_ids"`
+	DeferredTransactions    []tx.SignedTransaction `json:"deferred_transactions,omitempty"`
+	DeferredReasons         map[string]string      `json:"deferred_reasons"`
+	Reordering              bool                   `json:"reordering"`
+	ReadOnlyOptimization    bool                   `json:"read_only_optimization"`
+	RetryNonceGaps          bool                   `json:"retry_nonce_gaps"`
+	SelectionResultDigest   string                 `json:"selection_result_digest"`
+	SelectionSemanticDigest string                 `json:"selection_semantic_digest"`
+	// Metrics are small scalar evidence used by existing paper exports. They are
+	// retained for compatibility; the O(n) execution Trace is deliberately local.
+	Metrics execution.AriaMetrics `json:"metrics"`
 }
 
 type ariaSelectionCommitment struct {
@@ -200,7 +231,30 @@ func (p ariaBlockProducer) BuildCandidate(input BlockProductionInput) (realblock
 		Trace:                  selection.Trace,
 	}
 	evidence.SelectionSemanticDigest = ariaSelectionSemanticDigest(evidence, selection)
-	if err := attachProposalEvidence(&candidate, ariaCandidateSelectionEvidenceID, evidence); err != nil {
+	wire := ariaCandidateSelectionConsensusWire{
+		WireVersion:             ariaCandidateSelectionConsensusWireVersion,
+		ShardID:                 evidence.ShardID,
+		Height:                  evidence.Height,
+		CandidateCount:          evidence.CandidateCount,
+		ScanLimit:               evidence.ScanLimit,
+		SelectionLimit:          evidence.SelectionLimit,
+		CandidateTxIDs:          append([]string(nil), evidence.CandidateTxIDs...),
+		CandidateLogicalIDs:     append([]string(nil), evidence.CandidateLogicalIDs...),
+		CandidatePayloadDigest:  evidence.CandidatePayloadDigest,
+		SelectedTxIDs:           append([]string(nil), evidence.SelectedTxIDs...),
+		SelectedLogicalIDs:      append([]string(nil), evidence.SelectedLogicalIDs...),
+		DeferredTxIDs:           append([]string(nil), evidence.DeferredTxIDs...),
+		DeferredLogicalIDs:      append([]string(nil), evidence.DeferredLogicalIDs...),
+		DeferredTransactions:    append([]tx.SignedTransaction(nil), selection.Deferred...),
+		DeferredReasons:         cloneStringMap(evidence.DeferredReasons),
+		Reordering:              evidence.Reordering,
+		ReadOnlyOptimization:    evidence.ReadOnlyOptimization,
+		RetryNonceGaps:          evidence.RetryNonceGaps,
+		SelectionResultDigest:   evidence.SelectionResultDigest,
+		SelectionSemanticDigest: evidence.SelectionSemanticDigest,
+		Metrics:                 evidence.Metrics,
+	}
+	if err := attachProposalEvidence(&candidate, ariaCandidateSelectionEvidenceID, wire); err != nil {
 		input.Pool.ReleaseReserved(selection.Selected)
 		return realblock.Block{}, err
 	}
@@ -235,9 +289,82 @@ func decodeAriaCandidateSelectionEvidence(candidate realblock.Block) (ariaCandid
 	if candidate.ProposalEvidence == nil || candidate.ProposalEvidence.AlgorithmID != ariaCandidateSelectionEvidenceID {
 		return evidence, fmt.Errorf("aria block requires full candidate selection evidence")
 	}
-	if err := json.Unmarshal(candidate.ProposalEvidence.Payload, &evidence); err != nil {
-		return evidence, fmt.Errorf("decode aria candidate selection evidence: %w", err)
+	var header struct {
+		WireVersion string `json:"wire_version"`
 	}
+	if err := json.Unmarshal(candidate.ProposalEvidence.Payload, &header); err != nil {
+		return evidence, fmt.Errorf("decode aria candidate selection evidence header: %w", err)
+	}
+	if header.WireVersion == "" {
+		// Historical v2 payloads carried the complete candidate batch plus Trace.
+		if err := json.Unmarshal(candidate.ProposalEvidence.Payload, &evidence); err != nil {
+			return evidence, fmt.Errorf("decode legacy aria candidate selection evidence: %w", err)
+		}
+		return validateAriaCandidateSelectionEvidence(candidate, evidence)
+	}
+	if header.WireVersion != ariaCandidateSelectionConsensusWireVersion {
+		return evidence, fmt.Errorf("unsupported aria candidate evidence wire %q", header.WireVersion)
+	}
+	var wire ariaCandidateSelectionConsensusWire
+	if err := json.Unmarshal(candidate.ProposalEvidence.Payload, &wire); err != nil {
+		return evidence, fmt.Errorf("decode compact aria candidate selection evidence: %w", err)
+	}
+	if !sameStringList(transactionIDs(wire.DeferredTransactions), wire.DeferredTxIDs) ||
+		!sameStringList(logicalTransactionIDs(wire.DeferredTransactions), wire.DeferredLogicalIDs) {
+		return evidence, fmt.Errorf("aria compact deferred transaction identity mismatch")
+	}
+	acceptedByID := make(map[string]tx.SignedTransaction, len(candidate.TxList))
+	for _, item := range candidate.TxList {
+		if item.TxID == "" || acceptedByID[item.TxID].TxID != "" {
+			return evidence, fmt.Errorf("aria accepted block contains duplicate or empty transaction id %s", item.TxID)
+		}
+		acceptedByID[item.TxID] = item
+	}
+	deferredByID := make(map[string]tx.SignedTransaction, len(wire.DeferredTransactions))
+	for _, item := range wire.DeferredTransactions {
+		if item.TxID == "" || deferredByID[item.TxID].TxID != "" || acceptedByID[item.TxID].TxID != "" {
+			return evidence, fmt.Errorf("aria compact deferred transaction set is invalid for %s", item.TxID)
+		}
+		deferredByID[item.TxID] = item
+	}
+	reconstructed := make([]tx.SignedTransaction, 0, len(wire.CandidateTxIDs))
+	for _, txID := range wire.CandidateTxIDs {
+		if item, ok := acceptedByID[txID]; ok {
+			reconstructed = append(reconstructed, item)
+			continue
+		}
+		item, ok := deferredByID[txID]
+		if !ok {
+			return evidence, fmt.Errorf("aria compact candidate %s cannot be reconstructed", txID)
+		}
+		reconstructed = append(reconstructed, item)
+	}
+	evidence = ariaCandidateSelectionEvidence{
+		ShardID:                 wire.ShardID,
+		Height:                  wire.Height,
+		CandidateCount:          wire.CandidateCount,
+		ScanLimit:               wire.ScanLimit,
+		SelectionLimit:          wire.SelectionLimit,
+		CandidateTransactions:   reconstructed,
+		CandidateTxIDs:          append([]string(nil), wire.CandidateTxIDs...),
+		CandidateLogicalIDs:     append([]string(nil), wire.CandidateLogicalIDs...),
+		CandidatePayloadDigest:  wire.CandidatePayloadDigest,
+		SelectedTxIDs:           append([]string(nil), wire.SelectedTxIDs...),
+		SelectedLogicalIDs:      append([]string(nil), wire.SelectedLogicalIDs...),
+		DeferredTxIDs:           append([]string(nil), wire.DeferredTxIDs...),
+		DeferredLogicalIDs:      append([]string(nil), wire.DeferredLogicalIDs...),
+		DeferredReasons:         cloneStringMap(wire.DeferredReasons),
+		Reordering:              wire.Reordering,
+		ReadOnlyOptimization:    wire.ReadOnlyOptimization,
+		RetryNonceGaps:          wire.RetryNonceGaps,
+		SelectionResultDigest:   wire.SelectionResultDigest,
+		SelectionSemanticDigest: wire.SelectionSemanticDigest,
+		Metrics:                 wire.Metrics,
+	}
+	return validateAriaCandidateSelectionEvidence(candidate, evidence)
+}
+
+func validateAriaCandidateSelectionEvidence(candidate realblock.Block, evidence ariaCandidateSelectionEvidence) (ariaCandidateSelectionEvidence, error) {
 	if evidence.ShardID != candidate.ShardID || evidence.Height != candidate.Height {
 		return evidence, fmt.Errorf("aria candidate evidence block identity mismatch")
 	}
@@ -249,9 +376,6 @@ func decodeAriaCandidateSelectionEvidence(candidate realblock.Block) (ariaCandid
 	}
 	if evidence.SelectionLimit < 1 || evidence.SelectionLimit > evidence.CandidateCount {
 		return evidence, fmt.Errorf("aria candidate evidence invalid selection limit: %d", evidence.SelectionLimit)
-	}
-	if stableJSONDigest(evidence.CandidateTransactions) != evidence.CandidatePayloadDigest {
-		return evidence, fmt.Errorf("aria candidate payload digest mismatch")
 	}
 	if !sameStringList(transactionIDs(evidence.CandidateTransactions), evidence.CandidateTxIDs) ||
 		!sameStringList(logicalTransactionIDs(evidence.CandidateTransactions), evidence.CandidateLogicalIDs) {
@@ -279,6 +403,12 @@ func decodeAriaCandidateSelectionEvidence(candidate realblock.Block) (ariaCandid
 	}
 	if !sameStringList(evidence.SelectedTxIDs, candidate.TxIDs) {
 		return evidence, fmt.Errorf("aria selected transaction list mismatch")
+	}
+	// Preserve the historical precise selected-payload rejection before the
+	// whole-batch commitment check. Deferred payload tampering still falls
+	// through to CandidatePayloadDigest below.
+	if stableJSONDigest(evidence.CandidateTransactions) != evidence.CandidatePayloadDigest {
+		return evidence, fmt.Errorf("aria candidate payload mismatch: digest commitment mismatch")
 	}
 	seen := map[string]string{}
 	for _, txID := range evidence.SelectedTxIDs {

@@ -22,12 +22,14 @@ func TestCatchupPeerCandidatesPreferLeaderWithoutBroadcastFanout(t *testing.T) {
 
 func TestRecordProposalEvidenceCompactsAriaCandidatePayloadOnlyInArtifactCopy(t *testing.T) {
 	evidence := map[string]any{
+		"wire_version":             ariaCandidateSelectionConsensusWireVersion,
 		"candidate_count":          2,
-		"candidate_transactions":   []any{map[string]any{"tx_id": "a"}, map[string]any{"tx_id": "b"}},
+		"candidate_transactions":   []any{map[string]any{"tx_id": "legacy-a"}, map[string]any{"tx_id": "legacy-b"}},
 		"candidate_tx_ids":         []string{"a", "b"},
 		"candidate_payload_digest": "digest",
 		"selected_tx_ids":          []string{"a"},
 		"deferred_tx_ids":          []string{"b"},
+		"deferred_transactions":    []any{map[string]any{"tx_id": "b", "payload": "large-signed-payload"}},
 	}
 	payload, err := json.Marshal(evidence)
 	if err != nil {
@@ -43,17 +45,36 @@ func TestRecordProposalEvidenceCompactsAriaCandidatePayloadOnlyInArtifactCopy(t 
 	if !ok {
 		t.Fatalf("payload type=%T", runtime.proposalEvidence[0]["payload"])
 	}
-	if _, exists := object["candidate_transactions"]; exists {
-		t.Fatal("artifact copy retained full candidate transaction payload")
+	for _, key := range []string{"candidate_transactions", "deferred_transactions"} {
+		if _, exists := object[key]; exists {
+			t.Fatalf("artifact copy retained full %s payload", key)
+		}
+		if object[key+"_retained"] != false {
+			t.Fatalf("%s retained marker=%v", key, object[key+"_retained"])
+		}
+		if object[key+"_audit_digest"] == "" || object[key+"_audit_digest"] == nil {
+			t.Fatalf("%s audit digest missing: %#v", key, object)
+		}
 	}
-	if object["candidate_transactions_retained"] != false {
-		t.Fatalf("retained=%v", object["candidate_transactions_retained"])
+	// Preserve the pre-existing v2 candidate audit sample contract. Only the new
+	// deferred signed-transaction vector is sample-suppressed to stop shutdown bloat.
+	if _, exists := object["candidate_transactions_audit_sample"]; !exists {
+		t.Fatal("legacy candidate transaction audit sample was removed")
+	}
+	if _, exists := object["deferred_transactions_audit_sample"]; exists {
+		t.Fatal("artifact copy retained deferred signed-transaction audit sample")
+	}
+	if object["deferred_transactions_omitted_count"] != float64(1) && object["deferred_transactions_omitted_count"] != 1 {
+		t.Fatalf("deferred omitted count=%v", object["deferred_transactions_omitted_count"])
 	}
 	if object["candidate_payload_digest"] != "digest" {
 		t.Fatalf("candidate digest lost: %#v", object)
 	}
-	// Consensus evidence on the block remains unchanged.
-	if len(block.ProposalEvidence.Payload) != len(payload) {
+	if object["audit_payload_compaction_version"] != "proposal_selection_audit_digest_v2" {
+		t.Fatalf("compaction version=%v", object["audit_payload_compaction_version"])
+	}
+	// Consensus evidence on the block remains byte-for-byte unchanged.
+	if string(block.ProposalEvidence.Payload) != string(payload) {
 		t.Fatal("consensus-bound proposal evidence was mutated")
 	}
 }

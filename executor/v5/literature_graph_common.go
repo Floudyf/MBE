@@ -11,7 +11,16 @@ import (
 	"metaverse-chainlab/executor/realism/tx"
 )
 
-const literatureGraphPlanVersion = "mbe_literature_graph_plan_v1"
+const (
+	literatureGraphPlanVersion            = "mbe_literature_graph_plan_v1"
+	literatureGraphPlanCompactWireVersion = "mbe_literature_graph_plan_compact_wire_v1"
+	// A JSON edge is at least {"from":0,"to":0} (17 bytes), plus commas and
+	// the edges field name. At 16 edges the removed legacy edge field is at
+	// least 297 bytes, safely larger than fixed wire_version+edges_digest
+	// metadata (~141 bytes). Below this threshold we preserve the exact legacy
+	// encoder, avoiding payload expansion and a redundant full serialization.
+	literatureGraphPlanCompactEdgeThreshold = 16
+)
 
 type literatureTxAccess struct {
 	Item      tx.SignedTransaction
@@ -52,6 +61,8 @@ type literatureGraphPlan struct {
 	DeclaredReadKeyCount    int                    `json:"declared_read_key_count"`
 	DeclaredWriteKeyCount   int                    `json:"declared_write_key_count"`
 	Edges                   []literatureGraphEdge  `json:"edges,omitempty"`
+	ConsensusWireVersion    string                 `json:"wire_version,omitempty"`
+	EdgesDigest             string                 `json:"edges_digest,omitempty"`
 	ValidatorMode           string                 `json:"validator_mode,omitempty"`
 	Metrics                 literatureGraphMetrics `json:"metrics"`
 	PlanDigest              string                 `json:"plan_digest"`
@@ -60,6 +71,11 @@ type literatureGraphPlan struct {
 func literaturePlanDigest(plan literatureGraphPlan) string {
 	clone := plan
 	clone.PlanDigest = ""
+	// Wire-only fields must never change the literature algorithm's semantic
+	// plan digest. Historical v1 plans and new compact consensus wires therefore
+	// commit to exactly the same rich plan.
+	clone.ConsensusWireVersion = ""
+	clone.EdgesDigest = ""
 	clone.Metrics.GraphConstructionMS = 0
 	clone.Metrics.SortingMS = 0
 	return stableDigest(clone)
@@ -67,6 +83,37 @@ func literaturePlanDigest(plan literatureGraphPlan) string {
 
 func literatureMarshalPlan(plan literatureGraphPlan) ([]byte, error) {
 	return literatureJSONMarshal(plan)
+}
+
+func literatureGraphEdgesDigest(edges []literatureGraphEdge) string {
+	canonical := append([]literatureGraphEdge(nil), edges...)
+	if canonical == nil {
+		canonical = []literatureGraphEdge{}
+	}
+	return stableDigest(canonical)
+}
+
+// literatureMarshalConsensusPlan removes only the O(E) edge list from the PBFT
+// payload. The complete rich plan remains committed by PlanDigest, while the
+// exact ordered/multiplicity-preserving edge list is separately committed by
+// EdgesDigest. Validators rebuild the graph from the block access lists and
+// verify both commitments before voting.
+func literatureMarshalConsensusPlan(plan literatureGraphPlan) ([]byte, error) {
+	if plan.PlanDigest == "" || literaturePlanDigest(plan) != plan.PlanDigest {
+		return nil, fmt.Errorf("%s rich plan digest mismatch before compact marshal", plan.AlgorithmID)
+	}
+	// Fail-safe against negative optimization: sparse graphs keep the exact
+	// historical encoding. Dense graphs skip the legacy payload marshal entirely
+	// and send only an edge commitment, so this optimization does not add a
+	// redundant O(E) full-plan JSON pass to the consensus planning hot path.
+	if len(plan.Edges) < literatureGraphPlanCompactEdgeThreshold {
+		return literatureJSONMarshal(plan)
+	}
+	wire := plan
+	wire.ConsensusWireVersion = literatureGraphPlanCompactWireVersion
+	wire.EdgesDigest = literatureGraphEdgesDigest(plan.Edges)
+	wire.Edges = nil
+	return literatureJSONMarshal(wire)
 }
 
 func literatureParsePlan(raw []byte, algorithmID string) (literatureGraphPlan, error) {
@@ -77,10 +124,44 @@ func literatureParsePlan(raw []byte, algorithmID string) (literatureGraphPlan, e
 	if plan.AlgorithmID != algorithmID || plan.Version != literatureGraphPlanVersion {
 		return plan, fmt.Errorf("unsupported literature plan %s/%s", plan.AlgorithmID, plan.Version)
 	}
+	if plan.ConsensusWireVersion != "" {
+		if plan.ConsensusWireVersion != literatureGraphPlanCompactWireVersion {
+			return plan, fmt.Errorf("unsupported literature consensus wire %q", plan.ConsensusWireVersion)
+		}
+		if plan.PlanDigest == "" || plan.EdgesDigest == "" {
+			return plan, fmt.Errorf("%s compact plan is missing semantic commitments", algorithmID)
+		}
+		if len(plan.Edges) != 0 {
+			return plan, fmt.Errorf("%s compact plan unexpectedly carries graph edges", algorithmID)
+		}
+		return plan, nil
+	}
 	if plan.PlanDigest == "" || literaturePlanDigest(plan) != plan.PlanDigest {
 		return plan, fmt.Errorf("%s plan digest mismatch", algorithmID)
 	}
 	return plan, nil
+}
+
+func literatureVerifyCompactEdgeCommitment(plan literatureGraphPlan, expected []literatureGraphEdge) error {
+	if plan.ConsensusWireVersion == "" {
+		return nil
+	}
+	if plan.ConsensusWireVersion != literatureGraphPlanCompactWireVersion {
+		return fmt.Errorf("unsupported literature compact wire %q", plan.ConsensusWireVersion)
+	}
+	if got := literatureGraphEdgesDigest(expected); got != plan.EdgesDigest {
+		return fmt.Errorf("%s compact edge commitment mismatch", plan.AlgorithmID)
+	}
+	// Reconstitute the original rich plan and verify the historical semantic
+	// PlanDigest. This proves compact transport did not weaken plan binding.
+	rich := plan
+	rich.ConsensusWireVersion = ""
+	rich.EdgesDigest = ""
+	rich.Edges = append([]literatureGraphEdge(nil), expected...)
+	if literaturePlanDigest(rich) != plan.PlanDigest {
+		return fmt.Errorf("%s compact rich-plan reconstruction digest mismatch", plan.AlgorithmID)
+	}
+	return nil
 }
 
 // Thin wrappers keep JSON ownership in this package without coupling the
@@ -258,6 +339,9 @@ func literatureVerifyPlan(block realblock.Block, plan literatureGraphPlan, algor
 	}
 	recomputed, err := rebuild(block)
 	if err != nil {
+		return err
+	}
+	if err := literatureVerifyCompactEdgeCommitment(plan, recomputed.Edges); err != nil {
 		return err
 	}
 	if recomputed.PlanDigest != plan.PlanDigest {
