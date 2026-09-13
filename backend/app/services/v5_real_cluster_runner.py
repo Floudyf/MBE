@@ -21,6 +21,7 @@ from backend.app.services.v5_experiment_compiler import compile_plan
 from backend.app.services.v5_compatibility_engine import V5CompatibilityError
 from backend.app.services import v5_artifact_storage, v5_real_cluster_artifacts, v5_observability_metrics
 from backend.app.services.v5_artifact_contract import evaluate_expected_artifacts, write_run_artifact_catalog
+from backend.app.services.v5_timeout_extrapolation import analyze_run_timeout_extrapolation
 
 
 RUNS_ROOT = V5_REAL_CLUSTER_RUNS_ROOT
@@ -657,6 +658,18 @@ def run(
     # protocol/system keys when investigating a mismatch.
     summary["global_business_state_digest"] = _global_business_state_digest(summary)
     summary.update(_metatrack_control_plane_evidence(run_dir, summary))
+    timeout_extrapolation = analyze_run_timeout_extrapolation(run_dir)
+    if timeout_extrapolation:
+        summary["timeout_extrapolation"] = timeout_extrapolation
+        qualified_timeout_estimate = timeout_extrapolation.get("qualified_for_tps_estimate") is True
+        summary["throughput_measurement_mode"] = (
+            "timeout_extrapolated" if qualified_timeout_estimate else "timeout_unstable"
+        )
+        summary["throughput_estimate_eligible"] = qualified_timeout_estimate
+        summary["estimated_end_to_end_tps"] = (
+            timeout_extrapolation.get("estimated_end_to_end_tps") if qualified_timeout_estimate else None
+        )
+        summary["tail_regression_tps"] = timeout_extrapolation.get("tail_regression_tps")
 
     artifact_contract = _evaluate_artifact_contract_after_summary_presence(
         run_dir,
@@ -682,6 +695,14 @@ def run(
     summary["artifact_gate"] = artifact_gate
     summary["completion_gate"] = completion_gate
     summary.update(_status_fields(returncode, execution_gate, artifact_gate))
+    if timeout_extrapolation:
+        try:
+            (run_dir / "timeout_extrapolation.json").write_text(
+                json.dumps(timeout_extrapolation, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
     status_value = _run_status_from_completion(returncode, execution_gate)
     root_failure = _root_failure(run_dir, stderr) if status_value == "failed" else ""
     if status_value == "failed" and not root_failure:
@@ -1092,3 +1113,5 @@ def _positive_number(value: object) -> bool:
     return _number(value) > 0
 
 # MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7
+
+# MBE_TIMEOUT_EXTRAPOLATED_TPS_20260830_V4

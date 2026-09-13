@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.app.services.v5_statistics_service import summarize
+from backend.app.services.v5_timeout_extrapolation import write_timeout_tps_exports
 
 
 GROUP_FIELDS = [
@@ -74,6 +75,7 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     _write(group_dir / "observed_results.csv", raw_rows, raw_fields)
     valid_rows = [_raw_row(item) for item in paper_valid]
     _write(group_dir / "paper_valid_results.csv", valid_rows, raw_fields)
+    write_timeout_tps_exports(group_dir, group, children)
     effective = [(item, _effective_metrics(item)) for item in children]
     (group_dir / "missing_metrics.csv").write_text(
         "child_run_id,missing\n"
@@ -985,3 +987,5 @@ def _write(path: Path, rows: list[dict], fields: list[str]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+# MBE_TIMEOUT_EXTRAPOLATED_TPS_20260830_V4

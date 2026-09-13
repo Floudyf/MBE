@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
+  analyzeV5FormalTimeoutExtrapolation,
   cleanupV5LegacySavedConfigs,
   cleanupV5OrphanRealClusterDirs,
   archiveV5ArtifactStorage,
@@ -38,6 +39,7 @@ import V5ChildDetail from "../components/v5/V5ChildDetail";
 import V5GroupSummary from "../components/v5/V5GroupSummary";
 import V5ResultsDashboard from "../components/v5/V5ResultsDashboard";
 import { backendLabel, booleanLabel, statusLabel, suiteLabel } from "../v5Labels";
+import { reportedTpsSample } from "../v5TimeoutExtrapolation";
 import "../v5UiPolish.css";
 
 const recentGroupKey = "mbe.v5FormalRunGroupId";
@@ -64,6 +66,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
   const [historyOpen, setHistoryOpen] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [bundleBusy, setBundleBusy] = useState(false);
+  const [timeoutAnalysisBusy, setTimeoutAnalysisBusy] = useState(false);
   const [storage, setStorage] = useState<V5ArtifactStorageGroup | null>(null);
   const [storageBusyAction, setStorageBusyAction] = useState<"compact" | "archive" | "restore" | "">("");
   useEffect(() => {
@@ -421,6 +424,21 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
     }
   }
 
+  async function analyzeTimeoutExtrapolation() {
+    if (!selectedGroupId) return;
+    setTimeoutAnalysisBusy(true);
+    try {
+      const result = await analyzeV5FormalTimeoutExtrapolation(selectedGroupId);
+      setNotice(`60 分钟超时 TPS 分析完成：候选 ${result.candidate_count}，稳定外推 ${result.qualified_count}，尾部不稳定 ${result.unstable_count}，跳过 ${result.skipped_count}。${result.bundle_rebuild_recommended ? " 如需下载包含新证据的一键包，请点击重新生成一键下载包。" : ""}`);
+      await loadGroup(selectedGroupId, true);
+      await refreshSelectorGroups();
+    } catch (caught) {
+      setError(`分析超时外推 TPS 失败：${message(caught)}`);
+    } finally {
+      setTimeoutAnalysisBusy(false);
+    }
+  }
+
   async function compactStorage() {
     if (!selectedGroupId) return;
     setStorageBusyAction("compact");
@@ -484,6 +502,7 @@ export default function V5ResultsPage({ preferredGroupId = "" }: { preferredGrou
       {error && <p className="file-error">{error}</p>}
       {childError && <p className="file-error">子实验详情错误：{childError}</p>}
       {selectedGroup && <div className="button-row">
+        <button type="button" data-testid="v5-timeout-extrapolation-analyze" onClick={() => void analyzeTimeoutExtrapolation()} disabled={timeoutAnalysisBusy || !terminal(selectedGroup.status)}>{timeoutAnalysisBusy ? "分析中…" : "分析 / 刷新 60 分钟超时 TPS"}</button>
         <button type="button" onClick={() => void cleanupCurrentGroup(true)} disabled={cleanupBusy}>当前组清理预演</button>
         <button type="button" onClick={() => void cleanupCurrentGroup(false)} disabled={cleanupBusy}>删除当前组</button>
       </div>}
@@ -632,13 +651,14 @@ function ChildRow({ child, selected, onSelect }: { child: V5FormalChildRun; sele
   const blockers = [...(child.execution_gate?.blockers ?? child.result?.summary?.execution_gate?.blockers ?? []), ...(child.artifact_gate?.blockers ?? child.result?.summary?.artifact_gate?.blockers ?? [])];
   const executionLabel = execution ? statusLabel(String(execution)) : "未提供";
   const artifactLabel = artifact === "complete" ? "完整" : artifact === "incomplete" ? "不完整" : String(artifact ?? "未提供");
+  const tpsSample = reportedTpsSample(child);
   return <tr className={selected ? "selected-row" : ""}>
     <td><button type="button" onClick={onSelect}>{child.child_run_id}</button></td>
     <td>{suiteLabel(child.suite_type)}</td>
     <td>{child.method.display_name}</td><td>{child.seed}</td><td>{child.repeat_index + 1}</td>
     <td>{child.topology_point.nodes}/{child.topology_point.shards}/{child.topology_point.validators_per_shard}</td><td>{child.estimated_transactions}</td>
     <td>{executionLabel}</td><td>{artifactLabel}</td><td>{eligible === true ? "可用" : eligible === false ? "不可用" : "未提供"}</td><td>{child.result?.summary?.no_fallback === undefined ? "未提供" : String(child.result.summary.no_fallback)}</td><td>{blockers.length ? blockers.join("; ") : (child.error ?? "无")}</td>
-    <td>{metric(child.metrics?.end_to_end_tps ?? finality?.end_to_end_tps ?? child.metrics?.throughput_tps)}</td><td>{metric(child.metrics?.p99_finality_ms ?? finality?.p99_finality_ms ?? child.metrics?.p99_latency_ms)}</td><td>{metric(finality?.terminal_unique_tx_count)}</td><td>{metric(finality?.incomplete_unique_tx_count)}</td><td>{booleanLabel(child.paper_candidate)}</td>
+    <td title={tpsSample?.estimated ? "60min hard timeout 后由稳定尾部外推的预计完整工作负载 TPS" : undefined}>{tpsSample ? `${tpsSample.value.toFixed(3)}${tpsSample.estimated ? "*" : ""}` : "—"}</td><td>{metric(child.metrics?.p99_finality_ms ?? finality?.p99_finality_ms ?? child.metrics?.p99_latency_ms)}</td><td>{metric(finality?.terminal_unique_tx_count)}</td><td>{metric(finality?.incomplete_unique_tx_count)}</td><td>{booleanLabel(child.paper_candidate)}</td>
   </tr>;
 }
 
@@ -691,3 +711,5 @@ function formatBytes(value: number): string {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`;
   return `${(value / 1024 / 1024).toFixed(1)} MiB`;
 }
+
+// MBE_TIMEOUT_EXTRAPOLATION_FRONTEND_20260830_V5

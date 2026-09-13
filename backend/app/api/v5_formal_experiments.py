@@ -14,7 +14,7 @@ from backend.app.services.v5_formal_artifact_catalog import read_catalog, safe_a
 from backend.app.services.v5_formal_dto import V5FormalChildResponse, V5FormalRunGroupDetailResponse, child_detail as child_detail_dto, child_summary, group_detail, group_summary
 from backend.app.services.v5_formal_plan_validator import FormalPlanValidationError, validate_request
 from backend.app.services.v5_reproducibility_bundle import build as build_reproducibility_bundle
-from backend.app.services import v5_cleanup_service, v5_formal_artifact_storage
+from backend.app.services import v5_cleanup_service, v5_formal_artifact_storage, v5_timeout_extrapolation_backfill
 
 
 router = APIRouter(prefix="/api/v5/formal", tags=["v5"])
@@ -194,6 +194,22 @@ def group_analysis(group_id: str) -> dict:
         return analysis(read_group(group_id), children(group_id))
     except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(404, "unknown formal run group") from exc
+
+
+@router.post("/run-groups/{group_id}/timeout-extrapolation/analyze")
+def analyze_timeout_extrapolation_run_group(group_id: str) -> dict:
+    try:
+        group = read_group(group_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    if worker_active(group_id) or group.get("status") not in {"completed", "completed_with_failures", "failed", "cancelled"}:
+        raise HTTPException(409, "timeout extrapolation analysis requires a terminal, inactive RunGroup")
+    try:
+        return v5_timeout_extrapolation_backfill.analyze_group_timeout_extrapolation(group_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "unknown formal run group") from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.get("/run-groups/{group_id}/artifacts")
@@ -534,3 +550,5 @@ def _relative_to_root(path: Path) -> str:
         return path.resolve().relative_to(ROOT_DIR.parent.resolve()).as_posix()
     except ValueError:
         return path.name
+
+# MBE_TIMEOUT_EXTRAPOLATION_FRONTEND_20260830_V5

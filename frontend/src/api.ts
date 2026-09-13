@@ -1487,6 +1487,25 @@ export type V5FormalResumeCandidate = {
 export type V5FormalResumeCandidates = {
   schema_version: string; run_group_id: string; group_status: string; worker_active: boolean; selection_allowed: boolean; resume_unfinished_count: number; retry_failed_count: number; candidate_count: number; candidates: V5FormalResumeCandidate[];
 };
+export type V5TimeoutExtrapolationAnalysisResponse = {
+  schema_version: string;
+  run_group_id: string;
+  group_status: string;
+  candidate_count: number;
+  analyzed_count: number;
+  qualified_count: number;
+  unstable_count: number;
+  skipped_count: number;
+  qualified: Array<Record<string, unknown>>;
+  unstable: Array<Record<string, unknown>>;
+  skipped: Array<Record<string, unknown>>;
+  backup_dir?: string | null;
+  timeout_tps_csv: string;
+  paper_figure_tps_csv: string;
+  original_execution_truth_preserved: boolean;
+  latency_extrapolation_enabled: boolean;
+  bundle_rebuild_recommended: boolean;
+};
 export type V5FormalArtifactCatalogEntry = {
   name: string;
   size_bytes: number;
@@ -1694,6 +1713,10 @@ export async function fetchV5FormalGroupAnalysis(groupId: string): Promise<V5For
   return request<V5FormalAnalysis>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/analysis`);
 }
 
+export async function analyzeV5FormalTimeoutExtrapolation(groupId: string): Promise<V5TimeoutExtrapolationAnalysisResponse> {
+  return request<V5TimeoutExtrapolationAnalysisResponse>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/timeout-extrapolation/analyze`, { method: "POST" });
+}
+
 export async function fetchV5FormalArtifactCatalog(groupId: string): Promise<V5FormalArtifactCatalog> {
   return request<V5FormalArtifactCatalog>(`/api/v5/formal/run-groups/${encodeURIComponent(groupId)}/artifacts`);
 }
@@ -1764,3 +1787,5 @@ async function request<T = unknown>(path: string, init?: RequestInit): Promise<T
 }
 
 // MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7
+
+// MBE_TIMEOUT_EXTRAPOLATION_FRONTEND_20260830_V5

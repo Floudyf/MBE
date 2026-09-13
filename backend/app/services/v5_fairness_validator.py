@@ -31,6 +31,7 @@ _SEMANTIC_FIXED = (
 
 _SINGLE_SHARD_STATEFUL_PERFORMANCE_CLASSES = {
     "stateful_local_legacy_v1",
+    "aria_reordered_retryable_v1",
     "nezha_cg_johnson_retryable_v4",
     "nezha_acg_hs_retryable_v2",
     "bsx_deterministic_coloring_serializable_v1",

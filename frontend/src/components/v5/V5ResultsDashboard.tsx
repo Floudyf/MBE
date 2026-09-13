@@ -14,6 +14,7 @@ import V5ChildDetail from "./V5ChildDetail";
 import V5EvidencePanel from "./V5EvidencePanel";
 import V5MechanismAnalysis from "./V5MechanismAnalysis";
 import V5MetricHelp from "./V5MetricHelp";
+import { reportedTpsSample } from "../../v5TimeoutExtrapolation";
 import V5ResourceNetworkPanel from "./V5ResourceNetworkPanel";
 
 type Tab = "overview" | "performance" | "observability" | "mechanism" | "children" | "artifacts";
@@ -171,6 +172,7 @@ function Performance({ group, analysis, children }: { group: V5FormalRunGroup; a
     {directComparable !== true && <section className="notice v5-comparison-scope-banner" data-testid="v5-cross-semantic-comparison-warning"><strong>{directComparable === false ? "直接跨语义性能比较：受限" : "直接跨语义性能比较：未判定"}</strong><span>所有完成且通过有效性门禁的子实验仍可作为独立结果；跨内部执行语义的直接性能比较只有在后端确认共同外部性能合同，并证明每种方法的实际最终状态都等于其自身观测提交顺序的 Serial Oracle 重放结果后才有效；不同合法串行化顺序不要求产生相同最终 state digest。</span><ul>{cohorts.map((cohort) => <li key={cohort.id}><strong>{cohort.label}</strong>：{cohort.methods.join("、")}</li>)}</ul></section>}
     <V5AnalysisPanel analysis={analysis} />
     {sensitivity && <V5SkewTpsChart children={children} plannedThetaValues={(group.plan?.workload_points ?? []).map((point) => Number(point.target_theta)).filter((value) => Number.isFinite(value))} />}
+    <TimeoutExtrapolationSummary children={children} />
     <div className="v5-diagnostic-chart-grid">
       <MethodMetricBars title="完成时长" rows={methodRows(children)} metric="completion_duration_ms" unit="ms" lowerBetter />
       <PipelineBars rows={methodRows(children)} />
@@ -205,10 +207,41 @@ function PipelineTable({ children }: { children: V5FormalChildRun[] }) {
 }
 
 function ChildrenPanel({ group, children, selectedChild, selectedChildId, onSelectChild }: { group: V5FormalRunGroup; children: V5FormalChildRun[]; selectedChild: V5FormalChildRun | null; selectedChildId: string; onSelectChild: (childId: string) => void }) {
-  return <section className="v5-dashboard-section" data-testid="v5-dashboard-children"><h3>子实验</h3><p className="muted">主表只保留排查重复运行所需字段；点击行后在下方查看完整子实验依据。</p><div className="table-wrap"><table><thead><tr><th>方法</th><th>随机种子</th><th>重复序号</th><th>实际工作线程</th><th>TPS</th><th>P99</th><th>平均 CPU 核</th><th>峰值 RSS</th><th>网络流量</th><th>消息/终态交易</th><th>最终确认</th><th>有效性</th></tr></thead><tbody>{children.map((child) => {
+  return <section className="v5-dashboard-section" data-testid="v5-dashboard-children"><h3>子实验</h3><p className="muted">主表只保留排查重复运行所需字段；点击行后在下方查看完整子实验依据。TPS 后的 * 表示 60 分钟 hard timeout 后由稳定尾部外推，原始执行状态仍保持失败/超时。</p><div className="table-wrap"><table><thead><tr><th>方法</th><th>随机种子</th><th>重复序号</th><th>实际工作线程</th><th>TPS</th><th>P99</th><th>平均 CPU 核</th><th>峰值 RSS</th><th>网络流量</th><th>消息/终态交易</th><th>最终确认</th><th>有效性</th></tr></thead><tbody>{children.map((child) => {
     const selected = child.child_run_id === selectedChildId;
-    return <tr key={child.child_run_id} className={selected ? "selected-row" : ""} onClick={() => onSelectChild(child.child_run_id)}><td><button type="button" className="v5-child-method-button" title={child.method?.display_name ?? child.method_config_id}>{shortMethodLabel(child.method_config_id, child.method?.display_name ?? child.method_config_id)}</button></td><td>{child.seed}</td><td>{child.repeat_index + 1}</td><td>{formatNumber(effectiveWorker(group, child), 0)}</td><td>{formatNumber(metric(child, "end_to_end_tps"), 2)}</td><td>{formatMs(metric(child, "p99_finality_ms"))}</td><td>{formatNumber(metric(child, "average_cluster_cpu_cores"), 3)}</td><td>{formatBytes(metric(child, "cluster_rss_peak_bytes"))}</td><td>{formatBytes(metric(child, "delivered_network_bytes"))}</td><td>{formatNumber(metric(child, "network_messages_per_terminal_tx"), 3)}</td><td>{formatNumber(metric(child, "finalized_unique_logical_tx_count"), 0)}</td><td>{child.individual_result_valid === false ? "结果无效" : child.paper_candidate === false ? "比较受限" : child.status === "completed" ? "有效" : statusText(child.status)}</td></tr>;
+    const tpsSample = reportedTpsSample(child);
+    return <tr key={child.child_run_id} className={selected ? "selected-row" : ""} onClick={() => onSelectChild(child.child_run_id)}><td><button type="button" className="v5-child-method-button" title={child.method?.display_name ?? child.method_config_id}>{shortMethodLabel(child.method_config_id, child.method?.display_name ?? child.method_config_id)}</button></td><td>{child.seed}</td><td>{child.repeat_index + 1}</td><td>{formatNumber(effectiveWorker(group, child), 0)}</td><td title={tpsSample?.estimated ? "60min hard timeout 后由稳定尾部外推的预计完整工作负载 TPS" : undefined}>{tpsSample ? `${formatNumber(tpsSample.value, 2)}${tpsSample.estimated ? "*" : ""}` : "—"}</td><td>{formatMs(metric(child, "p99_finality_ms"))}</td><td>{formatNumber(metric(child, "average_cluster_cpu_cores"), 3)}</td><td>{formatBytes(metric(child, "cluster_rss_peak_bytes"))}</td><td>{formatBytes(metric(child, "delivered_network_bytes"))}</td><td>{formatNumber(metric(child, "network_messages_per_terminal_tx"), 3)}</td><td>{formatNumber(metric(child, "finalized_unique_logical_tx_count"), 0)}</td><td>{child.individual_result_valid === false ? "结果无效" : child.paper_candidate === false ? "比较受限" : child.status === "completed" ? "有效" : statusText(child.status)}</td></tr>;
   })}</tbody></table></div><div className="v5-child-detail-shell"><V5ChildDetail child={selectedChild} /></div></section>;
+}
+
+function TimeoutExtrapolationSummary({ children }: { children: V5FormalChildRun[] }) {
+  const rows = children.flatMap((child) => {
+    const sample = reportedTpsSample(child);
+    if (!sample?.estimated || !sample.evidence) return [];
+    const evidence = sample.evidence;
+    const observedDurationMs = numeric(evidence.observed_duration_ms);
+    const estimatedTotalSeconds = numeric(evidence.estimated_total_duration_seconds);
+    return [{
+      id: child.child_run_id,
+      method: shortMethodLabel(child.method_config_id, child.method?.display_name ?? child.method_config_id),
+      theta: numeric(child.workload_point?.target_theta),
+      repeat: child.repeat_index + 1,
+      tps: sample.value,
+      tail: numeric(evidence.tail_regression_tps),
+      r2: numeric(evidence.tail_terminal_r2),
+      observedMinutes: observedDurationMs === null ? null : observedDurationMs / 60000,
+      estimatedTotalMinutes: estimatedTotalSeconds === null ? null : estimatedTotalSeconds / 60,
+      terminal: numeric(evidence.terminal_at_timeout),
+      incomplete: numeric(evidence.incomplete_at_timeout),
+    }];
+  });
+  if (!rows.length) return null;
+  return <section className="v5-dashboard-section" data-testid="v5-timeout-extrapolation-summary">
+    <div className="v5-dashboard-heading"><div><h3>60 分钟超时外推 TPS</h3><p className="muted">仅列出已通过尾部稳定性门禁的 hard-timeout 样本。TPS 为预计完整固定工作负载吞吐，不是完整运行实测值；P99/延迟不做外推，原始 child 状态不改变。</p></div></div>
+    <div className="table-wrap"><table><thead><tr><th>方法</th><th>θ</th><th>Repeat</th><th>预计完整 TPS</th><th>尾部 TPS</th><th>R²</th><th>已观察</th><th>预计总时长</th><th>超时时终态 / 剩余</th></tr></thead><tbody>
+      {rows.map((row) => <tr key={row.id}><td>{row.method}</td><td>{row.theta === null ? "—" : row.theta.toFixed(1)}</td><td>{row.repeat}</td><td><strong>{formatNumber(row.tps, 3)}*</strong></td><td>{formatNumber(row.tail, 3)}</td><td>{formatNumber(row.r2, 6)}</td><td>{row.observedMinutes === null ? "—" : `${formatNumber(row.observedMinutes, 1)} min`}</td><td>{row.estimatedTotalMinutes === null ? "—" : `${formatNumber(row.estimatedTotalMinutes, 1)} min`}</td><td>{`${formatNumber(row.terminal, 0)} / ${formatNumber(row.incomplete, 0)}`}</td></tr>)}
+    </tbody></table></div>
+  </section>;
 }
 
 function HeaderKPI({ label, value }: { label: string; value: string }) { return <div><span>{label}</span><strong>{value}</strong></div>; }
@@ -389,3 +422,5 @@ function formatCI(low: unknown, high: unknown): string { const l = numeric(low);
 function formatBytes(value: unknown): string { const number = numeric(value); if (number === null) return "—"; const units = ["B", "KiB", "MiB", "GiB"]; let current = number; let index = 0; while (current >= 1024 && index < units.length - 1) { current /= 1024; index += 1; } return `${current.toFixed(index === 0 ? 0 : 2)} ${units[index]}`; }
 function formatPercent(value: unknown): string { const number = numeric(value); return number === null ? "—" : `${(number * 100).toFixed(2)}%`; }
 function statusText(status: string): string { return ({ completed: "✓ 已完成", completed_with_failures: "⚠ 部分失败", running: "运行中", queued: "排队中", failed: "✕ 失败", cancelled: "已取消" } as Record<string, string>)[status] ?? status; }
+
+// MBE_TIMEOUT_EXTRAPOLATION_FRONTEND_20260830_V5
