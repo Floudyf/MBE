@@ -524,7 +524,7 @@ def test_native_metatrack_multishard_state_ready_remains_paper_candidate() -> No
     assert by_id["meta"]["comparison_eligibility_status"] == "passed"
 
 
-def test_metatrack_block_stm_multishard_hybrid_prefetch_barrier_is_not_paper_candidate() -> None:
+def test_metatrack_block_stm_multishard_liveness_closed_frontier_remains_paper_candidate() -> None:
     hash_serial = _completed_child(
         "hash", "stateless_hash_serial", "stateless_remote_home_v1", final="same"
     )
@@ -540,10 +540,8 @@ def test_metatrack_block_stm_multishard_hybrid_prefetch_barrier_is_not_paper_can
     assert result["pairwise_logical_state_equivalent"] is True
     assert by_id["hash"]["paper_candidate"] is True
     assert by_id["hybrid"]["pairwise_logical_state_equivalent"] is True
-    assert by_id["hybrid"]["paper_candidate"] is False
-    assert by_id["hybrid"]["comparison_eligibility_status"] == (
-        "metatrack_block_stm_multi_shard_prefetch_barrier_hybrid_boundary"
-    )
+    assert by_id["hybrid"]["paper_candidate"] is True
+    assert by_id["hybrid"]["comparison_eligibility_status"] == "passed"
 
 
 

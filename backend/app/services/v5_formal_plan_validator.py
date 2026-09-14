@@ -143,7 +143,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "metatrack_block_executor",
             "commit": "commutative_hot_update_aggregation",
         },
-        plugin_config_overrides={"execution": {"access_size_threshold": 4}, "block_executor": {"worker_count": 4}},
+        plugin_config_overrides={"block_executor": {"worker_count": 4}},
     ),
     "metatrack_block_stm": V5FormalMethod(
         method_id="metatrack_block_stm",
@@ -156,7 +156,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "block_stm_block_executor",
             "commit": "commutative_hot_update_aggregation",
         },
-        plugin_config_overrides={"execution": {"access_size_threshold": 4}, "block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail"}},
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail"}},
     ),
 }
 

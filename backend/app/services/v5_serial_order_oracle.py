@@ -121,7 +121,6 @@ def _load_access_entries(path: Path) -> tuple[dict[str, dict[str, Any]], str, li
                 canonical_rows.append(
                     {
                         "index": index,
-                        "tx_id": tx_id,
                         "logical_id": logical_id,
                         "access_list": normalized_accesses,
                     }
@@ -209,6 +208,36 @@ def _execution_root_before(node_dir: Path, block_hash: str) -> tuple[str, list[s
     return (next(iter(roots)) if roots else ""), []
 
 
+def _matching_persistence_roots(value: object, block_hash: str) -> set[str]:
+    roots: set[str] = set()
+    if isinstance(value, dict):
+        if str(value.get("block_hash") or "").strip() == block_hash:
+            root = str(value.get("state_root_before_wal") or "").strip()
+            if root:
+                roots.add(root)
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                roots.update(_matching_persistence_roots(child, block_hash))
+    elif isinstance(value, list):
+        for child in value:
+            roots.update(_matching_persistence_roots(child, block_hash))
+    return roots
+
+
+def _persistence_root_before(node_dir: Path, block_hash: str) -> tuple[str, list[str]]:
+    path = node_dir / "block_execution_summary.json"
+    if not path.is_file():
+        return "", []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return "", [f"block_execution_summary_unreadable:{node_dir.name}:{type(exc).__name__}"]
+    roots = _matching_persistence_roots(payload, block_hash)
+    if len(roots) > 1:
+        return "", [f"initial_persistence_root_ambiguous:{node_dir.name}:{block_hash}"]
+    return (next(iter(roots)) if roots else ""), []
+
+
 def _initial_state_evidence(run_dir: Path) -> tuple[str, str, list[str], dict[str, str]]:
     roots: dict[str, set[str]] = {}
     sources: dict[str, str] = {}
@@ -224,9 +253,14 @@ def _initial_state_evidence(run_dir: Path) -> tuple[str, str, list[str], dict[st
             continue
         first = blocks[0]
         chain_root = str(first.get("state_root_before") or "").strip()
+        persistence_root, persistence_blockers = _persistence_root_before(node_dir, str(first["block_hash"]))
+        blockers.extend(persistence_blockers)
         execution_root, execution_blockers = _execution_root_before(node_dir, str(first["block_hash"]))
         blockers.extend(execution_blockers)
-        if execution_root:
+        if persistence_root:
+            root = persistence_root
+            sources[node_dir.name] = "block_execution_summary.state_root_before_wal"
+        elif execution_root:
             if chain_root not in _LEGACY_INITIAL_ROOT_PLACEHOLDERS and chain_root != execution_root:
                 blockers.append(f"initial_state_evidence_mismatch:{node_dir.name}")
                 continue
@@ -393,6 +427,36 @@ def _groundhog_correctness_blockers(summary: dict, structural_blockers: list[str
         blockers.append("groundhog_oracle_cross_shard_failed_not_zero")
     return list(dict.fromkeys(blockers))
 
+def _multishard_correctness_blockers(summary: dict) -> list[str]:
+    blockers: list[str] = []
+    for field in ("block_executor_consistent", "state_root_consistent", "receipt_root_consistent", "plan_digest_consistent", "no_fallback", "ready_to_commit"):
+        if _summary_bool(summary, field) is not True:
+            blockers.append(f"multishard_oracle_{field}_not_true")
+    submitted = _finality_int(summary, "submitted_unique_tx_count")
+    terminal = _finality_int(summary, "terminal_unique_tx_count")
+    finalized = _finality_int(summary, "finalized_unique_logical_tx_count")
+    incomplete = _finality_int(summary, "incomplete_unique_tx_count")
+    cross_failed = _finality_int(summary, "cross_shard_failed_unique_count")
+    if submitted is None or submitted <= 0:
+        blockers.append("multishard_oracle_submitted_count_missing")
+    else:
+        if terminal != submitted:
+            blockers.append("multishard_oracle_terminal_not_equal_submitted")
+        if finalized != submitted:
+            blockers.append("multishard_oracle_finalized_not_equal_submitted")
+        executed = summary.get("executed_logical_transaction_count")
+        if isinstance(executed, bool) or not isinstance(executed, (int, float)) or int(executed) != submitted:
+            blockers.append("multishard_oracle_executed_not_equal_submitted")
+    if incomplete != 0:
+        blockers.append("multishard_oracle_incomplete_not_zero")
+    if cross_failed != 0:
+        blockers.append("multishard_oracle_cross_shard_failed_not_zero")
+    for field in ("initial_state_digest", "state_home_mapping_digest", "global_final_state_digest"):
+        if not str(summary.get(field) or "").strip():
+            blockers.append(f"multishard_oracle_missing_{field}")
+    return list(dict.fromkeys(blockers))
+
+
 def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, Any]:
     """Validate durable transaction identity/order and method-appropriate state correctness.
 
@@ -423,6 +487,49 @@ def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, 
     else:
         access_entries, input_digest, access_blockers = _load_access_entries(access_path)
         blockers.extend(access_blockers)
+
+    if any(str(item).startswith("serial_oracle_requires_single_shard:") for item in blockers):
+        correctness_blockers = _multishard_correctness_blockers(summary)
+        correctness_valid = not correctness_blockers
+        summary_global_business = str(summary.get("global_business_state_digest") or "").strip()
+        transaction_count = _finality_int(summary, "submitted_unique_tx_count") or len(access_entries)
+        return {
+            "serial_order_oracle_schema": SCHEMA_VERSION,
+            "serial_order_oracle_status": "not_applicable",
+            "serial_order_replay_applicable": False,
+            "serial_order_replay_not_applicable_reason": "multi_shard_execution_outside_single_shard_serial_replay_scope",
+            "serial_order_replay_equivalent": None,
+            "serial_order_replay_blockers": [],
+            "serial_order_replay_structural_blockers": blockers,
+            "serial_order_replay_supported_scope": "single_shard_empty_initial_direct_access_committed_txid_v2",
+            "serial_order_replay_identity_basis": "logical_id_access_list_digest_for_workload;tx_id_for_durable_trace",
+            "serial_order_replay_order_basis": "not_applicable_multi_shard",
+            "serial_order_replay_original_index_semantics": "block_local_diagnostic_only",
+            "serial_order_replay_initial_state_empty": False,
+            "serial_order_replay_initial_state_root": "",
+            "serial_order_replay_initial_state_sources": initial_sources,
+            "serial_order_replay_shard_id": "",
+            "serial_order_replay_transaction_count": transaction_count,
+            "serial_order_replay_unique_transaction_count": transaction_count,
+            "serial_order_replay_committed_block_count": 0,
+            "serial_order_replay_trace_reexecution_count": 0,
+            "serial_order_replay_input_digest": input_digest,
+            "serial_order_replay_commit_order_digest": "",
+            "serial_order_replay_tx_id_order_digest": "",
+            "serial_order_replay_business_state_digest": "",
+            "serial_order_actual_business_state_digest": "",
+            "serial_order_replay_global_business_state_digest": "",
+            "serial_order_actual_global_business_state_digest": summary_global_business,
+            "serial_order_replay_business_key_count": 0,
+            "serial_order_replay_replica_order_consistent": None,
+            "serial_order_replay_replica_count": 0,
+            "serial_order_replay_reference_node": "",
+            "method_correctness_oracle_kind": "multishard_replica_determinism_completion_v1",
+            "method_correctness_oracle_status": "passed" if correctness_valid else "failed",
+            "method_correctness_oracle_valid": correctness_valid,
+            "method_correctness_oracle_blockers": correctness_blockers,
+            "method_correctness_oracle_scope": "multi_shard_replica_determinism_completion_v1",
+        }
 
     node_orders: dict[str, list[str]] = {}
     node_signatures: dict[str, list[tuple[int, str, int]]] = {}

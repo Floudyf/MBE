@@ -1891,7 +1891,13 @@ func TestVersionedRemoteWaveAdvancesInBlockDependencyFrontierForSerialAndBlockST
 				t.Fatalf("version frontier did not complete both transactions: %#v", result.ExecutionResult.TxDeltas)
 			}
 			if got := intValue(result.ActualMetrics["versioned_state_ready_wave_count"]); got < 2 {
-				t.Fatalf("dependent writers must advance in at least two ready waves, got %d (%#v)", got, result.ActualMetrics)
+				t.Fatalf("dependent writers must advance through the exact-version frontier in at least two ready waves, got %d (%#v)", got, result.ActualMetrics)
+			}
+			if got, _ := result.ActualMetrics["versioned_state_ready_scheduler_mode"].(string); got != "per_transaction_per_key_version_frontier" {
+				t.Fatalf("unexpected exact-version StateReady mode %q (%#v)", got, result.ActualMetrics)
+			}
+			if _, exists := result.ActualMetrics["versioned_state_ready_local_dependency_delegated_count"]; exists {
+				t.Fatalf("Block-STM must not bypass exact-version StateReady with local dependency delegation: %#v", result.ActualMetrics)
 			}
 			if _, ok := runtime.stateVersionValue(key, 1); !ok {
 				t.Fatal("first produced version was not published")

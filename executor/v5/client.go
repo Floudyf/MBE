@@ -154,6 +154,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	defer iterator.Close()
 	batchSize := plugins.BlockProducer.BlockSize()
+	if provider, ok := plugins.Routing.(routingBatchSizeProvider); ok {
+		batchSize = provider.RoutingBatchSize(batchSize)
+	}
 	if batchSize < 1 {
 		batchSize = 1
 	}
@@ -387,7 +390,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if err := metrics.WriteCSV(filepath.Join(outDir, "coaccess_matrix_edges.csv"), []string{"batch_index", "left_key", "right_key", "weight"}, coaccessRows); err != nil {
 			return err
 		}
-		if err := metrics.WriteCSV(filepath.Join(outDir, "placement_plan.csv"), []string{"batch_index", "state_key", "home_shard", "execution_shard", "frequency", "reason"}, placementRows); err != nil {
+		if err := metrics.WriteCSV(filepath.Join(outDir, "placement_plan.csv"), []string{"batch_index", "state_key", "home_state_unit", "home_shard", "execution_shard", "frequency", "reason"}, placementRows); err != nil {
 			return err
 		}
 		if err := metrics.WriteCSV(filepath.Join(outDir, "placement_score.csv"), []string{"batch_index", "state_key", "candidate_shard", "coaccess_affinity", "admissible", "capacity", "projected_load", "current_state_load", "score"}, placementScoreRows); err != nil {
@@ -399,7 +402,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if err := metrics.WriteCSV(filepath.Join(outDir, "dependency_graph.csv"), []string{"batch_index", "from_logical_id", "to_logical_id", "state_key", "dependency_type"}, dependencyRows); err != nil {
 			return err
 		}
-		remoteStateHeader := []string{"batch_index", "logical_id", "tx_index", "state_key", "home_shard", "execution_shard", "access_kind", "witness_digest"}
+		remoteStateHeader := []string{"batch_index", "logical_id", "tx_index", "state_key", "home_state_unit", "home_shard", "execution_shard", "access_kind", "witness_digest"}
 		if err := metrics.WriteCSV(filepath.Join(outDir, "predicted_remote_access.csv"), remoteStateHeader, remoteStateRows); err != nil {
 			return err
 		}
@@ -741,6 +744,7 @@ func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any,
 		"batch_index":                   plan.BatchIndex,
 		"plan_digest":                   plan.PlanDigest,
 		"sharding_plugin_id":            plan.ShardingPluginID,
+		"state_storage_unit_count":      plan.StateStorageUnitCount,
 		"placement_policy":              plan.PlacementPolicy,
 		"transaction_policy":            plan.TransactionPolicy,
 		"placement_budget":              plan.PlacementBudget,
@@ -769,7 +773,7 @@ func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any,
 		*coaccessRows = append(*coaccessRows, []string{fmt.Sprint(plan.BatchIndex), row.LeftKey, row.RightKey, fmt.Sprint(row.Weight)})
 	}
 	for _, row := range plan.StatePlacements {
-		*placementRows = append(*placementRows, []string{fmt.Sprint(plan.BatchIndex), row.Key, row.HomeShard, row.ExecutionShard, fmt.Sprint(row.Frequency), row.Reason})
+		*placementRows = append(*placementRows, []string{fmt.Sprint(plan.BatchIndex), row.Key, row.HomeStateUnit, row.HomeShard, row.ExecutionShard, fmt.Sprint(row.Frequency), row.Reason})
 	}
 	for _, row := range plan.PlacementScores {
 		*placementScoreRows = append(*placementScoreRows, []string{fmt.Sprint(plan.BatchIndex), row.Key, row.CandidateShard, fmt.Sprint(row.CoaccessLocalityGain), fmt.Sprint(row.Admissible), fmt.Sprint(row.Capacity), fmt.Sprint(row.ProjectedLoad), fmt.Sprint(row.ShardStateLoadPenalty), fmt.Sprint(row.Score)})
@@ -805,8 +809,8 @@ func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any,
 			if !ok || statePlacement.HomeShard == txPlacement.ExecutionShard {
 				continue
 			}
-			witness := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s:%s", plan.BatchIndex, row.LogicalID, row.Key, statePlacement.HomeShard)))
-			*remoteStateRows = append(*remoteStateRows, []string{fmt.Sprint(plan.BatchIndex), row.LogicalID, fmt.Sprint(row.TxIndex), row.Key, statePlacement.HomeShard, txPlacement.ExecutionShard, string(row.Mode), hex.EncodeToString(witness[:])})
+			witness := sha256.Sum256([]byte(fmt.Sprintf("%d:%s:%s:%s:%s", plan.BatchIndex, row.LogicalID, row.Key, statePlacement.HomeStateUnit, statePlacement.HomeShard)))
+			*remoteStateRows = append(*remoteStateRows, []string{fmt.Sprint(plan.BatchIndex), row.LogicalID, fmt.Sprint(row.TxIndex), row.Key, statePlacement.HomeStateUnit, statePlacement.HomeShard, txPlacement.ExecutionShard, string(row.Mode), hex.EncodeToString(witness[:])})
 		}
 	}
 }

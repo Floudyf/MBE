@@ -1582,10 +1582,6 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
         reference_report = reference_report_by_child.get(child_id)
         topology = item.get("topology_point") if isinstance(item.get("topology_point"), dict) else {}
         method_id = str(item.get("method_config_id") or "")
-        metatrack_multishard_prefetch_barrier = (
-            method_id == "metatrack_block_stm"
-            and int(topology.get("shards") or 1) > 1
-        )
         if item.get("individual_result_valid") is not True:
             equivalent = None
             item["comparison_eligibility_status"] = "individual_result_invalid"
@@ -1607,15 +1603,6 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
                 else report.get("status", "unknown")
             )
             if item.get("status") == "completed" and equivalent is not True:
-                item["paper_candidate"] = False
-            if metatrack_multishard_prefetch_barrier:
-                # The MetaTrack+Block-STM hybrid still uses the block-level
-                # remote-state prefetch barrier. Native MetaTrack now executes
-                # transaction-level StateReady suspend/resume and is eligible
-                # when the usual within-semantic correctness gates pass.
-                item["comparison_eligibility_status"] = (
-                    "metatrack_block_stm_multi_shard_prefetch_barrier_hybrid_boundary"
-                )
                 item["paper_candidate"] = False
         item["pairwise_logical_state_equivalent"] = equivalent
 

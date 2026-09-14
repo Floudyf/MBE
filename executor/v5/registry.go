@@ -497,6 +497,7 @@ type BatchRoutingPlan struct {
 	BatchIndex              int
 	PlanDigest              string
 	ShardingPluginID        string
+	StateStorageUnitCount   int `json:"state_storage_unit_count,omitempty"`
 	PlacementPolicy         string
 	TransactionPolicy       string
 	PlacementBudget         int
@@ -536,6 +537,7 @@ type CoaccessEdge struct {
 }
 type StatePlacement struct {
 	Key            string
+	HomeStateUnit  string `json:"home_state_unit,omitempty"`
 	HomeShard      string
 	ExecutionShard string
 	Frequency      int
@@ -590,6 +592,10 @@ type BatchClassificationResult struct {
 	DependencyChainMax                   int
 	SCCCount                             int
 	CommutativeDependencySuppressedCount int
+	AccessSizeMin                        int
+	AccessSizeMax                        int
+	AccessSizeP95                        int
+	AccessSizeTotal                      int
 }
 type ScheduleResult struct {
 	Ordered []tx.SignedTransaction
@@ -866,7 +872,11 @@ func (p *metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 }
 
 func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
-	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardingPluginID: shardingPluginID(input.Sharding), PlacementPolicy: "frequency_coaccess_admissible_v2", TransactionPolicy: "majority_place_queue_tie_v1", PlacementMinBudget: 1, PlacementMu: "1.0", ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
+	placementMinBudget := 1
+	if configured := intValue(p.config["placement_min_budget"]); configured > 0 {
+		placementMinBudget = configured
+	}
+	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardingPluginID: shardingPluginID(input.Sharding), StateStorageUnitCount: p.StateStorageUnitCount(input.ShardIDs), PlacementPolicy: "frequency_coaccess_admissible_v2", TransactionPolicy: "majority_place_queue_tie_v1", PlacementMinBudget: placementMinBudget, PlacementMu: "1.0", ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
 	if len(input.ShardIDs) == 0 {
 		return plan
 	}
@@ -952,8 +962,8 @@ func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 
 	placementByKey := map[string]StatePlacement{}
 	place := func(row StateFrequencyRow, shard, reason string) {
-		home := shardFor(input.Sharding, []string{row.Key}, input.ShardIDs)
-		placement := StatePlacement{Key: row.Key, HomeShard: home, ExecutionShard: shard, Frequency: row.Frequency, Reason: reason}
+		home := p.LogicalStateHome(row.Key, input.Sharding, input.ShardIDs)
+		placement := StatePlacement{Key: row.Key, HomeStateUnit: home.StateUnitID, HomeShard: home.ServingShard, ExecutionShard: shard, Frequency: row.Frequency, Reason: reason}
 		placementByKey[row.Key] = placement
 		plan.StatePlacements = append(plan.StatePlacements, placement)
 		plan.ShardLoadAfter[shard] += row.Frequency
@@ -994,7 +1004,7 @@ func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 		}
 		executionShard, group, _, coverage, tied, queueBefore := transactionExecutionShard(input.ShardIDs, placementByKey, accessItems, homeShard, transactionLoad)
 		transactionLoad[executionShard]++
-		remoteReads, remoteWrites := predictedRemoteAccessCounts(input.Sharding, input.ShardIDs, accessItems, executionShard)
+		remoteReads, remoteWrites := metaTrackPredictedRemoteAccessCounts(p, input.Sharding, input.ShardIDs, accessItems, executionShard)
 		remote := remoteReads + remoteWrites
 		plan.RemoteAccessEstimate += remote
 		reason := fmt.Sprintf("majority_place:coverage=%d", coverage)
@@ -1522,14 +1532,6 @@ func (p serialExecution) Classify(tx.SignedTransaction) ExecutionDecision {
 
 type dualTrackExecution struct{ basicPlugin }
 
-func (p dualTrackExecution) accessSizeThreshold() int {
-	threshold := intValue(p.config["access_size_threshold"])
-	if threshold <= 0 {
-		return 4
-	}
-	return threshold
-}
-
 func structuredAccessSize(item tx.SignedTransaction) int {
 	keys := map[string]bool{}
 	for _, access := range item.AccessList {
@@ -1544,22 +1546,25 @@ func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecisio
 	if len(item.AccessList) == 0 {
 		return ExecutionDecision{Track: "conservative", Reason: "missing_structured_access_list"}
 	}
-	if size := structuredAccessSize(item); size > p.accessSizeThreshold() {
-		return ExecutionDecision{Track: "conservative", Reason: fmt.Sprintf("access_size_exceeds_threshold:%d>%d", size, p.accessSizeThreshold())}
-	}
 	if hasRemoteExecutionBoundary(item) {
 		return ExecutionDecision{Track: "conservative", Reason: "legacy_cross_shard_protocol_boundary"}
 	}
 	commutative := false
+	knownDirectionWrite := false
 	for _, access := range item.AccessList {
 		switch access.Mode {
 		case tx.AccessRead:
 			continue
 		case tx.AccessCommutativeDelta:
 			commutative = true
+		case tx.AccessWrite, tx.AccessReadWrite:
+			knownDirectionWrite = true
 		default:
-			return ExecutionDecision{Track: "conservative", Reason: "non_commutative_write:" + access.Key}
+			return ExecutionDecision{Track: "conservative", Reason: "unknown_access_mode:" + access.Key}
 		}
+	}
+	if knownDirectionWrite {
+		return ExecutionDecision{Track: "fast", Reason: "known_direction_write_access"}
 	}
 	if commutative {
 		return ExecutionDecision{Track: "fast", Reason: "commutative_delta_access"}
@@ -1574,6 +1579,7 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		ReasonCodes:   map[string][]string{},
 		StateWaitKeys: map[string][]string{},
 	}
+	accessSizes := make([]int, 0, len(input.Transactions))
 
 	// Non-commutative writers establish ordinary serial-order barriers. Pure
 	// commutative writers on the same key intentionally do not depend on one
@@ -1618,21 +1624,24 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 			lastSenderTx[item.Sender] = txID
 		}
 
+		size := structuredAccessSize(item)
+		accessSizes = append(accessSizes, size)
+		result.AccessSizeTotal += size
+		if len(accessSizes) == 1 || size < result.AccessSizeMin {
+			result.AccessSizeMin = size
+		}
+		if size > result.AccessSizeMax {
+			result.AccessSizeMax = size
+		}
 		if len(item.AccessList) == 0 {
 			hardReasons[txID] = append(hardReasons[txID], "missing_structured_access_list")
 			continue
-		}
-		if size := structuredAccessSize(item); size > p.accessSizeThreshold() {
-			hardReasons[txID] = append(hardReasons[txID], fmt.Sprintf("access_size_exceeds_threshold:%d>%d", size, p.accessSizeThreshold()))
 		}
 		if hasRemoteExecutionBoundary(item) {
 			hardReasons[txID] = append(hardReasons[txID], "legacy_cross_shard_protocol_boundary")
 		}
 
 		for _, access := range item.AccessList {
-			if access.Mode != tx.AccessRead && access.Mode != tx.AccessCommutativeDelta {
-				hardReasons[txID] = append(hardReasons[txID], "non_commutative_write:"+access.Key)
-			}
 			if access.Key == "" {
 				hardReasons[txID] = append(hardReasons[txID], "missing_access_key")
 				continue
@@ -1671,7 +1680,7 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 				}
 				readers[access.Key] = append(readers[access.Key], txID)
 
-			default:
+			case tx.AccessWrite, tx.AccessReadWrite:
 				if writer := lastWriter[access.Key]; writer != "" {
 					addDependency(writer, txID, access.Key, "waw")
 					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
@@ -1687,6 +1696,9 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 				readers[access.Key] = nil
 				commutativeWriters[access.Key] = nil
 				lastWriter[access.Key] = txID
+
+			default:
+				hardReasons[txID] = append(hardReasons[txID], "unknown_access_mode:"+access.Key)
 			}
 		}
 	}
@@ -1701,6 +1713,17 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		result.StateWaitKeys[txID] = uniqueStrings(keys)
 	}
 	result.DependencyChainMax = dependencyChainMax(graph)
+	if len(accessSizes) > 0 {
+		sort.Ints(accessSizes)
+		p95Index := (95*len(accessSizes)+99)/100 - 1
+		if p95Index < 0 {
+			p95Index = 0
+		}
+		if p95Index >= len(accessSizes) {
+			p95Index = len(accessSizes) - 1
+		}
+		result.AccessSizeP95 = accessSizes[p95Index]
+	}
 	sccNodes := nonTrivialSCCNodes(graph)
 	result.SCCCount = countNonTrivialSCCs(graph)
 
@@ -2304,8 +2327,18 @@ func metaTrackClassificationMetrics(classification BatchClassificationResult, tr
 			stateWaitUnique++
 		}
 	}
+	accessSizeAverage := 0.0
+	if transactionCount > 0 {
+		accessSizeAverage = float64(classification.AccessSizeTotal) / float64(transactionCount)
+	}
 	return map[string]any{
 		"metatrack_classification_transaction_count":                       transactionCount,
+		"metatrack_fast_admission_policy":                                  "access_stable_topo_safe_semantic_safe_v1",
+		"metatrack_access_size_role":                                       "diagnostic_only_not_track_admission",
+		"metatrack_access_size_min":                                        classification.AccessSizeMin,
+		"metatrack_access_size_avg":                                        accessSizeAverage,
+		"metatrack_access_size_p95":                                        classification.AccessSizeP95,
+		"metatrack_access_size_max":                                        classification.AccessSizeMax,
 		"metatrack_classification_fast_unique_count":                       fastCount,
 		"metatrack_classification_conservative_unique_count":               conservativeCount,
 		"metatrack_classification_dependency_blocked_unique_count":         blockedUnique,
@@ -3978,3 +4011,5 @@ func InstantiatePlugins(profile map[string]PluginConfig) (RuntimePlugins, error)
 	}
 	return p, nil
 }
+
+// MBE_METADTRACK_SEMANTIC_COMPARISON_FRONTIER_20260913_V1

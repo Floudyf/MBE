@@ -228,12 +228,12 @@ def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path)
     assert plugin(compiled_by_method["hash_aria"], "block_executor")["config"]["read_only_optimization"] is True
     assert plugin(compiled_by_method["metatrack_serial"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
     assert plugin(compiled_by_method["metatrack_serial"], "execution")["plugin_id"] == "dual_track_execution"
-    assert plugin(compiled_by_method["metatrack_serial"], "execution")["config"]["access_size_threshold"] == 4
+    assert "access_size_threshold" not in plugin(compiled_by_method["metatrack_serial"], "execution")["config"]
     assert plugin(compiled_by_method["metatrack_serial"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
     assert plugin(compiled_by_method["metatrack_serial"], "block_executor")["plugin_id"] == "metatrack_block_executor"
     assert plugin(compiled_by_method["metatrack_block_stm"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
     assert plugin(compiled_by_method["metatrack_block_stm"], "execution")["plugin_id"] == "dual_track_execution"
-    assert plugin(compiled_by_method["metatrack_block_stm"], "execution")["config"]["access_size_threshold"] == 4
+    assert "access_size_threshold" not in plugin(compiled_by_method["metatrack_block_stm"], "execution")["config"]
     assert plugin(compiled_by_method["metatrack_block_stm"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
     assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["plugin_id"] == "block_stm_block_executor"
     assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["worker_count"] == 4

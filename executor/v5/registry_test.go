@@ -208,8 +208,8 @@ func TestMetaTrackPluginsUseStructuredAccessLists(t *testing.T) {
 	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{Payload: "v5_safe"}); got.Track != "conservative" {
 		t.Fatalf("payload-only transaction should be conservative: %#v", got)
 	}
-	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{AccessList: []tx.AccessItem{{Key: "balance:a", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}); got.Track != "conservative" {
-		t.Fatalf("noncommutative write should be conservative: %#v", got)
+	if got := dual.(ExecutionPlugin).Classify(tx.SignedTransaction{AccessList: []tx.AccessItem{{Key: "balance:a", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}); got.Track != "fast" || got.Reason != "known_direction_write_access" {
+		t.Fatalf("known-direction ordinary write should remain Fast-eligible: %#v", got)
 	}
 }
 
@@ -226,31 +226,38 @@ func TestFastFirstSchedulerOrdersByExecutionTrack(t *testing.T) {
 	}
 }
 
-func TestDualTrackBatchClassificationKeepsIndependentNonCommutativeWritesConservative(t *testing.T) {
+func TestDualTrackBatchClassificationKeepsIndependentKnownDirectionWritesFast(t *testing.T) {
 	execution := dualTrackExecution{makeBasic("execution", "dual_track_execution", map[string]any{"access_size_threshold": 4})}
 	first := tx.SignedTransaction{TxID: "first", Sender: "alice", AccessList: []tx.AccessItem{{Key: "balance:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "balance:bob", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:alice", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
 	second := tx.SignedTransaction{TxID: "second", Sender: "carol", AccessList: []tx.AccessItem{{Key: "balance:carol", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "balance:dave", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}, {Key: "nonce:carol", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
 	result := execution.ClassifyBatch(BatchClassificationInput{Transactions: []tx.SignedTransaction{first, second}})
 	for _, id := range []string{"first", "second"} {
-		if result.Decisions[id].Track != "conservative" || !strings.Contains(result.Decisions[id].Reason, "non_commutative_write:") {
-			t.Fatalf("paper non-commutative write must remain conservative even when independent: id=%s decision=%#v", id, result.Decisions[id])
+		if result.Decisions[id].Track != "fast" || result.Decisions[id].Reason != "known_direction_write_access" {
+			t.Fatalf("independent known-direction write should remain Fast-eligible: id=%s decision=%#v", id, result.Decisions[id])
 		}
 	}
 }
 
-func TestDualTrackAccessSizeThresholdUsesPaperTau(t *testing.T) {
+func TestDualTrackAccessSizeIsDiagnosticNotTrackAdmission(t *testing.T) {
+	// A stale historical access_size_threshold in a saved config must not change
+	// the current paper model: access cardinality is diagnostic only.
 	execution := dualTrackExecution{makeBasic("execution", "dual_track_execution", map[string]any{"access_size_threshold": 4})}
-	item := tx.SignedTransaction{TxID: "wide", AccessList: []tx.AccessItem{
-		{Key: "k1", Mode: tx.AccessRead}, {Key: "k2", Mode: tx.AccessRead}, {Key: "k3", Mode: tx.AccessRead},
-		{Key: "k4", Mode: tx.AccessRead}, {Key: "k5", Mode: tx.AccessRead},
-	}}
+	accesses := make([]tx.AccessItem, 0, 16)
+	for i := 0; i < 16; i++ {
+		accesses = append(accesses, tx.AccessItem{Key: fmt.Sprintf("k%d", i), Mode: tx.AccessRead})
+	}
+	item := tx.SignedTransaction{TxID: "wide", AccessList: accesses}
 	decision := execution.Classify(item)
-	if decision.Track != "conservative" || decision.Reason != "access_size_exceeds_threshold:5>4" {
-		t.Fatalf("access list wider than tau must be conservative: %#v", decision)
+	if decision.Track != "fast" || decision.Reason != "read_only_access" {
+		t.Fatalf("access cardinality incorrectly changed track admission: %#v", decision)
 	}
 	result := execution.ClassifyBatch(BatchClassificationInput{Transactions: []tx.SignedTransaction{item}})
-	if result.Decisions[item.TxID].Track != "conservative" || !strings.Contains(result.Decisions[item.TxID].Reason, "access_size_exceeds_threshold:5>4") {
-		t.Fatalf("batch classifier lost tau gate: %#v", result.Decisions[item.TxID])
+	if result.Decisions[item.TxID].Track != "fast" {
+		t.Fatalf("batch classifier incorrectly restored a size gate: %#v", result.Decisions[item.TxID])
+	}
+	metrics := metaTrackClassificationMetrics(result, 1)
+	if metrics["metatrack_access_size_role"] != "diagnostic_only_not_track_admission" || metrics["metatrack_access_size_max"] != 16 {
+		t.Fatalf("access-size diagnostics lost their non-admission role: %#v", metrics)
 	}
 }
 
@@ -518,10 +525,10 @@ func TestFastFirstSchedulerEmitsQueueWaitAndWakeupEvidence(t *testing.T) {
 	if !sawScheduleEvent(schedule.Events, "second", "blocked_waiting", true, false) {
 		t.Fatalf("missing dependency wait evidence: %#v", schedule.Events)
 	}
-	if !sawScheduleEvent(schedule.Events, "second", "conservative_queue", false, true) {
+	if !sawScheduleEvent(schedule.Events, "second", "fast_queue", false, true) {
 		t.Fatalf("missing dependency wakeup evidence: %#v", schedule.Events)
 	}
-	if !sawScheduleDepth(schedule.Events, 3, 1, 2) {
+	if !sawScheduleDepth(schedule.Events, 3, 3, 0) {
 		t.Fatalf("missing ready/fast/conservative queue depth evidence: %#v", schedule.Events)
 	}
 	if !sawScheduleWaitAndIdle(schedule.Events) {

@@ -747,6 +747,22 @@ def _canonical_digest(value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _matching_block_persistence_roots(value: object, block_hash: str) -> set[str]:
+    roots: set[str] = set()
+    if isinstance(value, dict):
+        if str(value.get("block_hash") or "").strip() == block_hash:
+            root = str(value.get("state_root_before_wal") or "").strip()
+            if root:
+                roots.add(root)
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                roots.update(_matching_block_persistence_roots(child, block_hash))
+    elif isinstance(value, list):
+        for child in value:
+            roots.update(_matching_block_persistence_roots(child, block_hash))
+    return roots
+
+
 def _matching_block_execution_roots(value: object, block_hash: str) -> set[str]:
     roots: set[str] = set()
     if isinstance(value, dict):
@@ -767,17 +783,25 @@ def _actual_first_block_state_root(node_dir: Path, first: dict) -> str:
     chain_root = str(first.get("state_root_before") or "").strip()
     block_hash = str(first.get("block_hash") or "").strip()
     summary_path = node_dir / "block_execution_summary.json"
+    persistence_root = ""
     execution_root = ""
     if block_hash and summary_path.is_file():
         try:
             payload = json.loads(summary_path.read_text(encoding="utf-8-sig"))
-            roots = _matching_block_execution_roots(payload, block_hash)
+            persistence_roots = _matching_block_persistence_roots(payload, block_hash)
+            execution_roots = _matching_block_execution_roots(payload, block_hash)
         except (OSError, UnicodeError, json.JSONDecodeError):
             return ""
-        if len(roots) > 1:
+        if len(persistence_roots) > 1 or len(execution_roots) > 1:
             return ""
-        if roots:
-            execution_root = next(iter(roots))
+        if persistence_roots:
+            persistence_root = next(iter(persistence_roots))
+        if execution_roots:
+            execution_root = next(iter(execution_roots))
+    if persistence_root:
+        # Cross-method fairness compares the persistent DB immediately before
+        # the first WAL apply. Execution overlays may legitimately differ.
+        return persistence_root
     if execution_root:
         if chain_root not in {"", "empty"} and chain_root != execution_root:
             return ""

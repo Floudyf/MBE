@@ -2003,7 +2003,7 @@ func (r *NodeRuntime) admitStatelessVersionCandidate(ctx context.Context, block 
 			if _, internal := producerIndex[token]; internal {
 				continue
 			}
-			homeShard := r.homeShardFor([]string{dependency.Key}, shardIDs)
+			homeShard := r.stateHomeShardForKey(dependency.Key, shardIDs)
 			if homeShard == "" {
 				return realblock.Block{}, nil, fmt.Errorf("stateless version admission has no home shard for %s", dependency.Key)
 			}
@@ -2527,7 +2527,7 @@ func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block)
 			TxIndex:               index,
 			SenderGroupID:         "sender:" + strings.ToLower(item.Sender),
 			RoutingEpoch:          routing.RoutingEpoch,
-			HomeShard:             shardFor(r.plugins.Sharding, []string{"nonce:" + item.Sender}, r.shardIDs()),
+			HomeShard:             r.stateHomeShardForKey("nonce:"+item.Sender, r.shardIDs()),
 			ExecutionShard:        routing.ExecutionShard,
 			CoaccessGroup:         strings.Join(item.StateKeys, "+"),
 			Reason:                routing.RoutingReason,
@@ -2723,7 +2723,7 @@ func (r *NodeRuntime) executesRemoteHomeState(item tx.SignedTransaction) bool {
 		if access.Key == "" {
 			continue
 		}
-		homeShard := r.homeShardFor([]string{access.Key}, shards)
+		homeShard := r.stateHomeShardForKey(access.Key, shards)
 		if homeShard != r.node.ShardID {
 			return true
 		}
@@ -3844,7 +3844,14 @@ func (r *NodeRuntime) probeStateAccessOnce(ctx context.Context, block realblock.
 		delete(r.stateFetchWaiters, requestID)
 		r.mu.Unlock()
 	}()
-	request := r.plugins.StateAccess.BuildFetchRequest(StateFetchInput{RequestID: requestID, TxID: item.TxID, BlockHash: block.BlockHash, Key: access.Key, HomeShard: homeShard, ExecutionShard: r.node.ShardID, AccessKind: string(access.Mode), RequiredVersion: dependency.RequiredVersion, Versioned: versioned})
+	accessKind := string(access.Mode)
+	if versioned {
+		// This path is a polling probe, not a long-lived fetch subscription.
+		// A not-yet-materialized exact version must answer immediately so the
+		// local wave scheduler can release the waiter and poll again later.
+		accessKind = statelessVersionAdmissionProbeAccessKind
+	}
+	request := r.plugins.StateAccess.BuildFetchRequest(StateFetchInput{RequestID: requestID, TxID: item.TxID, BlockHash: block.BlockHash, Key: access.Key, HomeShard: homeShard, ExecutionShard: r.node.ShardID, AccessKind: accessKind, RequiredVersion: dependency.RequiredVersion, Versioned: versioned})
 	envelope, err := p2p.NewEnvelope(stateFetchRequestMessage, r.node.NodeID, targetNode, r.node.ShardID, block.Height, 0, block.Height, request)
 	if err != nil {
 		return "", false, time.Since(started), err
@@ -3871,7 +3878,7 @@ func (r *NodeRuntime) probeStateAccessOnce(ctx context.Context, block realblock.
 	}
 }
 
-func versionedStateAccesses(item tx.SignedTransaction, shardIDs []string, home func([]string, []string) string, executionShard string) []versionedStateProbe {
+func versionedStateAccesses(item tx.SignedTransaction, shardIDs []string, home func(string, []string) string, executionShard string) []versionedStateProbe {
 	out := make([]versionedStateProbe, 0, len(item.AccessList))
 	seen := map[string]bool{}
 	for _, access := range item.AccessList {
@@ -3880,7 +3887,7 @@ func versionedStateAccesses(item tx.SignedTransaction, shardIDs []string, home f
 		}
 		dependency, hasDependency := stateVersionDependencyForKey(item, access.Key)
 		versioned := hasDependency && isVersionedStateAccess(access)
-		homeShard := home([]string{access.Key}, shardIDs)
+		homeShard := home(access.Key, shardIDs)
 		if !versioned && (homeShard == "" || homeShard == executionShard) {
 			continue
 		}
@@ -3896,6 +3903,15 @@ func versionedStateAccesses(item tx.SignedTransaction, shardIDs []string, home f
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].token < out[j].token })
 	return out
+}
+
+const versionedStateReadyNoProgressTimeout = 30 * time.Second
+
+func versionedStateReadyNoProgressExceeded(lastProgressAt, now time.Time) bool {
+	if lastProgressAt.IsZero() || now.Before(lastProgressAt) {
+		return false
+	}
+	return now.Sub(lastProgressAt) >= versionedStateReadyNoProgressTimeout
 }
 
 func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block realblock.Block, base map[string]string) (BlockExecutionResult, error) {
@@ -3914,7 +3930,7 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	probesByTx := map[string][]versionedStateProbe{}
 	probeByToken := map[string]versionedStateProbe{}
 	for _, item := range block.TxList {
-		probes := versionedStateAccesses(item, shardIDs, r.homeShardFor, r.node.ShardID)
+		probes := versionedStateAccesses(item, shardIDs, r.stateHomeShardForKey, r.node.ShardID)
 		probesByTx[item.TxID] = probes
 		for _, probe := range probes {
 			if _, exists := probeByToken[probe.token]; !exists {
@@ -3942,8 +3958,8 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	var mergedSTM execution.BlockSTMMetrics
 	allSerialEquivalent := true
 	started := time.Now()
-	deadline := time.NewTimer(30 * time.Second)
-	defer deadline.Stop()
+	lastProgressAt := started
+	markProgress := func() { lastProgressAt = time.Now() }
 
 	internalReady := func(item tx.SignedTransaction) bool {
 		if item.ExecutionRouting == nil {
@@ -4026,6 +4042,7 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 			if outcome.ready {
 				if !probeReady[outcome.token] {
 					stateReadyCount++
+					markProgress()
 				}
 				probeReady[outcome.token] = true
 				resolved[outcome.token] = outcome.value
@@ -4038,9 +4055,10 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 		select {
 		case <-ctx.Done():
 			return BlockExecutionResult{}, ctx.Err()
-		case <-deadline.C:
-			return BlockExecutionResult{}, fmt.Errorf("versioned state-ready execution timed out at block %d with %d/%d transactions remaining", block.Height, remaining, len(block.TxList))
 		default:
+		}
+		if versionedStateReadyNoProgressExceeded(lastProgressAt, time.Now()) {
+			return BlockExecutionResult{}, fmt.Errorf("versioned state-ready execution made no progress for %s at block %d with %d/%d transactions remaining (waves=%d probes=%d resolved_tokens=%d waits=%d)", versionedStateReadyNoProgressTimeout, block.Height, remaining, len(block.TxList), waveCount, probeCount, stateReadyCount, stateWaitCount)
 		}
 		frontier := make([]tx.SignedTransaction, 0, remaining)
 		for _, item := range block.TxList {
@@ -4136,6 +4154,7 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 		if waveResult.ExecutionResult.BlockExecutorID == execution.BlockSTMExecutorID && !waveResult.ExecutionResult.SerialEquivalent {
 			allSerialEquivalent = false
 		}
+		waveRemainingBefore := remaining
 		for _, delta := range waveResult.ExecutionResult.TxDeltas {
 			fullIndex, ok := indexByTxID[delta.TxID]
 			if !ok {
@@ -4156,6 +4175,9 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 			setByIndex[fullIndex] = true
 			completed[delta.TxID] = true
 			remaining--
+		}
+		if remaining < waveRemainingBefore {
+			markProgress()
 		}
 	}
 
@@ -4206,6 +4228,11 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	actualMetrics["versioned_state_ready_max_wave_width"] = maxWaveWidth
 	actualMetrics["versioned_state_ready_scheduler_mode"] = "per_transaction_per_key_version_frontier"
 	actualMetrics["versioned_state_ready_execution_ms"] = time.Since(started).Milliseconds()
+	if r.plugins.Execution != nil && r.plugins.Execution.ID() == "dual_track_execution" {
+		for key, value := range metaTrackClassificationMetrics(batchClassification(block.TxList, r.plugins.Execution), len(block.TxList)) {
+			actualMetrics[key] = value
+		}
+	}
 	return BlockExecutionResult{ExecutionResult: merged, StateDelta: stateKVsFromExecutionDelta(merged.StateDelta), PlanDigest: merged.PlanDigest, WorkerCount: workerCount, ActualMetrics: actualMetrics}, nil
 }
 
@@ -4265,7 +4292,7 @@ func (r *NodeRuntime) metaTrackStateReadyInputs(block realblock.Block) (map[stri
 			if access.Key == "" || strings.Contains(access.Key, "::") {
 				continue
 			}
-			homeShard := r.homeShardFor([]string{access.Key}, shardIDs)
+			homeShard := r.stateHomeShardForKey(access.Key, shardIDs)
 			_, versioned := stateVersionDependencyForKey(item, access.Key)
 			versioned = versioned && isVersionedStateAccess(access)
 			if versioned || (homeShard != "" && homeShard != r.node.ShardID) {
@@ -4278,7 +4305,7 @@ func (r *NodeRuntime) metaTrackStateReadyInputs(block realblock.Block) (map[stri
 		}
 	}
 	fetch := func(ctx context.Context, item tx.SignedTransaction, access tx.AccessItem) (RemoteStateReadyEvent, error) {
-		homeShard := r.homeShardFor([]string{access.Key}, shardIDs)
+		homeShard := r.stateHomeShardForKey(access.Key, shardIDs)
 		token := stateReadinessToken(item, access)
 		dependency, hasDependency := stateVersionDependencyForKey(item, access.Key)
 		versioned := hasDependency && isVersionedStateAccess(access)
@@ -4350,7 +4377,7 @@ func (r *NodeRuntime) prepareRemoteStateSnapshot(ctx context.Context, block real
 					continue
 				}
 			}
-			homeShard := r.homeShardFor([]string{access.Key}, shardIDs)
+			homeShard := r.stateHomeShardForKey(access.Key, shardIDs)
 			if homeShard == "" || homeShard == r.node.ShardID {
 				continue
 			}
@@ -4604,7 +4631,7 @@ func (r *NodeRuntime) publishTransactionStateVersions(ctx context.Context, block
 			value = exactSnapshot[qualifyStateKey(r.node.ShardID, dependency.Key)]
 		}
 		orderingNoop := !delta.Success || !wrote
-		homeShard := r.homeShardFor([]string{dependency.Key}, shardIDs)
+		homeShard := r.stateHomeShardForKey(dependency.Key, shardIDs)
 		if homeShard == "" {
 			return fmt.Errorf("versioned state %s has no persistent home shard", dependency.Key)
 		}
@@ -4953,7 +4980,7 @@ func (r *NodeRuntime) markLocalVersionedMaterialized(transactions []tx.SignedTra
 					break
 				}
 			}
-			if !versioned || r.homeShardFor([]string{dependency.Key}, shardIDs) != r.node.ShardID {
+			if !versioned || r.stateHomeShardForKey(dependency.Key, shardIDs) != r.node.ShardID {
 				continue
 			}
 			if dependency.ProducedVersion > versions[dependency.Key] {
@@ -4995,7 +5022,7 @@ func (r *NodeRuntime) applyMetaTrackRemoteDeltas(ctx context.Context, block real
 			local = append(local, item)
 			continue
 		}
-		homeShard := r.homeShardFor([]string{unqualified}, shardIDs)
+		homeShard := r.stateHomeShardForKey(unqualified, shardIDs)
 		if homeShard == "" || homeShard == r.node.ShardID {
 			local = append(local, item)
 			continue

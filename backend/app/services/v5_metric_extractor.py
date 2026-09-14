@@ -431,6 +431,13 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
         for block in blocks
     )
     metrics["state_commitment_ms"] = total("state_commitment_ms")
+    effective_worker_count = max(
+        (_int(block.get("configured_worker_count") or block.get("worker_count")) for block in blocks),
+        default=0,
+    )
+    if effective_worker_count > 0:
+        metrics["configured_worker_count"] = effective_worker_count
+        metrics["worker_count"] = effective_worker_count
     metrics["common_timing_block_count"] = len(blocks)
     root_versions = sorted({str(block.get("state_root_version")) for block in blocks if block.get("state_root_version")})
     if len(root_versions) == 1:
