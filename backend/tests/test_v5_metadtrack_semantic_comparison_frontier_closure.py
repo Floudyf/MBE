@@ -11,6 +11,9 @@ from backend.app.services.v5_serial_order_oracle import (
     _load_access_entries,
     _multishard_correctness_blockers,
 )
+from backend.app.services.v5_metric_truth import normalize_remote_operation_kind
+from backend.app.services.v5_paper_exporter import _individual_result_reasons
+from backend.app.services.v5_formal_scheduler import _state_equivalence_individual_reasons
 
 
 def _write_first_block(node_dir: Path, *, node_id: str, shard_id: str, block_hash: str, execution_root: str, persistent_root: str) -> None:
@@ -132,3 +135,43 @@ def test_dual_track_manifest_has_no_historical_access_size_gate() -> None:
     assert "access_stability_admission" in manifest.capabilities
     assert "semantic_stability_admission" in manifest.capabilities
     assert manifest.truth_boundary == "metatrack_dual_track_execution_stability_v1"
+
+
+def test_version_admission_probe_is_a_remote_fetch_not_unknown() -> None:
+    assert normalize_remote_operation_kind("state_version_admission_probe") == "fetch"
+    assert normalize_remote_operation_kind("write") == "fetch"
+
+
+def _paper_gate_child(remote_unknown: int) -> dict:
+    return {
+        "status": "completed",
+        "execution_status": "completed",
+        "metrics": {
+            "submitted_unique_tx_count": 10,
+            "terminal_unique_tx_count": 10,
+            "finalized_unique_logical_tx_count": 10,
+            "incomplete_unique_tx_count": 0,
+            "cross_shard_failed_unique_count": 0,
+            "lifecycle_complete": True,
+            "no_fallback": True,
+            "state_root_consistent": True,
+            "receipt_root_consistent": True,
+            "plan_digest_consistent": True,
+            "metric_completeness": "complete",
+            "end_to_end_tps": 1.0,
+            "p95_finality_ms": 1.0,
+            "p99_finality_ms": 1.0,
+            "remote_operation_unknown_kind_count": remote_unknown,
+            "replica_deduplicated_remote_unknown_kind_count": remote_unknown,
+        },
+        "result": {"summary": {}},
+    }
+
+
+def test_unknown_remote_operation_kind_blocks_paper_truth() -> None:
+    bad = _paper_gate_child(1)
+    assert "remote_operation_unknown_kind_nonzero" in _individual_result_reasons(bad)
+    assert "remote_operation_unknown_kind_nonzero" in _state_equivalence_individual_reasons(bad)
+    good = _paper_gate_child(0)
+    assert "remote_operation_unknown_kind_nonzero" not in _individual_result_reasons(good)
+    assert "remote_operation_unknown_kind_nonzero" not in _state_equivalence_individual_reasons(good)

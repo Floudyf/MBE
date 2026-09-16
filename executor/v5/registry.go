@@ -591,6 +591,8 @@ type BatchClassificationResult struct {
 	DeduplicatedEdgeCount                int
 	DependencyChainMax                   int
 	SCCCount                             int
+	AmbiguousConflictPairCount           int
+	SemanticUnsafeCount                  int
 	CommutativeDependencySuppressedCount int
 	AccessSizeMin                        int
 	AccessSizeMax                        int
@@ -1542,12 +1544,123 @@ func structuredAccessSize(item tx.SignedTransaction) int {
 	return len(keys)
 }
 
+var dualTrackSupportedOrdinaryWriteSemantics = map[string]bool{
+	"set":                                  true,
+	"alien_worlds_contract_semantic_state": true,
+	"axie_owner_debit":                     true,
+	"axie_owner_credit":                    true,
+	"axie_ownership_transfer":              true,
+	"marketplace_hotspot_state":            true,
+	"buyer_balance":                        true,
+	"buyer_nonce":                          true,
+	"seller_balance":                       true,
+	"tapos_observed_exact_write":           true,
+	"account_rmw":                          true,
+}
+
+func dualTrackSemanticSafety(item tx.SignedTransaction) (bool, string) {
+	for _, access := range item.AccessList {
+		key := strings.TrimSpace(access.Key)
+		if key == "" {
+			continue
+		}
+		semantics := strings.TrimSpace(access.UpdateSemantics)
+		switch access.Mode {
+		case tx.AccessRead:
+			// A declared read is semantically stable without a write-update
+			// policy. Its value/version readiness is checked independently.
+			continue
+		case tx.AccessCommutativeDelta:
+			switch semantics {
+			case "add", "commutative_delta", "market_sale_counter":
+				continue
+			case "":
+				return false, "missing_update_semantics:" + key
+			default:
+				return false, "unsupported_commutative_semantics:" + key + ":" + semantics
+			}
+		case tx.AccessWrite, tx.AccessReadWrite:
+			if semantics == "" {
+				return false, "missing_update_semantics:" + key
+			}
+			if !dualTrackSupportedOrdinaryWriteSemantics[semantics] {
+				return false, "unsupported_update_semantics:" + key + ":" + semantics
+			}
+		}
+	}
+	return true, ""
+}
+
+type dualTrackConflictAccess struct {
+	TxID   string
+	Item   tx.SignedTransaction
+	Access tx.AccessItem
+}
+
+// dualTrackConflictDirection returns -1 for left->right, +1 for right->left,
+// and 0 when the signed execution metadata cannot prove a safe direction.
+//
+// Compatibility note: direct unit/plugin invocations that carry no MetaTrack
+// execution-routing metadata retain deterministic input-order precedence.
+// Real MetaTrack transactions carry signed ExecutionRouting metadata; once that
+// metadata is present, a non-commutative business-state conflict must be
+// justified by exact per-key state-version evidence.
+func dualTrackConflictDirection(left, right dualTrackConflictAccess) int {
+	if !isVersionedStateAccess(left.Access) || !isVersionedStateAccess(right.Access) {
+		return -1
+	}
+	if left.Item.ExecutionRouting == nil && right.Item.ExecutionRouting == nil {
+		return -1
+	}
+	leftVersion, leftOK := stateVersionDependencyForKey(left.Item, left.Access.Key)
+	rightVersion, rightOK := stateVersionDependencyForKey(right.Item, right.Access.Key)
+	if !leftOK || !rightOK {
+		return 0
+	}
+
+	leftWrites := isWriteMode(left.Access.Mode)
+	rightWrites := isWriteMode(right.Access.Mode)
+	switch {
+	case leftWrites && rightWrites:
+		if leftVersion.ProducedVersion == 0 || rightVersion.ProducedVersion == 0 ||
+			leftVersion.ProducedVersion == rightVersion.ProducedVersion {
+			return 0
+		}
+		if leftVersion.ProducedVersion < rightVersion.ProducedVersion {
+			return -1
+		}
+		return 1
+
+	case leftWrites && !rightWrites:
+		if leftVersion.ProducedVersion == 0 {
+			return 0
+		}
+		if rightVersion.RequiredVersion >= leftVersion.ProducedVersion {
+			return -1
+		}
+		return 1
+
+	case !leftWrites && rightWrites:
+		if rightVersion.ProducedVersion == 0 {
+			return 0
+		}
+		if leftVersion.RequiredVersion >= rightVersion.ProducedVersion {
+			return 1
+		}
+		return -1
+	}
+	return 0
+}
+
 func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecision {
 	if len(item.AccessList) == 0 {
 		return ExecutionDecision{Track: "conservative", Reason: "missing_structured_access_list"}
 	}
 	if hasRemoteExecutionBoundary(item) {
 		return ExecutionDecision{Track: "conservative", Reason: "legacy_cross_shard_protocol_boundary"}
+	}
+	if safe, reason := dualTrackSemanticSafety(item); !safe {
+		return ExecutionDecision{Track: "conservative", Reason: reason}
 	}
 	commutative := false
 	knownDirectionWrite := false
@@ -1581,11 +1694,10 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 	}
 	accessSizes := make([]int, 0, len(input.Transactions))
 
-	// Non-commutative writers establish ordinary serial-order barriers. Pure
-	// commutative writers on the same key intentionally do not depend on one
-	// another: they commute and are folded at deterministic materialization.
-	// Readers and ordinary writers still depend on every earlier commutative
-	// writer so a later non-commutative observation sees the complete prefix.
+	// result.Dependencies is the deterministic execution-order DAG consumed by
+	// the scheduler. It remains separate from stabilityGraph: ambiguous
+	// conflicts are represented bidirectionally only in the classification
+	// graph so Conservative transactions never deadlock the execution scheduler.
 	lastWriter := map[string]string{}
 	commutativeWriters := map[string][]string{}
 	readers := map[string][]string{}
@@ -1594,6 +1706,11 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 	graph := map[string][]string{}
 	hardReasons := map[string][]string{}
 	dependencyReasons := map[string][]string{}
+
+	stabilityGraph := map[string][]string{}
+	stabilityEdges := map[string]bool{}
+	topologyReasons := map[string][]string{}
+	stabilityAccessByTxKey := map[string]dualTrackConflictAccess{}
 
 	addDependency := func(from, to, key, kind string) {
 		if from == "" || to == "" || from == to {
@@ -1611,14 +1728,61 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 			result.RAWDependencyEdges++
 		}
 	}
+	addStabilityEdge := func(from, to, key, kind string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		edgeKey := from + "->" + to + ":" + key + ":" + kind
+		if stabilityEdges[edgeKey] {
+			return
+		}
+		stabilityEdges[edgeKey] = true
+		stabilityGraph[from] = append(stabilityGraph[from], to)
+	}
+	stabilityAccessKey := func(txID, key string) string {
+		return txID + "\x00" + key
+	}
+	addStabilityConflict := func(previousTxID, currentTxID, key string, currentItem tx.SignedTransaction, currentAccess tx.AccessItem) {
+		if previousTxID == "" || currentTxID == "" || previousTxID == currentTxID {
+			return
+		}
+		previous, ok := stabilityAccessByTxKey[stabilityAccessKey(previousTxID, key)]
+		if !ok {
+			// The execution graph already proved that previousTxID conflicts on
+			// this key. Missing classification evidence is itself conservative.
+			addStabilityEdge(previousTxID, currentTxID, key, "ambiguous")
+			addStabilityEdge(currentTxID, previousTxID, key, "ambiguous")
+			reason := "ambiguous_conflict_direction:" + key
+			topologyReasons[previousTxID] = append(topologyReasons[previousTxID], reason)
+			topologyReasons[currentTxID] = append(topologyReasons[currentTxID], reason)
+			result.AmbiguousConflictPairCount++
+			return
+		}
+		current := dualTrackConflictAccess{TxID: currentTxID, Item: currentItem, Access: currentAccess}
+		switch dualTrackConflictDirection(previous, current) {
+		case -1:
+			addStabilityEdge(previousTxID, currentTxID, key, "conflict")
+		case 1:
+			addStabilityEdge(currentTxID, previousTxID, key, "conflict")
+		default:
+			addStabilityEdge(previousTxID, currentTxID, key, "ambiguous")
+			addStabilityEdge(currentTxID, previousTxID, key, "ambiguous")
+			reason := "ambiguous_conflict_direction:" + key
+			topologyReasons[previousTxID] = append(topologyReasons[previousTxID], reason)
+			topologyReasons[currentTxID] = append(topologyReasons[currentTxID], reason)
+			result.AmbiguousConflictPairCount++
+		}
+	}
 
 	for index, item := range input.Transactions {
 		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
 		graph[txID] = append([]string(nil), graph[txID]...)
+		stabilityGraph[txID] = append([]string(nil), stabilityGraph[txID]...)
 
 		if item.Sender != "" {
 			if previous := lastSenderTx[item.Sender]; previous != "" {
 				addDependency(previous, txID, "nonce:"+item.Sender, "nonce")
+				addStabilityEdge(previous, txID, "nonce:"+item.Sender, "nonce")
 				dependencyReasons[txID] = append(dependencyReasons[txID], "nonce_order_dependency")
 			}
 			lastSenderTx[item.Sender] = txID
@@ -1640,11 +1804,18 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		if hasRemoteExecutionBoundary(item) {
 			hardReasons[txID] = append(hardReasons[txID], "legacy_cross_shard_protocol_boundary")
 		}
+		if safe, reason := dualTrackSemanticSafety(item); !safe {
+			hardReasons[txID] = append(hardReasons[txID], reason)
+			result.SemanticUnsafeCount++
+		}
 
 		for _, access := range item.AccessList {
 			if access.Key == "" {
 				hardReasons[txID] = append(hardReasons[txID], "missing_access_key")
 				continue
+			}
+			stabilityAccessByTxKey[stabilityAccessKey(txID, access.Key)] = dualTrackConflictAccess{
+				TxID: txID, Item: item, Access: access,
 			}
 			if input.RemoteStateReadiness != nil {
 				token := stateReadinessToken(item, access)
@@ -1657,25 +1828,26 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 			case tx.AccessCommutativeDelta:
 				if writer := lastWriter[access.Key]; writer != "" {
 					addDependency(writer, txID, access.Key, "waw")
+					addStabilityConflict(writer, txID, access.Key, item, access)
 					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
 				}
 				for _, reader := range readers[access.Key] {
 					addDependency(reader, txID, access.Key, "war")
+					addStabilityConflict(reader, txID, access.Key, item, access)
 					dependencyReasons[txID] = append(dependencyReasons[txID], "war_dependency")
 				}
-				// Every existing commutative writer would have been a WAW edge under
-				// the ordinary writer rule. Count the deliberately suppressed edges
-				// as evidence that Fast commutative parallelism was actually exposed.
 				result.CommutativeDependencySuppressedCount += len(commutativeWriters[access.Key])
 				commutativeWriters[access.Key] = append(commutativeWriters[access.Key], txID)
 
 			case tx.AccessRead:
 				if writer := lastWriter[access.Key]; writer != "" {
 					addDependency(writer, txID, access.Key, "raw")
+					addStabilityConflict(writer, txID, access.Key, item, access)
 					dependencyReasons[txID] = append(dependencyReasons[txID], "raw_dependency")
 				}
 				for _, writer := range commutativeWriters[access.Key] {
 					addDependency(writer, txID, access.Key, "raw_commutative")
+					addStabilityConflict(writer, txID, access.Key, item, access)
 					dependencyReasons[txID] = append(dependencyReasons[txID], "raw_dependency")
 				}
 				readers[access.Key] = append(readers[access.Key], txID)
@@ -1683,14 +1855,17 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 			case tx.AccessWrite, tx.AccessReadWrite:
 				if writer := lastWriter[access.Key]; writer != "" {
 					addDependency(writer, txID, access.Key, "waw")
+					addStabilityConflict(writer, txID, access.Key, item, access)
 					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
 				}
 				for _, writer := range commutativeWriters[access.Key] {
 					addDependency(writer, txID, access.Key, "waw_commutative")
+					addStabilityConflict(writer, txID, access.Key, item, access)
 					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
 				}
 				for _, reader := range readers[access.Key] {
 					addDependency(reader, txID, access.Key, "war")
+					addStabilityConflict(reader, txID, access.Key, item, access)
 					dependencyReasons[txID] = append(dependencyReasons[txID], "war_dependency")
 				}
 				readers[access.Key] = nil
@@ -1724,19 +1899,20 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		}
 		result.AccessSizeP95 = accessSizes[p95Index]
 	}
-	sccNodes := nonTrivialSCCNodes(graph)
-	result.SCCCount = countNonTrivialSCCs(graph)
+	stabilitySCCNodes := nonTrivialSCCNodes(stabilityGraph)
+	result.SCCCount = countNonTrivialSCCs(stabilityGraph)
 
 	for index, item := range input.Transactions {
 		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
 		hard := append([]string(nil), hardReasons[txID]...)
+		hard = append(hard, topologyReasons[txID]...)
 		deps := append([]string(nil), dependencyReasons[txID]...)
 		sort.Strings(hard)
 		hard = uniqueStrings(hard)
 		sort.Strings(deps)
 		deps = uniqueStrings(deps)
 
-		if sccNodes[txID] {
+		if stabilitySCCNodes[txID] {
 			hard = append(hard, "nontrivial_scc")
 			sort.Strings(hard)
 			hard = uniqueStrings(hard)
@@ -2231,7 +2407,9 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		return BlockExecutionResult{}, fmt.Errorf("metatrack block executor schedule length mismatch")
 	}
 	classification := batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
+	executionStarted := time.Now()
 	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackSchedule(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, input.StateVersionPublish)
+	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return BlockExecutionResult{}, err
 	}
@@ -2240,6 +2418,9 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	}
 	actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_dual_track_runtime"
 	actualMetrics["metatrack_actual_dual_track_runtime"] = true
+	actualMetrics["transaction_execution_us"] = executionDuration.Microseconds()
+	actualMetrics["metatrack_suspend_resume_execution_ms"] = float64(executionDuration.Microseconds()) / 1000.0
+	materializationStarted := time.Now()
 	working := copyRegistryStringMap(input.BaseStateSnapshot)
 	before := state.RootOfSnapshot(working)
 	result := execution.Result{BlockHash: input.Block.BlockHash, Height: input.Block.Height, StateRootBefore: before, Deterministic: true, StateUpdates: map[string]string{}, BlockExecutorID: metaTrackBlockExecutorID, ExecutorVersion: "1.0.0", WorkerCount: workerCount}
@@ -2296,12 +2477,26 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		result.StateUpdates[key] = value
 	}
 	result.StateDelta = executionStateDelta(input.BaseStateSnapshot, working)
+	materializationDuration := time.Since(materializationStarted)
+	result.TransactionExecutionMS = executionDuration.Milliseconds()
+	result.DeterministicMaterializationMS = materializationDuration.Milliseconds()
+	actualMetrics["deterministic_materialization_us"] = materializationDuration.Microseconds()
 	plan := buildMetaTrackExecutionPlan(input.Block, schedule.Ordered, originalIndex, workerCount)
 	result.Plan = plan
 	result.PlanDigest = plan.PlanDigest
 	actualMetrics["duplicate_final_completion_count"] = duplicateFinalCompletions
 	actualMetrics["unique_final_logical_completion_count"] = len(finalSeen)
-	return BlockExecutionResult{ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: result.PlanDigest, WorkerCount: workerCount, ScheduleEvents: planEvents, ActualMetrics: actualMetrics, BusinessAttempts: attempts}, nil
+	return BlockExecutionResult{
+		ExecutionResult:        result,
+		StateDelta:             stateKVsFromExecutionDelta(result.StateDelta),
+		PlanDigest:             result.PlanDigest,
+		WorkerCount:            workerCount,
+		TransactionExecutionMS: result.TransactionExecutionMS,
+		DeterministicApplyMS:   result.DeterministicMaterializationMS,
+		ScheduleEvents:         planEvents,
+		ActualMetrics:          actualMetrics,
+		BusinessAttempts:       attempts,
+	}, nil
 }
 
 func metaTrackClassificationMetrics(classification BatchClassificationResult, transactionCount int) map[string]any {
@@ -2346,6 +2541,8 @@ func metaTrackClassificationMetrics(classification BatchClassificationResult, tr
 		"metatrack_classification_conflict_edge_count":                     classification.ConflictEdgeCount,
 		"metatrack_classification_dependency_chain_max":                    classification.DependencyChainMax,
 		"metatrack_classification_nontrivial_scc_count":                    classification.SCCCount,
+		"metatrack_classification_ambiguous_conflict_pair_count":           classification.AmbiguousConflictPairCount,
+		"metatrack_classification_semantic_unsafe_unique_count":            classification.SemanticUnsafeCount,
 		"metatrack_classification_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
 		"metatrack_classification_count_scope":                             "per_replica_unique_logical_transactions",
 	}

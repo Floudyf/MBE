@@ -14,7 +14,7 @@ def normalize_remote_operation_kind(value: object) -> str:
     kind = str(value or "").strip()
     if is_remote_writeback_kind(kind):
         return REMOTE_WRITEBACK_KIND
-    if kind in {"read", "read_write", "commutative_delta"}:
+    if kind in {"read", "write", "read_write", "commutative_delta", "state_version_admission_probe"}:
         return REMOTE_FETCH_KIND
     return REMOTE_UNKNOWN_KIND
 

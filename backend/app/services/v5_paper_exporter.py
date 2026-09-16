@@ -309,6 +309,10 @@ def _individual_result_reasons(child: dict) -> list[str]:
         reasons.append("cross_shard_failed_not_zero")
     if lifecycle_complete is not True:
         reasons.append("lifecycle_complete_not_true")
+    unknown_remote = _first_number(metrics, summary, name="remote_operation_unknown_kind_count")
+    dedup_unknown_remote = _first_number(metrics, summary, name="replica_deduplicated_remote_unknown_kind_count")
+    if (unknown_remote is not None and unknown_remote > 0) or (dedup_unknown_remote is not None and dedup_unknown_remote > 0):
+        reasons.append("remote_operation_unknown_kind_nonzero")
     for name in ("no_fallback", "state_root_consistent", "receipt_root_consistent", "plan_digest_consistent"):
         if _first_bool(metrics, summary, name=name) is not True:
             reasons.append(f"{name}_not_true")

@@ -14,6 +14,25 @@ const COMMON: MetricDef[] = [
   { key: "state_commitment_ms", label: "状态承诺耗时", unit: "ms", help: "状态承诺 / 状态根更新阶段累计时间。" },
 ];
 
+const VERSIONED_STATE_READY: MetricDef[] = [
+  { key: "versioned_state_ready_wave_count", label: "版本就绪 Wave 数", help: "exact-version StateReady 前沿实际形成的可执行 Wave 数。" },
+  { key: "versioned_state_ready_wait_observation_count", label: "版本等待观测次数", help: "外层版本前沿观察到 required version 尚未满足的次数。" },
+  { key: "versioned_state_ready_resolved_token_count", label: "已解析版本令牌数", help: "exact-version StateReady 成功解析的版本令牌数。" },
+  { key: "versioned_state_probe_count", label: "版本探测次数", help: "exact-version StateReady 发起的本地/远程版本探测次数。" },
+  { key: "versioned_state_probe_latency_ms", label: "版本探测累计延迟", unit: "ms", help: "版本探测累计观测延迟；这是事件累计量，不与区块墙钟耗时直接相加。" },
+  { key: "versioned_state_ready_max_wave_width", label: "最大版本就绪 Wave 宽度", help: "单个 exact-version ready Wave 的最大交易宽度。" },
+  { key: "versioned_state_ready_execution_ms", label: "版本前沿 / StateReady 包络", unit: "ms", help: "exact-version StateReady 从开始到完成的真实墙钟包络，包含版本探测、等待、Wave 推进和内层执行。" },
+];
+
+const NATIVE_STATE_READY: MetricDef[] = [
+  { key: "state_ready_wait_count", label: "StateReady 等待交易数", help: "MetaTrack 原生 suspend/resume 路径进入 StateReady 等待的逻辑交易计数。" },
+  { key: "state_ready_resume_count", label: "StateReady 恢复交易数", help: "状态/版本就绪后恢复执行的逻辑交易计数。" },
+  { key: "state_prefetch_wait_ms", label: "StateReady 累计等待时间", unit: "ms", help: "逐交易等待时间的累计量，可大于区块墙钟时间，不用于堆叠阶段图。" },
+  { key: "scheduler_blocked_count", label: "调度阻塞事件数", help: "双轨调度器记录的阻塞事件数。" },
+  { key: "scheduler_wakeup_count", label: "调度唤醒事件数", help: "双轨调度器记录的唤醒事件数。" },
+  { key: "metatrack_suspend_resume_execution_ms", label: "双轨 / StateReady 执行包络", unit: "ms", help: "MetaTrack 原生 suspend/resume 执行阶段的高精度墙钟包络。" },
+];
+
 const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; metrics: MetricDef[] }> = [
   {
     match: (id) => id.includes("block_stm"), title: "Block-STM",
@@ -148,13 +167,21 @@ export default function V5MechanismAnalysis({ children }: { children: V5FormalCh
   const active = methods.some((item) => item.id === selected) ? selected : methods[0]?.id ?? "";
   const selectedChildren = children.filter((child) => (child.method_config_id || child.method?.method_id) === active && child.status === "completed");
   const metrics = aggregateMetrics(selectedChildren);
-  const definition = METHOD_METRICS.find((item) => item.match(active));
-  const definitions = [...COMMON, ...(definition?.metrics ?? [])];
+  const matchedDefinitions = METHOD_METRICS.filter((item) => item.match(active));
+  const versionedMode = String(metrics.versioned_state_ready_scheduler_mode ?? "");
+  const nativeMode = String(metrics.state_ready_scheduler_mode ?? "");
+  const stateReadyDefinitions = versionedMode === "per_transaction_per_key_version_frontier"
+    ? VERSIONED_STATE_READY
+    : nativeMode === "transaction_level_suspend_resume"
+      ? NATIVE_STATE_READY
+      : [];
+  const definitions = [...COMMON, ...stateReadyDefinitions, ...matchedDefinitions.flatMap((item) => item.metrics)];
+  const activeName = methods.find((item) => item.id === active)?.name ?? active;
   return <section className="v5-dashboard-section" data-testid="v5-mechanism-analysis">
     <div className="v5-dashboard-heading"><div><h3>机制分析</h3><p className="muted">只显示该方法已有正式证据的指标；所有比例均在指标提取/结果层派生，不修改执行器。</p></div></div>
     <div className="v5-method-tabs">{methods.map((method) => <button key={method.id} type="button" className={active === method.id ? "active" : ""} onClick={() => setSelected(method.id)}>{method.name}</button>)}</div>
     {active ? <>
-      <div className="v5-mechanism-title"><strong>{definition?.title ?? methods.find((item) => item.id === active)?.name ?? active}</strong><span>{selectedChildren.length} 个已完成样本</span></div>
+      <div className="v5-mechanism-title"><strong>{activeName}</strong><span>{selectedChildren.length} 个已完成样本</span></div>
       <div className="v5-mechanism-grid">{definitions.map((item) => <Metric key={item.key} definition={item} value={metrics[item.key]} />)}</div>
       <ExecutionBreakdown metrics={metrics} />
     </> : <p className="muted">暂无方法数据。</p>}
@@ -171,12 +198,27 @@ function ExecutionBreakdown({ metrics }: { metrics: Record<string, unknown> }) {
   const materialization = number(metrics.deterministic_materialization_ms) ?? 0;
   const commitment = number(metrics.state_commitment_ms) ?? 0;
   const total = number(metrics.block_execution_ms) ?? 0;
-  const other = Math.max(0, total - transaction - materialization - commitment);
-  const pieces = [
-    ["交易执行", transaction], ["确定性物化", materialization], ["状态承诺", commitment], ["其他执行开销", other],
-  ] as const;
+  const versionedEnvelope = number(metrics.versioned_state_ready_execution_ms) ?? 0;
+  const nativeEnvelope = number(metrics.metatrack_suspend_resume_execution_ms) ?? 0;
+  let pieces: Array<readonly [string, number]>;
+  if (transaction > 0 || materialization > 0 || commitment > 0) {
+    pieces = [
+      ["交易/调度执行", transaction],
+      ["确定性物化", materialization],
+      ["状态承诺", commitment],
+      ["其他区块执行开销", Math.max(0, total - transaction - materialization - commitment)],
+    ];
+  } else if (versionedEnvelope > 0) {
+    const envelope = Math.min(total, versionedEnvelope);
+    pieces = [["版本前沿 / StateReady 包络", envelope], ["其他区块执行开销", Math.max(0, total - envelope)]];
+  } else if (nativeEnvelope > 0) {
+    const envelope = Math.min(total, nativeEnvelope);
+    pieces = [["双轨 / StateReady 执行包络", envelope], ["其他区块执行开销", Math.max(0, total - envelope)]];
+  } else {
+    pieces = [["区块执行包络", total]];
+  }
   const denominator = pieces.reduce((sum, [, value]) => sum + value, 0);
-  return <div className="v5-execution-breakdown"><h4>执行阶段耗时构成</h4><div className="v5-breakdown-bar">{pieces.map(([label, value]) => <span key={label} title={`${label}: ${value.toFixed(0)} ms`} style={{ flexGrow: denominator > 0 ? value : 1 }} />)}</div><div className="v5-breakdown-legend">{pieces.map(([label, value]) => <span key={label}><strong>{label}</strong> {value.toLocaleString(undefined, { maximumFractionDigits: 0 })} ms</span>)}</div></div>;
+  return <div className="v5-execution-breakdown"><h4>执行阶段耗时构成</h4><div className="v5-breakdown-bar">{pieces.map(([label, value]) => <span key={label} title={`${label}: ${value.toFixed(1)} ms`} style={{ flexGrow: denominator > 0 ? value : 1 }} />)}</div><div className="v5-breakdown-legend">{pieces.map(([label, value]) => <span key={label}><strong>{label}</strong> {value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ms</span>)}</div></div>;
 }
 
 function uniqueMethods(children: V5FormalChildRun[]) {
@@ -211,6 +253,10 @@ function formatMetric(value: number, unit?: string): string { if (unit === "B") 
 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();
+  if (id === "metatrack_block_stm") return "MetaTrack + Block-STM";
+  if (id === "stateless_hash_block_stm") return "Stateless Block-STM";
+  if (id === "metatrack_serial") return "MetaTrack";
+  if (id === "stateless_hash_serial") return "Stateless Serial";
   if (id === "hash_serial") return "Serial";
   if (id === "hash_block_stm") return "Block-STM";
   if (id === "hash_aria") return "Aria";
@@ -223,10 +269,10 @@ function shortMethodName(methodId: string, value: string): string {
   if (lower.includes("address conflict graph")) return "ACG/Nezha";
   if (lower.includes("batch-schedule-execute")) return "BSX";
   if (lower.includes("conflict graph") && !lower.includes("address")) return "CG/Nezha";
-  if (lower.includes("block-stm")) return "Block-STM";
   if (lower.includes("batch-si")) return "Batch-SI";
   if (lower.includes("groundhog")) return "Groundhog";
   if (lower.includes("aria")) return "Aria";
   if (lower.includes("serial")) return "Serial";
+  if (lower.includes("block-stm")) return "Block-STM";
   return value.replace(/Stateful Hash/gi, "有状态 Hash").replace(/Stateless Hash/gi, "无状态 Hash").replace(/with Block-STM backend/gi, "+ Block-STM");
 }

@@ -1186,6 +1186,10 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
         reasons.append("cross_shard_failed_not_zero")
     if boolean("lifecycle_complete") is not True:
         reasons.append("lifecycle_complete_not_true")
+    unknown_remote = number("remote_operation_unknown_kind_count")
+    dedup_unknown_remote = number("replica_deduplicated_remote_unknown_kind_count")
+    if (unknown_remote is not None and unknown_remote > 0) or (dedup_unknown_remote is not None and dedup_unknown_remote > 0):
+        reasons.append("remote_operation_unknown_kind_nonzero")
     reasons.extend(_worker_truth_reasons(item))
     return list(dict.fromkeys(reasons))
 

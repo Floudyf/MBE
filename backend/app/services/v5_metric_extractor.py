@@ -227,6 +227,12 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "remote_state_fetch_count": cluster.get("metatrack_remote_state_fetch_count"),
         "remote_state_fetch_completed_count": cluster.get("metatrack_remote_state_fetch_completed_count"),
         "state_ready_scheduler_mode": cluster.get("metatrack_state_ready_scheduler_mode"),
+        "metatrack_classification_conflict_edge_count": cluster.get("metatrack_classification_conflict_edge_count"),
+        "metatrack_classification_dependency_chain_max": cluster.get("metatrack_classification_dependency_chain_max"),
+        "metatrack_classification_nontrivial_scc_count": cluster.get("metatrack_classification_nontrivial_scc_count"),
+        "metatrack_classification_ambiguous_conflict_pair_count": cluster.get("metatrack_classification_ambiguous_conflict_pair_count"),
+        "metatrack_classification_semantic_unsafe_unique_count": cluster.get("metatrack_classification_semantic_unsafe_unique_count"),
+        "metatrack_classification_truth_scope": cluster.get("metatrack_classification_truth_scope"),
         "versioned_state_ready_wave_count": cluster.get("versioned_state_ready_wave_count"),
         "versioned_state_ready_wait_observation_count": cluster.get("versioned_state_ready_wait_observation_count"),
         "versioned_state_ready_resolved_token_count": cluster.get("versioned_state_ready_resolved_token_count"),
@@ -419,18 +425,52 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
     if not blocks:
         return
 
-    def total(name: str) -> int:
+    def total_int(name: str) -> int:
         return sum(_int(block.get(name)) for block in blocks)
 
-    # block_execution_ms is the common runtime wall-clock envelope. The three
-    # phase metrics remain separate and are never derived from that envelope.
-    metrics["block_execution_ms"] = total("block_execution_ms")
-    metrics["transaction_execution_ms"] = total("transaction_execution_ms")
-    metrics["deterministic_materialization_ms"] = sum(
-        _int(block.get("deterministic_materialization_ms") if block.get("deterministic_materialization_ms") is not None else block.get("deterministic_apply_ms"))
-        for block in blocks
+    def total_number(name: str) -> float:
+        total = 0.0
+        for block in blocks:
+            value = block.get(name)
+            if isinstance(value, bool) or value is None:
+                continue
+            try:
+                total += float(value)
+            except (TypeError, ValueError):
+                continue
+        return total
+
+    metrics["block_execution_ms"] = total_int("block_execution_ms")
+    transaction_us = total_number("transaction_execution_us")
+    materialization_us = total_number("deterministic_materialization_us")
+    metrics["transaction_execution_ms"] = (
+        transaction_us / 1000.0 if transaction_us > 0 else total_int("transaction_execution_ms")
     )
-    metrics["state_commitment_ms"] = total("state_commitment_ms")
+    metrics["deterministic_materialization_ms"] = (
+        materialization_us / 1000.0
+        if materialization_us > 0
+        else sum(
+            _int(
+                block.get("deterministic_materialization_ms")
+                if block.get("deterministic_materialization_ms") is not None
+                else block.get("deterministic_apply_ms")
+            )
+            for block in blocks
+        )
+    )
+    metrics["state_commitment_ms"] = total_int("state_commitment_ms")
+    if transaction_us > 0 or materialization_us > 0:
+        metrics["execution_phase_timing_precision"] = "microsecond_accumulated_then_reported_ms"
+    else:
+        metrics["execution_phase_timing_precision"] = "millisecond_executor_fields"
+
+    versioned_execution_ms = total_number("versioned_state_ready_execution_ms")
+    if versioned_execution_ms > 0:
+        metrics["versioned_state_ready_execution_ms"] = versioned_execution_ms
+    native_metatrack_envelope_ms = total_number("metatrack_suspend_resume_execution_ms")
+    if native_metatrack_envelope_ms > 0:
+        metrics["metatrack_suspend_resume_execution_ms"] = native_metatrack_envelope_ms
+
     effective_worker_count = max(
         (_int(block.get("configured_worker_count") or block.get("worker_count")) for block in blocks),
         default=0,
@@ -438,28 +478,88 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
     if effective_worker_count > 0:
         metrics["configured_worker_count"] = effective_worker_count
         metrics["worker_count"] = effective_worker_count
+
+    executor_ids = sorted({str(summary.get("block_executor_id")) for summary in summaries if summary.get("block_executor_id")})
+    observed_parallel_width = max(
+        (
+            max(
+                _int(block.get("maximum_parallel_width")),
+                _int(block.get("max_inflight_business_executions")),
+            )
+            for block in blocks
+        ),
+        default=0,
+    )
+    if executor_ids == ["serial_block_executor"] and blocks:
+        observed_parallel_width = max(observed_parallel_width, 1)
+    if observed_parallel_width > 0:
+        metrics["maximum_parallel_width"] = observed_parallel_width
+
     metrics["common_timing_block_count"] = len(blocks)
+    metrics["common_block_execution_timing_available"] = True
+    metrics["common_block_execution_timing_truth_scope"] = "leader_per_shard_runtime_block_evidence"
     root_versions = sorted({str(block.get("state_root_version")) for block in blocks if block.get("state_root_version")})
     if len(root_versions) == 1:
         metrics["state_root_version"] = root_versions[0]
-    executor_ids = sorted({str(summary.get("block_executor_id")) for summary in summaries if summary.get("block_executor_id")})
     if executor_ids:
         metrics["timing_block_executor_ids"] = executor_ids
-    metrics["common_block_execution_timing_available"] = True
     for path in _batch_si_leader_summary_paths(run_dir):
         if path.is_file():
             rel = str(path.relative_to(run_dir)).replace("\\", "/")
             if rel not in metrics["source_artifacts"]:
                 metrics["source_artifacts"].append(rel)
 
-
 def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    aggregate_path = run_dir / "aggregate" / "block_stm_aggregate_summary.json"
+    aggregate = _read_json(aggregate_path)
+    if aggregate.get("status") == "available":
+        rows = aggregate.get("per_validator") if isinstance(aggregate.get("per_validator"), list) else []
+
+        def replica_deduplicated_sum(field: str, aggregate_fallback: str | None = None) -> int:
+            by_shard: dict[str, int] = {}
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                shard = str(row.get("shard_id") or "")
+                if not shard:
+                    continue
+                value = _int(row.get(field))
+                if value > by_shard.get(shard, 0):
+                    by_shard[shard] = value
+            if by_shard:
+                return sum(by_shard.values())
+            return _int(aggregate.get(aggregate_fallback or field))
+
+        metrics.update(
+            {
+                "block_stm_metrics_available": True,
+                "worker_count": aggregate.get("worker_count"),
+                "maximum_parallel_width": aggregate.get("maximum_parallel_width"),
+                "maximum_concurrent_executions": aggregate.get("maximum_concurrent_executions"),
+                "abort_count": replica_deduplicated_sum("abort_count"),
+                "reexecution_count": replica_deduplicated_sum("reexecution_count"),
+                "dependency_wait_count": replica_deduplicated_sum("dependency_wait_count"),
+                "dependency_resume_count": replica_deduplicated_sum("dependency_resume_count"),
+                "validation_failure_count": replica_deduplicated_sum("validation_failure_count"),
+                "maximum_incarnation_observed": _int(aggregate.get("maximum_incarnation")),
+                "serial_fallback_count": aggregate.get("serial_fallback_count"),
+                "serial_equivalent": aggregate.get("serial_equivalent"),
+                "block_stm_metric_truth_scope": "sum_of_per_shard_replica_maxima_from_per_validator_evidence",
+            }
+        )
+        rel = "aggregate/block_stm_aggregate_summary.json"
+        if rel not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(rel)
+        return
+
+    # Historical/single-node fallback.
     block_stm_summary = _read_json(run_dir / "block_stm_summary.json")
     block_stm_metrics = block_stm_summary.get("block_stm_metrics") if isinstance(block_stm_summary.get("block_stm_metrics"), dict) else {}
     if not block_stm_metrics:
         return
     metrics.update(
         {
+            "block_stm_metrics_available": True,
             "worker_count": block_stm_metrics.get("worker_count"),
             "maximum_parallel_width": block_stm_metrics.get("maximum_parallel_width"),
             "abort_count": block_stm_metrics.get("abort_count"),
@@ -467,12 +567,13 @@ def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             "dependency_wait_count": block_stm_metrics.get("dependency_wait_count"),
             "dependency_resume_count": block_stm_metrics.get("dependency_resume_count"),
             "validation_failure_count": block_stm_metrics.get("validation_failure_count"),
+            "maximum_incarnation_observed": block_stm_metrics.get("maximum_incarnation"),
             "serial_equivalent": block_stm_summary.get("serial_equivalent"),
+            "block_stm_metric_truth_scope": "single_node_summary",
         }
     )
-    metrics["source_artifacts"].append("block_stm_summary.json")
-
-
+    if "block_stm_summary.json" not in metrics["source_artifacts"]:
+        metrics["source_artifacts"].append("block_stm_summary.json")
 
 def _batch_si_leader_summary_paths(run_dir: Path) -> list[Path]:
     plan = _read_json(run_dir / "compiled_run_plan.json")

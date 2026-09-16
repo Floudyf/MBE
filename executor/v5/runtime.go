@@ -2653,7 +2653,10 @@ func (r *NodeRuntime) recordScheduleEvents(block realblock.Block, events []Sched
 			event.Wakeup = false
 		}
 		if item, ok := txByID[event.TxID]; ok && r.executesRemoteHomeState(item) {
-			event.LocalExecution = false
+			// Remote state ownership does not make computation non-local.
+			// LocalExecution describes where the scheduler dispatches business
+			// execution; remote-home access is orthogonal evidence carried in the
+			// reason and the remote-state metrics.
 			if event.DecisionReason != "" {
 				event.DecisionReason += ";"
 			}
@@ -4181,6 +4184,8 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 		}
 	}
 
+	executionDuration := time.Since(started)
+	materializationStarted := time.Now()
 	// Normalize the block-level execution evidence in consensus order so remote
 	// response timing and wave grouping cannot change receipt roots or state roots.
 	normalized := copyStringMap(base)
@@ -4215,6 +4220,9 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 		merged.StateUpdates[key] = value
 	}
 	merged.StateDelta = executionStateDelta(base, normalized)
+	materializationDuration := time.Since(materializationStarted)
+	merged.TransactionExecutionMS = executionDuration.Milliseconds()
+	merged.DeterministicMaterializationMS = materializationDuration.Milliseconds()
 	if block.ExecutionPlan != nil && block.ExecutionPlan.PlanDigest != "" {
 		merged.PlanDigest = block.ExecutionPlan.PlanDigest
 	} else {
@@ -4228,12 +4236,22 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	actualMetrics["versioned_state_ready_max_wave_width"] = maxWaveWidth
 	actualMetrics["versioned_state_ready_scheduler_mode"] = "per_transaction_per_key_version_frontier"
 	actualMetrics["versioned_state_ready_execution_ms"] = time.Since(started).Milliseconds()
+	actualMetrics["transaction_execution_us"] = executionDuration.Microseconds()
+	actualMetrics["deterministic_materialization_us"] = materializationDuration.Microseconds()
 	if r.plugins.Execution != nil && r.plugins.Execution.ID() == "dual_track_execution" {
 		for key, value := range metaTrackClassificationMetrics(batchClassification(block.TxList, r.plugins.Execution), len(block.TxList)) {
 			actualMetrics[key] = value
 		}
 	}
-	return BlockExecutionResult{ExecutionResult: merged, StateDelta: stateKVsFromExecutionDelta(merged.StateDelta), PlanDigest: merged.PlanDigest, WorkerCount: workerCount, ActualMetrics: actualMetrics}, nil
+	return BlockExecutionResult{
+		ExecutionResult:        merged,
+		StateDelta:             stateKVsFromExecutionDelta(merged.StateDelta),
+		PlanDigest:             merged.PlanDigest,
+		WorkerCount:            workerCount,
+		TransactionExecutionMS: merged.TransactionExecutionMS,
+		DeterministicApplyMS:   merged.DeterministicMaterializationMS,
+		ActualMetrics:          actualMetrics,
+	}, nil
 }
 
 func mergeBlockSTMMetrics(dst *execution.BlockSTMMetrics, src execution.BlockSTMMetrics) {
@@ -6618,7 +6636,30 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	blockProduction := summarizeBlockProductionRows(chainRows)
 	businessStateDigest := canonicalBusinessStateDigest(r.plugins.StateStorage.Snapshot(r.db))
 	stateReadySummary := summarizeStateReadyEvidence(blockExecutionSummaries)
-	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+	classificationSummary := summarizeMetaTrackClassificationEvidence(blockExecutionSummaries)
+	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "metatrack_classification_conflict_edge_count": classificationSummary.conflictEdgeCount, "metatrack_classification_dependency_chain_max": classificationSummary.dependencyChainMax, "metatrack_classification_nontrivial_scc_count": classificationSummary.nontrivialSCCCount, "metatrack_classification_ambiguous_conflict_pair_count": classificationSummary.ambiguousConflictPairCount, "metatrack_classification_semantic_unsafe_unique_count": classificationSummary.semanticUnsafeUniqueCount, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+}
+
+type metaTrackClassificationEvidenceSummary struct {
+	conflictEdgeCount          int64
+	dependencyChainMax         int64
+	nontrivialSCCCount         int64
+	ambiguousConflictPairCount int64
+	semanticUnsafeUniqueCount  int64
+}
+
+func summarizeMetaTrackClassificationEvidence(blocks []map[string]any) metaTrackClassificationEvidenceSummary {
+	out := metaTrackClassificationEvidenceSummary{}
+	for _, block := range blocks {
+		out.conflictEdgeCount += int64FromAny(block["metatrack_classification_conflict_edge_count"])
+		if value := int64FromAny(block["metatrack_classification_dependency_chain_max"]); value > out.dependencyChainMax {
+			out.dependencyChainMax = value
+		}
+		out.nontrivialSCCCount += int64FromAny(block["metatrack_classification_nontrivial_scc_count"])
+		out.ambiguousConflictPairCount += int64FromAny(block["metatrack_classification_ambiguous_conflict_pair_count"])
+		out.semanticUnsafeUniqueCount += int64FromAny(block["metatrack_classification_semantic_unsafe_unique_count"])
+	}
+	return out
 }
 
 type stateReadyEvidenceSummary struct {
@@ -7335,7 +7376,7 @@ func NormalizeRemoteOperationKind(kind string) string {
 		return "writeback"
 	}
 	switch trimmed {
-	case "read", "read_write", "commutative_delta":
+	case "read", "write", "read_write", "commutative_delta", statelessVersionAdmissionProbeAccessKind:
 		return "fetch"
 	default:
 		return "unknown"

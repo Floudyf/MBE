@@ -108,73 +108,78 @@ type v5NodeProcess struct {
 	LogPath    string `json:"log_path"`
 }
 type v5NodeSummary struct {
-	NodeID                           string  `json:"node_id"`
-	ShardID                          string  `json:"shard_id"`
-	PID                              int     `json:"pid"`
-	ListenAddr                       string  `json:"listen_addr"`
-	CommittedBlockCount              int     `json:"committed_block_count"`
-	StateRoot                        string  `json:"state_root"`
-	BusinessStateDigest              string  `json:"business_state_digest"`
-	StateReadyWaitCount              int64   `json:"state_ready_wait_count"`
-	StateReadyResumeCount            int64   `json:"state_ready_resume_count"`
-	StatePrefetchWaitMS              int64   `json:"state_prefetch_wait_ms"`
-	RemoteStateFetchCount            int64   `json:"remote_state_fetch_count"`
-	RemoteStateFetchCompletedCount   int64   `json:"remote_state_fetch_completed_count"`
-	StateReadySchedulerMode          string  `json:"state_ready_scheduler_mode"`
-	VersionedStateReadyWaveCount     int64   `json:"versioned_state_ready_wave_count"`
-	VersionedStateReadyWaitCount     int64   `json:"versioned_state_ready_wait_observation_count"`
-	VersionedStateReadyResolvedCount int64   `json:"versioned_state_ready_resolved_token_count"`
-	VersionedStateProbeCount         int64   `json:"versioned_state_probe_count"`
-	VersionedStateProbeLatencyMS     int64   `json:"versioned_state_probe_latency_ms"`
-	VersionedStateReadyMaxWaveWidth  int64   `json:"versioned_state_ready_max_wave_width"`
-	VersionedStateReadySchedulerMode string  `json:"versioned_state_ready_scheduler_mode"`
-	RealPBFT                         bool    `json:"real_pbft_style_messages"`
-	BlockExecutorID                  string  `json:"block_executor_id"`
-	BlockExecutorVersion             string  `json:"block_executor_version"`
-	WorkerCount                      int     `json:"worker_count"`
-	PlanDigestConsistent             bool    `json:"plan_digest_consistent"`
-	FastTrackCount                   int     `json:"fast_track_count"`
-	ConservativeTrackCount           int     `json:"conservative_track_count"`
-	AggregationGroupCount            int     `json:"aggregation_group_count"`
-	SchedulerEventCount              int     `json:"scheduler_event_count"`
-	SchedulerBlockedCount            int     `json:"scheduler_blocked_count"`
-	SchedulerWakeupCount             int     `json:"scheduler_wakeup_count"`
-	SchedulerStolenWorkCount         int     `json:"scheduler_stolen_work_count"`
-	SchedulerLocalExecutionCount     int     `json:"scheduler_local_execution_count"`
-	SchedulerReadyQueueMaxDepth      int     `json:"scheduler_ready_queue_max_depth"`
-	SchedulerFastQueueMaxDepth       int     `json:"scheduler_fast_queue_max_depth"`
-	SchedulerConsQueueMaxDepth       int     `json:"scheduler_conservative_queue_max_depth"`
-	SchedulerDependencyWaitMS        int     `json:"scheduler_dependency_wait_ms"`
-	SchedulerIdleMS                  int     `json:"scheduler_idle_ms"`
-	SchedulerIdleRatio               float64 `json:"scheduler_idle_ratio"`
-	RemoteStateAccessCount           int     `json:"remote_state_access_count"`
-	RemoteStateReadCount             int     `json:"remote_state_read_count"`
-	RemoteStateWriteApplyCount       int     `json:"remote_state_write_apply_count"`
-	RemoteOperationUnknownCount      int     `json:"remote_operation_unknown_kind_count"`
-	PhysicalRemoteOperationCount     int     `json:"physical_remote_operation_count"`
-	PhysicalRemoteFetchCount         int     `json:"physical_remote_fetch_count"`
-	PhysicalRemoteWritebackCount     int     `json:"physical_remote_writeback_count"`
-	PhysicalRemoteFailedCount        int     `json:"physical_remote_failed_count"`
-	RemoteStateAccessFailedCount     int     `json:"remote_state_access_failed_count"`
-	RemoteStateAccessAvgLatencyMS    float64 `json:"remote_state_access_avg_latency_ms"`
-	LogicalUpdateCount               int     `json:"logical_update_count"`
-	PhysicalUpdateCount              int     `json:"physical_update_count"`
-	ExecutedLogicalTxCount           int     `json:"executed_logical_transaction_count"`
-	ExecutedTxInstanceCount          int     `json:"executed_transaction_instance_count"`
-	PreAggregationPhysicalOps        int     `json:"pre_aggregation_physical_op_count"`
-	PostAggregationPhysicalOps       int     `json:"post_aggregation_physical_op_count"`
-	AggregatedKeyCount               int     `json:"aggregated_key_count"`
-	AggregatedLogicalDeltaCount      int     `json:"aggregated_logical_delta_count"`
-	PhysicalOpsSavedCount            int     `json:"physical_ops_saved_count"`
-	AggregationReductionRatio        float64 `json:"aggregation_reduction_ratio"`
-	ConfiguredBlockSize              int     `json:"configured_block_size"`
-	ConfiguredBlockIntervalMS        int     `json:"configured_block_interval_ms"`
-	ActualCommittedBlockCount        int     `json:"actual_committed_block_count"`
-	ActualAverageTxPerBlock          float64 `json:"actual_average_tx_per_block"`
-	ActualMinTxPerBlock              int     `json:"actual_min_tx_per_block"`
-	ActualMaxTxPerBlock              int     `json:"actual_max_tx_per_block"`
-	ActualBlockIntervalMeanMS        float64 `json:"actual_block_interval_mean_ms"`
-	ActualBlockIntervalP95MS         int64   `json:"actual_block_interval_p95_ms"`
+	NodeID                                            string  `json:"node_id"`
+	ShardID                                           string  `json:"shard_id"`
+	PID                                               int     `json:"pid"`
+	ListenAddr                                        string  `json:"listen_addr"`
+	CommittedBlockCount                               int     `json:"committed_block_count"`
+	StateRoot                                         string  `json:"state_root"`
+	BusinessStateDigest                               string  `json:"business_state_digest"`
+	StateReadyWaitCount                               int64   `json:"state_ready_wait_count"`
+	StateReadyResumeCount                             int64   `json:"state_ready_resume_count"`
+	StatePrefetchWaitMS                               int64   `json:"state_prefetch_wait_ms"`
+	RemoteStateFetchCount                             int64   `json:"remote_state_fetch_count"`
+	RemoteStateFetchCompletedCount                    int64   `json:"remote_state_fetch_completed_count"`
+	StateReadySchedulerMode                           string  `json:"state_ready_scheduler_mode"`
+	MetaTrackClassificationConflictEdgeCount          int64   `json:"metatrack_classification_conflict_edge_count"`
+	MetaTrackClassificationDependencyChainMax         int64   `json:"metatrack_classification_dependency_chain_max"`
+	MetaTrackClassificationNontrivialSCCCount         int64   `json:"metatrack_classification_nontrivial_scc_count"`
+	MetaTrackClassificationAmbiguousConflictPairCount int64   `json:"metatrack_classification_ambiguous_conflict_pair_count"`
+	MetaTrackClassificationSemanticUnsafeUniqueCount  int64   `json:"metatrack_classification_semantic_unsafe_unique_count"`
+	VersionedStateReadyWaveCount                      int64   `json:"versioned_state_ready_wave_count"`
+	VersionedStateReadyWaitCount                      int64   `json:"versioned_state_ready_wait_observation_count"`
+	VersionedStateReadyResolvedCount                  int64   `json:"versioned_state_ready_resolved_token_count"`
+	VersionedStateProbeCount                          int64   `json:"versioned_state_probe_count"`
+	VersionedStateProbeLatencyMS                      int64   `json:"versioned_state_probe_latency_ms"`
+	VersionedStateReadyMaxWaveWidth                   int64   `json:"versioned_state_ready_max_wave_width"`
+	VersionedStateReadySchedulerMode                  string  `json:"versioned_state_ready_scheduler_mode"`
+	RealPBFT                                          bool    `json:"real_pbft_style_messages"`
+	BlockExecutorID                                   string  `json:"block_executor_id"`
+	BlockExecutorVersion                              string  `json:"block_executor_version"`
+	WorkerCount                                       int     `json:"worker_count"`
+	PlanDigestConsistent                              bool    `json:"plan_digest_consistent"`
+	FastTrackCount                                    int     `json:"fast_track_count"`
+	ConservativeTrackCount                            int     `json:"conservative_track_count"`
+	AggregationGroupCount                             int     `json:"aggregation_group_count"`
+	SchedulerEventCount                               int     `json:"scheduler_event_count"`
+	SchedulerBlockedCount                             int     `json:"scheduler_blocked_count"`
+	SchedulerWakeupCount                              int     `json:"scheduler_wakeup_count"`
+	SchedulerStolenWorkCount                          int     `json:"scheduler_stolen_work_count"`
+	SchedulerLocalExecutionCount                      int     `json:"scheduler_local_execution_count"`
+	SchedulerReadyQueueMaxDepth                       int     `json:"scheduler_ready_queue_max_depth"`
+	SchedulerFastQueueMaxDepth                        int     `json:"scheduler_fast_queue_max_depth"`
+	SchedulerConsQueueMaxDepth                        int     `json:"scheduler_conservative_queue_max_depth"`
+	SchedulerDependencyWaitMS                         int     `json:"scheduler_dependency_wait_ms"`
+	SchedulerIdleMS                                   int     `json:"scheduler_idle_ms"`
+	SchedulerIdleRatio                                float64 `json:"scheduler_idle_ratio"`
+	RemoteStateAccessCount                            int     `json:"remote_state_access_count"`
+	RemoteStateReadCount                              int     `json:"remote_state_read_count"`
+	RemoteStateWriteApplyCount                        int     `json:"remote_state_write_apply_count"`
+	RemoteOperationUnknownCount                       int     `json:"remote_operation_unknown_kind_count"`
+	PhysicalRemoteOperationCount                      int     `json:"physical_remote_operation_count"`
+	PhysicalRemoteFetchCount                          int     `json:"physical_remote_fetch_count"`
+	PhysicalRemoteWritebackCount                      int     `json:"physical_remote_writeback_count"`
+	PhysicalRemoteFailedCount                         int     `json:"physical_remote_failed_count"`
+	RemoteStateAccessFailedCount                      int     `json:"remote_state_access_failed_count"`
+	RemoteStateAccessAvgLatencyMS                     float64 `json:"remote_state_access_avg_latency_ms"`
+	LogicalUpdateCount                                int     `json:"logical_update_count"`
+	PhysicalUpdateCount                               int     `json:"physical_update_count"`
+	ExecutedLogicalTxCount                            int     `json:"executed_logical_transaction_count"`
+	ExecutedTxInstanceCount                           int     `json:"executed_transaction_instance_count"`
+	PreAggregationPhysicalOps                         int     `json:"pre_aggregation_physical_op_count"`
+	PostAggregationPhysicalOps                        int     `json:"post_aggregation_physical_op_count"`
+	AggregatedKeyCount                                int     `json:"aggregated_key_count"`
+	AggregatedLogicalDeltaCount                       int     `json:"aggregated_logical_delta_count"`
+	PhysicalOpsSavedCount                             int     `json:"physical_ops_saved_count"`
+	AggregationReductionRatio                         float64 `json:"aggregation_reduction_ratio"`
+	ConfiguredBlockSize                               int     `json:"configured_block_size"`
+	ConfiguredBlockIntervalMS                         int     `json:"configured_block_interval_ms"`
+	ActualCommittedBlockCount                         int     `json:"actual_committed_block_count"`
+	ActualAverageTxPerBlock                           float64 `json:"actual_average_tx_per_block"`
+	ActualMinTxPerBlock                               int     `json:"actual_min_tx_per_block"`
+	ActualMaxTxPerBlock                               int     `json:"actual_max_tx_per_block"`
+	ActualBlockIntervalMeanMS                         float64 `json:"actual_block_interval_mean_ms"`
+	ActualBlockIntervalP95MS                          int64   `json:"actual_block_interval_p95_ms"`
 }
 
 func runV5(planPath, dataDir string) error {
@@ -1720,6 +1725,11 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	versionedProbeLatencyByShard := map[string]int64{}
 	versionedMaxWaveWidth := int64(0)
 	versionedModes := map[string]bool{}
+	classificationConflictEdgesByShard := map[string]int64{}
+	classificationSCCByShard := map[string]int64{}
+	classificationAmbiguousByShard := map[string]int64{}
+	classificationSemanticUnsafeByShard := map[string]int64{}
+	classificationDependencyChainMax := int64(0)
 	for _, node := range plan.NodeConfigs {
 		raw, err := os.ReadFile(filepath.Join(node.DataDir, "node_summary.json"))
 		if err != nil {
@@ -1796,6 +1806,21 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		}
 		if item.StateReadySchedulerMode != "" {
 			stateReadyModes[item.StateReadySchedulerMode] = true
+		}
+		if item.MetaTrackClassificationConflictEdgeCount > classificationConflictEdgesByShard[item.ShardID] {
+			classificationConflictEdgesByShard[item.ShardID] = item.MetaTrackClassificationConflictEdgeCount
+		}
+		if item.MetaTrackClassificationNontrivialSCCCount > classificationSCCByShard[item.ShardID] {
+			classificationSCCByShard[item.ShardID] = item.MetaTrackClassificationNontrivialSCCCount
+		}
+		if item.MetaTrackClassificationAmbiguousConflictPairCount > classificationAmbiguousByShard[item.ShardID] {
+			classificationAmbiguousByShard[item.ShardID] = item.MetaTrackClassificationAmbiguousConflictPairCount
+		}
+		if item.MetaTrackClassificationSemanticUnsafeUniqueCount > classificationSemanticUnsafeByShard[item.ShardID] {
+			classificationSemanticUnsafeByShard[item.ShardID] = item.MetaTrackClassificationSemanticUnsafeUniqueCount
+		}
+		if item.MetaTrackClassificationDependencyChainMax > classificationDependencyChainMax {
+			classificationDependencyChainMax = item.MetaTrackClassificationDependencyChainMax
 		}
 		if item.VersionedStateReadyWaveCount > versionedWaveByShard[item.ShardID] {
 			versionedWaveByShard[item.ShardID] = item.VersionedStateReadyWaveCount
@@ -1892,104 +1917,110 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	stateReadyMode := singleMapKey(stateReadyModes)
 	versionedStateReadyMode := singleMapKey(versionedModes)
 	return map[string]any{
-		"runtime_stage":                                       "v5_1_real_plugin_driven_multi_process_multishard_runtime",
-		"runtime_truth":                                       "v5_real_cluster_candidate",
-		"one_node_one_os_process":                             true,
-		"distinct_process_count":                              len(pids),
-		"expected_process_count":                              len(plan.NodeConfigs),
-		"independent_tcp_ports":                               len(ports) == len(plan.NodeConfigs),
-		"real_client_submission":                              clientInfo != nil,
-		"real_signed_tx":                                      true,
-		"plugin_driven_runtime":                               true,
-		"block_executor_id":                                   singleMapKey(blockExecutors),
-		"block_executor_consistent":                           len(blockExecutors) == 1,
-		"plan_digest_consistent":                              planDigestConsistent,
-		"continuous_multi_shard":                              true,
-		"shard_count":                                         len(roots),
-		"all_shards_active":                                   allActive,
-		"per_shard_multiple_blocks":                           allActive,
-		"real_pbft_style_messages":                            pbftCount == len(plan.NodeConfigs),
-		"persistent_state":                                    true,
-		"state_root_consistent":                               consistent,
-		"receipt_root_consistent":                             matrixReceiptConsistent,
-		"real_cross_shard_network":                            crossSuccess > 0,
-		"cross_shard_success_count":                           crossSuccess,
-		"cross_shard_refund_count":                            crossRefund,
-		"configured_block_size":                               blockProductionAggregate["configured_block_size"],
-		"configured_block_interval_ms":                        blockProductionAggregate["configured_block_interval_ms"],
-		"actual_committed_block_count":                        blockProductionAggregate["actual_committed_block_count"],
-		"actual_average_tx_per_block":                         blockProductionAggregate["actual_average_tx_per_block"],
-		"actual_min_tx_per_block":                             blockProductionAggregate["actual_min_tx_per_block"],
-		"actual_max_tx_per_block":                             blockProductionAggregate["actual_max_tx_per_block"],
-		"actual_block_interval_mean_ms":                       blockProductionAggregate["actual_block_interval_mean_ms"],
-		"actual_block_interval_p95_ms":                        blockProductionAggregate["actual_block_interval_p95_ms"],
-		"block_production_summary":                            blockProductionAggregate,
-		"logical_update_count":                                logicalUpdateCount,
-		"physical_update_count":                               physicalUpdateCount,
-		"logical_update_count_deprecated":                     true,
-		"physical_update_count_deprecated":                    true,
-		"executed_logical_transaction_count":                  replicaDeduplicatedExecutedLogicalTxCount,
-		"physical_replica_executed_logical_transaction_count": physicalReplicaExecutedLogicalTxCount,
-		"executed_logical_transaction_count_truth_scope":      "replica_deduplicated_by_shard",
-		"executed_transaction_instance_count":                 executedTxInstanceCount,
-		"pre_aggregation_physical_op_count":                   preAggregationPhysicalOps,
-		"post_aggregation_physical_op_count":                  postAggregationPhysicalOps,
-		"aggregated_key_count":                                aggregatedKeyCount,
-		"aggregated_logical_delta_count":                      aggregatedLogicalDeltaCount,
-		"physical_ops_saved_count":                            physicalOpsSavedCount,
-		"aggregation_reduction_ratio":                         ratio(physicalOpsSavedCount, preAggregationPhysicalOps),
-		"scheduler_event_count":                               schedulerEventCount,
-		"scheduler_blocked_count":                             schedulerBlockedCount,
-		"scheduler_wakeup_count":                              schedulerWakeupCount,
-		"scheduler_stolen_work_count":                         schedulerStolenWorkCount,
-		"scheduler_local_execution_count":                     schedulerLocalExecutionCount,
-		"scheduler_ready_queue_max_depth":                     schedulerReadyQueueMaxDepth,
-		"scheduler_fast_queue_max_depth":                      schedulerFastQueueMaxDepth,
-		"scheduler_conservative_queue_max_depth":              schedulerConsQueueMaxDepth,
-		"scheduler_dependency_wait_ms":                        schedulerDependencyWaitMS,
-		"scheduler_idle_ms":                                   schedulerIdleMS,
-		"scheduler_idle_ratio":                                schedulerIdleRatio,
-		"state_ready_wait_count":                              sumInt64(stateReadyWaitByShard),
-		"state_ready_resume_count":                            sumInt64(stateReadyResumeByShard),
-		"state_prefetch_wait_ms":                              sumInt64(stateReadyWaitMSByShard),
-		"remote_state_fetch_count":                            sumInt64(stateReadyFetchByShard),
-		"remote_state_fetch_completed_count":                  sumInt64(stateReadyFetchCompletedByShard),
-		"state_ready_scheduler_mode":                          stateReadyMode,
-		"versioned_state_ready_wave_count":                    sumInt64(versionedWaveByShard),
-		"versioned_state_ready_wait_observation_count":        sumInt64(versionedWaitByShard),
-		"versioned_state_ready_resolved_token_count":          sumInt64(versionedResolvedByShard),
-		"versioned_state_probe_count":                         sumInt64(versionedProbeByShard),
-		"versioned_state_probe_latency_ms":                    sumInt64(versionedProbeLatencyByShard),
-		"versioned_state_ready_max_wave_width":                versionedMaxWaveWidth,
-		"versioned_state_ready_scheduler_mode":                versionedStateReadyMode,
-		"remote_state_access_count":                           remoteStateAccessCount,
-		"remote_state_read_count":                             remoteStateReadCount,
-		"remote_state_write_apply_count":                      remoteStateWriteApplyCount,
-		"remote_operation_unknown_kind_count":                 remoteOperationUnknownCount,
-		"physical_remote_operation_count":                     physicalRemoteOperationCount,
-		"physical_remote_fetch_count":                         physicalRemoteFetchCount,
-		"physical_remote_writeback_count":                     physicalRemoteWritebackCount,
-		"physical_remote_failed_count":                        physicalRemoteFailedCount,
-		"replica_deduplicated_remote_operation_count":         remoteStateAggregate["replica_deduplicated_remote_operation_count"],
-		"replica_deduplicated_remote_fetch_count":             remoteStateAggregate["replica_deduplicated_remote_fetch_count"],
-		"replica_deduplicated_remote_writeback_count":         remoteStateAggregate["replica_deduplicated_remote_writeback_count"],
-		"remote_fetches_per_logical_tx":                       remoteStateAggregate["remote_fetches_per_logical_tx"],
-		"remote_writebacks_per_logical_tx":                    remoteStateAggregate["remote_writebacks_per_logical_tx"],
-		"remote_operations_per_logical_tx":                    remoteStateAggregate["remote_operations_per_logical_tx"],
-		"replica_amplification_factor":                        remoteStateAggregate["replica_amplification_factor"],
-		"remote_fetch_replica_amplification_factor":           remoteStateAggregate["remote_fetch_replica_amplification_factor"],
-		"remote_writeback_replica_amplification_factor":       remoteStateAggregate["remote_writeback_replica_amplification_factor"],
-		"mechanism_metrics":                                   mechanismMetrics,
-		"remote_state_access_failed_count":                    remoteStateFailedCount,
-		"remote_state_access_avg_latency_ms":                  remoteStateAvgLatency,
-		"fault_injection_real":                                faultEvidence,
-		"fault_injection_requested":                           faultRequested,
-		"orphan_process_count":                                0,
-		"no_fallback":                                         true,
-		"node_summaries":                                      summaries,
-		"processes":                                           redactV5Processes(processes, dataDir),
-		"shard_blocks":                                        shardBlocks,
-		"ready_to_commit":                                     ready,
+		"runtime_stage":                                          "v5_1_real_plugin_driven_multi_process_multishard_runtime",
+		"runtime_truth":                                          "v5_real_cluster_candidate",
+		"one_node_one_os_process":                                true,
+		"distinct_process_count":                                 len(pids),
+		"expected_process_count":                                 len(plan.NodeConfigs),
+		"independent_tcp_ports":                                  len(ports) == len(plan.NodeConfigs),
+		"real_client_submission":                                 clientInfo != nil,
+		"real_signed_tx":                                         true,
+		"plugin_driven_runtime":                                  true,
+		"block_executor_id":                                      singleMapKey(blockExecutors),
+		"block_executor_consistent":                              len(blockExecutors) == 1,
+		"plan_digest_consistent":                                 planDigestConsistent,
+		"continuous_multi_shard":                                 true,
+		"shard_count":                                            len(roots),
+		"all_shards_active":                                      allActive,
+		"per_shard_multiple_blocks":                              allActive,
+		"real_pbft_style_messages":                               pbftCount == len(plan.NodeConfigs),
+		"persistent_state":                                       true,
+		"state_root_consistent":                                  consistent,
+		"receipt_root_consistent":                                matrixReceiptConsistent,
+		"real_cross_shard_network":                               crossSuccess > 0,
+		"cross_shard_success_count":                              crossSuccess,
+		"cross_shard_refund_count":                               crossRefund,
+		"configured_block_size":                                  blockProductionAggregate["configured_block_size"],
+		"configured_block_interval_ms":                           blockProductionAggregate["configured_block_interval_ms"],
+		"actual_committed_block_count":                           blockProductionAggregate["actual_committed_block_count"],
+		"actual_average_tx_per_block":                            blockProductionAggregate["actual_average_tx_per_block"],
+		"actual_min_tx_per_block":                                blockProductionAggregate["actual_min_tx_per_block"],
+		"actual_max_tx_per_block":                                blockProductionAggregate["actual_max_tx_per_block"],
+		"actual_block_interval_mean_ms":                          blockProductionAggregate["actual_block_interval_mean_ms"],
+		"actual_block_interval_p95_ms":                           blockProductionAggregate["actual_block_interval_p95_ms"],
+		"block_production_summary":                               blockProductionAggregate,
+		"logical_update_count":                                   logicalUpdateCount,
+		"physical_update_count":                                  physicalUpdateCount,
+		"logical_update_count_deprecated":                        true,
+		"physical_update_count_deprecated":                       true,
+		"executed_logical_transaction_count":                     replicaDeduplicatedExecutedLogicalTxCount,
+		"physical_replica_executed_logical_transaction_count":    physicalReplicaExecutedLogicalTxCount,
+		"executed_logical_transaction_count_truth_scope":         "replica_deduplicated_by_shard",
+		"executed_transaction_instance_count":                    executedTxInstanceCount,
+		"pre_aggregation_physical_op_count":                      preAggregationPhysicalOps,
+		"post_aggregation_physical_op_count":                     postAggregationPhysicalOps,
+		"aggregated_key_count":                                   aggregatedKeyCount,
+		"aggregated_logical_delta_count":                         aggregatedLogicalDeltaCount,
+		"physical_ops_saved_count":                               physicalOpsSavedCount,
+		"aggregation_reduction_ratio":                            ratio(physicalOpsSavedCount, preAggregationPhysicalOps),
+		"scheduler_event_count":                                  schedulerEventCount,
+		"scheduler_blocked_count":                                schedulerBlockedCount,
+		"scheduler_wakeup_count":                                 schedulerWakeupCount,
+		"scheduler_stolen_work_count":                            schedulerStolenWorkCount,
+		"scheduler_local_execution_count":                        schedulerLocalExecutionCount,
+		"scheduler_ready_queue_max_depth":                        schedulerReadyQueueMaxDepth,
+		"scheduler_fast_queue_max_depth":                         schedulerFastQueueMaxDepth,
+		"scheduler_conservative_queue_max_depth":                 schedulerConsQueueMaxDepth,
+		"scheduler_dependency_wait_ms":                           schedulerDependencyWaitMS,
+		"scheduler_idle_ms":                                      schedulerIdleMS,
+		"scheduler_idle_ratio":                                   schedulerIdleRatio,
+		"state_ready_wait_count":                                 sumInt64(stateReadyWaitByShard),
+		"state_ready_resume_count":                               sumInt64(stateReadyResumeByShard),
+		"state_prefetch_wait_ms":                                 sumInt64(stateReadyWaitMSByShard),
+		"remote_state_fetch_count":                               sumInt64(stateReadyFetchByShard),
+		"remote_state_fetch_completed_count":                     sumInt64(stateReadyFetchCompletedByShard),
+		"state_ready_scheduler_mode":                             stateReadyMode,
+		"metatrack_classification_conflict_edge_count":           sumInt64(classificationConflictEdgesByShard),
+		"metatrack_classification_dependency_chain_max":          classificationDependencyChainMax,
+		"metatrack_classification_nontrivial_scc_count":          sumInt64(classificationSCCByShard),
+		"metatrack_classification_ambiguous_conflict_pair_count": sumInt64(classificationAmbiguousByShard),
+		"metatrack_classification_semantic_unsafe_unique_count":  sumInt64(classificationSemanticUnsafeByShard),
+		"metatrack_classification_truth_scope":                   "replica_deduplicated_by_shard",
+		"versioned_state_ready_wave_count":                       sumInt64(versionedWaveByShard),
+		"versioned_state_ready_wait_observation_count":           sumInt64(versionedWaitByShard),
+		"versioned_state_ready_resolved_token_count":             sumInt64(versionedResolvedByShard),
+		"versioned_state_probe_count":                            sumInt64(versionedProbeByShard),
+		"versioned_state_probe_latency_ms":                       sumInt64(versionedProbeLatencyByShard),
+		"versioned_state_ready_max_wave_width":                   versionedMaxWaveWidth,
+		"versioned_state_ready_scheduler_mode":                   versionedStateReadyMode,
+		"remote_state_access_count":                              remoteStateAccessCount,
+		"remote_state_read_count":                                remoteStateReadCount,
+		"remote_state_write_apply_count":                         remoteStateWriteApplyCount,
+		"remote_operation_unknown_kind_count":                    remoteOperationUnknownCount,
+		"physical_remote_operation_count":                        physicalRemoteOperationCount,
+		"physical_remote_fetch_count":                            physicalRemoteFetchCount,
+		"physical_remote_writeback_count":                        physicalRemoteWritebackCount,
+		"physical_remote_failed_count":                           physicalRemoteFailedCount,
+		"replica_deduplicated_remote_operation_count":            remoteStateAggregate["replica_deduplicated_remote_operation_count"],
+		"replica_deduplicated_remote_fetch_count":                remoteStateAggregate["replica_deduplicated_remote_fetch_count"],
+		"replica_deduplicated_remote_writeback_count":            remoteStateAggregate["replica_deduplicated_remote_writeback_count"],
+		"remote_fetches_per_logical_tx":                          remoteStateAggregate["remote_fetches_per_logical_tx"],
+		"remote_writebacks_per_logical_tx":                       remoteStateAggregate["remote_writebacks_per_logical_tx"],
+		"remote_operations_per_logical_tx":                       remoteStateAggregate["remote_operations_per_logical_tx"],
+		"replica_amplification_factor":                           remoteStateAggregate["replica_amplification_factor"],
+		"remote_fetch_replica_amplification_factor":              remoteStateAggregate["remote_fetch_replica_amplification_factor"],
+		"remote_writeback_replica_amplification_factor":          remoteStateAggregate["remote_writeback_replica_amplification_factor"],
+		"mechanism_metrics":                                      mechanismMetrics,
+		"remote_state_access_failed_count":                       remoteStateFailedCount,
+		"remote_state_access_avg_latency_ms":                     remoteStateAvgLatency,
+		"fault_injection_real":                                   faultEvidence,
+		"fault_injection_requested":                              faultRequested,
+		"orphan_process_count":                                   0,
+		"no_fallback":                                            true,
+		"node_summaries":                                         summaries,
+		"processes":                                              redactV5Processes(processes, dataDir),
+		"shard_blocks":                                           shardBlocks,
+		"ready_to_commit":                                        ready,
 	}, nil
 }
 
