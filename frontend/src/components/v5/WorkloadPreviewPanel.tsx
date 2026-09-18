@@ -124,6 +124,10 @@ function compactScalar(value: unknown): string {
 function friendlyKey(path: string): string {
   const key = path.split(".").pop() ?? path;
   const labels: Record<string, string> = {
+    target_access_theta: "目标访问 θ",
+    measured_access_theta: "实测访问 θ",
+    theta_axis: "θ 统计口径",
+    theta_fit_ks: "θ 拟合 KS",
     target_account_write_theta: "目标账户写 θ",
     measured_account_write_theta: "实测账户写 θ",
     measured_account_touch_theta: "实测账户触点 θ",

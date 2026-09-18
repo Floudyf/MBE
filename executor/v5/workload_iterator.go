@@ -51,28 +51,32 @@ func (it *SyntheticIterator) Close() error                   { return nil }
 func (it *SyntheticIterator) Summary() WorkloadReplaySummary { return it.summary }
 
 type canonicalWireRecord struct {
-	SchemaVersion     string                        `json:"schema_version"`
-	DatasetID         string                        `json:"dataset_id"`
-	SourceRowIndex    int                           `json:"source_row_index"`
-	SourceEventID     string                        `json:"source_event_id"`
-	SourceTxHash      string                        `json:"source_tx_hash"`
-	TimestampMS       int64                         `json:"timestamp_ms"`
-	SenderID          string                        `json:"sender_id"`
-	ReceiverID        string                        `json:"receiver_id"`
-	OperationType     string                        `json:"operation_type"`
-	RuntimeValue      int64                         `json:"runtime_value"`
-	StateKeys         []string                      `json:"state_keys"`
-	RoutingSourceKey  string                        `json:"routing_source_key"`
-	RoutingTargetKey  string                        `json:"routing_target_key"`
-	AccessListSchema  string                        `json:"access_list_schema"`
-	AccessListSource  string                        `json:"access_list_source"`
-	AccessTemplate    []canonicalWireAccessTemplate `json:"access_template"`
-	AccessList        []tx.AccessItem               `json:"access_list"`
-	AccessListDigest  string                        `json:"access_list_digest"`
-	Category          string                        `json:"category,omitempty"`
-	Contract          string                        `json:"contract,omitempty"`
-	MaterializedIndex int                           `json:"materialized_index"`
-	LogicalEventID    string                        `json:"logical_event_id"`
+	SchemaVersion          string                        `json:"schema_version"`
+	DatasetID              string                        `json:"dataset_id"`
+	SourceRowIndex         int                           `json:"source_row_index"`
+	SourceEventID          string                        `json:"source_event_id"`
+	SourceTxHash           string                        `json:"source_tx_hash"`
+	TimestampMS            int64                         `json:"timestamp_ms"`
+	SenderID               string                        `json:"sender_id"`
+	ReceiverID             string                        `json:"receiver_id"`
+	OperationType          string                        `json:"operation_type"`
+	RuntimeValue           int64                         `json:"runtime_value"`
+	StateKeys              []string                      `json:"state_keys"`
+	RoutingSourceKey       string                        `json:"routing_source_key"`
+	RoutingTargetKey       string                        `json:"routing_target_key"`
+	AccessListSchema       string                        `json:"access_list_schema"`
+	AccessListSource       string                        `json:"access_list_source"`
+	AccessTemplate         []canonicalWireAccessTemplate `json:"access_template"`
+	AccessList             []tx.AccessItem               `json:"access_list"`
+	AccessListDigest       string                        `json:"access_list_digest"`
+	SchedulingAccessList   []tx.AccessItem               `json:"scheduling_access_list"`
+	SchedulingAccessDigest string                        `json:"scheduling_access_digest"`
+	SchedulingAccessSchema string                        `json:"scheduling_access_schema"`
+	SchedulingAccessSource string                        `json:"scheduling_access_source"`
+	Category               string                        `json:"category,omitempty"`
+	Contract               string                        `json:"contract,omitempty"`
+	MaterializedIndex      int                           `json:"materialized_index"`
+	LogicalEventID         string                        `json:"logical_event_id"`
 }
 
 type canonicalWireAccessTemplate struct {
@@ -166,8 +170,12 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 	if err != nil {
 		return WorkloadRecord{}, err
 	}
+	schedulingAccess, schedulingSchema, schedulingSource, schedulingDigest, err := resolveCanonicalSchedulingAccessList(wire)
+	if err != nil {
+		return WorkloadRecord{}, err
+	}
 	sourceShard := canonicalRuntimeSourceShardWithSharding(it.plan, senderID, it.shards, it.sharding)
-	if wire.SchemaVersion == "mbe_workload_record_v3" && accessSchema != "dcl_sale_access_template_v1" {
+	if (wire.SchemaVersion == "mbe_workload_record_v3" || wire.SchemaVersion == "mbe_workload_record_v4") && accessSchema != "dcl_sale_access_template_v1" {
 		sourceShard = shardIndexFor(it.sharding, []string{strings.ToLower(wire.RoutingSourceKey)}, it.shards)
 	}
 	targetShard := sourceShard
@@ -185,7 +193,7 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 	it.summary.ShardLoadDistribution[fmt.Sprintf("s%d", sourceShard)]++
 	it.summary.ReadCount++
 	it.index++
-	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), SenderID: senderID, ReceiverID: strings.ToLower(wire.ReceiverID), OperationType: wire.OperationType, RoutingSourceKey: wire.RoutingSourceKey, RoutingTargetKey: wire.RoutingTargetKey, Payload: payload, StateKeys: wire.StateKeys, AccessList: accessList, AccessListSchema: accessSchema, AccessListSource: accessSource, AccessListDigest: accessDigest, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", sourceShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
+	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), SenderID: senderID, ReceiverID: strings.ToLower(wire.ReceiverID), OperationType: wire.OperationType, RoutingSourceKey: wire.RoutingSourceKey, RoutingTargetKey: wire.RoutingTargetKey, Payload: payload, StateKeys: wire.StateKeys, AccessList: accessList, AccessListSchema: accessSchema, AccessListSource: accessSource, AccessListDigest: accessDigest, SchedulingAccessList: schedulingAccess, SchedulingAccessSchema: schedulingSchema, SchedulingAccessSource: schedulingSource, SchedulingAccessDigest: schedulingDigest, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", sourceShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
 }
 
 func (it *CanonicalTraceIterator) Close() error {
@@ -243,7 +251,7 @@ func (it *CanonicalTraceIterator) SignedTransaction(record WorkloadRecord) (tx.S
 	if record.AccessListSchema == "dcl_sale_access_template_v1" && (!accessListHasKey(record.AccessList, "balance:"+sender) || !accessListHasKey(record.AccessList, "nonce:"+sender) || !accessListHasKey(record.AccessList, "balance:"+receiver) || !accessListHasKey(record.AccessList, "nonce:"+receiver)) {
 		return tx.SignedTransaction{}, fmt.Errorf("resolved access list does not match runtime sender/receiver for source_event_id=%s", record.SourceEventID)
 	}
-	item := tx.SignedTransaction{LogicalTxID: firstNonEmpty(record.LogicalID, record.SourceEventID), Sender: sender, Receiver: receiver, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, AccessList: append([]tx.AccessItem(nil), record.AccessList...), AccessListDigest: record.AccessListDigest, AccessListSchema: record.AccessListSchema, AccessListSource: record.AccessListSource, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
+	item := tx.SignedTransaction{LogicalTxID: firstNonEmpty(record.LogicalID, record.SourceEventID), Sender: sender, Receiver: receiver, Nonce: nonce, Value: record.Value, StateKeys: record.StateKeys, AccessList: append([]tx.AccessItem(nil), record.AccessList...), AccessListDigest: record.AccessListDigest, AccessListSchema: record.AccessListSchema, AccessListSource: record.AccessListSource, SchedulingAccessList: append([]tx.AccessItem(nil), record.SchedulingAccessList...), SchedulingAccessDigest: record.SchedulingAccessDigest, SchedulingAccessSchema: record.SchedulingAccessSchema, SchedulingAccessSource: record.SchedulingAccessSource, Payload: record.Payload, Timestamp: record.TimestampMS, SourceKind: "canonical_trace_replay", TraceSourceID: record.SourceEventID}
 	if record.RoutePlanDigest != "" {
 		routing := tx.ExecutionRoutingMetadata{SenderID: sender, ReceiverID: receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: record.ExecutionShard, RoutingReason: record.RoutingReason, RoutePlanDigest: record.RoutePlanDigest, RouteBatchSequence: record.RouteBatchSequence, RouteBatchTransactionCount: record.RouteBatchTransactionCount, RouteBatchShardTransactionCount: record.RouteBatchShardTransactionCount, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...)}
 		digest, err := tx.ComputeExecutionRoutingDigest(item, routing)
@@ -300,7 +308,7 @@ func resolveCanonicalAccessList(plan WorkloadPlan, wire canonicalWireRecord) ([]
 		digest := CanonicalAccessListDigest(items)
 		return items, wire.AccessListSchema, wire.AccessListSource, digest, nil
 	}
-	if wire.SchemaVersion == "mbe_workload_record_v3" {
+	if wire.SchemaVersion == "mbe_workload_record_v3" || wire.SchemaVersion == "mbe_workload_record_v4" {
 		items, err := resolveDirectAccessList(wire)
 		if err != nil {
 			return nil, "", "", "", err
@@ -320,6 +328,54 @@ func resolveCanonicalAccessList(plan WorkloadPlan, wire canonicalWireRecord) ([]
 		return items, "legacy_access_inference_v1", "legacy_state_keys", digest, nil
 	}
 	return nil, "", "", "", fmt.Errorf("canonical workload schema error source_row_index=%d source_event_id=%s schema=%s", wire.SourceRowIndex, wire.SourceEventID, wire.SchemaVersion)
+}
+
+func resolveCanonicalSchedulingAccessList(wire canonicalWireRecord) ([]tx.AccessItem, string, string, string, error) {
+	if wire.SchemaVersion != "mbe_workload_record_v4" {
+		return nil, "", "", "", nil
+	}
+	if strings.TrimSpace(wire.SchedulingAccessSchema) == "" || strings.TrimSpace(wire.SchedulingAccessSource) == "" || len(wire.SchedulingAccessList) == 0 {
+		return nil, "", "", "", fmt.Errorf("canonical layered scheduling access error source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+	}
+	byKey := map[string]tx.AccessItem{}
+	for _, item := range wire.SchedulingAccessList {
+		item.Key = strings.TrimSpace(item.Key)
+		item.UpdateSemantics = strings.TrimSpace(item.UpdateSemantics)
+		if item.Key == "" || item.UpdateSemantics == "" {
+			return nil, "", "", "", fmt.Errorf("canonical layered scheduling item error source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+		}
+		switch item.Mode {
+		case tx.AccessRead, tx.AccessWrite, tx.AccessReadWrite, tx.AccessCommutativeDelta, tx.AccessUnknown:
+		default:
+			return nil, "", "", "", fmt.Errorf("canonical layered scheduling mode error source_row_index=%d source_event_id=%s mode=%s", wire.SourceRowIndex, wire.SourceEventID, item.Mode)
+		}
+		if _, exists := byKey[item.Key]; exists {
+			return nil, "", "", "", fmt.Errorf("duplicate layered scheduling key source_row_index=%d source_event_id=%s key=%s", wire.SourceRowIndex, wire.SourceEventID, item.Key)
+		}
+		byKey[item.Key] = item
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	stateKeys := append([]string(nil), wire.StateKeys...)
+	sort.Strings(stateKeys)
+	if len(keys) != len(stateKeys) {
+		return nil, "", "", "", fmt.Errorf("layered scheduling/state key count mismatch source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+	}
+	out := make([]tx.AccessItem, 0, len(keys))
+	for index, key := range keys {
+		if stateKeys[index] != key {
+			return nil, "", "", "", fmt.Errorf("layered scheduling/state key mismatch source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+		}
+		out = append(out, byKey[key])
+	}
+	digest := CanonicalAccessListDigest(out)
+	if !strings.EqualFold(digest, wire.SchedulingAccessDigest) {
+		return nil, "", "", "", fmt.Errorf("layered scheduling access digest mismatch source_row_index=%d source_event_id=%s", wire.SourceRowIndex, wire.SourceEventID)
+	}
+	return out, wire.SchedulingAccessSchema, wire.SchedulingAccessSource, digest, nil
 }
 
 func resolveDirectAccessList(wire canonicalWireRecord) ([]tx.AccessItem, error) {

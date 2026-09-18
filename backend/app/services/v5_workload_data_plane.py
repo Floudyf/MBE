@@ -9,6 +9,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import math
 import os
 import shutil
 import tempfile
@@ -508,7 +509,7 @@ def preview_workload(request: WorkloadPreviewRequest, *, shards: int = 4) -> Wor
         if audit:
             selected_window_preview["validated_prefix_audit"] = audit
             target_account_write_theta = audit.get("target_account_write_theta")
-            if target_account_write_theta is None:
+            if target_account_write_theta is None and str(manifest.get("adapter_id") or "") != "alien_worlds_layered_v2":
                 target_account_write_theta = parameters.get("target_theta")
             measured_account_write_theta = audit.get("measured_account_write_theta")
             measured_account_touch_theta = audit.get("measured_account_touch_theta")
@@ -522,7 +523,8 @@ def preview_workload(request: WorkloadPreviewRequest, *, shards: int = 4) -> Wor
             # Keep the legacy preview key populated for old UI consumers, but its
             # meaning is explicitly the account-touch statistic rather than the
             # controlled account-write theta axis.
-            selected_window_preview["measured_access_theta"] = measured_account_touch_theta
+            if selected_window_preview.get("measured_access_theta") is None:
+                selected_window_preview["measured_access_theta"] = measured_account_touch_theta
             selected_window_preview["measured_read_ratio"] = audit.get("measured_read_ratio")
             selected_window_preview["read_modify_write_topology_preserved"] = audit.get("read_modify_write_topology_preserved")
         operation_counts = dict(selected_window_preview.get("operation_counts") or manifest.get("operation_counts") or {})
@@ -571,7 +573,7 @@ def _csv_summary(summary: SourceValidationSummary) -> CsvValidationSummary:
 
 def _validate_canonical_record(record: dict[str, Any], *, dataset_id: str, row_number: int) -> dict[str, Any]:
     schema_version = record.get("schema_version")
-    if schema_version not in {"mbe_workload_record_v1", "mbe_workload_record_v2", "mbe_workload_record_v3"}:
+    if schema_version not in {"mbe_workload_record_v1", "mbe_workload_record_v2", "mbe_workload_record_v3", "mbe_workload_record_v4"}:
         raise WorkloadDataError(f"canonical row {row_number}: unexpected schema_version")
     if record.get("dataset_id") != dataset_id:
         raise WorkloadDataError(f"canonical row {row_number}: dataset_id mismatch")
@@ -588,6 +590,8 @@ def _validate_canonical_record(record: dict[str, Any], *, dataset_id: str, row_n
         _validate_access_template_record(record, row_number=row_number)
     elif schema_version == "mbe_workload_record_v3":
         _validate_direct_access_record(record, row_number=row_number)
+    elif schema_version == "mbe_workload_record_v4":
+        _validate_layered_v4_record(record, row_number=row_number)
     record.setdefault("source_tx_hash", None)
     record.setdefault("receiver_id", None)
     record.setdefault("routing_target_key", None)
@@ -660,6 +664,49 @@ def _validate_direct_access_record(record: dict[str, Any], *, row_number: int) -
     record["access_list"] = normalized
 
 
+def _validate_layered_v4_record(record: dict[str, Any], *, row_number: int) -> None:
+    _validate_direct_access_record(record, row_number=row_number)
+    envelope = record.get("static_access_envelope")
+    if not isinstance(envelope, dict) or envelope.get("complete") is not True:
+        raise WorkloadDataError(f"canonical row {row_number}: incomplete static_access_envelope")
+    envelope_keys = envelope.get("keys")
+    if not isinstance(envelope_keys, list) or sorted(envelope_keys) != sorted(record["state_keys"]):
+        raise WorkloadDataError(f"canonical row {row_number}: static envelope/state_keys mismatch")
+    scheduling = record.get("scheduling_access_list")
+    if not isinstance(scheduling, list) or not scheduling:
+        raise WorkloadDataError(f"canonical row {row_number}: missing scheduling_access_list")
+    if not record.get("scheduling_access_schema") or not record.get("scheduling_access_source"):
+        raise WorkloadDataError(f"canonical row {row_number}: missing scheduling access provenance")
+    allowed_modes = {"read", "write", "read_write", "commutative_delta", "unknown"}
+    normalized: list[dict[str, Any]] = []
+    keys: set[str] = set()
+    for index, item in enumerate(scheduling):
+        if not isinstance(item, dict):
+            raise WorkloadDataError(f"canonical row {row_number}: scheduling_access_list[{index}] is not an object")
+        key = str(item.get("key") or "").strip()
+        mode = str(item.get("mode") or "").strip()
+        semantics = str(item.get("update_semantics") or "").strip()
+        if not key or key in keys or mode not in allowed_modes or not semantics:
+            raise WorkloadDataError(f"canonical row {row_number}: invalid scheduling access item")
+        keys.add(key)
+        normalized.append({"key": key, "mode": mode, "update_semantics": semantics})
+    normalized.sort(key=lambda item: (item["key"], item["mode"], item["update_semantics"], int(item.get("delta") or 0)))
+    if sorted(record["state_keys"]) != [item["key"] for item in normalized]:
+        raise WorkloadDataError(f"canonical row {row_number}: scheduling access/state key mismatch")
+    digest = hashlib.sha256(json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+    if digest != str(record.get("scheduling_access_digest") or "").lower():
+        raise WorkloadDataError(f"canonical row {row_number}: scheduling_access_digest mismatch")
+    record["scheduling_access_list"] = normalized
+    state_keys = set(record["state_keys"])
+    if record.get("routing_source_key") not in state_keys:
+        raise WorkloadDataError(f"canonical row {row_number}: routing_source_key outside static envelope")
+    if record.get("routing_target_key") and record.get("routing_target_key") not in state_keys:
+        raise WorkloadDataError(f"canonical row {row_number}: routing_target_key outside static envelope")
+    forbidden = {"source_execution_oracle", "runtime_execution_truth", "actual_read_keys", "actual_write_keys", "state_versions", "state_ready", "fast", "conservative", "classification"}
+    if forbidden.intersection(record):
+        raise WorkloadDataError(f"canonical row {row_number}: forbidden layered truth/classification field")
+
+
 def _canonical_bytes(record: dict[str, Any]) -> bytes:
     return (json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=False) + "\n").encode("utf-8")
 
@@ -702,8 +749,20 @@ def build_canonical(csv_path: Path, cache_root: Path, manifest: dict[str, Any]) 
             "operation_counts": summary.operation_counts, "category_counts": summary.operation_counts, "cache_hit": False,
         }
         (temporary / "canonical_summary.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-        os.replace(temporary, target)
-        return result
+        try:
+            os.replace(temporary, target)
+            return result
+        except OSError:
+            # On Windows two child runs can race to publish the same content-addressed
+            # directory.  If the winner already published a complete byte-identical
+            # cache entry, this run is a cache hit rather than an experiment failure.
+            if output.is_file() and (target / "canonical_summary.json").is_file():
+                existing = json.loads((target / "canonical_summary.json").read_text(encoding="utf-8"))
+                if existing.get("canonical_sha256") == sha256_file(output):
+                    shutil.rmtree(temporary, ignore_errors=True)
+                    existing = dict(existing); existing["cache_hit"] = True
+                    return existing
+            raise
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -791,6 +850,42 @@ def _zipf_records(base: list[dict[str, Any]], alpha: float, skew_axis: str, doma
         interleaved.append(sampled[operation][cursors[operation]])
         cursors[operation] += 1
     return interleaved
+
+
+def _finite_zipf_metrics(counter: Counter[str]) -> dict[str, Any]:
+    counts = sorted((float(v) for v in counter.values() if v > 0), reverse=True)
+    if not counts:
+        return {"theta": None, "ks": None, "unique_keys": 0, "touches": 0}
+    logs = [math.log(i + 1.0) for i in range(len(counts))]
+    touches = sum(counts)
+    observed_mean = sum(c * lr for c, lr in zip(counts, logs)) / touches
+    uniform_mean = sum(logs) / len(logs)
+    if observed_mean >= uniform_mean - 1e-14:
+        theta = 0.0
+    else:
+        theta = 0.5
+        for _ in range(28):
+            exponents = [-theta * x for x in logs]; shift = max(exponents)
+            weights = [math.exp(x - shift) for x in exponents]; total = sum(weights); weights = [x / total for x in weights]
+            model_mean = sum(w * lr for w, lr in zip(weights, logs))
+            variance = sum(w * (lr - model_mean) ** 2 for w, lr in zip(weights, logs))
+            difference = model_mean - observed_mean
+            if abs(difference) < 1e-13 or variance <= 1e-18: break
+            theta = min(80.0, max(0.0, theta + difference / variance))
+        def model_mean_log_rank(value: float) -> float:
+            exps=[-value*x for x in logs]; shift=max(exps); ws=[math.exp(x-shift) for x in exps]; total=sum(ws)
+            return sum(w*lr for w,lr in zip(ws,logs))/total
+        low, high = 0.0, max(1.0, theta * 1.25 + 0.25)
+        while model_mean_log_rank(high) > observed_mean and high < 80.0: high *= 2.0
+        for _ in range(28):
+            middle=(low+high)/2.0
+            if model_mean_log_rank(middle) > observed_mean: low=middle
+            else: high=middle
+        theta=(low+high)/2.0
+    exps=[-theta*x for x in logs]; shift=max(exps); model=[math.exp(x-shift) for x in exps]; z=sum(model); model=[x/z for x in model]
+    empirical=[x/touches for x in counts]; ec=0.0; mc=0.0; ks=0.0
+    for e,m in zip(empirical,model): ec+=e; mc+=m; ks=max(ks,abs(ec-mc))
+    return {"theta": float(theta), "ks": float(ks), "unique_keys": len(counts), "touches": int(round(touches))}
 
 
 def _skew_statistics(skew_keys: Counter[str], senders: set[str], receivers: set[str], count: int, occurrences: Counter[int], skew_axis: str | None) -> dict[str, Any]:
@@ -935,6 +1030,7 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
     senders: set[str] = set()
     receivers: set[str] = set()
     occurrences: Counter[int] = Counter()
+    state_key_touches: Counter[str] = Counter()
     direct_access_count = 0
     skew_axis = spec.get("skew_axis")
     for index, record in enumerate(selected):
@@ -954,9 +1050,13 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
         if record.get("receiver_id"):
             receivers.add(str(record["receiver_id"]))
         occurrences[int(record.get("source_row_index", index))] += 1
+        for state_key in set(str(key) for key in (record.get("state_keys") or []) if str(key)):
+            state_key_touches[state_key] += 1
     operation_data = dict(operation_counts)
     selection_digest = _selection_digest(spec, start=start, count=count, base_window_sha256=base_window_sha256)
     routing_source_basis = "logical_routing_key" if selected and direct_access_count == len(selected) else ("runtime_identity" if direct_access_count == 0 else "mixed")
+    theta_fit = _finite_zipf_metrics(state_key_touches)
+    target_access_theta = (spec.get("variant_parameters") or {}).get("target_theta")
     return {
         "requested_tx_count": spec["requested_tx_count"],
         "actual_selected_count": len(selected),
@@ -966,6 +1066,12 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
         "category_percentages": _operation_percentages(operation_data, len(selected)),
         "operation_percentages": _operation_percentages(operation_data, len(selected)),
         "realized_skew": _skew_statistics(skew_keys, senders, receivers, max(1, len(selected)), occurrences, str(skew_axis) if skew_axis else None),
+        "target_access_theta": target_access_theta,
+        "measured_access_theta": theta_fit["theta"],
+        "theta_axis": "unique_transaction_state_key_touches",
+        "theta_fit_ks": theta_fit["ks"],
+        "theta_touch_count": theta_fit["touches"],
+        "theta_unique_state_key_count": theta_fit["unique_keys"],
         "cross_shard_count": cross_shard_count,
         "cross_shard_ratio": cross_shard_count / len(selected) if selected else 0,
         "routing_source_basis": routing_source_basis,
@@ -1057,6 +1163,7 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
     try:
         occurrences: Counter[int] = Counter()
         skew_keys: Counter[str] = Counter()
+        materialized_state_key_touches: Counter[str] = Counter()
         senders: set[str] = set()
         receivers: set[str] = set()
         operation_counts: Counter[str] = Counter()
@@ -1074,18 +1181,40 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
                     if record.get("receiver_id"):
                         receivers.add(str(record["receiver_id"]))
                     operation_counts[str(record["operation_type"])] += 1
+                    for state_key in set(str(key) for key in (record.get("state_keys") or []) if str(key)):
+                        materialized_state_key_touches[state_key] += 1
                     total_count += 1
                     compressed.write(_canonical_bytes(_materialized_record(record, materialized_id, index, occurrence)))
         skew = _skew_statistics(skew_keys, senders, receivers, total_count, occurrences, skew_axis)
+        theta_fit = _finite_zipf_metrics(materialized_state_key_touches)
+        effective_audit = dict(audit_metadata or {})
+        if dataset_id == "alien_worlds_layered_v2_controlled":
+            effective_audit.update({
+                "target_access_theta": (spec.get("variant_parameters") or {}).get("target_theta"),
+                "measured_access_theta": theta_fit["theta"],
+                "theta_axis": "unique_transaction_state_key_touches",
+                "theta_fit_ks": theta_fit["ks"],
+                "theta_touch_count": theta_fit["touches"],
+                "theta_unique_state_key_count": theta_fit["unique_keys"],
+            })
         summary = dict(spec)
         routing_source_basis = str(selected_preview.get("routing_source_basis") or "runtime_identity")
         expected_cross_shard_count = int(selected_preview.get("cross_shard_count") or 0) if routing_source_basis == "logical_routing_key" else 0
         expected_cross_shard_ratio = float(selected_preview.get("cross_shard_ratio") or 0.0) if routing_source_basis == "logical_routing_key" else 0.0
-        summary.update({"materialized_id": materialized_id, "actual_tx_count": total_count, "truth_label": truth_label, "source_file_sha256": source_file_sha256, "audit_metadata": audit_metadata or {}, "start_offset": start, "end_offset": start + total_count - 1, "selected_time_start_ms": selected_start_ms, "selected_time_end_ms": selected_end_ms, "base_window_sha256": base_hash, "selection_digest": selected_preview["selection_digest"], "selected_window_preview": selected_preview, "routing_source_basis": routing_source_basis, "expected_cross_shard_count": expected_cross_shard_count, "expected_cross_shard_ratio": expected_cross_shard_ratio, "materialized_sha256": sha256_file(temporary / "workload.jsonl.gz"), "materialized_relative_path": f"materialized/{materialized_id}/workload.jsonl.gz", "operation_counts": dict(operation_counts), "category_counts": dict(operation_counts), "cache_hit": False, **skew})
+        summary.update({"materialized_id": materialized_id, "actual_tx_count": total_count, "truth_label": truth_label, "source_file_sha256": source_file_sha256, "audit_metadata": effective_audit, "start_offset": start, "end_offset": start + total_count - 1, "selected_time_start_ms": selected_start_ms, "selected_time_end_ms": selected_end_ms, "base_window_sha256": base_hash, "selection_digest": selected_preview["selection_digest"], "selected_window_preview": selected_preview, "routing_source_basis": routing_source_basis, "expected_cross_shard_count": expected_cross_shard_count, "expected_cross_shard_ratio": expected_cross_shard_ratio, "materialized_sha256": sha256_file(temporary / "workload.jsonl.gz"), "materialized_relative_path": f"materialized/{materialized_id}/workload.jsonl.gz", "operation_counts": dict(operation_counts), "category_counts": dict(operation_counts), "target_access_theta": effective_audit.get("target_access_theta"), "measured_access_theta": effective_audit.get("measured_access_theta"), "theta_axis": effective_audit.get("theta_axis"), "theta_fit_ks": effective_audit.get("theta_fit_ks"), "cache_hit": False, **skew})
         (temporary / "materialization_summary.json").write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         (temporary / ".ready").write_text("ready\n", encoding="utf-8")
-        os.replace(temporary, target)
-        return summary
+        try:
+            os.replace(temporary, target)
+            return summary
+        except OSError:
+            if output.is_file() and (target / "materialization_summary.json").is_file() and (target / ".ready").is_file():
+                existing = json.loads((target / "materialization_summary.json").read_text(encoding="utf-8"))
+                if existing.get("materialized_sha256") == sha256_file(output):
+                    shutil.rmtree(temporary, ignore_errors=True)
+                    existing = dict(existing); existing["cache_hit"] = True
+                    return existing
+            raise
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
         raise
@@ -1156,7 +1285,7 @@ def workload_artifact_snapshots(source: dict[str, Any], materialized: dict[str, 
     }
     skew = {
         key: materialized.get(key)
-        for key in ("target_alpha", "skew_axis", "gini", "hhi", "top_1_ratio", "top_10_ratio", "top_100_ratio", "duplicate_source_row_count", "duplicate_source_row_ratio", "unique_sender_count", "unique_receiver_count", "unique_skew_key_count", "unique_buyer_count", "unique_seller_count", "unique_contract_count")
+        for key in ("target_alpha", "skew_axis", "target_access_theta", "measured_access_theta", "theta_axis", "theta_fit_ks", "theta_touch_count", "theta_unique_state_key_count", "gini", "hhi", "top_1_ratio", "top_10_ratio", "top_100_ratio", "duplicate_source_row_count", "duplicate_source_row_ratio", "unique_sender_count", "unique_receiver_count", "unique_skew_key_count", "unique_buyer_count", "unique_seller_count", "unique_contract_count")
         if key in materialized
     }
     return {

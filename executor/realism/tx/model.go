@@ -17,24 +17,28 @@ const (
 
 // SignedTransaction is the V4.0 transaction format admitted by real node mempools.
 type SignedTransaction struct {
-	TxID             string                    `json:"tx_id"`
-	LogicalTxID      string                    `json:"logical_tx_id,omitempty"`
-	Sender           string                    `json:"sender"`
-	Receiver         string                    `json:"receiver"`
-	Nonce            uint64                    `json:"nonce"`
-	Value            int64                     `json:"value"`
-	StateKeys        []string                  `json:"state_keys"`
-	AccessList       []AccessItem              `json:"access_list,omitempty"`
-	AccessListDigest string                    `json:"access_list_digest,omitempty"`
-	AccessListSchema string                    `json:"access_list_schema,omitempty"`
-	AccessListSource string                    `json:"access_list_source,omitempty"`
-	Payload          string                    `json:"payload"`
-	Timestamp        int64                     `json:"timestamp"`
-	Signature        string                    `json:"signature"`
-	PublicKey        string                    `json:"public_key"`
-	SourceKind       string                    `json:"source_kind,omitempty"`
-	TraceSourceID    string                    `json:"trace_source_id,omitempty"`
-	ExecutionRouting *ExecutionRoutingMetadata `json:"execution_routing,omitempty"`
+	TxID                   string                    `json:"tx_id"`
+	LogicalTxID            string                    `json:"logical_tx_id,omitempty"`
+	Sender                 string                    `json:"sender"`
+	Receiver               string                    `json:"receiver"`
+	Nonce                  uint64                    `json:"nonce"`
+	Value                  int64                     `json:"value"`
+	StateKeys              []string                  `json:"state_keys"`
+	AccessList             []AccessItem              `json:"access_list,omitempty"`
+	AccessListDigest       string                    `json:"access_list_digest,omitempty"`
+	AccessListSchema       string                    `json:"access_list_schema,omitempty"`
+	AccessListSource       string                    `json:"access_list_source,omitempty"`
+	SchedulingAccessList   []AccessItem              `json:"scheduling_access_list,omitempty"`
+	SchedulingAccessDigest string                    `json:"scheduling_access_digest,omitempty"`
+	SchedulingAccessSchema string                    `json:"scheduling_access_schema,omitempty"`
+	SchedulingAccessSource string                    `json:"scheduling_access_source,omitempty"`
+	Payload                string                    `json:"payload"`
+	Timestamp              int64                     `json:"timestamp"`
+	Signature              string                    `json:"signature"`
+	PublicKey              string                    `json:"public_key"`
+	SourceKind             string                    `json:"source_kind,omitempty"`
+	TraceSourceID          string                    `json:"trace_source_id,omitempty"`
+	ExecutionRouting       *ExecutionRoutingMetadata `json:"execution_routing,omitempty"`
 }
 
 type AccessMode string
@@ -44,6 +48,7 @@ const (
 	AccessWrite            AccessMode = "write"
 	AccessReadWrite        AccessMode = "read_write"
 	AccessCommutativeDelta AccessMode = "commutative_delta"
+	AccessUnknown          AccessMode = "unknown"
 )
 
 type AccessItem struct {
@@ -54,42 +59,50 @@ type AccessItem struct {
 }
 
 type coreFields struct {
-	LogicalTxID      string                    `json:"logical_tx_id,omitempty"`
-	Sender           string                    `json:"sender"`
-	Receiver         string                    `json:"receiver"`
-	Nonce            uint64                    `json:"nonce"`
-	Value            int64                     `json:"value"`
-	StateKeys        []string                  `json:"state_keys"`
-	AccessList       []AccessItem              `json:"access_list,omitempty"`
-	AccessListDigest string                    `json:"access_list_digest,omitempty"`
-	AccessListSchema string                    `json:"access_list_schema,omitempty"`
-	AccessListSource string                    `json:"access_list_source,omitempty"`
-	Payload          string                    `json:"payload"`
-	Timestamp        int64                     `json:"timestamp"`
-	PublicKey        string                    `json:"public_key"`
-	SourceKind       string                    `json:"source_kind,omitempty"`
-	TraceSourceID    string                    `json:"trace_source_id,omitempty"`
-	ExecutionRouting *ExecutionRoutingMetadata `json:"execution_routing,omitempty"`
+	LogicalTxID            string                    `json:"logical_tx_id,omitempty"`
+	Sender                 string                    `json:"sender"`
+	Receiver               string                    `json:"receiver"`
+	Nonce                  uint64                    `json:"nonce"`
+	Value                  int64                     `json:"value"`
+	StateKeys              []string                  `json:"state_keys"`
+	AccessList             []AccessItem              `json:"access_list,omitempty"`
+	AccessListDigest       string                    `json:"access_list_digest,omitempty"`
+	AccessListSchema       string                    `json:"access_list_schema,omitempty"`
+	AccessListSource       string                    `json:"access_list_source,omitempty"`
+	SchedulingAccessList   []AccessItem              `json:"scheduling_access_list,omitempty"`
+	SchedulingAccessDigest string                    `json:"scheduling_access_digest,omitempty"`
+	SchedulingAccessSchema string                    `json:"scheduling_access_schema,omitempty"`
+	SchedulingAccessSource string                    `json:"scheduling_access_source,omitempty"`
+	Payload                string                    `json:"payload"`
+	Timestamp              int64                     `json:"timestamp"`
+	PublicKey              string                    `json:"public_key"`
+	SourceKind             string                    `json:"source_kind,omitempty"`
+	TraceSourceID          string                    `json:"trace_source_id,omitempty"`
+	ExecutionRouting       *ExecutionRoutingMetadata `json:"execution_routing,omitempty"`
 }
 
 func (t SignedTransaction) core() coreFields {
 	return coreFields{
-		LogicalTxID:      t.LogicalTxID,
-		Sender:           t.Sender,
-		Receiver:         t.Receiver,
-		Nonce:            t.Nonce,
-		Value:            t.Value,
-		StateKeys:        append([]string(nil), t.StateKeys...),
-		AccessList:       append([]AccessItem(nil), t.AccessList...),
-		AccessListDigest: t.AccessListDigest,
-		AccessListSchema: t.AccessListSchema,
-		AccessListSource: t.AccessListSource,
-		Payload:          t.Payload,
-		Timestamp:        t.Timestamp,
-		PublicKey:        t.PublicKey,
-		SourceKind:       t.SourceKind,
-		TraceSourceID:    t.TraceSourceID,
-		ExecutionRouting: cloneExecutionRouting(t.ExecutionRouting),
+		LogicalTxID:            t.LogicalTxID,
+		Sender:                 t.Sender,
+		Receiver:               t.Receiver,
+		Nonce:                  t.Nonce,
+		Value:                  t.Value,
+		StateKeys:              append([]string(nil), t.StateKeys...),
+		AccessList:             append([]AccessItem(nil), t.AccessList...),
+		AccessListDigest:       t.AccessListDigest,
+		AccessListSchema:       t.AccessListSchema,
+		AccessListSource:       t.AccessListSource,
+		SchedulingAccessList:   append([]AccessItem(nil), t.SchedulingAccessList...),
+		SchedulingAccessDigest: t.SchedulingAccessDigest,
+		SchedulingAccessSchema: t.SchedulingAccessSchema,
+		SchedulingAccessSource: t.SchedulingAccessSource,
+		Payload:                t.Payload,
+		Timestamp:              t.Timestamp,
+		PublicKey:              t.PublicKey,
+		SourceKind:             t.SourceKind,
+		TraceSourceID:          t.TraceSourceID,
+		ExecutionRouting:       cloneExecutionRouting(t.ExecutionRouting),
 	}
 }
 
@@ -126,6 +139,16 @@ func (t SignedTransaction) ValidateBasic() error {
 		}
 		switch item.Mode {
 		case AccessRead, AccessWrite, AccessReadWrite, AccessCommutativeDelta:
+		default:
+			return errors.New(ErrMalformedTx)
+		}
+	}
+	for _, item := range t.SchedulingAccessList {
+		if strings.TrimSpace(item.Key) == "" || strings.TrimSpace(item.UpdateSemantics) == "" {
+			return errors.New(ErrMalformedTx)
+		}
+		switch item.Mode {
+		case AccessRead, AccessWrite, AccessReadWrite, AccessCommutativeDelta, AccessUnknown:
 		default:
 			return errors.New(ErrMalformedTx)
 		}

@@ -336,8 +336,12 @@ def _apply_workload_replay_metrics(metrics: dict[str, Any], run_dir: Path) -> No
 
     variant_parameters = replay.get("variant_parameters") if isinstance(replay.get("variant_parameters"), dict) else {}
     audit = replay.get("audit_metadata") if isinstance(replay.get("audit_metadata"), dict) else {}
+    target_access_theta = audit.get("target_access_theta")
+    if target_access_theta is None:
+        target_access_theta = variant_parameters.get("target_theta")
+    measured_access_theta = audit.get("measured_access_theta")
     target_account_write_theta = audit.get("target_account_write_theta")
-    if target_account_write_theta is None:
+    if target_account_write_theta is None and str(audit.get("theta_axis") or "").startswith("account"):
         target_account_write_theta = variant_parameters.get("target_theta")
     measured_account_touch_theta = audit.get("measured_account_touch_theta")
     if measured_account_touch_theta is None:
@@ -353,6 +357,8 @@ def _apply_workload_replay_metrics(metrics: dict[str, Any], run_dir: Path) -> No
         "pacing_schedule": first("pacing_schedule"),
         "pacing_late_release_count": first("pacing_late_release_count", 0),
         "pacing_max_schedule_lag_ms": first("pacing_max_schedule_lag_ms", 0),
+        "target_access_theta": target_access_theta,
+        "measured_access_theta": measured_access_theta,
         "target_account_write_theta": target_account_write_theta,
         "measured_account_write_theta": audit.get("measured_account_write_theta"),
         "measured_account_touch_theta": measured_account_touch_theta,

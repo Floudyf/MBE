@@ -1,0 +1,44 @@
+{
+  "schema_version": "mbe_dataset_manifest_v2",
+  "dataset_id": "alien_worlds_layered_v2_historical",
+  "display_name": "Alien Worlds V2 历史回放声明",
+  "description": "Alien Worlds 历史 10K 的分层静态声明回放。分类器只读取 V2 input；oracle 不进入运行链。",
+  "source_platform": "alien_worlds",
+  "source_chain": "wax_mainnet",
+  "dataset_type": "layered_historical_replay_projection",
+  "adapter_id": "alien_worlds_layered_v2",
+  "source_layout": "single_file",
+  "local_raw_relative_path": "dataset/Alien_World/layered_v2/bundles/selected_template_10k_original/selected_template_10k_original.v2.input.jsonl",
+  "source_sha256": "062e0981e0a12a9a17e61195c531c475c1d86bbbf950f0f4d92e26e840f37133",
+  "row_count": 10000,
+  "truth_label": "real_replay_projected",
+  "catalog_validation": "full",
+  "supported_tx_counts": [
+    100,
+    1000,
+    2500,
+    5000,
+    10000
+  ],
+  "allow_full_dataset": true,
+  "supported_skew_axes": [
+    "state_key"
+  ],
+  "default_skew_axis": "state_key",
+  "supported_variants": [
+    "original_window"
+  ],
+  "variant_definitions": [
+    {
+      "variant_mode": "original_window",
+      "display_name": "历史回放静态声明",
+      "kind": "original",
+      "selection_mode": "contiguous_window",
+      "parameters": []
+    }
+  ],
+  "generator_version": "mbe_v5_aw_v2_formal_experiment_closure_20260917_v1_1",
+  "verification_method": "layered_v2_bundle_manifest_and_adapter_validation",
+  "verification_results": "input-only runtime boundary; source oracle excluded from workload plan",
+  "usage_note": "Historical entity attributes are offline replay declaration projection, not native signed WAX access declarations."
+}

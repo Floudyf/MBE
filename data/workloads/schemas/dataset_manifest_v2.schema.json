@@ -27,7 +27,7 @@
     "source_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
     "source_size_bytes": {"type": "integer", "minimum": 1},
     "row_count": {"type": "integer", "minimum": 1},
-    "truth_label": {"enum": ["real_observed", "real_derived_resampled", "real_derived_controlled", "fixture_generic_canonical"]},
+    "truth_label": {"enum": ["real_observed", "real_derived_resampled", "real_derived_controlled", "real_replay_projected", "fixture_generic_canonical"]},
     "supported_tx_counts": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "uniqueItems": true},
     "allow_full_dataset": {"type": "boolean"},
     "variant_definitions": {

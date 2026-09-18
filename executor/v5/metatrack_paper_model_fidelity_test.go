@@ -92,7 +92,7 @@ func TestDualTrackKnownDirectionOrdinaryWritesRemainFastWhenTopoSafe(t *testing.
 		t.Fatalf("ordinary write dependency semantics changed unexpectedly: %#v", result.Dependencies)
 	}
 	if result.SCCCount != 0 || result.AmbiguousConflictPairCount != 0 {
-		t.Fatalf("exact-version direction was incorrectly treated as ambiguous: %#v", result)
+		t.Fatalf("static writer/reader direction was incorrectly treated as ambiguous: %#v", result)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestLogicalStateUnitProviderDoesNotChangeBaselineHomeRouting(t *testing.T) 
 	}
 }
 
-func TestDualTrackAmbiguousSignedBusinessConflictFallsBackConservative(t *testing.T) {
+func TestDualTrackStaticWriterReaderConflictIsTopoSafeWithoutStateVersion(t *testing.T) {
 	execution := dualTrackExecution{makeBasic("execution", "dual_track_execution", nil)}
 	items := []tx.SignedTransaction{
 		{
@@ -127,16 +127,15 @@ func TestDualTrackAmbiguousSignedBusinessConflictFallsBackConservative(t *testin
 	}
 	result := execution.ClassifyBatch(BatchClassificationInput{Transactions: items})
 	for _, id := range []string{"writer", "reader"} {
-		got := result.Decisions[id]
-		if got.Track != "conservative" || !strings.Contains(got.Reason, "ambiguous_conflict_direction:object:x") || !strings.Contains(got.Reason, "nontrivial_scc") {
-			t.Fatalf("ambiguous signed business conflict must be Conservative: id=%s got=%#v result=%#v", id, got, result)
+		if got := result.Decisions[id]; got.Track != "fast" {
+			t.Fatalf("static writer->reader dependency should remain TopoSafe without StateVersion evidence: id=%s got=%#v result=%#v", id, got, result)
 		}
 	}
-	if result.SCCCount != 1 || result.AmbiguousConflictPairCount != 1 {
-		t.Fatalf("ambiguous topology evidence mismatch: %#v", result)
+	if result.SCCCount != 0 || result.AmbiguousConflictPairCount != 0 {
+		t.Fatalf("static writer/reader relation was incorrectly treated as ambiguous: %#v", result)
 	}
 	if len(result.Dependencies["reader"]) != 1 || result.Dependencies["reader"][0] != "writer" {
-		t.Fatalf("classification SCC polluted execution scheduler dependencies: %#v", result.Dependencies)
+		t.Fatalf("execution scheduler dependency changed unexpectedly: %#v", result.Dependencies)
 	}
 }
 

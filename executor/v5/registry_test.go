@@ -511,8 +511,11 @@ func TestFastFirstSchedulerEmitsQueueWaitAndWakeupEvidence(t *testing.T) {
 	scheduler := builtinScheduler{makeBasic("scheduler", "fast_first_scheduler", nil)}
 	execution := dualTrackExecution{}
 	fast := tx.SignedTransaction{TxID: "fast", AccessList: []tx.AccessItem{{Key: "state:delta", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
-	first := tx.SignedTransaction{TxID: "first", AccessList: []tx.AccessItem{{Key: "nonce:shared", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
-	second := tx.SignedTransaction{TxID: "second", AccessList: []tx.AccessItem{{Key: "nonce:shared", Mode: tx.AccessReadWrite, UpdateSemantics: "set"}}}
+	// This test exercises scheduler wait/wakeup evidence, not an RW/RW topology cycle.
+	// Use a statically acyclic writer->reader pair so both transactions are Fast
+	// under the frozen TopoSafe rules while second still waits for first.
+	first := tx.SignedTransaction{TxID: "first", AccessList: []tx.AccessItem{{Key: "nonce:shared", Mode: tx.AccessWrite, UpdateSemantics: "set"}}}
+	second := tx.SignedTransaction{TxID: "second", AccessList: []tx.AccessItem{{Key: "nonce:shared", Mode: tx.AccessRead, UpdateSemantics: "validate"}}}
 
 	schedule := scheduler.Schedule([]tx.SignedTransaction{first, second, fast}, execution)
 

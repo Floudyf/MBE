@@ -421,6 +421,10 @@ type WorkloadRecord struct {
 	AccessListSchema                string
 	AccessListSource                string
 	AccessListDigest                string
+	SchedulingAccessList            []tx.AccessItem
+	SchedulingAccessSchema          string
+	SchedulingAccessSource          string
+	SchedulingAccessDigest          string
 	CrossShard                      bool
 	SourceShard                     string
 	TargetShard                     string
@@ -1109,8 +1113,12 @@ func topCooccurNeighbors(key string, edges []CoaccessEdge, frequency map[string]
 }
 
 func normalizedAccessItems(record WorkloadRecord) []tx.AccessItem {
-	if len(record.AccessList) > 0 {
-		items := append([]tx.AccessItem(nil), record.AccessList...)
+	source := record.AccessList
+	if len(record.SchedulingAccessList) > 0 {
+		source = record.SchedulingAccessList
+	}
+	if len(source) > 0 {
+		items := append([]tx.AccessItem(nil), source...)
 		sort.Slice(items, func(i, j int) bool {
 			if items[i].Key != items[j].Key {
 				return items[i].Key < items[j].Key
@@ -1221,11 +1229,11 @@ func coaccessLocalityGainForCandidate(key, candidate string, edges []CoaccessEdg
 }
 
 func isWriteMode(mode tx.AccessMode) bool {
-	return mode == tx.AccessWrite || mode == tx.AccessReadWrite || mode == tx.AccessCommutativeDelta
+	return mode == tx.AccessWrite || mode == tx.AccessReadWrite || mode == tx.AccessCommutativeDelta || mode == tx.AccessUnknown
 }
 
 func isReadMode(mode tx.AccessMode) bool {
-	return mode == tx.AccessRead || mode == tx.AccessReadWrite || mode == tx.AccessCommutativeDelta
+	return mode == tx.AccessRead || mode == tx.AccessReadWrite || mode == tx.AccessCommutativeDelta || mode == tx.AccessUnknown
 }
 
 func keyPair(left, right string) string {
@@ -1534,9 +1542,16 @@ func (p serialExecution) Classify(tx.SignedTransaction) ExecutionDecision {
 
 type dualTrackExecution struct{ basicPlugin }
 
+func classificationAccessItems(item tx.SignedTransaction) []tx.AccessItem {
+	if len(item.SchedulingAccessList) > 0 {
+		return item.SchedulingAccessList
+	}
+	return item.AccessList
+}
+
 func structuredAccessSize(item tx.SignedTransaction) int {
 	keys := map[string]bool{}
-	for _, access := range item.AccessList {
+	for _, access := range classificationAccessItems(item) {
 		if strings.TrimSpace(access.Key) != "" {
 			keys[access.Key] = true
 		}
@@ -1546,6 +1561,7 @@ func structuredAccessSize(item tx.SignedTransaction) int {
 
 var dualTrackSupportedOrdinaryWriteSemantics = map[string]bool{
 	"set":                                  true,
+	"rmw":                                  true,
 	"alien_worlds_contract_semantic_state": true,
 	"axie_owner_debit":                     true,
 	"axie_owner_credit":                    true,
@@ -1559,7 +1575,7 @@ var dualTrackSupportedOrdinaryWriteSemantics = map[string]bool{
 }
 
 func dualTrackSemanticSafety(item tx.SignedTransaction) (bool, string) {
-	for _, access := range item.AccessList {
+	for _, access := range classificationAccessItems(item) {
 		key := strings.TrimSpace(access.Key)
 		if key == "" {
 			continue
@@ -1597,59 +1613,146 @@ type dualTrackConflictAccess struct {
 	Access tx.AccessItem
 }
 
-// dualTrackConflictDirection returns -1 for left->right, +1 for right->left,
-// and 0 when the signed execution metadata cannot prove a safe direction.
-//
-// Compatibility note: direct unit/plugin invocations that carry no MetaTrack
-// execution-routing metadata retain deterministic input-order precedence.
-// Real MetaTrack transactions carry signed ExecutionRouting metadata; once that
-// metadata is present, a non-commutative business-state conflict must be
-// justified by exact per-key state-version evidence.
-func dualTrackConflictDirection(left, right dualTrackConflictAccess) int {
-	if !isVersionedStateAccess(left.Access) || !isVersionedStateAccess(right.Access) {
-		return -1
+type dualTrackStaticTopologyEdge struct {
+	From string
+	To   string
+	Key  string
+	Kind string
+}
+
+func dualTrackStaticReads(mode tx.AccessMode) bool {
+	return mode == tx.AccessRead || mode == tx.AccessReadWrite
+}
+
+func dualTrackStaticWrites(mode tx.AccessMode) bool {
+	return mode == tx.AccessWrite || mode == tx.AccessReadWrite || mode == tx.AccessCommutativeDelta
+}
+
+func dualTrackStaticKnownMode(mode tx.AccessMode) bool {
+	switch mode {
+	case tx.AccessRead, tx.AccessWrite, tx.AccessReadWrite, tx.AccessCommutativeDelta:
+		return true
+	default:
+		return false
 	}
-	if left.Item.ExecutionRouting == nil && right.Item.ExecutionRouting == nil {
-		return -1
+}
+
+func dualTrackCompatibleCommutative(left, right tx.AccessItem) bool {
+	if left.Mode != tx.AccessCommutativeDelta || right.Mode != tx.AccessCommutativeDelta {
+		return false
 	}
-	leftVersion, leftOK := stateVersionDependencyForKey(left.Item, left.Access.Key)
-	rightVersion, rightOK := stateVersionDependencyForKey(right.Item, right.Access.Key)
-	if !leftOK || !rightOK {
-		return 0
+	allowed := func(value string) bool {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "add", "commutative_delta", "market_sale_counter":
+			return true
+		default:
+			return false
+		}
+	}
+	return allowed(left.UpdateSemantics) && allowed(right.UpdateSemantics)
+}
+
+func dualTrackCanonicalWriteOrder(left, right dualTrackConflictAccess) (string, string, bool) {
+	leftSender := strings.TrimSpace(left.Item.Sender)
+	rightSender := strings.TrimSpace(right.Item.Sender)
+
+	// Same-sender nonce is signed pre-execution ordering evidence.
+	if leftSender != "" && leftSender == rightSender && left.Item.Nonce != right.Item.Nonce {
+		if left.Item.Nonce < right.Item.Nonce {
+			return left.TxID, right.TxID, true
+		}
+		return right.TxID, left.TxID, true
 	}
 
-	leftWrites := isWriteMode(left.Access.Mode)
-	rightWrites := isWriteMode(right.Access.Mode)
-	switch {
-	case leftWrites && rightWrites:
-		if leftVersion.ProducedVersion == 0 || rightVersion.ProducedVersion == 0 ||
-			leftVersion.ProducedVersion == rightVersion.ProducedVersion {
-			return 0
+	// Otherwise use the transaction's own stable TxID, never the classifier's
+	// batch-position fallback id. If no stable TxID exists, sender identity may
+	// still provide a deterministic cross-sender order.
+	leftStableTxID := strings.TrimSpace(left.Item.TxID)
+	rightStableTxID := strings.TrimSpace(right.Item.TxID)
+	if leftStableTxID != "" && rightStableTxID != "" && leftStableTxID != rightStableTxID {
+		if leftStableTxID < rightStableTxID {
+			return left.TxID, right.TxID, true
 		}
-		if leftVersion.ProducedVersion < rightVersion.ProducedVersion {
-			return -1
-		}
-		return 1
-
-	case leftWrites && !rightWrites:
-		if leftVersion.ProducedVersion == 0 {
-			return 0
-		}
-		if rightVersion.RequiredVersion >= leftVersion.ProducedVersion {
-			return -1
-		}
-		return 1
-
-	case !leftWrites && rightWrites:
-		if rightVersion.ProducedVersion == 0 {
-			return 0
-		}
-		if leftVersion.RequiredVersion >= rightVersion.ProducedVersion {
-			return 1
-		}
-		return -1
+		return right.TxID, left.TxID, true
 	}
-	return 0
+	if leftSender != "" && rightSender != "" && leftSender != rightSender {
+		if leftSender < rightSender {
+			return left.TxID, right.TxID, true
+		}
+		return right.TxID, left.TxID, true
+	}
+	return "", "", false
+}
+
+// dualTrackStaticTopologyPair builds only pre-execution classification edges.
+// It deliberately does not inspect ExecutionRouting, StateVersion, StateReady,
+// runtime fetch results, actual read/write truth, or batch iteration order.
+func dualTrackStaticTopologyPair(left, right dualTrackConflictAccess) ([]dualTrackStaticTopologyEdge, bool) {
+	if left.TxID == "" || right.TxID == "" || left.TxID == right.TxID || left.Access.Key == "" || left.Access.Key != right.Access.Key {
+		return nil, false
+	}
+	key := left.Access.Key
+	if !dualTrackStaticKnownMode(left.Access.Mode) || !dualTrackStaticKnownMode(right.Access.Mode) {
+		return []dualTrackStaticTopologyEdge{
+			{From: left.TxID, To: right.TxID, Key: key, Kind: "ambiguous"},
+			{From: right.TxID, To: left.TxID, Key: key, Kind: "ambiguous"},
+		}, true
+	}
+	if dualTrackCompatibleCommutative(left.Access, right.Access) {
+		return nil, false
+	}
+
+	edges := make([]dualTrackStaticTopologyEdge, 0, 2)
+	seen := map[string]bool{}
+	add := func(from, to, kind string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		id := from + "->" + to + ":" + kind
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		edges = append(edges, dualTrackStaticTopologyEdge{From: from, To: to, Key: key, Kind: kind})
+	}
+
+	// Same-key RW/RW is a symmetric serialization conflict, not evidence that
+	// both transactions causally depend on each other. Choose one stable
+	// pre-execution arbitration direction instead of manufacturing a two-way SCC.
+	if left.Access.Mode == tx.AccessReadWrite && right.Access.Mode == tx.AccessReadWrite {
+		from, to, ok := dualTrackCanonicalWriteOrder(left, right)
+		if !ok {
+			add(left.TxID, right.TxID, "ambiguous")
+			add(right.TxID, left.TxID, "ambiguous")
+			return edges, true
+		}
+		add(from, to, "waw")
+		return edges, false
+	}
+
+	// Static producer/consumer relation: for asymmetric access roles, every
+	// declared writer precedes every declared reader of the same key. These
+	// read-derived directions are never overridden by canonical arbitration.
+	if dualTrackStaticWrites(left.Access.Mode) && dualTrackStaticReads(right.Access.Mode) {
+		add(left.TxID, right.TxID, "raw")
+	}
+	if dualTrackStaticWrites(right.Access.Mode) && dualTrackStaticReads(left.Access.Mode) {
+		add(right.TxID, left.TxID, "raw")
+	}
+
+	// Symmetric write/write conflicts without a read-derived direction only need
+	// stable deterministic serialization. This includes W/W and C/W; compatible
+	// C/C was already suppressed above.
+	if len(edges) == 0 && dualTrackStaticWrites(left.Access.Mode) && dualTrackStaticWrites(right.Access.Mode) {
+		from, to, ok := dualTrackCanonicalWriteOrder(left, right)
+		if !ok {
+			add(left.TxID, right.TxID, "ambiguous")
+			add(right.TxID, left.TxID, "ambiguous")
+			return edges, true
+		}
+		add(from, to, "waw")
+	}
+	return edges, false
 }
 
 func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecision {
@@ -1664,7 +1767,7 @@ func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecisio
 	}
 	commutative := false
 	knownDirectionWrite := false
-	for _, access := range item.AccessList {
+	for _, access := range classificationAccessItems(item) {
 		switch access.Mode {
 		case tx.AccessRead:
 			continue
@@ -1706,11 +1809,12 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 	graph := map[string][]string{}
 	hardReasons := map[string][]string{}
 	dependencyReasons := map[string][]string{}
+	topologyDependencyReasons := map[string][]string{}
 
 	stabilityGraph := map[string][]string{}
 	stabilityEdges := map[string]bool{}
 	topologyReasons := map[string][]string{}
-	stabilityAccessByTxKey := map[string]dualTrackConflictAccess{}
+	topologyAccessesByKey := map[string][]dualTrackConflictAccess{}
 
 	addDependency := func(from, to, key, kind string) {
 		if from == "" || to == "" || from == to {
@@ -1721,7 +1825,6 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 			return
 		}
 		edges[edgeKey] = true
-		result.ConflictEdgeCount++
 		result.Dependencies[to] = append(result.Dependencies[to], from)
 		graph[from] = append(graph[from], to)
 		if kind == "raw" || kind == "raw_commutative" {
@@ -1739,39 +1842,9 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		stabilityEdges[edgeKey] = true
 		stabilityGraph[from] = append(stabilityGraph[from], to)
 	}
-	stabilityAccessKey := func(txID, key string) string {
-		return txID + "\x00" + key
-	}
 	addStabilityConflict := func(previousTxID, currentTxID, key string, currentItem tx.SignedTransaction, currentAccess tx.AccessItem) {
-		if previousTxID == "" || currentTxID == "" || previousTxID == currentTxID {
-			return
-		}
-		previous, ok := stabilityAccessByTxKey[stabilityAccessKey(previousTxID, key)]
-		if !ok {
-			// The execution graph already proved that previousTxID conflicts on
-			// this key. Missing classification evidence is itself conservative.
-			addStabilityEdge(previousTxID, currentTxID, key, "ambiguous")
-			addStabilityEdge(currentTxID, previousTxID, key, "ambiguous")
-			reason := "ambiguous_conflict_direction:" + key
-			topologyReasons[previousTxID] = append(topologyReasons[previousTxID], reason)
-			topologyReasons[currentTxID] = append(topologyReasons[currentTxID], reason)
-			result.AmbiguousConflictPairCount++
-			return
-		}
-		current := dualTrackConflictAccess{TxID: currentTxID, Item: currentItem, Access: currentAccess}
-		switch dualTrackConflictDirection(previous, current) {
-		case -1:
-			addStabilityEdge(previousTxID, currentTxID, key, "conflict")
-		case 1:
-			addStabilityEdge(currentTxID, previousTxID, key, "conflict")
-		default:
-			addStabilityEdge(previousTxID, currentTxID, key, "ambiguous")
-			addStabilityEdge(currentTxID, previousTxID, key, "ambiguous")
-			reason := "ambiguous_conflict_direction:" + key
-			topologyReasons[previousTxID] = append(topologyReasons[previousTxID], reason)
-			topologyReasons[currentTxID] = append(topologyReasons[currentTxID], reason)
-			result.AmbiguousConflictPairCount++
-		}
+		// Intentionally empty. Execution-order edges belong to the scheduler graph,
+		// not to the pre-execution TopoSafe classification graph.
 	}
 
 	for index, item := range input.Transactions {
@@ -1782,7 +1855,6 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		if item.Sender != "" {
 			if previous := lastSenderTx[item.Sender]; previous != "" {
 				addDependency(previous, txID, "nonce:"+item.Sender, "nonce")
-				addStabilityEdge(previous, txID, "nonce:"+item.Sender, "nonce")
 				dependencyReasons[txID] = append(dependencyReasons[txID], "nonce_order_dependency")
 			}
 			lastSenderTx[item.Sender] = txID
@@ -1809,14 +1881,14 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 			result.SemanticUnsafeCount++
 		}
 
-		for _, access := range item.AccessList {
+		for _, access := range classificationAccessItems(item) {
 			if access.Key == "" {
 				hardReasons[txID] = append(hardReasons[txID], "missing_access_key")
 				continue
 			}
-			stabilityAccessByTxKey[stabilityAccessKey(txID, access.Key)] = dualTrackConflictAccess{
+			topologyAccessesByKey[access.Key] = append(topologyAccessesByKey[access.Key], dualTrackConflictAccess{
 				TxID: txID, Item: item, Access: access,
-			}
+			})
 			if input.RemoteStateReadiness != nil {
 				token := stateReadinessToken(item, access)
 				if ready, ok := input.RemoteStateReadiness[token]; ok && !ready {
@@ -1878,6 +1950,64 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		}
 	}
 
+	// Build the TopoSafe classification graph only after all declared scheduling
+	// accesses are visible. This graph is invariant to batch iteration order and
+	// exact StateVersion mutations.
+	for key, accesses := range topologyAccessesByKey {
+		sort.Slice(accesses, func(i, j int) bool {
+			if accesses[i].TxID != accesses[j].TxID {
+				return accesses[i].TxID < accesses[j].TxID
+			}
+			return accesses[i].Access.Mode < accesses[j].Access.Mode
+		})
+		for i := 0; i < len(accesses); i++ {
+			for j := i + 1; j < len(accesses); j++ {
+				pairEdges, ambiguous := dualTrackStaticTopologyPair(accesses[i], accesses[j])
+				if ambiguous {
+					reason := "ambiguous_conflict_direction:" + key
+					topologyReasons[accesses[i].TxID] = append(topologyReasons[accesses[i].TxID], reason)
+					topologyReasons[accesses[j].TxID] = append(topologyReasons[accesses[j].TxID], reason)
+					result.AmbiguousConflictPairCount++
+				}
+				for _, edge := range pairEdges {
+					addStabilityEdge(edge.From, edge.To, edge.Key, edge.Kind)
+					switch edge.Kind {
+					case "raw":
+						topologyDependencyReasons[edge.To] = append(topologyDependencyReasons[edge.To], "raw_dependency")
+					case "waw":
+						topologyDependencyReasons[edge.To] = append(topologyDependencyReasons[edge.To], "waw_dependency")
+					}
+				}
+			}
+		}
+	}
+
+	// Same-sender nonce precedence is legitimate pre-execution evidence, but its
+	// direction comes from the signed nonce value rather than batch position.
+	nonceGroups := map[string][]dualTrackConflictAccess{}
+	for index, item := range input.Transactions {
+		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
+		sender := strings.TrimSpace(item.Sender)
+		if sender == "" {
+			continue
+		}
+		nonceGroups[sender] = append(nonceGroups[sender], dualTrackConflictAccess{TxID: txID, Item: item})
+	}
+	for sender, items := range nonceGroups {
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].Item.Nonce != items[j].Item.Nonce {
+				return items[i].Item.Nonce < items[j].Item.Nonce
+			}
+			return items[i].TxID < items[j].TxID
+		})
+		for i := 1; i < len(items); i++ {
+			from, to := items[i-1].TxID, items[i].TxID
+			addStabilityEdge(from, to, "nonce:"+sender, "nonce")
+			topologyDependencyReasons[to] = append(topologyDependencyReasons[to], "nonce_order_dependency")
+		}
+	}
+
+	result.ConflictEdgeCount = len(stabilityEdges)
 	result.DeduplicatedEdgeCount = len(edges)
 	for txID, deps := range result.Dependencies {
 		sort.Strings(deps)
@@ -1887,7 +2017,7 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		sort.Strings(keys)
 		result.StateWaitKeys[txID] = uniqueStrings(keys)
 	}
-	result.DependencyChainMax = dependencyChainMax(graph)
+	result.DependencyChainMax = dependencyChainMax(stabilityGraph)
 	if len(accessSizes) > 0 {
 		sort.Ints(accessSizes)
 		p95Index := (95*len(accessSizes)+99)/100 - 1
@@ -1906,7 +2036,7 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
 		hard := append([]string(nil), hardReasons[txID]...)
 		hard = append(hard, topologyReasons[txID]...)
-		deps := append([]string(nil), dependencyReasons[txID]...)
+		deps := append([]string(nil), topologyDependencyReasons[txID]...)
 		sort.Strings(hard)
 		hard = uniqueStrings(hard)
 		sort.Strings(deps)
@@ -2920,7 +3050,7 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 				return fmt.Errorf("metatrack state-ready token %s missing resolved value for %s", token, txID)
 			}
 			item := byID[txID]
-			for _, access := range item.AccessList {
+			for _, access := range classificationAccessItems(item) {
 				if stateReadinessToken(item, access) == token {
 					snapshot[qualifyStateKey(block.ShardID, access.Key)] = value
 					break
@@ -3363,7 +3493,7 @@ func buildMetaTrackExecutionPlan(block realblock.Block, ordered []tx.SignedTrans
 
 func collectDeclaredAccessKeys(item tx.SignedTransaction, readKeys, writeKeys map[string]bool) {
 	if len(item.AccessList) > 0 {
-		for _, access := range item.AccessList {
+		for _, access := range classificationAccessItems(item) {
 			switch access.Mode {
 			case tx.AccessRead:
 				readKeys[access.Key] = true
@@ -3414,7 +3544,7 @@ func metaTrackPureCommutativeTransaction(item tx.SignedTransaction) bool {
 		return false
 	}
 	hasDelta := false
-	for _, access := range item.AccessList {
+	for _, access := range classificationAccessItems(item) {
 		switch access.Mode {
 		case tx.AccessRead:
 			continue
@@ -3429,7 +3559,7 @@ func metaTrackPureCommutativeTransaction(item tx.SignedTransaction) bool {
 
 func metaTrackTransactionSnapshot(base map[string]string, shardID string, item tx.SignedTransaction) map[string]string {
 	keys := map[string]bool{}
-	for _, access := range item.AccessList {
+	for _, access := range classificationAccessItems(item) {
 		if access.Key != "" {
 			keys[access.Key] = true
 		}
@@ -3466,7 +3596,7 @@ func metaTrackTransactionSnapshot(base map[string]string, shardID string, item t
 
 func metaTrackApplyCommutativeTransaction(snapshot map[string]string, shardID string, item tx.SignedTransaction) map[string]string {
 	writes := map[string]string{}
-	for _, access := range item.AccessList {
+	for _, access := range classificationAccessItems(item) {
 		if access.Mode != tx.AccessCommutativeDelta || access.Key == "" {
 			continue
 		}
@@ -3704,7 +3834,7 @@ func aggregateCommutativeStateDelta(input CommitInput) ([]state.StateKV, aggrega
 		if delta, ok := txDeltaByID[txID]; ok && !delta.Success {
 			continue
 		}
-		for _, access := range item.AccessList {
+		for _, access := range classificationAccessItems(item) {
 			if access.Key == "" {
 				continue
 			}
