@@ -20,6 +20,7 @@ def _schema(properties: dict) -> dict:
 _ZH = {
     "deterministic_signed_synthetic": ("确定性签名合成负载", "生成带签名的确定性片内、跨片及超时退款交易。"),
     "signature_nonce_admission": ("签名与随机数准入", "校验 Ed25519 签名、发送方公钥绑定和随机数。"),
+    "metatrack_strict_admission_v1": ("MetaTrack 严格访问声明准入", "在签名校验基础上要求结构化访问声明完整、状态键唯一且访问模式明确。"),
     "fifo_per_node_mempool": ("每节点 FIFO 交易池", "每个节点维护独立的 FIFO 交易池。"),
     "deterministic_state_key_sharding": ("确定性状态键分片", "将账户和状态键映射到配置的分片。"),
     "hash_routing_baseline": ("有状态哈希路由参考", "按源分片执行并使用本地状态的历史参考路由。"),
@@ -83,6 +84,7 @@ _MANIFESTS = [
     _manifest("workload", "deterministic_signed_synthetic", "Deterministic Signed Synthetic", "Deterministic signed workload with intra-shard, relay, and timeout cases.", config={"cross_shard_ratio": 0.25, "timeout_every": 17}, schema=_schema({"cross_shard_ratio": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.25}, "timeout_every": {"type": "integer", "minimum": 0, "maximum": 1000, "default": 17}}), metrics=[{"key": "submitted_tx_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Transactions submitted over TCP."}]),
     _manifest("workload", "canonical_trace_replay", "Canonical Trace Replay", "Streams deterministic materialized dataset workload records through a manifest-owned universal access-list contract.", config={}, schema=_schema({"dataset_id": {"type": "string"}, "variant_mode": {"type": "string"}, "selection_mode": {"type": "string", "enum": ["contiguous_window", "validated_prefix"]}, "skew_axis": {"type": ["string", "null"]}, "target_alpha": {"type": ["number", "null"]}, "variant_parameters": {"type": "object"}}), capabilities=["dataset_replay", "gzip_streaming", "manifest_variants", "direct_access_list_v3", "no_fallback"], metrics=[{"key": "workload_replay_read_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Canonical workload records read by the client."}]),
     _manifest("transaction_admission", "signature_nonce_admission", "Signature and Nonce Admission", "Ed25519 signature, sender/public-key binding, and nonce admission.", capabilities=["signed_tx", "nonce_validation"]),
+    _manifest("transaction_admission", "metatrack_strict_admission_v1", "MetaTrack Strict Access Admission", "MetaTrack-only signature admission with mandatory structured access declarations.", capabilities=["signed_tx", "nonce_validation", "declared_access_required"]),
     _manifest("txpool", "fifo_per_node_mempool", "FIFO Per-node Mempool", "Independent FIFO mempool on every node.", config={"capacity": 10000}, schema=_schema({"capacity": {"type": "integer", "minimum": 100, "maximum": 100000, "default": 10000}})),
     _manifest("sharding", "deterministic_state_key_sharding", "Deterministic State-key Sharding", "Maps account/state keys to a configured shard.", capabilities=["multi_shard"]),
     _manifest("routing", "hash_routing_baseline", "Stateful Hash Routing Reference", "Historical source-shard execution reference with local state access.", aliases=["hash"], capabilities=["stateful_local_execution"], truth_boundary="stateful_reference_not_directly_comparable_to_stateless_methods", metrics=[{"key": "routing_decision_count", "type": "integer", "unit": "decision", "aggregation": "sum", "visualization": "summary", "description": "Routing decisions made by the client."}]),
@@ -93,6 +95,8 @@ _MANIFESTS = [
         config={"routing_epoch": 0},
         schema=_schema({
             "routing_epoch": {"type": "integer", "minimum": 0, "maximum": 1000000000, "default": 0},
+            "control_policy": {"type": "string", "enum": ["legacy_v2", "logical_domain_frontier_v1"], "default": "legacy_v2"},
+            "logical_domain_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4},
             "state_storage_unit_count": {"type": "integer", "minimum": 0, "maximum": 65536, "default": 0},
             "micro_batch_size": {"type": "integer", "minimum": 0, "maximum": 5000, "default": 0},
             "placement_mu": {"type": "number", "minimum": 0.01, "maximum": 64.0, "default": 1.0},

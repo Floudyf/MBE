@@ -137,13 +137,17 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         display_name="MetaTrack",
         role="main",
         plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
             "routing": "metatrack_coaccess_routing",
             "execution": "dual_track_execution",
             "scheduler": "fast_first_scheduler",
             "block_executor": "metatrack_block_executor",
             "commit": "commutative_hot_update_aggregation",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 4}},
+        plugin_config_overrides={
+            "routing": {"control_policy": "logical_domain_frontier_v1", "logical_domain_count": 4},
+            "block_executor": {"worker_count": 4, "control_policy": "logical_domain_frontier_v1"},
+        },
     ),
     "metatrack_block_stm": V5FormalMethod(
         method_id="metatrack_block_stm",

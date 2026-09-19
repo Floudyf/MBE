@@ -218,7 +218,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				item = generated[0]
 				item.Payload = payload
 				if bindExecutionRouting && record.RoutePlanDigest != "" {
-					routing := tx.ExecutionRoutingMetadata{SenderID: item.Sender, ReceiverID: item.Receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: executionShard, RoutingReason: firstNonEmpty(record.RoutingReason, route.Reason), RoutePlanDigest: record.RoutePlanDigest, RouteBatchSequence: record.RouteBatchSequence, RouteBatchTransactionCount: record.RouteBatchTransactionCount, RouteBatchShardTransactionCount: record.RouteBatchShardTransactionCount, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...)}
+					routing := tx.ExecutionRoutingMetadata{SenderID: item.Sender, ReceiverID: item.Receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: executionShard, RoutingReason: firstNonEmpty(record.RoutingReason, route.Reason), RoutePlanDigest: record.RoutePlanDigest, RouteBatchSequence: record.RouteBatchSequence, RouteBatchTransactionCount: record.RouteBatchTransactionCount, RouteBatchShardTransactionCount: record.RouteBatchShardTransactionCount, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...), ControlPolicy: record.ControlPolicy, LogicalDomains: append([]string(nil), record.LogicalDomains...), Local: record.Local, Bridge: record.Bridge, FrontierDigest: record.FrontierDigest}
 					digest, digestErr := tx.ComputeExecutionRoutingDigest(item, routing)
 					if digestErr != nil {
 						err = digestErr
@@ -303,6 +303,13 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				route = RoutingDecision{ShardID: placement.ExecutionShard, Reason: placement.Reason}
 				record.RoutingEpoch = placement.RoutingEpoch
 				record.ExecutionShard = placement.ExecutionShard
+				if len(placement.LogicalDomains) > 0 || placement.Local || placement.Bridge || placement.FrontierDigest != "" {
+					record.ControlPolicy = metaTrackLogicalDomainFrontierPolicy
+				}
+				record.LogicalDomains = append([]string(nil), placement.LogicalDomains...)
+				record.Local = placement.Local
+				record.Bridge = placement.Bridge
+				record.FrontierDigest = placement.FrontierDigest
 				record.RoutingReason = placement.Reason
 				if bindExecutionRouting {
 					record.RoutePlanDigest = routePlanDigest

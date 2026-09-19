@@ -442,6 +442,11 @@ type WorkloadRecord struct {
 	PredictedRemoteReads            int
 	PredictedRemoteWrites           int
 	StateVersions                   []tx.StateVersionDependency
+	ControlPolicy                   string
+	LogicalDomains                  []string
+	Local                           bool
+	Bridge                          bool
+	FrontierDigest                  string
 }
 type WorkloadReplaySummary struct {
 	DatasetID                string         `json:"dataset_id,omitempty"`
@@ -501,7 +506,9 @@ type BatchRoutingPlan struct {
 	BatchIndex              int
 	PlanDigest              string
 	ShardingPluginID        string
-	StateStorageUnitCount   int `json:"state_storage_unit_count,omitempty"`
+	StateStorageUnitCount   int    `json:"state_storage_unit_count,omitempty"`
+	ControlPolicy           string `json:"control_policy,omitempty"`
+	LogicalDomainCount      int    `json:"logical_domain_count,omitempty"`
 	PlacementPolicy         string
 	TransactionPolicy       string
 	PlacementBudget         int
@@ -544,6 +551,7 @@ type StatePlacement struct {
 	HomeStateUnit  string `json:"home_state_unit,omitempty"`
 	HomeShard      string
 	ExecutionShard string
+	LogicalDomain  string `json:"logical_domain,omitempty"`
 	Frequency      int
 	Reason         string
 }
@@ -572,6 +580,10 @@ type TransactionPlacement struct {
 	ExecutionShard        string
 	TargetShard           string
 	CoaccessGroup         string
+	LogicalDomains        []string `json:"logical_domains,omitempty"`
+	Local                 bool     `json:"local,omitempty"`
+	Bridge                bool     `json:"bridge,omitempty"`
+	FrontierDigest        string   `json:"frontier_digest,omitempty"`
 	Reason                string
 	PredictedRemoteReads  int
 	PredictedRemoteWrites int
@@ -602,6 +614,10 @@ type BatchClassificationResult struct {
 	AccessSizeMax                        int
 	AccessSizeP95                        int
 	AccessSizeTotal                      int
+	LocalTransactionCount                int
+	BridgeTransactionCount               int
+	ConservativeLocalCount               int
+	ConservativeBridgeCount              int
 }
 type ScheduleResult struct {
 	Ordered []tx.SignedTransaction
@@ -715,6 +731,33 @@ func (p canonicalTraceWorkload) NewIterator(plan WorkloadPlan, shards int, dataD
 type builtinAdmission struct{ basicPlugin }
 
 func (p builtinAdmission) Admit(item tx.SignedTransaction) error { return tx.Verify(item) }
+
+type metaTrackStrictAdmission struct{ basicPlugin }
+
+func (p metaTrackStrictAdmission) validateDeclaredAccess(item tx.SignedTransaction) error {
+	accesses := classificationAccessItems(item)
+	if len(accesses) == 0 {
+		return fmt.Errorf("metatrack_access_violation: missing declared access list")
+	}
+	seen := map[string]bool{}
+	for _, access := range accesses {
+		key := strings.TrimSpace(access.Key)
+		if key == "" || seen[key] {
+			return fmt.Errorf("metatrack_access_violation: invalid or duplicate access key")
+		}
+		seen[key] = true
+		if !dualTrackStaticKnownMode(access.Mode) {
+			return fmt.Errorf("metatrack_access_violation: unknown access mode for %s", key)
+		}
+	}
+	return nil
+}
+func (p metaTrackStrictAdmission) Admit(item tx.SignedTransaction) error {
+	if err := tx.Verify(item); err != nil {
+		return err
+	}
+	return p.validateDeclaredAccess(item)
+}
 
 type builtinTxPool struct{ basicPlugin }
 
@@ -878,6 +921,9 @@ func (p *metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 }
 
 func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
+	if metaTrackLogicalDomainPolicyEnabled(p.config) {
+		return p.planLogicalDomainFrontierV1(input)
+	}
 	placementMinBudget := 1
 	if configured := intValue(p.config["placement_min_budget"]); configured > 0 {
 		placementMinBudget = configured
@@ -1756,6 +1802,18 @@ func dualTrackStaticTopologyPair(left, right dualTrackConflictAccess) ([]dualTra
 }
 
 func (p dualTrackExecution) Classify(item tx.SignedTransaction) ExecutionDecision {
+	if item.ExecutionRouting != nil && item.ExecutionRouting.ControlPolicy == metaTrackLogicalDomainFrontierPolicy {
+		_, local, bridge, ok := metaTrackLogicalDomainBinding(item)
+		if !ok {
+			return ExecutionDecision{Track: "conservative", Reason: "missing_or_invalid_logical_domain_binding"}
+		}
+		if bridge {
+			return ExecutionDecision{Track: "conservative", Reason: "bridge_transaction"}
+		}
+		if !local {
+			return ExecutionDecision{Track: "conservative", Reason: "nonlocal_fast_candidate"}
+		}
+	}
 	if len(item.AccessList) == 0 {
 		return ExecutionDecision{Track: "conservative", Reason: "missing_structured_access_list"}
 	}
@@ -1879,6 +1937,16 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		if safe, reason := dualTrackSemanticSafety(item); !safe {
 			hardReasons[txID] = append(hardReasons[txID], reason)
 			result.SemanticUnsafeCount++
+		}
+		if item.ExecutionRouting != nil && item.ExecutionRouting.ControlPolicy == metaTrackLogicalDomainFrontierPolicy {
+			_, local, bridge, ok := metaTrackLogicalDomainBinding(item)
+			if !ok {
+				hardReasons[txID] = append(hardReasons[txID], "missing_or_invalid_logical_domain_binding")
+			} else if bridge {
+				hardReasons[txID] = append(hardReasons[txID], "bridge_transaction")
+			} else if !local {
+				hardReasons[txID] = append(hardReasons[txID], "nonlocal_fast_candidate")
+			}
 		}
 
 		for _, access := range classificationAccessItems(item) {
@@ -2069,6 +2137,25 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		}
 		result.ReasonCodes[txID] = []string{decision.Reason}
 		result.Decisions[txID] = decision
+	}
+	for index, item := range input.Transactions {
+		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
+		_, local, bridge, ok := metaTrackLogicalDomainBinding(item)
+		if !ok {
+			continue
+		}
+		if local {
+			result.LocalTransactionCount++
+			if result.Decisions[txID].Track == "conservative" {
+				result.ConservativeLocalCount++
+			}
+		}
+		if bridge {
+			result.BridgeTransactionCount++
+			if result.Decisions[txID].Track == "conservative" {
+				result.ConservativeBridgeCount++
+			}
+		}
 	}
 	return result
 }
@@ -2537,8 +2624,9 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		return BlockExecutionResult{}, fmt.Errorf("metatrack block executor schedule length mismatch")
 	}
 	classification := batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
+	strictFrontier := metaTrackLogicalDomainPolicyEnabled(p.config)
 	executionStarted := time.Now()
-	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackSchedule(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, input.StateVersionPublish)
+	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithPolicy(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, input.StateVersionPublish, strictFrontier)
 	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -2673,6 +2761,10 @@ func metaTrackClassificationMetrics(classification BatchClassificationResult, tr
 		"metatrack_classification_nontrivial_scc_count":                    classification.SCCCount,
 		"metatrack_classification_ambiguous_conflict_pair_count":           classification.AmbiguousConflictPairCount,
 		"metatrack_classification_semantic_unsafe_unique_count":            classification.SemanticUnsafeCount,
+		"metatrack_local_transaction_count":                                classification.LocalTransactionCount,
+		"metatrack_bridge_transaction_count":                               classification.BridgeTransactionCount,
+		"metatrack_conservative_local_count":                               classification.ConservativeLocalCount,
+		"metatrack_conservative_bridge_count":                              classification.ConservativeBridgeCount,
 		"metatrack_classification_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
 		"metatrack_classification_count_scope":                             "per_replica_unique_logical_transactions",
 	}
@@ -2691,6 +2783,10 @@ type metaTrackExecutionOutcome struct {
 }
 
 func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, versionPublish StateVersionPublishFunc) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+	return executeMetaTrackScheduleWithPolicy(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, versionPublish, false)
+}
+
+func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
 	ordered := append([]tx.SignedTransaction(nil), schedule.Ordered...)
 	byID := map[string]tx.SignedTransaction{}
 	decisionByID := map[string]ExecutionDecision{}
@@ -2707,6 +2803,41 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	if len(classification.Dependencies) == 0 {
 		deps = scheduleDependenciesByOrder(ordered)
 	}
+	frontierSealCount, bridgeCapsuleCount := 0, 0
+	frontierRequiredVersionCount, frontierWriteSlotCount := 0, 0
+	frontierSealStarted := time.Now()
+	if strictFrontier {
+		for _, item := range ordered {
+			txID := txIdentifier(item)
+			decision := decisionByID[txID]
+			if item.ExecutionRouting == nil || item.ExecutionRouting.ControlPolicy != metaTrackLogicalDomainFrontierPolicy {
+				return nil, nil, nil, nil, fmt.Errorf("metatrack strict frontier missing signed binding for %s", txID)
+			}
+			for _, dependency := range item.ExecutionRouting.StateVersions {
+				frontierRequiredVersionCount++
+				if dependency.ProducedVersion != 0 {
+					frontierWriteSlotCount++
+				}
+			}
+			if decision.Track == "conservative" {
+				seal, err := buildMetaTrackFrontierSeal(item, deps[txID])
+				if err != nil {
+					return nil, nil, nil, nil, err
+				}
+				frontierSealCount++
+				_, _, bridge, _ := metaTrackLogicalDomainBinding(item)
+				if bridge {
+					if _, err := buildMetaTrackExecutionCapsule(item, seal); err != nil {
+						return nil, nil, nil, nil, err
+					}
+					bridgeCapsuleCount++
+				}
+			}
+		}
+	}
+	frontierSealBuildUS := time.Since(frontierSealStarted).Microseconds()
+	bridgeWaveCount, maxBridgeWaveWidth := metaTrackBridgeWaveStats(ordered, deps)
+
 	reverse := map[string][]string{}
 	depCount := map[string]int{}
 	fastReady := []string{}
@@ -2910,6 +3041,7 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 	var fastFallbackCount int64
 	var discardedTentativeCount int64
 	var conservativeReexecutionCount int64
+	var terminalAccessViolationCount int64
 	workerExecutionCount := make([]int, workerCount)
 	var workerMu sync.Mutex
 	workerDone := make(chan struct{})
@@ -3199,6 +3331,11 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 					continue
 				}
 			}
+			if strictFrontier {
+				closeWorkers()
+				wg.Wait()
+				return nil, nil, nil, nil, fmt.Errorf("metatrack logical-domain frontier plan stalled: no dependency/state-ready transaction")
+			}
 			for _, item := range ordered {
 				txID := txIdentifier(item)
 				if !completed[txID] {
@@ -3261,20 +3398,29 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		}
 		if outcomeTrack == "fast" {
 			if reason := declaredAccessViolation(done.outcome.Tx.AccessList, done.outcome.Delta); reason != "" {
-				atomic.AddInt64(&fastFallbackCount, 1)
-				atomic.AddInt64(&discardedTentativeCount, 1)
-				atomic.AddInt64(&conservativeReexecutionCount, 1)
-				decisionByID[doneID] = ExecutionDecision{Track: "conservative", Reason: "fast_fallback:" + reason}
-				conservativeReady = append(conservativeReady, doneID)
-				recordDepths()
-				attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: "fast", Attempt: done.outcome.Attempt, Reason: "fast_fallback:" + reason, Success: done.outcome.Receipt.Success, FinalCompletion: false})
-				events = append(events, ScheduleEvent{TxID: doneID, Track: "conservative", QueueName: "conservative_queue", DecisionReason: "fast_fallback:" + reason, LocalExecution: true, Wakeup: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady), DependencyWaitMS: 1})
-				if err := dispatchCapacity(); err != nil {
-					closeWorkers()
-					wg.Wait()
-					return nil, nil, nil, nil, err
+				if strictFrontier {
+					atomic.AddInt64(&terminalAccessViolationCount, 1)
+					done.outcome.Receipt.Success = false
+					done.outcome.Receipt.Error = "metatrack_access_violation:" + reason
+					done.outcome.Delta.WriteSet = nil
+					done.outcome.Delta.Success = false
+					done.outcome.Delta.Error = done.outcome.Receipt.Error
+				} else {
+					atomic.AddInt64(&fastFallbackCount, 1)
+					atomic.AddInt64(&discardedTentativeCount, 1)
+					atomic.AddInt64(&conservativeReexecutionCount, 1)
+					decisionByID[doneID] = ExecutionDecision{Track: "conservative", Reason: "fast_fallback:" + reason}
+					conservativeReady = append(conservativeReady, doneID)
+					recordDepths()
+					attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: "fast", Attempt: done.outcome.Attempt, Reason: "fast_fallback:" + reason, Success: done.outcome.Receipt.Success, FinalCompletion: false})
+					events = append(events, ScheduleEvent{TxID: doneID, Track: "conservative", QueueName: "conservative_queue", DecisionReason: "fast_fallback:" + reason, LocalExecution: true, Wakeup: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady), DependencyWaitMS: 1})
+					if err := dispatchCapacity(); err != nil {
+						closeWorkers()
+						wg.Wait()
+						return nil, nil, nil, nil, err
+					}
+					continue
 				}
-				continue
 			}
 		}
 		if done.outcome.Receipt.Success {
@@ -3411,6 +3557,16 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 		"conservative_reexecution_count":                    int(atomic.LoadInt64(&conservativeReexecutionCount)),
 		"retry_execution_count":                             int(atomic.LoadInt64(&conservativeReexecutionCount)),
 		"reexecution_count":                                 int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"metatrack_terminal_access_violation_count":         int(atomic.LoadInt64(&terminalAccessViolationCount)),
+		"metatrack_frontier_seal_count":                     frontierSealCount,
+		"metatrack_bridge_capsule_count":                    bridgeCapsuleCount,
+		"metatrack_frontier_required_version_count":         frontierRequiredVersionCount,
+		"metatrack_frontier_write_slot_count":               frontierWriteSlotCount,
+		"metatrack_version_ticket_issued_count":             frontierRequiredVersionCount,
+		"metatrack_version_ticket_released_count":           frontierRequiredVersionCount,
+		"metatrack_frontier_seal_build_us":                  frontierSealBuildUS,
+		"metatrack_bridge_wave_count":                       bridgeWaveCount,
+		"metatrack_max_bridge_wave_width":                   maxBridgeWaveWidth,
 		"validator_execution_completion_count":              len(executionOutcomes),
 		"unique_final_logical_completion_count":             len(executionOutcomes),
 		"duplicate_final_completion_count":                  0,
@@ -4144,6 +4300,9 @@ func BuiltinRegistry() *Registry {
 	})
 	register("transaction_admission", "signature_nonce_admission", func(c map[string]any) (Plugin, error) {
 		return builtinAdmission{makeBasic("transaction_admission", "signature_nonce_admission", c)}, nil
+	})
+	register("transaction_admission", "metatrack_strict_admission_v1", func(c map[string]any) (Plugin, error) {
+		return metaTrackStrictAdmission{makeBasic("transaction_admission", "metatrack_strict_admission_v1", c)}, nil
 	})
 	register("txpool", "fifo_per_node_mempool", func(c map[string]any) (Plugin, error) {
 		return builtinTxPool{makeBasic("txpool", "fifo_per_node_mempool", c)}, nil

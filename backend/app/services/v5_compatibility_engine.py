@@ -120,6 +120,23 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         blockers.append("cross-shard experiments with message loss or node restart are not supported because Relay/SourceFinalize reliable retransmission is not implemented")
     scheduler = by_category.get("scheduler")
     execution = by_category.get("execution")
+    routing = by_category.get("routing")
+    if routing and routing.plugin_id == "metatrack_coaccess_routing" and routing.config.get("control_policy") == "logical_domain_frontier_v1":
+        required = {
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+        }
+        for category, plugin_id in required.items():
+            selected = by_category.get(category)
+            if not selected or selected.plugin_id != plugin_id:
+                blockers.append(f"MetaTrack logical_domain_frontier_v1 requires {category}:{plugin_id}")
+        if int(routing.config.get("logical_domain_count", 0) or 0) < 1:
+            blockers.append("MetaTrack logical_domain_frontier_v1 requires logical_domain_count >= 1")
+        selected_executor = by_category.get("block_executor")
+        if selected_executor and selected_executor.plugin_id == "metatrack_block_executor" and selected_executor.config.get("control_policy") != "logical_domain_frontier_v1":
+            blockers.append("MetaTrack routing and block executor control_policy must match logical_domain_frontier_v1")
     if scheduler and scheduler.plugin_id == "fast_first_scheduler" and (not execution or execution.plugin_id != "dual_track_execution"):
         blockers.append("fast_first_scheduler requires dual_track_execution")
     block_producer = by_category.get("block_producer")

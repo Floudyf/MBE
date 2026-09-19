@@ -54,7 +54,23 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   { method_id: "stateless_hash_serial", display_name: "Stateless Hash + Serial", role: "baseline", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
   { method_id: "stateless_hash_block_stm", display_name: "Stateless Hash + Block-STM", role: "compatibility", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },
   // MBE_META_TRACK_RAPID_FIX_V3
-  { method_id: "metatrack_serial", display_name: "MetaTrack", role: "main", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "metatrack_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
+  {
+    method_id: "metatrack_serial",
+    display_name: "MetaTrack",
+    role: "main",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      execution: "dual_track_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "logical_domain_frontier_v1", logical_domain_count: 4 },
+      block_executor: { worker_count: 4, control_policy: "logical_domain_frontier_v1" },
+    },
+  },
   { method_id: "metatrack_block_stm", display_name: "MetaTrack with Block-STM backend", role: "compatibility", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "block_stm_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },
 ];
 

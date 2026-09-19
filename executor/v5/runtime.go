@@ -2516,7 +2516,11 @@ func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block)
 			accessDigest = CanonicalAccessListDigest(item.AccessList)
 		}
 		accessDigests = append(accessDigests, accessDigest)
-		for _, access := range item.AccessList {
+		planAccesses := item.AccessList
+		if routing.ControlPolicy == metaTrackLogicalDomainFrontierPolicy && len(item.SchedulingAccessList) > 0 {
+			planAccesses = item.SchedulingAccessList
+		}
+		for _, access := range planAccesses {
 			accessMatrix = append(accessMatrix, AccessMatrixRow{LogicalID: txID, TxIndex: index, Key: access.Key, Mode: access.Mode})
 		}
 		remote := routing.PredictedRemoteReads + routing.PredictedRemoteWrites
@@ -2529,7 +2533,11 @@ func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block)
 			RoutingEpoch:          routing.RoutingEpoch,
 			HomeShard:             r.stateHomeShardForKey("nonce:"+item.Sender, r.shardIDs()),
 			ExecutionShard:        routing.ExecutionShard,
-			CoaccessGroup:         strings.Join(item.StateKeys, "+"),
+			CoaccessGroup:         strings.Join(routing.LogicalDomains, "+"),
+			LogicalDomains:        append([]string(nil), routing.LogicalDomains...),
+			Local:                 routing.Local,
+			Bridge:                routing.Bridge,
+			FrontierDigest:        routing.FrontierDigest,
 			Reason:                routing.RoutingReason,
 			PredictedRemoteReads:  routing.PredictedRemoteReads,
 			PredictedRemoteWrites: routing.PredictedRemoteWrites,
@@ -4523,6 +4531,11 @@ func (r *NodeRuntime) validateMetaTrackPlanDrivesExecution(block realblock.Block
 		}
 		if placement.ExecutionShard != item.ExecutionRouting.ExecutionShard || placement.RoutingEpoch != item.ExecutionRouting.RoutingEpoch || placement.PredictedRemoteReads != item.ExecutionRouting.PredictedRemoteReads || placement.PredictedRemoteWrites != item.ExecutionRouting.PredictedRemoteWrites {
 			return fmt.Errorf("metatrack signed route mismatch for %s", txID)
+		}
+		if item.ExecutionRouting.ControlPolicy == metaTrackLogicalDomainFrontierPolicy {
+			if placement.FrontierDigest != item.ExecutionRouting.FrontierDigest || placement.Local != item.ExecutionRouting.Local || placement.Bridge != item.ExecutionRouting.Bridge || strings.Join(placement.LogicalDomains, "|") != strings.Join(item.ExecutionRouting.LogicalDomains, "|") {
+				return fmt.Errorf("metatrack signed logical-domain frontier mismatch for %s", txID)
+			}
 		}
 		if placement.ExecutionShard != r.node.ShardID {
 			return fmt.Errorf("metatrack plan drives execution mismatch for %s: plan_execution_shard=%s runtime_shard=%s", txID, placement.ExecutionShard, r.node.ShardID)

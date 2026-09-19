@@ -32,6 +32,11 @@ type ExecutionRoutingMetadata struct {
 	PredictedRemoteReads            int                      `json:"predicted_remote_reads"`
 	PredictedRemoteWrites           int                      `json:"predicted_remote_writes"`
 	StateVersions                   []StateVersionDependency `json:"state_versions,omitempty"`
+	ControlPolicy                   string                   `json:"control_policy,omitempty"`
+	LogicalDomains                  []string                 `json:"logical_domains,omitempty"`
+	Local                           bool                     `json:"local,omitempty"`
+	Bridge                          bool                     `json:"bridge,omitempty"`
+	FrontierDigest                  string                   `json:"frontier_digest,omitempty"`
 }
 
 type executionRoutingDigestPayload struct {
@@ -52,6 +57,11 @@ type executionRoutingDigestPayload struct {
 	PredictedRemoteReads            int                      `json:"predicted_remote_reads"`
 	PredictedRemoteWrites           int                      `json:"predicted_remote_writes"`
 	StateVersions                   []StateVersionDependency `json:"state_versions,omitempty"`
+	ControlPolicy                   string                   `json:"control_policy,omitempty"`
+	LogicalDomains                  []string                 `json:"logical_domains,omitempty"`
+	Local                           bool                     `json:"local,omitempty"`
+	Bridge                          bool                     `json:"bridge,omitempty"`
+	FrontierDigest                  string                   `json:"frontier_digest,omitempty"`
 	AccessList                      []AccessItem             `json:"access_list,omitempty"`
 }
 
@@ -77,6 +87,11 @@ func ComputeExecutionRoutingDigest(t SignedTransaction, routing ExecutionRouting
 		PredictedRemoteReads:            routing.PredictedRemoteReads,
 		PredictedRemoteWrites:           routing.PredictedRemoteWrites,
 		StateVersions:                   append([]StateVersionDependency(nil), routing.StateVersions...),
+		ControlPolicy:                   routing.ControlPolicy,
+		LogicalDomains:                  append([]string(nil), routing.LogicalDomains...),
+		Local:                           routing.Local,
+		Bridge:                          routing.Bridge,
+		FrontierDigest:                  routing.FrontierDigest,
 		AccessList:                      append([]AccessItem(nil), t.AccessList...),
 	}
 	raw, err := json.Marshal(payload)
@@ -135,6 +150,27 @@ func ValidateExecutionRouting(t SignedTransaction) error {
 		}
 		if dependency.ProducedVersion != 0 && dependency.RequiredVersion >= dependency.ProducedVersion {
 			return fmt.Errorf("invalid execution routing state version ordering")
+		}
+	}
+	if routing.ControlPolicy != "" {
+		if routing.ControlPolicy != "logical_domain_frontier_v1" {
+			return fmt.Errorf("invalid execution routing control_policy")
+		}
+		if len(routing.LogicalDomains) == 0 || strings.TrimSpace(routing.FrontierDigest) == "" {
+			return fmt.Errorf("invalid execution routing logical-domain frontier")
+		}
+		lastDomain := ""
+		for _, domain := range routing.LogicalDomains {
+			if strings.TrimSpace(domain) == "" || (lastDomain != "" && domain <= lastDomain) {
+				return fmt.Errorf("execution routing logical domains must be sorted unique non-empty")
+			}
+			lastDomain = domain
+		}
+		if routing.Local == routing.Bridge {
+			return fmt.Errorf("execution routing must be exactly one of local or bridge")
+		}
+		if routing.Local != (len(routing.LogicalDomains) == 1) || routing.Bridge != (len(routing.LogicalDomains) > 1) {
+			return fmt.Errorf("execution routing local/bridge classification mismatch")
 		}
 	}
 	expected, err := ComputeExecutionRoutingDigest(t, routing)

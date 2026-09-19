@@ -112,6 +112,7 @@ func cloneExecutionRouting(input *ExecutionRoutingMetadata) *ExecutionRoutingMet
 	}
 	copyValue := *input
 	copyValue.StateVersions = append([]StateVersionDependency(nil), input.StateVersions...)
+	copyValue.LogicalDomains = append([]string(nil), input.LogicalDomains...)
 	return &copyValue
 }
 
