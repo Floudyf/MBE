@@ -233,6 +233,14 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "metatrack_classification_ambiguous_conflict_pair_count": cluster.get("metatrack_classification_ambiguous_conflict_pair_count"),
         "metatrack_classification_semantic_unsafe_unique_count": cluster.get("metatrack_classification_semantic_unsafe_unique_count"),
         "metatrack_classification_truth_scope": cluster.get("metatrack_classification_truth_scope"),
+        "metatrack_frontier_seal_count": cluster.get("metatrack_frontier_seal_count"),
+        "metatrack_terminal_access_violation_count": cluster.get("metatrack_terminal_access_violation_count"),
+        "metatrack_frontier_required_version_count": cluster.get("metatrack_frontier_required_version_count"),
+        "metatrack_frontier_write_slot_count": cluster.get("metatrack_frontier_write_slot_count"),
+        "metatrack_version_ticket_issued_count": cluster.get("metatrack_version_ticket_issued_count"),
+        "metatrack_version_ticket_released_count": cluster.get("metatrack_version_ticket_released_count"),
+        "metatrack_frontier_seal_build_us": cluster.get("metatrack_frontier_seal_build_us"),
+        "metatrack_frontier_truth_scope": cluster.get("metatrack_frontier_truth_scope"),
         "versioned_state_ready_wave_count": cluster.get("versioned_state_ready_wave_count"),
         "versioned_state_ready_wait_observation_count": cluster.get("versioned_state_ready_wait_observation_count"),
         "versioned_state_ready_resolved_token_count": cluster.get("versioned_state_ready_resolved_token_count"),
@@ -553,6 +561,39 @@ def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
                 "block_stm_metric_truth_scope": "sum_of_per_shard_replica_maxima_from_per_validator_evidence",
             }
         )
+        # The stateless exact-version layer can delegate same-block dependencies
+        # back to Block-STM. This evidence lives in per-block execution summaries,
+        # not in block_stm_aggregate_summary.json. Select one leader summary per
+        # shard (with a per-shard max fallback) so PBFT replicas cannot multiply
+        # the count.
+        delegation_by_shard: dict[str, int] = {}
+        delegation_evidence = False
+        for summary_path in _batch_si_leader_summary_paths(run_dir):
+            summary = _read_json(summary_path)
+            if summary.get("block_executor_id") != "block_stm_block_executor":
+                continue
+            shard_id = str(summary.get("shard_id") or summary_path.parent.name)
+            block_total = 0
+            block_has_evidence = False
+            for block in summary.get("blocks") if isinstance(summary.get("blocks"), list) else []:
+                if not isinstance(block, dict):
+                    continue
+                if "block_stm_internal_version_dependency_delegated_count" not in block:
+                    continue
+                block_has_evidence = True
+                block_total += _int(block.get("block_stm_internal_version_dependency_delegated_count"))
+            if block_has_evidence:
+                delegation_evidence = True
+                delegation_by_shard[shard_id] = max(delegation_by_shard.get(shard_id, 0), block_total)
+                rel_summary = str(summary_path.relative_to(run_dir)).replace("\\", "/")
+                if rel_summary not in metrics["source_artifacts"]:
+                    metrics["source_artifacts"].append(rel_summary)
+        if delegation_evidence:
+            metrics["block_stm_internal_version_dependency_delegated_count"] = sum(delegation_by_shard.values())
+            metrics["block_stm_internal_version_dependency_delegated_truth_scope"] = (
+                "sum_of_per_shard_leader_maxima_from_block_execution_evidence"
+            )
+
         rel = "aggregate/block_stm_aggregate_summary.json"
         if rel not in metrics["source_artifacts"]:
             metrics["source_artifacts"].append(rel)
@@ -1143,16 +1184,25 @@ def _apply_mechanism_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         )
     block_stm = mechanism.get("block_stm") if isinstance(mechanism.get("block_stm"), dict) else {}
     if block_stm.get("status") == "available":
-        metrics.update(
-            {
-                "worker_count": block_stm.get("worker_count"),
-                "maximum_parallel_width": block_stm.get("maximum_parallel_width"),
-                "abort_count": block_stm.get("abort_count"),
-                "reexecution_count": block_stm.get("reexecution_count"),
-                "validation_failure_count": block_stm.get("validation_failure_count"),
-                "serial_equivalent": block_stm.get("serial_equivalent"),
-            }
-        )
+        # block_stm_aggregate_summary keeps physical-replica totals as raw
+        # mechanism evidence. _apply_block_stm_metrics() has already converted
+        # the formal Block-STM counters to the paper truth scope
+        # (per-shard replica maxima, then cross-shard sum). Never overwrite those
+        # canonical values with physical PBFT replica totals here.
+        metrics["block_stm_mechanism_metric_truth_scope"] = block_stm.get("metric_truth_scope")
+        for source, target in (
+            ("abort_count", "block_stm_physical_replica_abort_count"),
+            ("reexecution_count", "block_stm_physical_replica_reexecution_count"),
+            ("validation_failure_count", "block_stm_physical_replica_validation_failure_count"),
+            ("dependency_wait_count", "block_stm_physical_replica_dependency_wait_count"),
+            ("dependency_resume_count", "block_stm_physical_replica_dependency_resume_count"),
+        ):
+            value = block_stm.get(source)
+            if value is not None:
+                metrics[target] = value
+        for key in ("worker_count", "maximum_parallel_width", "serial_equivalent"):
+            if metrics.get(key) is None and block_stm.get(key) is not None:
+                metrics[key] = block_stm.get(key)
     remote_state = mechanism.get("remote_state") if isinstance(mechanism.get("remote_state"), dict) else {}
     if remote_state:
         metrics.update(remote_state)
@@ -1282,6 +1332,7 @@ def _derive_research_metrics(metrics: dict[str, Any]) -> None:
             ("reexecution_count", "reexecution_events_per_tx"),
             ("validation_failure_count", "validation_failures_per_tx"),
             ("dependency_wait_count", "dependency_waits_per_tx"),
+            ("block_stm_internal_version_dependency_delegated_count", "block_stm_internal_version_dependencies_delegated_per_tx"),
             ("dependency_edge_count", "dependency_edges_per_tx"),
             ("pairwise_conflict_check_count", "conflict_checks_per_tx"),
             ("write_opportunity_reuse_count", "write_reuse_per_tx"),

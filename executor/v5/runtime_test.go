@@ -1890,14 +1890,19 @@ func TestVersionedRemoteWaveAdvancesInBlockDependencyFrontierForSerialAndBlockST
 			if len(result.ExecutionResult.TxDeltas) != 2 || !result.ExecutionResult.TxDeltas[0].Success || !result.ExecutionResult.TxDeltas[1].Success {
 				t.Fatalf("version frontier did not complete both transactions: %#v", result.ExecutionResult.TxDeltas)
 			}
-			if got := intValue(result.ActualMetrics["versioned_state_ready_wave_count"]); got < 2 {
-				t.Fatalf("dependent writers must advance through the exact-version frontier in at least two ready waves, got %d (%#v)", got, result.ActualMetrics)
+			waves := intValue(result.ActualMetrics["versioned_state_ready_wave_count"])
+			if blockExecutor == "block_stm_block_executor" {
+				if waves != 1 {
+					t.Fatalf("same-block exact-version dependency must be delegated to Block-STM in one wave, got %d (%#v)", waves, result.ActualMetrics)
+				}
+				if delegated := intValue(result.ActualMetrics["block_stm_internal_version_dependency_delegated_count"]); delegated < 1 {
+					t.Fatalf("Block-STM internal dependency delegation evidence missing: %#v", result.ActualMetrics)
+				}
+			} else if waves < 2 {
+				t.Fatalf("serial executor must preserve exact-version frontier ordering, got %d (%#v)", waves, result.ActualMetrics)
 			}
 			if got, _ := result.ActualMetrics["versioned_state_ready_scheduler_mode"].(string); got != "per_transaction_per_key_version_frontier" {
 				t.Fatalf("unexpected exact-version StateReady mode %q (%#v)", got, result.ActualMetrics)
-			}
-			if _, exists := result.ActualMetrics["versioned_state_ready_local_dependency_delegated_count"]; exists {
-				t.Fatalf("Block-STM must not bypass exact-version StateReady with local dependency delegation: %#v", result.ActualMetrics)
 			}
 			if _, ok := runtime.stateVersionValue(key, 1); !ok {
 				t.Fatal("first produced version was not published")
