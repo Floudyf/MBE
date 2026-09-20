@@ -126,6 +126,13 @@ type v5NodeSummary struct {
 	MetaTrackClassificationNontrivialSCCCount         int64   `json:"metatrack_classification_nontrivial_scc_count"`
 	MetaTrackClassificationAmbiguousConflictPairCount int64   `json:"metatrack_classification_ambiguous_conflict_pair_count"`
 	MetaTrackClassificationSemanticUnsafeUniqueCount  int64   `json:"metatrack_classification_semantic_unsafe_unique_count"`
+	MetaTrackFrontierSealCount                        int64   `json:"metatrack_frontier_seal_count"`
+	MetaTrackTerminalAccessViolationCount             int64   `json:"metatrack_terminal_access_violation_count"`
+	MetaTrackFrontierRequiredVersionCount             int64   `json:"metatrack_frontier_required_version_count"`
+	MetaTrackFrontierWriteSlotCount                   int64   `json:"metatrack_frontier_write_slot_count"`
+	MetaTrackVersionTicketIssuedCount                 int64   `json:"metatrack_version_ticket_issued_count"`
+	MetaTrackVersionTicketReleasedCount               int64   `json:"metatrack_version_ticket_released_count"`
+	MetaTrackFrontierSealBuildUS                      int64   `json:"metatrack_frontier_seal_build_us"`
 	VersionedStateReadyWaveCount                      int64   `json:"versioned_state_ready_wave_count"`
 	VersionedStateReadyWaitCount                      int64   `json:"versioned_state_ready_wait_observation_count"`
 	VersionedStateReadyResolvedCount                  int64   `json:"versioned_state_ready_resolved_token_count"`
@@ -1729,6 +1736,13 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	classificationSCCByShard := map[string]int64{}
 	classificationAmbiguousByShard := map[string]int64{}
 	classificationSemanticUnsafeByShard := map[string]int64{}
+	frontierSealByShard := map[string]int64{}
+	terminalAccessViolationByShard := map[string]int64{}
+	frontierRequiredVersionByShard := map[string]int64{}
+	frontierWriteSlotByShard := map[string]int64{}
+	versionTicketIssuedByShard := map[string]int64{}
+	versionTicketReleasedByShard := map[string]int64{}
+	frontierSealBuildUSByShard := map[string]int64{}
 	classificationDependencyChainMax := int64(0)
 	for _, node := range plan.NodeConfigs {
 		raw, err := os.ReadFile(filepath.Join(node.DataDir, "node_summary.json"))
@@ -1818,6 +1832,27 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		}
 		if item.MetaTrackClassificationSemanticUnsafeUniqueCount > classificationSemanticUnsafeByShard[item.ShardID] {
 			classificationSemanticUnsafeByShard[item.ShardID] = item.MetaTrackClassificationSemanticUnsafeUniqueCount
+		}
+		if item.MetaTrackFrontierSealCount > frontierSealByShard[item.ShardID] {
+			frontierSealByShard[item.ShardID] = item.MetaTrackFrontierSealCount
+		}
+		if item.MetaTrackTerminalAccessViolationCount > terminalAccessViolationByShard[item.ShardID] {
+			terminalAccessViolationByShard[item.ShardID] = item.MetaTrackTerminalAccessViolationCount
+		}
+		if item.MetaTrackFrontierRequiredVersionCount > frontierRequiredVersionByShard[item.ShardID] {
+			frontierRequiredVersionByShard[item.ShardID] = item.MetaTrackFrontierRequiredVersionCount
+		}
+		if item.MetaTrackFrontierWriteSlotCount > frontierWriteSlotByShard[item.ShardID] {
+			frontierWriteSlotByShard[item.ShardID] = item.MetaTrackFrontierWriteSlotCount
+		}
+		if item.MetaTrackVersionTicketIssuedCount > versionTicketIssuedByShard[item.ShardID] {
+			versionTicketIssuedByShard[item.ShardID] = item.MetaTrackVersionTicketIssuedCount
+		}
+		if item.MetaTrackVersionTicketReleasedCount > versionTicketReleasedByShard[item.ShardID] {
+			versionTicketReleasedByShard[item.ShardID] = item.MetaTrackVersionTicketReleasedCount
+		}
+		if item.MetaTrackFrontierSealBuildUS > frontierSealBuildUSByShard[item.ShardID] {
+			frontierSealBuildUSByShard[item.ShardID] = item.MetaTrackFrontierSealBuildUS
 		}
 		if item.MetaTrackClassificationDependencyChainMax > classificationDependencyChainMax {
 			classificationDependencyChainMax = item.MetaTrackClassificationDependencyChainMax
@@ -1986,6 +2021,14 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		"metatrack_classification_ambiguous_conflict_pair_count": sumInt64(classificationAmbiguousByShard),
 		"metatrack_classification_semantic_unsafe_unique_count":  sumInt64(classificationSemanticUnsafeByShard),
 		"metatrack_classification_truth_scope":                   "replica_deduplicated_by_shard",
+		"metatrack_frontier_seal_count":                          sumInt64(frontierSealByShard),
+		"metatrack_terminal_access_violation_count":              sumInt64(terminalAccessViolationByShard),
+		"metatrack_frontier_required_version_count":              sumInt64(frontierRequiredVersionByShard),
+		"metatrack_frontier_write_slot_count":                    sumInt64(frontierWriteSlotByShard),
+		"metatrack_version_ticket_issued_count":                  sumInt64(versionTicketIssuedByShard),
+		"metatrack_version_ticket_released_count":                sumInt64(versionTicketReleasedByShard),
+		"metatrack_frontier_seal_build_us":                       sumInt64(frontierSealBuildUSByShard),
+		"metatrack_frontier_truth_scope":                         "replica_deduplicated_by_shard",
 		"versioned_state_ready_wave_count":                       sumInt64(versionedWaveByShard),
 		"versioned_state_ready_wait_observation_count":           sumInt64(versionedWaitByShard),
 		"versioned_state_ready_resolved_token_count":             sumInt64(versionedResolvedByShard),

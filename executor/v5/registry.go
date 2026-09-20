@@ -735,19 +735,40 @@ func (p builtinAdmission) Admit(item tx.SignedTransaction) error { return tx.Ver
 type metaTrackStrictAdmission struct{ basicPlugin }
 
 func (p metaTrackStrictAdmission) validateDeclaredAccess(item tx.SignedTransaction) error {
-	accesses := classificationAccessItems(item)
-	if len(accesses) == 0 {
-		return fmt.Errorf("metatrack_access_violation: missing declared access list")
-	}
-	seen := map[string]bool{}
-	for _, access := range accesses {
-		key := strings.TrimSpace(access.Key)
-		if key == "" || seen[key] {
-			return fmt.Errorf("metatrack_access_violation: invalid or duplicate access key")
+	validate := func(label string, accesses []tx.AccessItem, allowUnknown bool) (map[string]bool, error) {
+		if len(accesses) == 0 {
+			return nil, fmt.Errorf("metatrack_access_violation: missing %s declared access list", label)
 		}
-		seen[key] = true
-		if !dualTrackStaticKnownMode(access.Mode) {
-			return fmt.Errorf("metatrack_access_violation: unknown access mode for %s", key)
+		seen := map[string]bool{}
+		for _, access := range accesses {
+			key := strings.TrimSpace(access.Key)
+			if key == "" || seen[key] {
+				return nil, fmt.Errorf("metatrack_access_violation: invalid or duplicate %s access key", label)
+			}
+			seen[key] = true
+			if !dualTrackStaticKnownMode(access.Mode) && !(allowUnknown && access.Mode == tx.AccessUnknown) {
+				return nil, fmt.Errorf("metatrack_access_violation: unknown %s access mode for %s", label, key)
+			}
+		}
+		return seen, nil
+	}
+	runtimeKeys, err := validate("runtime", item.AccessList, false)
+	if err != nil {
+		return err
+	}
+	if len(item.SchedulingAccessList) == 0 {
+		return nil
+	}
+	schedulingKeys, err := validate("scheduling", item.SchedulingAccessList, true)
+	if err != nil {
+		return err
+	}
+	if len(runtimeKeys) != len(schedulingKeys) {
+		return fmt.Errorf("metatrack_access_violation: runtime/scheduling declared key-set mismatch")
+	}
+	for key := range runtimeKeys {
+		if !schedulingKeys[key] {
+			return fmt.Errorf("metatrack_access_violation: runtime/scheduling declared key-set mismatch")
 		}
 	}
 	return nil
@@ -1088,6 +1109,9 @@ func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 		return plan.TransactionPlacements[i].TxIndex < plan.TransactionPlacements[j].TxIndex
 	})
 	plan.RoutingOverhead = plan.RemoteAccessEstimate + len(plan.CoaccessEdges)
+	if metaTrackDeclaredAccessFrontierPolicyEnabled(p.config) {
+		applyMetaTrackDeclaredAccessFrontierV2(&plan, input.Records)
+	}
 	plan.PlanDigest = routingPlanDigest(plan)
 	return plan
 }
@@ -2624,7 +2648,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		return BlockExecutionResult{}, fmt.Errorf("metatrack block executor schedule length mismatch")
 	}
 	classification := batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
-	strictFrontier := metaTrackLogicalDomainPolicyEnabled(p.config)
+	strictFrontier := metaTrackStrictFrontierPolicyEnabled(p.config)
 	executionStarted := time.Now()
 	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithPolicy(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, input.StateVersionPublish, strictFrontier)
 	executionDuration := time.Since(executionStarted)
@@ -2805,38 +2829,55 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 	}
 	frontierSealCount, bridgeCapsuleCount := 0, 0
 	frontierRequiredVersionCount, frontierWriteSlotCount := 0, 0
+	versionTicketIssuedCount, versionTicketReleasedCount := 0, 0
 	frontierSealStarted := time.Now()
+	hasLegacyLogicalDomainFrontier := false
 	if strictFrontier {
 		for _, item := range ordered {
 			txID := txIdentifier(item)
-			decision := decisionByID[txID]
-			if item.ExecutionRouting == nil || item.ExecutionRouting.ControlPolicy != metaTrackLogicalDomainFrontierPolicy {
+			if item.ExecutionRouting == nil || !metaTrackStrictFrontierControlPolicy(item.ExecutionRouting.ControlPolicy) {
 				return nil, nil, nil, nil, fmt.Errorf("metatrack strict frontier missing signed binding for %s", txID)
 			}
 			for _, dependency := range item.ExecutionRouting.StateVersions {
-				frontierRequiredVersionCount++
+				if dependency.RequiredVersion > 0 {
+					frontierRequiredVersionCount++
+					versionTicketIssuedCount++
+				}
 				if dependency.ProducedVersion != 0 {
 					frontierWriteSlotCount++
 				}
 			}
-			if decision.Track == "conservative" {
-				seal, err := buildMetaTrackFrontierSeal(item, deps[txID])
-				if err != nil {
+			switch item.ExecutionRouting.ControlPolicy {
+			case metaTrackDeclaredAccessFrontierPolicy:
+				if _, err := buildMetaTrackDeclaredAccessFrontierSeal(item, deps[txID]); err != nil {
 					return nil, nil, nil, nil, err
 				}
 				frontierSealCount++
-				_, _, bridge, _ := metaTrackLogicalDomainBinding(item)
-				if bridge {
-					if _, err := buildMetaTrackExecutionCapsule(item, seal); err != nil {
+			case metaTrackLogicalDomainFrontierPolicy:
+				hasLegacyLogicalDomainFrontier = true
+				decision := decisionByID[txID]
+				if decision.Track == "conservative" {
+					seal, err := buildMetaTrackFrontierSeal(item, deps[txID])
+					if err != nil {
 						return nil, nil, nil, nil, err
 					}
-					bridgeCapsuleCount++
+					frontierSealCount++
+					_, _, bridge, _ := metaTrackLogicalDomainBinding(item)
+					if bridge {
+						if _, err := buildMetaTrackExecutionCapsule(item, seal); err != nil {
+							return nil, nil, nil, nil, err
+						}
+						bridgeCapsuleCount++
+					}
 				}
 			}
 		}
 	}
 	frontierSealBuildUS := time.Since(frontierSealStarted).Microseconds()
-	bridgeWaveCount, maxBridgeWaveWidth := metaTrackBridgeWaveStats(ordered, deps)
+	bridgeWaveCount, maxBridgeWaveWidth := 0, 0
+	if hasLegacyLogicalDomainFrontier {
+		bridgeWaveCount, maxBridgeWaveWidth = metaTrackBridgeWaveStats(ordered, deps)
+	}
 
 	reverse := map[string][]string{}
 	depCount := map[string]int{}
@@ -3396,31 +3437,29 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 		if outcomeTrack == "" {
 			outcomeTrack = decisionByID[doneID].Track
 		}
-		if outcomeTrack == "fast" {
-			if reason := declaredAccessViolation(done.outcome.Tx.AccessList, done.outcome.Delta); reason != "" {
-				if strictFrontier {
-					atomic.AddInt64(&terminalAccessViolationCount, 1)
-					done.outcome.Receipt.Success = false
-					done.outcome.Receipt.Error = "metatrack_access_violation:" + reason
-					done.outcome.Delta.WriteSet = nil
-					done.outcome.Delta.Success = false
-					done.outcome.Delta.Error = done.outcome.Receipt.Error
-				} else {
-					atomic.AddInt64(&fastFallbackCount, 1)
-					atomic.AddInt64(&discardedTentativeCount, 1)
-					atomic.AddInt64(&conservativeReexecutionCount, 1)
-					decisionByID[doneID] = ExecutionDecision{Track: "conservative", Reason: "fast_fallback:" + reason}
-					conservativeReady = append(conservativeReady, doneID)
-					recordDepths()
-					attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: "fast", Attempt: done.outcome.Attempt, Reason: "fast_fallback:" + reason, Success: done.outcome.Receipt.Success, FinalCompletion: false})
-					events = append(events, ScheduleEvent{TxID: doneID, Track: "conservative", QueueName: "conservative_queue", DecisionReason: "fast_fallback:" + reason, LocalExecution: true, Wakeup: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady), DependencyWaitMS: 1})
-					if err := dispatchCapacity(); err != nil {
-						closeWorkers()
-						wg.Wait()
-						return nil, nil, nil, nil, err
-					}
-					continue
+		if reason := declaredAccessViolation(done.outcome.Tx.AccessList, done.outcome.Delta); reason != "" {
+			if strictFrontier {
+				atomic.AddInt64(&terminalAccessViolationCount, 1)
+				done.outcome.Receipt.Success = false
+				done.outcome.Receipt.Error = "metatrack_access_violation:" + reason
+				done.outcome.Delta.WriteSet = nil
+				done.outcome.Delta.Success = false
+				done.outcome.Delta.Error = done.outcome.Receipt.Error
+			} else if outcomeTrack == "fast" {
+				atomic.AddInt64(&fastFallbackCount, 1)
+				atomic.AddInt64(&discardedTentativeCount, 1)
+				atomic.AddInt64(&conservativeReexecutionCount, 1)
+				decisionByID[doneID] = ExecutionDecision{Track: "conservative", Reason: "fast_fallback:" + reason}
+				conservativeReady = append(conservativeReady, doneID)
+				recordDepths()
+				attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: "fast", Attempt: done.outcome.Attempt, Reason: "fast_fallback:" + reason, Success: done.outcome.Receipt.Success, FinalCompletion: false})
+				events = append(events, ScheduleEvent{TxID: doneID, Track: "conservative", QueueName: "conservative_queue", DecisionReason: "fast_fallback:" + reason, LocalExecution: true, Wakeup: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady), DependencyWaitMS: 1})
+				if err := dispatchCapacity(); err != nil {
+					closeWorkers()
+					wg.Wait()
+					return nil, nil, nil, nil, err
 				}
+				continue
 			}
 		}
 		if done.outcome.Receipt.Success {
@@ -3468,6 +3507,9 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 				wg.Wait()
 				return nil, nil, nil, nil, ctx.Err()
 			}
+		}
+		if strictFrontier {
+			versionTicketReleasedCount += metaTrackRequiredVersionTicketCount(done.outcome.Tx)
 		}
 		completed[doneID] = true
 		executionOutcomes = append(executionOutcomes, done.outcome)
@@ -3562,8 +3604,8 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 		"metatrack_bridge_capsule_count":                    bridgeCapsuleCount,
 		"metatrack_frontier_required_version_count":         frontierRequiredVersionCount,
 		"metatrack_frontier_write_slot_count":               frontierWriteSlotCount,
-		"metatrack_version_ticket_issued_count":             frontierRequiredVersionCount,
-		"metatrack_version_ticket_released_count":           frontierRequiredVersionCount,
+		"metatrack_version_ticket_issued_count":             versionTicketIssuedCount,
+		"metatrack_version_ticket_released_count":           versionTicketReleasedCount,
 		"metatrack_frontier_seal_build_us":                  frontierSealBuildUS,
 		"metatrack_bridge_wave_count":                       bridgeWaveCount,
 		"metatrack_max_bridge_wave_width":                   maxBridgeWaveWidth,

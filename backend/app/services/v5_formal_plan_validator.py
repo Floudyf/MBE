@@ -145,8 +145,8 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "logical_domain_frontier_v1", "logical_domain_count": 4},
-            "block_executor": {"worker_count": 4, "control_policy": "logical_domain_frontier_v1"},
+            "routing": {"control_policy": "declared_access_frontier_v2"},
+            "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2"},
         },
     ),
     "metatrack_block_stm": V5FormalMethod(

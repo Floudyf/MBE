@@ -67,8 +67,8 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "logical_domain_frontier_v1", logical_domain_count: 4 },
-      block_executor: { worker_count: 4, control_policy: "logical_domain_frontier_v1" },
+      routing: { control_policy: "declared_access_frontier_v2" },
+      block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2" },
     },
   },
   { method_id: "metatrack_block_stm", display_name: "MetaTrack with Block-STM backend", role: "compatibility", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "block_stm_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },

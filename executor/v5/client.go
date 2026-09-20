@@ -272,6 +272,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 		placements := map[int]TransactionPlacement{}
 		routePlanDigest := ""
+		routeControlPolicy := ""
 		routeBatchShardCounts := map[string]int{}
 		if planner, ok := plugins.Routing.(BatchRoutingPlugin); ok {
 			routingRecords := append([]WorkloadRecord(nil), records...)
@@ -288,6 +289,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			}
 			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding})
 			routePlanDigest = routePlan.PlanDigest
+			routeControlPolicy = routePlan.ControlPolicy
 			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &placementScoreRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
 			for _, placement := range routePlan.TransactionPlacements {
 				placements[placement.TxIndex] = placement
@@ -303,7 +305,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				route = RoutingDecision{ShardID: placement.ExecutionShard, Reason: placement.Reason}
 				record.RoutingEpoch = placement.RoutingEpoch
 				record.ExecutionShard = placement.ExecutionShard
-				if len(placement.LogicalDomains) > 0 || placement.Local || placement.Bridge || placement.FrontierDigest != "" {
+				if routeControlPolicy != "" {
+					record.ControlPolicy = routeControlPolicy
+				} else if len(placement.LogicalDomains) > 0 || placement.Local || placement.Bridge || placement.FrontierDigest != "" {
 					record.ControlPolicy = metaTrackLogicalDomainFrontierPolicy
 				}
 				record.LogicalDomains = append([]string(nil), placement.LogicalDomains...)

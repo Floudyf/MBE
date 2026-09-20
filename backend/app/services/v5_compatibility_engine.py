@@ -137,6 +137,20 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         selected_executor = by_category.get("block_executor")
         if selected_executor and selected_executor.plugin_id == "metatrack_block_executor" and selected_executor.config.get("control_policy") != "logical_domain_frontier_v1":
             blockers.append("MetaTrack routing and block executor control_policy must match logical_domain_frontier_v1")
+    if routing and routing.plugin_id == "metatrack_coaccess_routing" and routing.config.get("control_policy") == "declared_access_frontier_v2":
+        required = {
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+        }
+        for category, plugin_id in required.items():
+            selected = by_category.get(category)
+            if not selected or selected.plugin_id != plugin_id:
+                blockers.append(f"MetaTrack declared_access_frontier_v2 requires {category}:{plugin_id}")
+        selected_executor = by_category.get("block_executor")
+        if selected_executor and selected_executor.plugin_id == "metatrack_block_executor" and selected_executor.config.get("control_policy") != "declared_access_frontier_v2":
+            blockers.append("MetaTrack routing and block executor control_policy must match declared_access_frontier_v2")
     if scheduler and scheduler.plugin_id == "fast_first_scheduler" and (not execution or execution.plugin_id != "dual_track_execution"):
         blockers.append("fast_first_scheduler requires dual_track_execution")
     block_producer = by_category.get("block_producer")

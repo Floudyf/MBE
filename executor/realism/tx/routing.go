@@ -153,24 +153,33 @@ func ValidateExecutionRouting(t SignedTransaction) error {
 		}
 	}
 	if routing.ControlPolicy != "" {
-		if routing.ControlPolicy != "logical_domain_frontier_v1" {
-			return fmt.Errorf("invalid execution routing control_policy")
-		}
-		if len(routing.LogicalDomains) == 0 || strings.TrimSpace(routing.FrontierDigest) == "" {
-			return fmt.Errorf("invalid execution routing logical-domain frontier")
-		}
-		lastDomain := ""
-		for _, domain := range routing.LogicalDomains {
-			if strings.TrimSpace(domain) == "" || (lastDomain != "" && domain <= lastDomain) {
-				return fmt.Errorf("execution routing logical domains must be sorted unique non-empty")
+		switch routing.ControlPolicy {
+		case "logical_domain_frontier_v1":
+			if len(routing.LogicalDomains) == 0 || strings.TrimSpace(routing.FrontierDigest) == "" {
+				return fmt.Errorf("invalid execution routing logical-domain frontier")
 			}
-			lastDomain = domain
-		}
-		if routing.Local == routing.Bridge {
-			return fmt.Errorf("execution routing must be exactly one of local or bridge")
-		}
-		if routing.Local != (len(routing.LogicalDomains) == 1) || routing.Bridge != (len(routing.LogicalDomains) > 1) {
-			return fmt.Errorf("execution routing local/bridge classification mismatch")
+			lastDomain := ""
+			for _, domain := range routing.LogicalDomains {
+				if strings.TrimSpace(domain) == "" || (lastDomain != "" && domain <= lastDomain) {
+					return fmt.Errorf("execution routing logical domains must be sorted unique non-empty")
+				}
+				lastDomain = domain
+			}
+			if routing.Local == routing.Bridge {
+				return fmt.Errorf("execution routing must be exactly one of local or bridge")
+			}
+			if routing.Local != (len(routing.LogicalDomains) == 1) || routing.Bridge != (len(routing.LogicalDomains) > 1) {
+				return fmt.Errorf("execution routing local/bridge classification mismatch")
+			}
+		case "declared_access_frontier_v2":
+			if strings.TrimSpace(routing.FrontierDigest) == "" {
+				return fmt.Errorf("invalid execution routing declared-access frontier")
+			}
+			if len(routing.LogicalDomains) != 0 || routing.Local || routing.Bridge {
+				return fmt.Errorf("declared-access frontier must not carry logical-domain admission state")
+			}
+		default:
+			return fmt.Errorf("invalid execution routing control_policy")
 		}
 	}
 	expected, err := ComputeExecutionRoutingDigest(t, routing)

@@ -95,7 +95,7 @@ _MANIFESTS = [
         config={"routing_epoch": 0},
         schema=_schema({
             "routing_epoch": {"type": "integer", "minimum": 0, "maximum": 1000000000, "default": 0},
-            "control_policy": {"type": "string", "enum": ["legacy_v2", "logical_domain_frontier_v1"], "default": "legacy_v2"},
+            "control_policy": {"type": "string", "enum": ["legacy_v2", "logical_domain_frontier_v1", "declared_access_frontier_v2"], "default": "legacy_v2"},
             "logical_domain_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4},
             "state_storage_unit_count": {"type": "integer", "minimum": 0, "maximum": 65536, "default": 0},
             "micro_batch_size": {"type": "integer", "minimum": 0, "maximum": 5000, "default": 0},
@@ -206,7 +206,10 @@ _MANIFESTS = [
         "block_executor", "metatrack_block_executor", "MetaTrack Block Executor",
         "Executes MetaTrack fast/conservative ready queues with dependency and transaction-level remote StateReady suspend/resume callbacks over MBE transfer semantics.",
         config={"worker_count": 4},
-        schema=_schema({"worker_count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4}}),
+        schema=_schema({
+            "worker_count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
+            "control_policy": {"type": "string", "enum": ["logical_domain_frontier_v1", "declared_access_frontier_v2"]},
+        }),
         capabilities=["metatrack_ready_queues", "dependency_release", "transaction_level_remote_state_ready", "state_wait_suspend_resume", "deterministic_state_delta", "execution_plan_digest"],
         requirements=["execution:dual_track_execution", "scheduler:fast_first_scheduler"],
         metrics=[
