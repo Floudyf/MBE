@@ -466,6 +466,18 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
 
 
 def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[str, object]:
+    # MBE_PORYGON_PAPER_REPRO_20260920_V7: method-specific semantics must precede generic stateless routing.
+    if method_id == "stateless_porygon" or snapshot.get("block_executor") == "porygon_block_executor":
+        return {
+            "comparison_semantics_class": "porygon_3d_stateless_pbft_adapted_v1",
+            "state_access_semantics": "stateless_remote_home_global_order_esc_sharding",
+            "state_home_mapping_policy": "deterministic_state_key_sharding",
+            "remote_fetch_policy": "home_leader_witness_fetch",
+            "remote_writeback_policy": "home_shard_consensus_delta",
+            "proof_policy": "consensus_bound_porygon_transaction_and_execution_plan_roots",
+            "legacy_cross_shard_protocol": False,
+            "measurement_boundary": "client_submit_to_porygon_terminal",
+        }
     if method_id == "hash_fabricpp_cg" or snapshot.get("block_executor") == "fabricpp_cg_block_executor":
         return {
             "comparison_semantics_class": "fabricpp_cg_cycle_abortable_v1",

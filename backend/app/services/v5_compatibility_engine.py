@@ -230,6 +230,35 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         if spec.topology.shards != 1:
             blockers.append("Batch-SI core literature reproduction requires exactly 1 shard; multi-shard Batch-SI must be labeled as an extension")
         warnings.append("Batch-SI literature baseline uses one shard; batches are sequential and transactions inside one batch use a common immutable snapshot")
+    # MBE_PORYGON_PAPER_REPRO_20260920_V7: additive Porygon composition guard.
+    porygon_selected = any(
+        selected and selected.plugin_id.startswith("porygon_")
+        for selected in by_category.values()
+    )
+    if porygon_selected:
+        required = {
+            "routing": "porygon_stateless_routing",
+            "block_producer": "porygon_transaction_block_producer",
+            "consensus": "pbft_style_consensus",
+            "execution": "porygon_execution",
+            "scheduler": "porygon_pipeline_scheduler",
+            "block_executor": "porygon_block_executor",
+            "state_access": "porygon_remote_state_access",
+            "state_storage": "persistent_local_state_store",
+            "cross_shard": "porygon_cross_shard_coordinator",
+            "commit": "normal_commit",
+        }
+        for category, plugin_id in required.items():
+            selected = by_category.get(category)
+            if not selected or selected.plugin_id != plugin_id:
+                blockers.append(f"Porygon requires {category}:{plugin_id}")
+        scheduler_cfg = by_category.get("scheduler").config if by_category.get("scheduler") else {}
+        cross_cfg = by_category.get("cross_shard").config if by_category.get("cross_shard") else {}
+        shard_count = int(scheduler_cfg.get("execution_shard_count", 4) or 4)
+        if int(cross_cfg.get("execution_shard_count", shard_count) or shard_count) != shard_count:
+            blockers.append("Porygon scheduler and cross-shard execution_shard_count must match")
+        warnings.append("Porygon uses the common MBE PBFT consensus for fair comparison; W/O/E/M pipeline timing is exported as logical protocol-slot evidence and is not claimed as wall-clock overlap")
+
     if spec.execution_backend == "real_cluster" and blockers:
         warnings.append("real_cluster is blocked and will not fall back to simulation or V4 smoke")
     estimate = {**RESOURCE_POLICY, "estimated_processes": spec.topology.nodes, "estimated_ports": spec.topology.nodes, "estimate_only": True}

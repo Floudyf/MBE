@@ -145,7 +145,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2"},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100},
             "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2"},
         },
     ),
@@ -236,7 +236,34 @@ STATELESS_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
 }
 
-ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS}
+
+# MBE_PORYGON_PAPER_REPRO_20260920_V7: separate family so existing STATELESS_BUILTIN_METHODS tests/semantics remain unchanged.
+PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+    "stateless_porygon": V5FormalMethod(
+        method_id="stateless_porygon",
+        display_name="Porygon",
+        role="baseline",
+        plugin_overrides={
+            "routing": "porygon_stateless_routing",
+            "block_producer": "porygon_transaction_block_producer",
+            "execution": "porygon_execution",
+            "scheduler": "porygon_pipeline_scheduler",
+            "block_executor": "porygon_block_executor",
+            "state_access": "porygon_remote_state_access",
+            "cross_shard": "porygon_cross_shard_coordinator",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={
+            "block_producer": {"transaction_block_size": 100, "witness_threshold": 1},
+            "scheduler": {"execution_shard_count": 4, "execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True},
+            "block_executor": {"worker_count": 4},
+            "cross_shard": {"execution_shard_count": 4},
+        },
+    ),
+}
+
+
+ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS}
 
 
 

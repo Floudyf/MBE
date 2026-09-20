@@ -2379,6 +2379,10 @@ func (r *NodeRuntime) hasVerifiedExecutionPlan(block realblock.Block) bool {
 
 func (r *NodeRuntime) verifyProposalEvidenceEnvelope(block realblock.Block) error {
 	envelope := block.ProposalEvidence
+	// MBE_PORYGON_PAPER_REPRO_20260920_V7: opt-in proposal-evidence verifier; only Porygon implements this hook.
+	if verifier, ok := r.plugins.BlockProducer.(ProposalEvidenceVerifier); ok {
+		return verifier.VerifyProposalEvidence(block)
+	}
 	if envelope == nil {
 		if r.plugins.BlockProducer != nil && (r.plugins.BlockProducer.ID() == ariaBlockProducerID || r.plugins.BlockProducer.ID() == groundhogBlockProducerID) && len(block.TxList) > 0 {
 			return fmt.Errorf("%s requires proposal selection evidence", r.plugins.BlockProducer.ID())
@@ -2494,7 +2498,7 @@ func (r *NodeRuntime) metaTrackExecutionPlanPayload(block realblock.Block) (map[
 }
 
 func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block) (map[string]any, error) {
-	batchProjection, err := validateMetaTrackBatchProjection(block, false)
+	batchProjections, err := validateMetaTrackAggregatedBatchProjections(block, false)
 	if err != nil {
 		return nil, err
 	}
@@ -2564,18 +2568,42 @@ func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block)
 		digests = append(digests, digest)
 	}
 	sort.Strings(digests)
+
+	projectionPayload := make([]map[string]any, 0, len(batchProjections))
+	for _, projection := range batchProjections {
+		projectionPayload = append(projectionPayload, map[string]any{
+			"route_batch_sequence":                projection.Sequence,
+			"route_plan_digest":                   projection.PlanDigest,
+			"route_batch_transaction_count":       projection.TransactionCount,
+			"route_batch_shard_transaction_count": projection.ShardTransactionCount,
+			"execution_shard":                     projection.ExecutionShard,
+		})
+	}
+	aggregateDigestBytes, err := json.Marshal(struct {
+		BlockShard            string           `json:"block_shard"`
+		OrderedTransactionIDs []string         `json:"ordered_transaction_ids"`
+		Projections           []map[string]any `json:"route_batch_projections"`
+	}{
+		BlockShard:            block.ShardID,
+		OrderedTransactionIDs: orderedIDs,
+		Projections:           projectionPayload,
+	})
+	if err != nil {
+		return nil, err
+	}
+	aggregateDigest := stableTextDigest(string(aggregateDigestBytes))
+
 	routingDigestPayload := struct {
-		BlockShard                      string                 `json:"block_shard"`
-		BlockHeight                     uint64                 `json:"block_height"`
-		SourceDigests                   []string               `json:"source_route_plan_digests"`
-		RouteBatchSequence              uint64                 `json:"route_batch_sequence,omitempty"`
-		RouteBatchTransactionCount      int                    `json:"route_batch_transaction_count,omitempty"`
-		RouteBatchShardTransactionCount int                    `json:"route_batch_shard_transaction_count,omitempty"`
-		Placements                      []TransactionPlacement `json:"transaction_placements"`
-		AccessListDigest                []string               `json:"access_list_digests"`
+		BlockShard            string                 `json:"block_shard"`
+		BlockHeight           uint64                 `json:"block_height"`
+		SourceDigests         []string               `json:"source_route_plan_digests"`
+		ProjectionAggregate   string                 `json:"projection_aggregate_digest"`
+		RouteBatchProjections []map[string]any       `json:"route_batch_projections"`
+		Placements            []TransactionPlacement `json:"transaction_placements"`
+		AccessListDigest      []string               `json:"access_list_digests"`
 	}{
 		BlockShard: block.ShardID, BlockHeight: block.Height, SourceDigests: digests,
-		RouteBatchSequence: batchProjection.Sequence, RouteBatchTransactionCount: batchProjection.TransactionCount, RouteBatchShardTransactionCount: batchProjection.ShardTransactionCount,
+		ProjectionAggregate: aggregateDigest, RouteBatchProjections: projectionPayload,
 		Placements: placements, AccessListDigest: accessDigests,
 	}
 	raw, err := json.Marshal(routingDigestPayload)
@@ -2583,21 +2611,32 @@ func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block)
 		return nil, err
 	}
 	routingDigest := stableTextDigest(string(raw))
-	return map[string]any{
-		"algorithm_id":                        r.batchExecutionPlanAlgorithmID(),
-		"ordered_transaction_ids":             orderedIDs,
-		"access_list_digests":                 accessDigests,
-		"routing_plan_digest":                 routingDigest,
-		"source_route_plan_digests":           digests,
-		"route_batch_sequence":                batchProjection.Sequence,
-		"route_batch_transaction_count":       batchProjection.TransactionCount,
-		"route_batch_shard_transaction_count": batchProjection.ShardTransactionCount,
-		"placement_policy":                    "signed_client_route_entries_v1",
-		"transaction_policy":                  "sender_group_remote_cost_v2",
-		"access_matrix":                       accessMatrix,
-		"transaction_placements":              placements,
-		"remote_access_estimate":              remoteEstimate,
-	}, nil
+	payload := map[string]any{
+		"algorithm_id":                              r.batchExecutionPlanAlgorithmID(),
+		"ordered_transaction_ids":                   orderedIDs,
+		"access_list_digests":                       accessDigests,
+		"routing_plan_digest":                       routingDigest,
+		"source_route_plan_digests":                 digests,
+		"route_batch_projection_count":              len(batchProjections),
+		"route_batch_projections":                   projectionPayload,
+		"preconsensus_projection_aggregate_digest":  aggregateDigest,
+		"preconsensus_aggregated_transaction_count": len(block.TxList),
+		"preconsensus_pbft_instance_saved_estimate": maxInt(0, len(batchProjections)-1),
+		"preconsensus_aggregation_policy":           "complete_signed_projection_pack_v1",
+		"placement_policy":                          "signed_client_route_entries_v1",
+		"transaction_policy":                        "sender_group_remote_cost_v2",
+		"access_matrix":                             accessMatrix,
+		"transaction_placements":                    placements,
+		"remote_access_estimate":                    remoteEstimate,
+	}
+	// Preserve legacy single-projection fields for old artifact readers.
+	if len(batchProjections) == 1 {
+		projection := batchProjections[0]
+		payload["route_batch_sequence"] = projection.Sequence
+		payload["route_batch_transaction_count"] = projection.TransactionCount
+		payload["route_batch_shard_transaction_count"] = projection.ShardTransactionCount
+	}
+	return payload, nil
 }
 
 func bindBatchPlanToExecutionShard(plan BatchRoutingPlan, executionShard string) BatchRoutingPlan {
@@ -3934,6 +3973,7 @@ func versionedStateReadyNoProgressExceeded(lastProgressAt, now time.Time) bool {
 	return now.Sub(lastProgressAt) >= versionedStateReadyNoProgressTimeout
 }
 
+// MBE_STATE_ROOT_INCREMENTAL_MATERIALIZATION_V13
 func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block realblock.Block, base map[string]string) (BlockExecutionResult, error) {
 	if r.plugins.BlockExecutor == nil {
 		return BlockExecutionResult{}, fmt.Errorf("versioned remote execution requires block executor")
@@ -4235,8 +4275,10 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	materializationStarted := time.Now()
 	// Normalize the block-level execution evidence in consensus order so remote
 	// response timing and wave grouping cannot change receipt roots or state roots.
+	// Build once, then update only keys written by each successful transaction.
 	normalized := copyStringMap(base)
-	merged := execution.Result{BlockHash: block.BlockHash, Height: block.Height, StateRootBefore: state.RootOfSnapshot(base), Deterministic: true, StateUpdates: map[string]string{}, WorkerCount: workerCount, BlockExecutorID: r.plugins.BlockExecutor.ID(), BlockSTMMetrics: mergedSTM}
+	materializationCommitment := state.NewCommitment(normalized)
+	merged := execution.Result{BlockHash: block.BlockHash, Height: block.Height, StateRootBefore: materializationCommitment.Root(), Deterministic: true, StateUpdates: map[string]string{}, WorkerCount: workerCount, BlockExecutorID: r.plugins.BlockExecutor.ID(), BlockSTMMetrics: mergedSTM}
 	if r.plugins.BlockExecutor.ID() == "block_stm_block_executor" {
 		merged.BlockExecutorID = execution.BlockSTMExecutorID
 		merged.SerialEquivalent = allSerialEquivalent
@@ -4250,18 +4292,21 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 			for key, value := range delta.WriteSet {
 				normalized[qualifyStateKey(block.ShardID, key)] = value
 			}
+			materializationCommitment.Apply(delta.WriteSet, func(key string) string {
+				return qualifyStateKey(block.ShardID, key)
+			})
 			merged.SuccessfulTxs++
 		} else {
 			merged.FailedTxs++
 		}
 		receipt := receiptByIndex[index]
-		receipt.StateRootAfterTx = state.RootOfSnapshot(normalized)
+		receipt.StateRootAfterTx = materializationCommitment.Root()
 		delta.Receipt = receipt
 		resultByIndex[index] = delta
 		merged.Receipts = append(merged.Receipts, receipt)
 		merged.TxDeltas = append(merged.TxDeltas, delta)
 	}
-	merged.StateRootAfter = state.RootOfSnapshot(normalized)
+	merged.StateRootAfter = materializationCommitment.Root()
 	merged.ReceiptRoot = execution.ReceiptRoot(merged.Receipts)
 	for key, value := range normalized {
 		merged.StateUpdates[key] = value
@@ -4288,6 +4333,7 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	actualMetrics["versioned_state_ready_execution_ms"] = time.Since(started).Milliseconds()
 	actualMetrics["transaction_execution_us"] = executionDuration.Microseconds()
 	actualMetrics["deterministic_materialization_us"] = materializationDuration.Microseconds()
+	actualMetrics["versioned_state_root_materialization_policy"] = "incremental_commitment_per_block_v1"
 	if r.plugins.Execution != nil && r.plugins.Execution.ID() == "dual_track_execution" {
 		for key, value := range metaTrackClassificationMetrics(batchClassification(block.TxList, r.plugins.Execution), len(block.TxList)) {
 			actualMetrics[key] = value
@@ -4363,11 +4409,10 @@ func (r *NodeRuntime) metaTrackStateReadyInputs(block realblock.Block) (map[stri
 			homeShard := r.stateHomeShardForKey(access.Key, shardIDs)
 			_, versioned := stateVersionDependencyForKey(item, access.Key)
 			versioned = versioned && isVersionedStateAccess(access)
-			if versioned || (homeShard != "" && homeShard != r.node.ShardID) {
-				// Every exact-version access is resolved through StateReady, even when
-				// this execution shard is also the persistent home. The latest DB
-				// value may already be a newer logical version, so the scheduler must
-				// overlay the exact required version before dispatch.
+			remote := homeShard != "" && homeShard != r.node.ShardID
+			if metaTrackStateReadyRequired(access, versioned, remote) {
+				// Exact-value reads/RMWs need StateReady. Blind writes retain their
+				// version/order metadata but do not wait for a value they never read.
 				readiness[stateReadinessToken(item, access)] = false
 			}
 		}
@@ -4628,6 +4673,16 @@ func transactionRequiresExactStateValue(item tx.SignedTransaction, key string) b
 		}
 	}
 	return false
+}
+
+// metaTrackStateReadyRequired separates execution-time value readiness from
+// deterministic write ordering. Blind writes and pure deltas do not fetch a
+// predecessor value merely because they carry a logical version ticket.
+func metaTrackStateReadyRequired(access tx.AccessItem, versioned, remote bool) bool {
+	if versioned && requiresExactStateValue(access) {
+		return true
+	}
+	return !versioned && remote && isReadMode(access.Mode)
 }
 
 func (r *NodeRuntime) stateVersionValue(key string, version uint64) (string, bool) {
@@ -6734,22 +6789,31 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	businessStateDigest := canonicalBusinessStateDigest(r.plugins.StateStorage.Snapshot(r.db))
 	stateReadySummary := summarizeStateReadyEvidence(blockExecutionSummaries)
 	classificationSummary := summarizeMetaTrackClassificationEvidence(blockExecutionSummaries)
-	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "metatrack_classification_conflict_edge_count": classificationSummary.conflictEdgeCount, "metatrack_classification_dependency_chain_max": classificationSummary.dependencyChainMax, "metatrack_classification_nontrivial_scc_count": classificationSummary.nontrivialSCCCount, "metatrack_classification_ambiguous_conflict_pair_count": classificationSummary.ambiguousConflictPairCount, "metatrack_classification_semantic_unsafe_unique_count": classificationSummary.semanticUnsafeUniqueCount, "metatrack_frontier_seal_count": classificationSummary.frontierSealCount, "metatrack_terminal_access_violation_count": classificationSummary.terminalAccessViolationCount, "metatrack_frontier_required_version_count": classificationSummary.frontierRequiredVersionCount, "metatrack_frontier_write_slot_count": classificationSummary.frontierWriteSlotCount, "metatrack_version_ticket_issued_count": classificationSummary.versionTicketIssuedCount, "metatrack_version_ticket_released_count": classificationSummary.versionTicketReleasedCount, "metatrack_frontier_seal_build_us": classificationSummary.frontierSealBuildUS, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "metatrack_classification_conflict_edge_count": classificationSummary.conflictEdgeCount, "metatrack_classification_dependency_chain_max": classificationSummary.dependencyChainMax, "metatrack_classification_nontrivial_scc_count": classificationSummary.nontrivialSCCCount, "metatrack_classification_ambiguous_conflict_pair_count": classificationSummary.ambiguousConflictPairCount, "metatrack_classification_semantic_unsafe_unique_count": classificationSummary.semanticUnsafeUniqueCount, "metatrack_effective_frontier_policy": classificationSummary.effectiveFrontierPolicy, "metatrack_effective_frontier_width_zero_count": classificationSummary.effectiveFrontierWidthZeroCount, "metatrack_effective_frontier_width_one_count": classificationSummary.effectiveFrontierWidthOneCount, "metatrack_effective_frontier_width_multi_count": classificationSummary.effectiveFrontierWidthMultiCount, "metatrack_effective_frontier_width_max": classificationSummary.effectiveFrontierWidthMax, "metatrack_effective_frontier_raw_producer_count": classificationSummary.effectiveFrontierRawProducerCount, "metatrack_effective_frontier_reduced_producer_count": classificationSummary.effectiveFrontierReducedProducerCount, "metatrack_effective_frontier_track_demotion_count": classificationSummary.effectiveFrontierTrackDemotionCount, "metatrack_frontier_seal_count": classificationSummary.frontierSealCount, "metatrack_terminal_access_violation_count": classificationSummary.terminalAccessViolationCount, "metatrack_frontier_required_version_count": classificationSummary.frontierRequiredVersionCount, "metatrack_frontier_write_slot_count": classificationSummary.frontierWriteSlotCount, "metatrack_version_ticket_issued_count": classificationSummary.versionTicketIssuedCount, "metatrack_version_ticket_released_count": classificationSummary.versionTicketReleasedCount, "metatrack_frontier_seal_build_us": classificationSummary.frontierSealBuildUS, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
 }
 
+// MBE_METATRACK_EFFECTIVE_FRONTIER_OBSERVABILITY_V12
 type metaTrackClassificationEvidenceSummary struct {
-	conflictEdgeCount            int64
-	dependencyChainMax           int64
-	nontrivialSCCCount           int64
-	ambiguousConflictPairCount   int64
-	semanticUnsafeUniqueCount    int64
-	frontierSealCount            int64
-	terminalAccessViolationCount int64
-	frontierRequiredVersionCount int64
-	frontierWriteSlotCount       int64
-	versionTicketIssuedCount     int64
-	versionTicketReleasedCount   int64
-	frontierSealBuildUS          int64
+	conflictEdgeCount                     int64
+	dependencyChainMax                    int64
+	nontrivialSCCCount                    int64
+	ambiguousConflictPairCount            int64
+	semanticUnsafeUniqueCount             int64
+	effectiveFrontierPolicy               string
+	effectiveFrontierWidthZeroCount       int64
+	effectiveFrontierWidthOneCount        int64
+	effectiveFrontierWidthMultiCount      int64
+	effectiveFrontierWidthMax             int64
+	effectiveFrontierRawProducerCount     int64
+	effectiveFrontierReducedProducerCount int64
+	effectiveFrontierTrackDemotionCount   int64
+	frontierSealCount                     int64
+	terminalAccessViolationCount          int64
+	frontierRequiredVersionCount          int64
+	frontierWriteSlotCount                int64
+	versionTicketIssuedCount              int64
+	versionTicketReleasedCount            int64
+	frontierSealBuildUS                   int64
 }
 
 func summarizeMetaTrackClassificationEvidence(blocks []map[string]any) metaTrackClassificationEvidenceSummary {
@@ -6762,6 +6826,18 @@ func summarizeMetaTrackClassificationEvidence(blocks []map[string]any) metaTrack
 		out.nontrivialSCCCount += int64FromAny(block["metatrack_classification_nontrivial_scc_count"])
 		out.ambiguousConflictPairCount += int64FromAny(block["metatrack_classification_ambiguous_conflict_pair_count"])
 		out.semanticUnsafeUniqueCount += int64FromAny(block["metatrack_classification_semantic_unsafe_unique_count"])
+		if policy := strings.TrimSpace(fmt.Sprint(block["metatrack_effective_frontier_policy"])); policy != "" && policy != "<nil>" {
+			out.effectiveFrontierPolicy = policy
+		}
+		out.effectiveFrontierWidthZeroCount += int64FromAny(block["metatrack_effective_frontier_width_zero_count"])
+		out.effectiveFrontierWidthOneCount += int64FromAny(block["metatrack_effective_frontier_width_one_count"])
+		out.effectiveFrontierWidthMultiCount += int64FromAny(block["metatrack_effective_frontier_width_multi_count"])
+		if value := int64FromAny(block["metatrack_effective_frontier_width_max"]); value > out.effectiveFrontierWidthMax {
+			out.effectiveFrontierWidthMax = value
+		}
+		out.effectiveFrontierRawProducerCount += int64FromAny(block["metatrack_effective_frontier_raw_producer_count"])
+		out.effectiveFrontierReducedProducerCount += int64FromAny(block["metatrack_effective_frontier_reduced_producer_count"])
+		out.effectiveFrontierTrackDemotionCount += int64FromAny(block["metatrack_effective_frontier_track_demotion_count"])
 		out.frontierSealCount += int64FromAny(block["metatrack_frontier_seal_count"])
 		out.terminalAccessViolationCount += int64FromAny(block["metatrack_terminal_access_violation_count"])
 		out.frontierRequiredVersionCount += int64FromAny(block["metatrack_frontier_required_version_count"])

@@ -42,6 +42,8 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "hash_batch_si_serial_batch", title: "w/o Snapshot Parallelism", description: "保持相同分批与排序，将批内执行改为单 Worker。", family: "batch_si", comparisonVisible: false, mainVisible: false, ablationTarget: "batch_si" },
   { methodId: "hash_batch_si_txid_priority", title: "w/o OFAS Priority", description: "保留 OFAS 正确性规则，仅取消论文读次数优先级。", family: "batch_si", comparisonVisible: false, mainVisible: false, ablationTarget: "batch_si" },
   { methodId: "stateless_hash_serial", title: "Stateless Hash + Serial", description: "无状态哈希路由的串行兼容参考。", family: "stateless", comparisonVisible: true, mainVisible: false },
+  // MBE_PORYGON_PAPER_REPRO_20260920_V7
+  { methodId: "stateless_porygon", title: "Porygon", description: "ICDE 2024 无状态区块链：存储/共识分离、W/O/E/M 协议流水线证据、执行子委员会分片与轻量跨片协调；主实验统一使用 MBE PBFT。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "stateless_hash_block_stm", title: "Stateless Hash + Block-STM", description: "无状态哈希路由与 Block-STM 后端组合。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "metatrack_serial", title: "MetaTrack", description: "状态共访存路由与双轨执行的完整方案。", family: "metatrack", comparisonVisible: true, mainVisible: true },
   { methodId: "metatrack_block_stm", title: "MetaTrack + Block-STM", description: "MetaTrack 路由与 Block-STM 执行兼容组合。", family: "metatrack", comparisonVisible: true, mainVisible: false },

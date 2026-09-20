@@ -134,7 +134,7 @@ def test_dual_track_manifest_has_no_historical_access_size_gate() -> None:
     assert "access_size_threshold" not in manifest.capabilities
     assert "access_stability_admission" in manifest.capabilities
     assert "semantic_stability_admission" in manifest.capabilities
-    assert manifest.truth_boundary == "metatrack_dual_track_execution_stability_v1"
+    assert manifest.truth_boundary == "metatrack_dual_track_dependency_frontier_v2"
 
 
 def test_version_admission_probe_is_a_remote_fetch_not_unknown() -> None:

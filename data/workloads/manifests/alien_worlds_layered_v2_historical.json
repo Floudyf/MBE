@@ -9,7 +9,7 @@
   "adapter_id": "alien_worlds_layered_v2",
   "source_layout": "single_file",
   "local_raw_relative_path": "dataset/Alien_World/layered_v2/bundles/selected_template_10k_original/selected_template_10k_original.v2.input.jsonl",
-  "source_sha256": "062e0981e0a12a9a17e61195c531c475c1d86bbbf950f0f4d92e26e840f37133",
+  "source_sha256": "860b51e61776e19d2e0a9c2039ddd71f31b19b8f650b0982292a50e5799327ca",
   "row_count": 10000,
   "truth_label": "real_replay_projected",
   "catalog_validation": "full",
@@ -37,8 +37,8 @@
       "parameters": []
     }
   ],
-  "generator_version": "mbe_v5_aw_v2_formal_experiment_closure_20260917_v1_1",
-  "verification_method": "layered_v2_bundle_manifest_and_adapter_validation",
-  "verification_results": "input-only runtime boundary; source oracle excluded from workload plan",
-  "usage_note": "Historical entity attributes are offline replay declaration projection, not native signed WAX access declarations."
+  "generator_version": "mbe_aw_v2_historical_inplace_contract_semantic_audit_20260920_v1",
+  "verification_method": "layered_v2_bundle_manifest_adapter_validation_plus_mfederation_mine_contract_semantic_audit",
+  "verification_results": "in-place historical semantic audit: preserved 10000 rows, transaction/source order, static envelope, keys and access modes; RW/UNKNOWN -> RW/RMW only for audited m.federation::mine state families (m.federation/landcomms=9998, m.federation/minerclaim=10000, m.federation/miners=10000, m.federation/pltdtapconf=10000, m.federation/pools=10000, m.federation/state3=10000, m.federation/tooluse=21994); unresolved UNKNOWN families={}; no execution oracle, StateVersion, StateReady, TopoSafe or Fast/Conservative labels injected",
+  "usage_note": "Historical entity attributes remain offline replay declaration projection, not native signed WAX access declarations. Write semantics for audited m.federation::mine state families are statically derived from contract program behavior; runtime values and classification outcomes are not encoded."
 }

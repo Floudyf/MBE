@@ -233,6 +233,16 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "metatrack_classification_ambiguous_conflict_pair_count": cluster.get("metatrack_classification_ambiguous_conflict_pair_count"),
         "metatrack_classification_semantic_unsafe_unique_count": cluster.get("metatrack_classification_semantic_unsafe_unique_count"),
         "metatrack_classification_truth_scope": cluster.get("metatrack_classification_truth_scope"),
+        # MBE_METATRACK_EFFECTIVE_FRONTIER_OBSERVABILITY_V12
+        "metatrack_effective_frontier_policy": cluster.get("metatrack_effective_frontier_policy"),
+        "metatrack_effective_frontier_width_zero_count": cluster.get("metatrack_effective_frontier_width_zero_count"),
+        "metatrack_effective_frontier_width_one_count": cluster.get("metatrack_effective_frontier_width_one_count"),
+        "metatrack_effective_frontier_width_multi_count": cluster.get("metatrack_effective_frontier_width_multi_count"),
+        "metatrack_effective_frontier_width_max": cluster.get("metatrack_effective_frontier_width_max"),
+        "metatrack_effective_frontier_raw_producer_count": cluster.get("metatrack_effective_frontier_raw_producer_count"),
+        "metatrack_effective_frontier_reduced_producer_count": cluster.get("metatrack_effective_frontier_reduced_producer_count"),
+        "metatrack_effective_frontier_track_demotion_count": cluster.get("metatrack_effective_frontier_track_demotion_count"),
+        "metatrack_effective_frontier_truth_scope": cluster.get("metatrack_effective_frontier_truth_scope"),
         "metatrack_frontier_seal_count": cluster.get("metatrack_frontier_seal_count"),
         "metatrack_terminal_access_violation_count": cluster.get("metatrack_terminal_access_violation_count"),
         "metatrack_frontier_required_version_count": cluster.get("metatrack_frontier_required_version_count"),
@@ -255,6 +265,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     _apply_workload_replay_metrics(metrics, run_dir)
     _apply_mempool_admission_metrics(metrics, run_dir)
     _apply_common_block_execution_timing(metrics, run_dir)
+    _apply_porygon_metrics(metrics, run_dir)
 
     _apply_block_stm_metrics(metrics, run_dir)
     _apply_batch_si_metrics(metrics, run_dir)
@@ -522,6 +533,49 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
             rel = str(path.relative_to(run_dir)).replace("\\", "/")
             if rel not in metrics["source_artifacts"]:
                 metrics["source_artifacts"].append(rel)
+
+# MBE_PORYGON_PAPER_REPRO_20260920_V7: derive Porygon mechanism evidence from leader-per-shard block summaries.
+def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
+    summaries = [item for item in summaries if item and item.get("block_executor_id") == "porygon_block_executor"]
+    blocks = [
+        block
+        for summary in summaries
+        for block in (summary.get("blocks") if isinstance(summary.get("blocks"), list) else [])
+        if isinstance(block, dict)
+    ]
+    if not blocks:
+        return
+
+    def total(name: str) -> int:
+        return sum(_int(block.get(name)) for block in blocks)
+
+    def maximum(name: str) -> int:
+        return max((_int(block.get(name)) for block in blocks), default=0)
+
+    metrics.update({
+        "porygon_metrics_available": True,
+        "porygon_witnessed_block_count": total("porygon_witnessed_block_count"),
+        "porygon_cross_batch_witness_count": total("porygon_cross_batch_witness_count"),
+        "porygon_pipeline_overlap_slot_count": total("porygon_pipeline_overlap_slot_count"),
+        "porygon_execution_committee_count": maximum("porygon_execution_committee_count"),
+        "porygon_execution_shard_count": maximum("porygon_execution_shard_count"),
+        "porygon_execution_wave_count": total("porygon_execution_wave_count"),
+        "porygon_maximum_wave_width": maximum("porygon_maximum_wave_width"),
+        "porygon_intra_shard_transaction_count": total("porygon_intra_shard_transaction_count"),
+        "porygon_cross_shard_transaction_count": total("porygon_cross_shard_transaction_count"),
+        "porygon_single_shard_execution_count": total("porygon_single_shard_execution_count"),
+        "porygon_multi_shard_update_count": total("porygon_multi_shard_update_count"),
+        "porygon_state_lock_count": total("porygon_state_lock_count"),
+        "porygon_pipeline_timing_truth_boundary": next((block.get("porygon_pipeline_timing_truth_boundary") for block in blocks if block.get("porygon_pipeline_timing_truth_boundary")), None),
+        "porygon_mbe_consensus_adaptation": next((block.get("porygon_mbe_consensus_adaptation") for block in blocks if block.get("porygon_mbe_consensus_adaptation")), None),
+    })
+    for path in _batch_si_leader_summary_paths(run_dir):
+        if path.is_file():
+            rel = str(path.relative_to(run_dir)).replace("\\", "/")
+            if rel not in metrics["source_artifacts"]:
+                metrics["source_artifacts"].append(rel)
+
 
 def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     aggregate_path = run_dir / "aggregate" / "block_stm_aggregate_summary.json"

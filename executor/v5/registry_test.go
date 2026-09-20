@@ -507,13 +507,54 @@ func TestDualTrackBatchClassificationChainsFollowingTransactionAfterCrossShardTx
 	}
 }
 
+func TestMetaTrackAggregatedBlockClassifiesWithinSignedProjectionWindows(t *testing.T) {
+	execution := dualTrackExecution{makeBasic("execution", "dual_track_execution", nil)}
+	writer := tx.SignedTransaction{
+		TxID: "p1-writer",
+		AccessList: []tx.AccessItem{{Key: "shared:k", Mode: tx.AccessWrite, UpdateSemantics: "set"}},
+		ExecutionRouting: &tx.ExecutionRoutingMetadata{
+			ControlPolicy:      metaTrackDeclaredAccessFrontierPolicy,
+			RouteBatchSequence: 1,
+			RoutingOrdinal:     1,
+		},
+	}
+	reader := tx.SignedTransaction{
+		TxID: "p2-reader",
+		AccessList: []tx.AccessItem{{Key: "shared:k", Mode: tx.AccessRead, UpdateSemantics: "validate"}},
+		ExecutionRouting: &tx.ExecutionRoutingMetadata{
+			ControlPolicy:      metaTrackDeclaredAccessFrontierPolicy,
+			RouteBatchSequence: 2,
+			RoutingOrdinal:     2,
+			StateVersions:      []tx.StateVersionDependency{{Key: "shared:k", RequiredVersion: 1}},
+		},
+	}
+	token := stateReadinessToken(reader, reader.AccessList[0])
+	result := batchClassificationWithReadiness(
+		[]tx.SignedTransaction{writer, reader},
+		execution,
+		map[string]bool{token: false},
+	)
+	if result.ClassificationWindowCount != 2 {
+		t.Fatalf("expected two signed projection classification windows, got %#v", result)
+	}
+	if len(result.Dependencies[reader.TxID]) != 0 {
+		t.Fatalf("aggregate PBFT block must not manufacture cross-projection static dependencies: %#v", result.Dependencies)
+	}
+	if result.Decisions[writer.TxID].Track != "fast" || result.Decisions[reader.TxID].Track != "fast" {
+		t.Fatalf("TopoSafe transactions should remain Fast across projection windows: %#v", result.Decisions)
+	}
+	if len(result.StateWaitKeys[reader.TxID]) != 1 || result.StateWaitKeys[reader.TxID][0] != token {
+		t.Fatalf("cross-projection exact-version readiness must still be enforced by StateReady: %#v", result.StateWaitKeys)
+	}
+}
+
 func TestFastFirstSchedulerEmitsQueueWaitAndWakeupEvidence(t *testing.T) {
 	scheduler := builtinScheduler{makeBasic("scheduler", "fast_first_scheduler", nil)}
 	execution := dualTrackExecution{}
 	fast := tx.SignedTransaction{TxID: "fast", AccessList: []tx.AccessItem{{Key: "state:delta", Mode: tx.AccessCommutativeDelta, UpdateSemantics: "add", Delta: 1}}}
 	// This test exercises scheduler wait/wakeup evidence, not an RW/RW topology cycle.
-	// Use a statically acyclic writer->reader pair so both transactions are Fast
-	// under the frozen TopoSafe rules while second still waits for first.
+	// A statically acyclic writer->reader pair is TopoSafe: both remain Fast,
+	// while readiness still makes the dependent transaction wait for its predecessor.
 	first := tx.SignedTransaction{TxID: "first", AccessList: []tx.AccessItem{{Key: "nonce:shared", Mode: tx.AccessWrite, UpdateSemantics: "set"}}}
 	second := tx.SignedTransaction{TxID: "second", AccessList: []tx.AccessItem{{Key: "nonce:shared", Mode: tx.AccessRead, UpdateSemantics: "validate"}}}
 

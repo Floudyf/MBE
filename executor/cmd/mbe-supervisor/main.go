@@ -107,6 +107,8 @@ type v5NodeProcess struct {
 	DataDir    string `json:"data_dir"`
 	LogPath    string `json:"log_path"`
 }
+
+// MBE_METATRACK_EFFECTIVE_FRONTIER_OBSERVABILITY_V12
 type v5NodeSummary struct {
 	NodeID                                            string  `json:"node_id"`
 	ShardID                                           string  `json:"shard_id"`
@@ -126,6 +128,14 @@ type v5NodeSummary struct {
 	MetaTrackClassificationNontrivialSCCCount         int64   `json:"metatrack_classification_nontrivial_scc_count"`
 	MetaTrackClassificationAmbiguousConflictPairCount int64   `json:"metatrack_classification_ambiguous_conflict_pair_count"`
 	MetaTrackClassificationSemanticUnsafeUniqueCount  int64   `json:"metatrack_classification_semantic_unsafe_unique_count"`
+	MetaTrackEffectiveFrontierPolicy                  string  `json:"metatrack_effective_frontier_policy"`
+	MetaTrackEffectiveFrontierWidthZeroCount          int64   `json:"metatrack_effective_frontier_width_zero_count"`
+	MetaTrackEffectiveFrontierWidthOneCount           int64   `json:"metatrack_effective_frontier_width_one_count"`
+	MetaTrackEffectiveFrontierWidthMultiCount         int64   `json:"metatrack_effective_frontier_width_multi_count"`
+	MetaTrackEffectiveFrontierWidthMax                int64   `json:"metatrack_effective_frontier_width_max"`
+	MetaTrackEffectiveFrontierRawProducerCount        int64   `json:"metatrack_effective_frontier_raw_producer_count"`
+	MetaTrackEffectiveFrontierReducedProducerCount    int64   `json:"metatrack_effective_frontier_reduced_producer_count"`
+	MetaTrackEffectiveFrontierTrackDemotionCount      int64   `json:"metatrack_effective_frontier_track_demotion_count"`
 	MetaTrackFrontierSealCount                        int64   `json:"metatrack_frontier_seal_count"`
 	MetaTrackTerminalAccessViolationCount             int64   `json:"metatrack_terminal_access_violation_count"`
 	MetaTrackFrontierRequiredVersionCount             int64   `json:"metatrack_frontier_required_version_count"`
@@ -1736,6 +1746,14 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	classificationSCCByShard := map[string]int64{}
 	classificationAmbiguousByShard := map[string]int64{}
 	classificationSemanticUnsafeByShard := map[string]int64{}
+	effectiveFrontierPolicies := map[string]bool{}
+	effectiveFrontierWidthZeroByShard := map[string]int64{}
+	effectiveFrontierWidthOneByShard := map[string]int64{}
+	effectiveFrontierWidthMultiByShard := map[string]int64{}
+	effectiveFrontierRawProducerByShard := map[string]int64{}
+	effectiveFrontierReducedProducerByShard := map[string]int64{}
+	effectiveFrontierTrackDemotionByShard := map[string]int64{}
+	effectiveFrontierWidthMax := int64(0)
 	frontierSealByShard := map[string]int64{}
 	terminalAccessViolationByShard := map[string]int64{}
 	frontierRequiredVersionByShard := map[string]int64{}
@@ -1832,6 +1850,30 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		}
 		if item.MetaTrackClassificationSemanticUnsafeUniqueCount > classificationSemanticUnsafeByShard[item.ShardID] {
 			classificationSemanticUnsafeByShard[item.ShardID] = item.MetaTrackClassificationSemanticUnsafeUniqueCount
+		}
+		if item.MetaTrackEffectiveFrontierPolicy != "" {
+			effectiveFrontierPolicies[item.MetaTrackEffectiveFrontierPolicy] = true
+		}
+		if item.MetaTrackEffectiveFrontierWidthZeroCount > effectiveFrontierWidthZeroByShard[item.ShardID] {
+			effectiveFrontierWidthZeroByShard[item.ShardID] = item.MetaTrackEffectiveFrontierWidthZeroCount
+		}
+		if item.MetaTrackEffectiveFrontierWidthOneCount > effectiveFrontierWidthOneByShard[item.ShardID] {
+			effectiveFrontierWidthOneByShard[item.ShardID] = item.MetaTrackEffectiveFrontierWidthOneCount
+		}
+		if item.MetaTrackEffectiveFrontierWidthMultiCount > effectiveFrontierWidthMultiByShard[item.ShardID] {
+			effectiveFrontierWidthMultiByShard[item.ShardID] = item.MetaTrackEffectiveFrontierWidthMultiCount
+		}
+		if item.MetaTrackEffectiveFrontierRawProducerCount > effectiveFrontierRawProducerByShard[item.ShardID] {
+			effectiveFrontierRawProducerByShard[item.ShardID] = item.MetaTrackEffectiveFrontierRawProducerCount
+		}
+		if item.MetaTrackEffectiveFrontierReducedProducerCount > effectiveFrontierReducedProducerByShard[item.ShardID] {
+			effectiveFrontierReducedProducerByShard[item.ShardID] = item.MetaTrackEffectiveFrontierReducedProducerCount
+		}
+		if item.MetaTrackEffectiveFrontierTrackDemotionCount > effectiveFrontierTrackDemotionByShard[item.ShardID] {
+			effectiveFrontierTrackDemotionByShard[item.ShardID] = item.MetaTrackEffectiveFrontierTrackDemotionCount
+		}
+		if item.MetaTrackEffectiveFrontierWidthMax > effectiveFrontierWidthMax {
+			effectiveFrontierWidthMax = item.MetaTrackEffectiveFrontierWidthMax
 		}
 		if item.MetaTrackFrontierSealCount > frontierSealByShard[item.ShardID] {
 			frontierSealByShard[item.ShardID] = item.MetaTrackFrontierSealCount
@@ -2021,6 +2063,15 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		"metatrack_classification_ambiguous_conflict_pair_count": sumInt64(classificationAmbiguousByShard),
 		"metatrack_classification_semantic_unsafe_unique_count":  sumInt64(classificationSemanticUnsafeByShard),
 		"metatrack_classification_truth_scope":                   "replica_deduplicated_by_shard",
+		"metatrack_effective_frontier_policy":                    singleMapKey(effectiveFrontierPolicies),
+		"metatrack_effective_frontier_width_zero_count":          sumInt64(effectiveFrontierWidthZeroByShard),
+		"metatrack_effective_frontier_width_one_count":           sumInt64(effectiveFrontierWidthOneByShard),
+		"metatrack_effective_frontier_width_multi_count":         sumInt64(effectiveFrontierWidthMultiByShard),
+		"metatrack_effective_frontier_width_max":                 effectiveFrontierWidthMax,
+		"metatrack_effective_frontier_raw_producer_count":        sumInt64(effectiveFrontierRawProducerByShard),
+		"metatrack_effective_frontier_reduced_producer_count":    sumInt64(effectiveFrontierReducedProducerByShard),
+		"metatrack_effective_frontier_track_demotion_count":      sumInt64(effectiveFrontierTrackDemotionByShard),
+		"metatrack_effective_frontier_truth_scope":               "replica_deduplicated_by_shard",
 		"metatrack_frontier_seal_count":                          sumInt64(frontierSealByShard),
 		"metatrack_terminal_access_violation_count":              sumInt64(terminalAccessViolationByShard),
 		"metatrack_frontier_required_version_count":              sumInt64(frontierRequiredVersionByShard),

@@ -40,6 +40,43 @@ func TestMetaTrackBatchProjectionSelectorFencesPlanBatchesAndWaitsForCompletenes
 	}
 }
 
+
+func TestMetaTrackPreConsensusAggregationPacksCompleteProjections(t *testing.T) {
+	first := signedMetaTrackBatchTestTx(t, "a", 1, 1, "plan-1", "s0", 4, 2)
+	second := signedMetaTrackBatchTestTx(t, "b", 3, 1, "plan-1", "s0", 4, 2)
+	next := signedMetaTrackBatchTestTx(t, "c", 5, 2, "plan-2", "s0", 4, 1)
+	selected, deferred, projections, err := selectMetaTrackAggregatedBatchProjections([]tx.SignedTransaction{second, next, first}, 4, "s0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 3 || selected[0].TxID != "a" || selected[1].TxID != "b" || selected[2].TxID != "c" {
+		t.Fatalf("aggregate selection mismatch: %#v", selected)
+	}
+	if len(deferred) != 0 || len(projections) != 2 || projections[0].Sequence != 1 || projections[1].Sequence != 2 {
+		t.Fatalf("aggregate projection evidence mismatch: deferred=%d projections=%#v", len(deferred), projections)
+	}
+	block := realblock.Block{ShardID: "s0", TxList: selected}
+	validated, err := validateMetaTrackAggregatedBatchProjections(block, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(validated) != 2 {
+		t.Fatalf("validated projection count=%d want=2", len(validated))
+	}
+}
+
+func TestMetaTrackPreConsensusAggregationStopsBeforePartialNextProjection(t *testing.T) {
+	first := signedMetaTrackBatchTestTx(t, "a", 1, 1, "plan-1", "s0", 4, 1)
+	partial := signedMetaTrackBatchTestTx(t, "b", 2, 2, "plan-2", "s0", 4, 2)
+	selected, deferred, projections, err := selectMetaTrackAggregatedBatchProjections([]tx.SignedTransaction{first, partial}, 4, "s0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(selected) != 1 || selected[0].TxID != "a" || len(deferred) != 1 || deferred[0].TxID != "b" || len(projections) != 1 {
+		t.Fatalf("partial-next projection was not deferred atomically: selected=%#v deferred=%#v projections=%#v", selected, deferred, projections)
+	}
+}
+
 func TestMetaTrackBatchProjectionMetadataIsDigestBound(t *testing.T) {
 	item := signedMetaTrackBatchTestTx(t, "bound", 7, 3, "plan-bound", "s1", 10, 4)
 	if err := tx.ValidateExecutionRouting(item); err != nil {

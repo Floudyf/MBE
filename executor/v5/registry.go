@@ -598,26 +598,39 @@ type BatchClassificationInput struct {
 	RemoteStateReadiness map[string]bool
 }
 type BatchClassificationResult struct {
-	Decisions                            map[string]ExecutionDecision
-	Dependencies                         map[string][]string
-	ReasonCodes                          map[string][]string
-	StateWaitKeys                        map[string][]string
-	ConflictEdgeCount                    int
-	RAWDependencyEdges                   int
-	DeduplicatedEdgeCount                int
-	DependencyChainMax                   int
-	SCCCount                             int
-	AmbiguousConflictPairCount           int
-	SemanticUnsafeCount                  int
-	CommutativeDependencySuppressedCount int
-	AccessSizeMin                        int
-	AccessSizeMax                        int
-	AccessSizeP95                        int
-	AccessSizeTotal                      int
-	LocalTransactionCount                int
-	BridgeTransactionCount               int
-	ConservativeLocalCount               int
-	ConservativeBridgeCount              int
+	Decisions                             map[string]ExecutionDecision
+	Dependencies                          map[string][]string
+	ReasonCodes                           map[string][]string
+	StateWaitKeys                         map[string][]string
+	ConflictEdgeCount                     int
+	RAWDependencyEdges                    int
+	DeduplicatedEdgeCount                 int
+	DependencyChainMax                    int
+	SCCCount                              int
+	AmbiguousConflictPairCount            int
+	SemanticUnsafeCount                   int
+	CommutativeDependencySuppressedCount  int
+	AccessSizeMin                         int
+	AccessSizeMax                         int
+	AccessSizeP95                         int
+	AccessSizeTotal                       int
+	LocalTransactionCount                 int
+	BridgeTransactionCount                int
+	ConservativeLocalCount                int
+	ConservativeBridgeCount               int
+	DependencyFrontierRootCount           int
+	DependencyFrontierNonRootCount        int
+	FastDependencyBlockedCount            int
+	ClassificationWindowCount             int
+	OrderingOnlyEdgeCount                 int
+	InBlockVersionHandoffCount            int
+	EffectiveFrontierWidthZeroCount       int
+	EffectiveFrontierWidthOneCount        int
+	EffectiveFrontierWidthMultiCount      int
+	EffectiveFrontierWidthMax             int
+	EffectiveFrontierRawProducerCount     int
+	EffectiveFrontierReducedProducerCount int
+	EffectiveFrontierTrackDemotionCount   int
 }
 type ScheduleResult struct {
 	Ordered []tx.SignedTransaction
@@ -1566,7 +1579,7 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 		if len(reserved) == 0 {
 			return realblock.Block{}, fmt.Errorf("empty_mempool")
 		}
-		selected, deferred, err := selectMetaTrackBatchProjection(reserved, limit, input.Proposer.ShardID)
+		selected, deferred, _, err := selectMetaTrackAggregatedBatchProjections(reserved, limit, input.Proposer.ShardID)
 		if err != nil {
 			input.Pool.ReleaseReserved(reserved)
 			return realblock.Block{}, err
@@ -1888,6 +1901,7 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 	readers := map[string][]string{}
 	lastSenderTx := map[string]string{}
 	edges := map[string]bool{}
+	orderingOnlyEdges := map[string]bool{}
 	graph := map[string][]string{}
 	hardReasons := map[string][]string{}
 	dependencyReasons := map[string][]string{}
@@ -1897,6 +1911,10 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 	stabilityEdges := map[string]bool{}
 	topologyReasons := map[string][]string{}
 	topologyAccessesByKey := map[string][]dualTrackConflictAccess{}
+	// dependencyFrontier is classification-only, pre-execution evidence. It is
+	// derived from the same static conflict topology as TopoSafe and therefore
+	// never consumes StateReady, actual read/write truth, or execution results.
+	dependencyFrontier := map[string][]string{}
 
 	addDependency := func(from, to, key, kind string) {
 		if from == "" || to == "" || from == to {
@@ -1912,6 +1930,17 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		if kind == "raw" || kind == "raw_commutative" {
 			result.RAWDependencyEdges++
 		}
+	}
+	addOrderingOnly := func(from, to, key, kind string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		edgeKey := from + "->" + to + ":" + key + ":" + kind
+		if orderingOnlyEdges[edgeKey] {
+			return
+		}
+		orderingOnlyEdges[edgeKey] = true
+		result.OrderingOnlyEdgeCount++
 	}
 	addStabilityEdge := func(from, to, key, kind string) {
 		if from == "" || to == "" || from == to {
@@ -1990,15 +2019,18 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 
 			switch access.Mode {
 			case tx.AccessCommutativeDelta:
+				// Commutative deltas and blind writes do not require predecessor
+				// values to execute. Preserve deterministic order as evidence only;
+				// final materialization still follows consensus order.
 				if writer := lastWriter[access.Key]; writer != "" {
-					addDependency(writer, txID, access.Key, "waw")
+					addOrderingOnly(writer, txID, access.Key, "waw")
 					addStabilityConflict(writer, txID, access.Key, item, access)
-					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_ordering_only")
 				}
 				for _, reader := range readers[access.Key] {
-					addDependency(reader, txID, access.Key, "war")
+					addOrderingOnly(reader, txID, access.Key, "war")
 					addStabilityConflict(reader, txID, access.Key, item, access)
-					dependencyReasons[txID] = append(dependencyReasons[txID], "war_dependency")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "war_ordering_only")
 				}
 				result.CommutativeDependencySuppressedCount += len(commutativeWriters[access.Key])
 				commutativeWriters[access.Key] = append(commutativeWriters[access.Key], txID)
@@ -2016,21 +2048,45 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 				}
 				readers[access.Key] = append(readers[access.Key], txID)
 
-			case tx.AccessWrite, tx.AccessReadWrite:
+			case tx.AccessWrite:
+				// A blind write has no predecessor-value dependency. WAW/WAR are
+				// deterministic materialization constraints, not execution barriers.
 				if writer := lastWriter[access.Key]; writer != "" {
-					addDependency(writer, txID, access.Key, "waw")
+					addOrderingOnly(writer, txID, access.Key, "waw")
 					addStabilityConflict(writer, txID, access.Key, item, access)
-					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_ordering_only")
 				}
 				for _, writer := range commutativeWriters[access.Key] {
-					addDependency(writer, txID, access.Key, "waw_commutative")
+					addOrderingOnly(writer, txID, access.Key, "waw_commutative")
 					addStabilityConflict(writer, txID, access.Key, item, access)
-					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_dependency")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "waw_ordering_only")
 				}
 				for _, reader := range readers[access.Key] {
-					addDependency(reader, txID, access.Key, "war")
+					addOrderingOnly(reader, txID, access.Key, "war")
 					addStabilityConflict(reader, txID, access.Key, item, access)
-					dependencyReasons[txID] = append(dependencyReasons[txID], "war_dependency")
+					dependencyReasons[txID] = append(dependencyReasons[txID], "war_ordering_only")
+				}
+				readers[access.Key] = nil
+				commutativeWriters[access.Key] = nil
+				lastWriter[access.Key] = txID
+
+			case tx.AccessReadWrite:
+				// RMW needs the previous writer value, so only true value producers
+				// remain execution dependencies. Earlier readers only constrain order.
+				if writer := lastWriter[access.Key]; writer != "" {
+					addDependency(writer, txID, access.Key, "raw")
+					addStabilityConflict(writer, txID, access.Key, item, access)
+					dependencyReasons[txID] = append(dependencyReasons[txID], "raw_dependency")
+				}
+				for _, writer := range commutativeWriters[access.Key] {
+					addDependency(writer, txID, access.Key, "raw_commutative")
+					addStabilityConflict(writer, txID, access.Key, item, access)
+					dependencyReasons[txID] = append(dependencyReasons[txID], "raw_dependency")
+				}
+				for _, reader := range readers[access.Key] {
+					addOrderingOnly(reader, txID, access.Key, "war")
+					addStabilityConflict(reader, txID, access.Key, item, access)
+					dependencyReasons[txID] = append(dependencyReasons[txID], "war_ordering_only")
 				}
 				readers[access.Key] = nil
 				commutativeWriters[access.Key] = nil
@@ -2063,6 +2119,9 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 				}
 				for _, edge := range pairEdges {
 					addStabilityEdge(edge.From, edge.To, edge.Key, edge.Kind)
+					if edge.Kind != "ambiguous" {
+						dependencyFrontier[edge.To] = append(dependencyFrontier[edge.To], edge.From)
+					}
 					switch edge.Kind {
 					case "raw":
 						topologyDependencyReasons[edge.To] = append(topologyDependencyReasons[edge.To], "raw_dependency")
@@ -2095,6 +2154,7 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		for i := 1; i < len(items); i++ {
 			from, to := items[i-1].TxID, items[i].TxID
 			addStabilityEdge(from, to, "nonce:"+sender, "nonce")
+			dependencyFrontier[to] = append(dependencyFrontier[to], from)
 			topologyDependencyReasons[to] = append(topologyDependencyReasons[to], "nonce_order_dependency")
 		}
 	}
@@ -2148,10 +2208,19 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 			continue
 		}
 
-		if len(deps) > 0 {
+		frontierDeps := append([]string(nil), dependencyFrontier[txID]...)
+		sort.Strings(frontierDeps)
+		frontierDeps = uniqueStrings(frontierDeps)
+		if len(frontierDeps) > 0 {
+			// Deterministic predecessors affect readiness, not risk-track identity.
+			// TopoSafe transactions remain Fast and can still suspend on dependency
+			// or StateReady barriers before actual dispatch.
 			reasons := append([]string{"topo_safe_dependency"}, deps...)
+			sort.Strings(reasons)
+			reasons = uniqueStrings(reasons)
 			result.ReasonCodes[txID] = reasons
 			result.Decisions[txID] = ExecutionDecision{Track: "fast", Reason: strings.Join(reasons, "|")}
+			result.DependencyFrontierNonRootCount++
 			continue
 		}
 
@@ -2161,6 +2230,16 @@ func (p dualTrackExecution) ClassifyBatch(input BatchClassificationInput) BatchC
 		}
 		result.ReasonCodes[txID] = []string{decision.Reason}
 		result.Decisions[txID] = decision
+		if decision.Track == "fast" {
+			result.DependencyFrontierRootCount++
+		}
+	}
+	for txID, dependencies := range result.Dependencies {
+		if len(dependencies) > 0 && result.Decisions[txID].Track == "fast" {
+			// This is expected for TopoSafe dependencies: Fast denotes safety,
+			// while readiness is enforced separately by the scheduler.
+			result.FastDependencyBlockedCount++
+		}
 	}
 	for index, item := range input.Transactions {
 		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
@@ -2347,7 +2426,383 @@ func batchClassificationWithReadiness(items []tx.SignedTransaction, execution Ex
 	if !ok {
 		return BatchClassificationResult{}
 	}
-	return batch.ClassifyBatch(BatchClassificationInput{Transactions: items, RemoteStateReadiness: readiness})
+	groups, projectionAware := metaTrackSignedProjectionClassificationWindows(items, execution)
+	if !projectionAware {
+		result := batch.ClassifyBatch(BatchClassificationInput{Transactions: items, RemoteStateReadiness: readiness})
+		if len(items) > 0 {
+			result.ClassificationWindowCount = 1
+		}
+		applyMetaTrackEffectiveFrontierTracks(items, execution, &result)
+		return result
+	}
+
+	merged := BatchClassificationResult{
+		Decisions:     map[string]ExecutionDecision{},
+		Dependencies:  map[string][]string{},
+		ReasonCodes:   map[string][]string{},
+		StateWaitKeys: map[string][]string{},
+	}
+	for _, group := range groups {
+		part := batch.ClassifyBatch(BatchClassificationInput{Transactions: group, RemoteStateReadiness: readiness})
+		mergeBatchClassificationResult(&merged, part)
+	}
+	merged.ClassificationWindowCount = len(groups)
+	recomputeBatchAccessSizeEvidence(&merged, items)
+	// Track classification must use the whole signed aggregate, not each
+	// projection in isolation. StateVersions are pre-execution metadata, and
+	// only producers still present in this scheduling window participate.
+	applyMetaTrackEffectiveFrontierTracks(items, execution, &merged)
+	return merged
+}
+
+func metaTrackSignedProjectionClassificationWindows(items []tx.SignedTransaction, execution ExecutionPlugin) ([][]tx.SignedTransaction, bool) {
+	if execution == nil || execution.ID() != "dual_track_execution" || len(items) < 2 {
+		return nil, false
+	}
+	groups := make([][]tx.SignedTransaction, 0)
+	var currentSequence uint64
+	for _, item := range items {
+		routing := item.ExecutionRouting
+		if routing == nil || routing.RouteBatchSequence == 0 || !metaTrackStrictFrontierControlPolicy(routing.ControlPolicy) {
+			return nil, false
+		}
+		if currentSequence == 0 || routing.RouteBatchSequence != currentSequence {
+			if currentSequence != 0 && routing.RouteBatchSequence < currentSequence {
+				return nil, false
+			}
+			currentSequence = routing.RouteBatchSequence
+			groups = append(groups, nil)
+		}
+		groups[len(groups)-1] = append(groups[len(groups)-1], item)
+	}
+	if len(groups) <= 1 {
+		return nil, false
+	}
+	return groups, true
+}
+
+// MBE_METATRACK_EFFECTIVE_FRONTIER_TRACK_V11
+// applyMetaTrackEffectiveFrontierTracks separates structural track identity
+// from dynamic readiness. It uses only signed pre-execution StateVersions and
+// current-window transaction identities:
+//
+//   width 0: no in-flight exact-value producer -> Fast eligible
+//   width 1: one irreducible producer chain   -> Fast eligible
+//   width 2+: independent value frontiers join -> Conservative
+//
+// Producers already completed outside this window are intentionally ignored;
+// their exact-value availability remains a StateReady concern. A producer that
+// is an ancestor of another producer is transitively reduced because waiting
+// for the descendant already implies the ancestor completed.
+func applyMetaTrackEffectiveFrontierTracks(items []tx.SignedTransaction, execution ExecutionPlugin, result *BatchClassificationResult) {
+	if result == nil || execution == nil || execution.ID() != "dual_track_execution" || len(items) == 0 {
+		return
+	}
+	for _, item := range items {
+		if item.ExecutionRouting == nil || !metaTrackStrictFrontierControlPolicy(item.ExecutionRouting.ControlPolicy) {
+			return
+		}
+	}
+
+	type versionedStateKey struct {
+		Version uint64
+		Key     string
+	}
+	ownerByVersionKey := map[versionedStateKey]string{}
+	for _, item := range items {
+		routing := item.ExecutionRouting
+		if routing.RoutingOrdinal == 0 {
+			return
+		}
+		txID := txIdentifier(item)
+		for _, dependency := range routing.StateVersions {
+			if dependency.ProducedVersion == 0 || strings.TrimSpace(dependency.Key) == "" {
+				continue
+			}
+			slot := versionedStateKey{Version: dependency.ProducedVersion, Key: dependency.Key}
+			if previous := ownerByVersionKey[slot]; previous != "" && previous != txID {
+				return
+			}
+			ownerByVersionKey[slot] = txID
+		}
+	}
+
+	producersByTx := map[string][]string{}
+	for _, item := range items {
+		txID := txIdentifier(item)
+		set := map[string]bool{}
+		for _, dependency := range item.ExecutionRouting.StateVersions {
+			if dependency.RequiredVersion == 0 || !transactionRequiresExactStateValue(item, dependency.Key) {
+				continue
+			}
+			owner := ownerByVersionKey[versionedStateKey{Version: dependency.RequiredVersion, Key: dependency.Key}]
+			if owner == "" || owner == txID {
+				// RequiredVersion belongs to an earlier committed window/block.
+				// It can block StateReady, but it is not an in-flight frontier.
+				continue
+			}
+			set[owner] = true
+		}
+		producers := make([]string, 0, len(set))
+		for producer := range set {
+			producers = append(producers, producer)
+		}
+		sort.Strings(producers)
+		producersByTx[txID] = producers
+	}
+
+	ancestorMemo := map[string]map[string]bool{}
+	visiting := map[string]bool{}
+	var ancestorsOf func(string) map[string]bool
+	ancestorsOf = func(txID string) map[string]bool {
+		if cached, ok := ancestorMemo[txID]; ok {
+			return cached
+		}
+		if visiting[txID] {
+			return map[string]bool{}
+		}
+		visiting[txID] = true
+		ancestors := map[string]bool{}
+		for _, producer := range producersByTx[txID] {
+			ancestors[producer] = true
+			for ancestor := range ancestorsOf(producer) {
+				ancestors[ancestor] = true
+			}
+		}
+		delete(visiting, txID)
+		ancestorMemo[txID] = ancestors
+		return ancestors
+	}
+
+	result.EffectiveFrontierWidthZeroCount = 0
+	result.EffectiveFrontierWidthOneCount = 0
+	result.EffectiveFrontierWidthMultiCount = 0
+	result.EffectiveFrontierWidthMax = 0
+	result.EffectiveFrontierRawProducerCount = 0
+	result.EffectiveFrontierReducedProducerCount = 0
+	result.EffectiveFrontierTrackDemotionCount = 0
+
+	for _, item := range items {
+		txID := txIdentifier(item)
+		raw := producersByTx[txID]
+		result.EffectiveFrontierRawProducerCount += len(raw)
+		effective := map[string]bool{}
+		for _, producer := range raw {
+			effective[producer] = true
+		}
+		for _, producer := range raw {
+			for _, other := range raw {
+				if producer == other {
+					continue
+				}
+				if ancestorsOf(other)[producer] {
+					delete(effective, producer)
+					break
+				}
+			}
+		}
+		width := len(effective)
+		result.EffectiveFrontierReducedProducerCount += len(raw) - width
+		if width > result.EffectiveFrontierWidthMax {
+			result.EffectiveFrontierWidthMax = width
+		}
+		switch width {
+		case 0:
+			result.EffectiveFrontierWidthZeroCount++
+		case 1:
+			result.EffectiveFrontierWidthOneCount++
+		default:
+			result.EffectiveFrontierWidthMultiCount++
+		}
+
+		if width < 2 {
+			continue
+		}
+		reasons := append([]string(nil), result.ReasonCodes[txID]...)
+		if len(reasons) == 0 {
+			if decision := result.Decisions[txID]; decision.Reason != "" {
+				reasons = append(reasons, strings.Split(decision.Reason, "|")...)
+			}
+		}
+		reasons = append(reasons, "multi_frontier_value_join")
+		sort.Strings(reasons)
+		reasons = uniqueStrings(reasons)
+		result.ReasonCodes[txID] = reasons
+		decision := result.Decisions[txID]
+		if decision.Track == "fast" {
+			result.EffectiveFrontierTrackDemotionCount++
+		}
+		if decision.Track == "" || decision.Track == "fast" {
+			decision.Track = "conservative"
+		}
+		decision.Reason = strings.Join(reasons, "|")
+		result.Decisions[txID] = decision
+	}
+
+	result.FastDependencyBlockedCount = 0
+	for txID, dependencies := range result.Dependencies {
+		if len(dependencies) > 0 && result.Decisions[txID].Track == "fast" {
+			result.FastDependencyBlockedCount++
+		}
+	}
+	result.ConservativeLocalCount = 0
+	result.ConservativeBridgeCount = 0
+	for _, item := range items {
+		txID := txIdentifier(item)
+		_, local, bridge, ok := metaTrackLogicalDomainBinding(item)
+		if !ok || result.Decisions[txID].Track != "conservative" {
+			continue
+		}
+		if local {
+			result.ConservativeLocalCount++
+		}
+		if bridge {
+			result.ConservativeBridgeCount++
+		}
+	}
+}
+
+func mergeBatchClassificationResult(dst *BatchClassificationResult, src BatchClassificationResult) {
+	if dst == nil {
+		return
+	}
+	for txID, decision := range src.Decisions {
+		dst.Decisions[txID] = decision
+	}
+	for txID, deps := range src.Dependencies {
+		dst.Dependencies[txID] = append([]string(nil), deps...)
+	}
+	for txID, reasons := range src.ReasonCodes {
+		dst.ReasonCodes[txID] = append([]string(nil), reasons...)
+	}
+	for txID, keys := range src.StateWaitKeys {
+		dst.StateWaitKeys[txID] = append([]string(nil), keys...)
+	}
+	dst.ConflictEdgeCount += src.ConflictEdgeCount
+	dst.RAWDependencyEdges += src.RAWDependencyEdges
+	dst.DeduplicatedEdgeCount += src.DeduplicatedEdgeCount
+	if src.DependencyChainMax > dst.DependencyChainMax {
+		dst.DependencyChainMax = src.DependencyChainMax
+	}
+	dst.SCCCount += src.SCCCount
+	dst.AmbiguousConflictPairCount += src.AmbiguousConflictPairCount
+	dst.SemanticUnsafeCount += src.SemanticUnsafeCount
+	dst.CommutativeDependencySuppressedCount += src.CommutativeDependencySuppressedCount
+	dst.LocalTransactionCount += src.LocalTransactionCount
+	dst.BridgeTransactionCount += src.BridgeTransactionCount
+	dst.ConservativeLocalCount += src.ConservativeLocalCount
+	dst.ConservativeBridgeCount += src.ConservativeBridgeCount
+	dst.DependencyFrontierRootCount += src.DependencyFrontierRootCount
+	dst.DependencyFrontierNonRootCount += src.DependencyFrontierNonRootCount
+	dst.FastDependencyBlockedCount += src.FastDependencyBlockedCount
+	dst.OrderingOnlyEdgeCount += src.OrderingOnlyEdgeCount
+	dst.InBlockVersionHandoffCount += src.InBlockVersionHandoffCount
+}
+
+func bindMetaTrackInBlockVersionHandoffs(items []tx.SignedTransaction, result *BatchClassificationResult) {
+	if result == nil || len(items) == 0 {
+		return
+	}
+	ownerByOrdinal := map[uint64]string{}
+	for _, item := range items {
+		if item.ExecutionRouting == nil || item.ExecutionRouting.RoutingOrdinal == 0 {
+			continue
+		}
+		ownerByOrdinal[item.ExecutionRouting.RoutingOrdinal] = txIdentifier(item)
+	}
+	for _, item := range items {
+		txID := txIdentifier(item)
+		if item.ExecutionRouting == nil {
+			continue
+		}
+		for _, dependency := range item.ExecutionRouting.StateVersions {
+			if dependency.RequiredVersion == 0 || !transactionRequiresExactStateValue(item, dependency.Key) {
+				continue
+			}
+			owner := ownerByOrdinal[dependency.RequiredVersion]
+			if owner == "" || owner == txID {
+				continue
+			}
+			deps := append([]string(nil), result.Dependencies[txID]...)
+			deps = append(deps, owner)
+			sort.Strings(deps)
+			result.Dependencies[txID] = uniqueStrings(deps)
+			result.InBlockVersionHandoffCount++
+			reasons := append([]string(nil), result.ReasonCodes[txID]...)
+			reasons = append(reasons, "in_block_exact_version_handoff")
+			sort.Strings(reasons)
+			result.ReasonCodes[txID] = uniqueStrings(reasons)
+		}
+		// MBE_METATRACK_EXACT_VERSION_VALUE_HANDOFF_V10
+		// Dependency and StateReady have different responsibilities. The owner
+		// dependency controls WHEN this transaction may execute. Its existing
+		// RequiredVersion StateReady token must remain intact so dispatch overlays
+		// the exact logical value into the transaction snapshot. Removing the token
+		// makes the consumer fall back to completion-order workingSnapshot state,
+		// which is replica-nondeterministic under parallel blind writes.
+	}
+	recomputeMetaTrackExecutionDependencyEvidence(items, result)
+}
+
+func recomputeMetaTrackExecutionDependencyEvidence(items []tx.SignedTransaction, result *BatchClassificationResult) {
+	if result == nil {
+		return
+	}
+	graph := map[string][]string{}
+	edgeCount := 0
+	result.FastDependencyBlockedCount = 0
+	for _, item := range items {
+		graph[txIdentifier(item)] = nil
+	}
+	for to, predecessors := range result.Dependencies {
+		deps := append([]string(nil), predecessors...)
+		sort.Strings(deps)
+		deps = uniqueStrings(deps)
+		result.Dependencies[to] = deps
+		edgeCount += len(deps)
+		if len(deps) > 0 && result.Decisions[to].Track == "fast" {
+			result.FastDependencyBlockedCount++
+		}
+		for _, from := range deps {
+			graph[from] = append(graph[from], to)
+		}
+	}
+	result.DeduplicatedEdgeCount = edgeCount
+	result.DependencyChainMax = dependencyChainMax(graph)
+}
+
+func recomputeBatchAccessSizeEvidence(result *BatchClassificationResult, items []tx.SignedTransaction) {
+	if result == nil {
+		return
+	}
+	result.AccessSizeMin = 0
+	result.AccessSizeMax = 0
+	result.AccessSizeP95 = 0
+	result.AccessSizeTotal = 0
+	if len(items) == 0 {
+		return
+	}
+	sizes := make([]int, 0, len(items))
+	for _, item := range items {
+		size := structuredAccessSize(item)
+		sizes = append(sizes, size)
+		result.AccessSizeTotal += size
+		if len(sizes) == 1 || size < result.AccessSizeMin {
+			result.AccessSizeMin = size
+		}
+		if size > result.AccessSizeMax {
+			result.AccessSizeMax = size
+		}
+	}
+	sort.Ints(sizes)
+	p95Index := (95*len(sizes)+99)/100 - 1
+	if p95Index < 0 {
+		p95Index = 0
+	}
+	if p95Index >= len(sizes) {
+		p95Index = len(sizes) - 1
+	}
+	result.AccessSizeP95 = sizes[p95Index]
 }
 
 func decisionForTx(item tx.SignedTransaction, decisions map[string]ExecutionDecision, execution ExecutionPlugin) ExecutionDecision {
@@ -2629,6 +3084,7 @@ const metaTrackBlockExecutorID = "metatrack_block_executor"
 
 type metaTrackBlockExecutor struct{ basicPlugin }
 
+// MBE_STATE_ROOT_INCREMENTAL_MATERIALIZATION_V13
 func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
 	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
 	if workerCount < 1 {
@@ -2648,6 +3104,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		return BlockExecutionResult{}, fmt.Errorf("metatrack block executor schedule length mismatch")
 	}
 	classification := batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
+	bindMetaTrackInBlockVersionHandoffs(input.Block.TxList, &classification)
 	strictFrontier := metaTrackStrictFrontierPolicyEnabled(p.config)
 	executionStarted := time.Now()
 	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithPolicy(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, input.StateVersionPublish, strictFrontier)
@@ -2664,7 +3121,10 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	actualMetrics["metatrack_suspend_resume_execution_ms"] = float64(executionDuration.Microseconds()) / 1000.0
 	materializationStarted := time.Now()
 	working := copyRegistryStringMap(input.BaseStateSnapshot)
-	before := state.RootOfSnapshot(working)
+	// Build/clone the authenticated state exactly once for this block. Per-tx
+	// roots below are then path-copy updates over touched keys only.
+	materializationCommitment := state.CloneOrBuild(input.BaseStateCommitment, working)
+	before := materializationCommitment.Root()
 	result := execution.Result{BlockHash: input.Block.BlockHash, Height: input.Block.Height, StateRootBefore: before, Deterministic: true, StateUpdates: map[string]string{}, BlockExecutorID: metaTrackBlockExecutorID, ExecutorVersion: "1.0.0", WorkerCount: workerCount}
 	originalIndex := map[string]int{}
 	for index, item := range input.Block.TxList {
@@ -2692,8 +3152,11 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 				working[qualifyStateKey(input.Block.ShardID, key)] = value
 			}
 		}
+		materializationCommitment.Apply(delta.WriteSet, func(key string) string {
+			return qualifyStateKey(input.Block.ShardID, key)
+		})
 		receipt := outcome.Receipt
-		receipt.StateRootAfterTx = state.RootOfSnapshot(working)
+		receipt.StateRootAfterTx = materializationCommitment.Root()
 		index := originalIndex[outcome.TxID]
 		delta.OriginalIndex = index
 		delta.Receipt = receipt
@@ -2713,7 +3176,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		result.Receipts = append(result.Receipts, receiptsByIndex[index])
 		result.TxDeltas = append(result.TxDeltas, deltasByIndex[index])
 	}
-	result.StateRootAfter = state.RootOfSnapshot(working)
+	result.StateRootAfter = materializationCommitment.Root()
 	result.ReceiptRoot = execution.ReceiptRoot(result.Receipts)
 	for key, value := range working {
 		result.StateUpdates[key] = value
@@ -2723,6 +3186,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	result.TransactionExecutionMS = executionDuration.Milliseconds()
 	result.DeterministicMaterializationMS = materializationDuration.Milliseconds()
 	actualMetrics["deterministic_materialization_us"] = materializationDuration.Microseconds()
+	actualMetrics["state_root_materialization_policy"] = "incremental_commitment_per_block_v1"
 	plan := buildMetaTrackExecutionPlan(input.Block, schedule.Ordered, originalIndex, workerCount)
 	result.Plan = plan
 	result.PlanDigest = plan.PlanDigest
@@ -2770,7 +3234,8 @@ func metaTrackClassificationMetrics(classification BatchClassificationResult, tr
 	}
 	return map[string]any{
 		"metatrack_classification_transaction_count":                       transactionCount,
-		"metatrack_fast_admission_policy":                                  "access_stable_topo_safe_semantic_safe_v1",
+		"metatrack_fast_admission_policy":                                  "access_stable_topo_safe_semantic_safe_effective_value_frontier_v3",
+		"metatrack_track_readiness_separation":                             "fast_is_safety_class_not_immediate_readiness",
 		"metatrack_access_size_role":                                       "diagnostic_only_not_track_admission",
 		"metatrack_access_size_min":                                        classification.AccessSizeMin,
 		"metatrack_access_size_avg":                                        accessSizeAverage,
@@ -2789,6 +3254,23 @@ func metaTrackClassificationMetrics(classification BatchClassificationResult, tr
 		"metatrack_bridge_transaction_count":                               classification.BridgeTransactionCount,
 		"metatrack_conservative_local_count":                               classification.ConservativeLocalCount,
 		"metatrack_conservative_bridge_count":                              classification.ConservativeBridgeCount,
+		"metatrack_dependency_frontier_root_count":                         classification.DependencyFrontierRootCount,
+		"metatrack_dependency_frontier_nonroot_count":                      classification.DependencyFrontierNonRootCount,
+		"metatrack_fast_dependency_blocked_count":                          classification.FastDependencyBlockedCount,
+		"metatrack_toposafe_dependent_fast_count":                          classification.FastDependencyBlockedCount,
+		"metatrack_classification_window_count":                            classification.ClassificationWindowCount,
+		"metatrack_classification_window_policy":                           "signed_route_batch_projection_v1",
+		"metatrack_execution_dependency_policy":                            "value_dependency_only_ordering_edges_materialize_later_v1",
+		"metatrack_execution_ordering_only_edge_count":                     classification.OrderingOnlyEdgeCount,
+		"metatrack_inblock_exact_version_handoff_count":                    classification.InBlockVersionHandoffCount,
+		"metatrack_effective_frontier_policy":                              "inflight_exact_value_transitive_reduction_v1",
+		"metatrack_effective_frontier_width_zero_count":                    classification.EffectiveFrontierWidthZeroCount,
+		"metatrack_effective_frontier_width_one_count":                     classification.EffectiveFrontierWidthOneCount,
+		"metatrack_effective_frontier_width_multi_count":                   classification.EffectiveFrontierWidthMultiCount,
+		"metatrack_effective_frontier_width_max":                           classification.EffectiveFrontierWidthMax,
+		"metatrack_effective_frontier_raw_producer_count":                  classification.EffectiveFrontierRawProducerCount,
+		"metatrack_effective_frontier_reduced_producer_count":              classification.EffectiveFrontierReducedProducerCount,
+		"metatrack_effective_frontier_track_demotion_count":                classification.EffectiveFrontierTrackDemotionCount,
 		"metatrack_classification_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
 		"metatrack_classification_count_scope":                             "per_replica_unique_logical_transactions",
 	}
@@ -2824,7 +3306,10 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 		txID := txIdentifier(item)
 		deps[txID] = append([]string(nil), classification.Dependencies[txID]...)
 	}
-	if len(classification.Dependencies) == 0 {
+	if classification.Dependencies == nil {
+		// Only non-batch execution plugins need the legacy conflict fallback.
+		// An empty but non-nil MetaTrack dependency map is intentional: it
+		// means there are no predecessor-value barriers for this block/window.
 		deps = scheduleDependenciesByOrder(ordered)
 	}
 	frontierSealCount, bridgeCapsuleCount := 0, 0
@@ -3005,39 +3490,21 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 		delta    execution.TxDelta
 		snapshot map[string]string
 	}
-	var publishQueue chan versionPublishTask
-	var publishDone chan struct{}
+	var publishWG sync.WaitGroup
 	var publishErrors chan error
-	publishClosed := false
+	publishCtx := ctx
+	var cancelPublish context.CancelFunc
 	versionPublishEnqueued := 0
 	if versionPublish != nil {
-		publishQueue = make(chan versionPublishTask, len(ordered))
-		publishDone = make(chan struct{})
-		publishErrors = make(chan error, 1)
-		go func() {
-			defer close(publishDone)
-			failed := false
-			for task := range publishQueue {
-				if failed {
-					continue
-				}
-				if err := versionPublish(ctx, task.item, task.delta, task.snapshot); err != nil {
-					failed = true
-					select {
-					case publishErrors <- err:
-					default:
-					}
-				}
-			}
-		}()
+		publishCtx, cancelPublish = context.WithCancel(ctx)
+		publishErrors = make(chan error, len(ordered))
+		defer cancelPublish()
 	}
 	finishPublishers := func() error {
-		if publishQueue == nil || publishClosed {
+		if versionPublish == nil {
 			return nil
 		}
-		publishClosed = true
-		close(publishQueue)
-		<-publishDone
+		publishWG.Wait()
 		select {
 		case err := <-publishErrors:
 			return err
@@ -3045,7 +3512,6 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 			return nil
 		}
 	}
-	defer func() { _ = finishPublishers() }()
 	type job struct {
 		seq            int
 		txID           string
@@ -3351,8 +3817,12 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 			if len(stateBlocked) > 0 {
 				select {
 				case err := <-publishErrors:
+					if cancelPublish != nil {
+						cancelPublish()
+					}
 					closeWorkers()
 					wg.Wait()
+					publishWG.Wait()
 					return nil, nil, nil, nil, err
 				case <-ctx.Done():
 					closeWorkers()
@@ -3398,8 +3868,12 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 		gotCompletion := false
 		select {
 		case err := <-publishErrors:
+			if cancelPublish != nil {
+				cancelPublish()
+			}
 			closeWorkers()
 			wg.Wait()
+			publishWG.Wait()
 			return nil, nil, nil, nil, err
 		case <-ctx.Done():
 			closeWorkers()
@@ -3495,18 +3969,18 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 					}
 				}
 			}
-			select {
-			case publishQueue <- versionPublishTask{item: done.outcome.Tx, delta: done.outcome.Delta, snapshot: publishSnapshot}:
-				versionPublishEnqueued++
-			case err := <-publishErrors:
-				closeWorkers()
-				wg.Wait()
-				return nil, nil, nil, nil, err
-			case <-ctx.Done():
-				closeWorkers()
-				wg.Wait()
-				return nil, nil, nil, nil, ctx.Err()
-			}
+			task := versionPublishTask{item: done.outcome.Tx, delta: done.outcome.Delta, snapshot: publishSnapshot}
+			versionPublishEnqueued++
+			publishWG.Add(1)
+			go func(task versionPublishTask) {
+				defer publishWG.Done()
+				if err := versionPublish(publishCtx, task.item, task.delta, task.snapshot); err != nil {
+					select {
+					case publishErrors <- err:
+					default:
+					}
+				}
+			}(task)
 		}
 		if strictFrontier {
 			versionTicketReleasedCount += metaTrackRequiredVersionTicketCount(done.outcome.Tx)
@@ -3575,6 +4049,7 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 		"metatrack_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
 		"metatrack_transaction_snapshot_total_key_count":    transactionSnapshotTotalKeys,
 		"metatrack_version_publish_async_enqueued_count":    versionPublishEnqueued,
+		"metatrack_version_publish_policy":                  "completion_triggered_independent_v1",
 		"max_ready_queue_depth":                             maxReadyQueueDepth,
 		"max_fast_ready_queue_depth":                        maxFastReadyQueueDepth,
 		"max_conservative_ready_queue_depth":                maxConservativeReadyQueueDepth,
@@ -4399,6 +4874,8 @@ func BuiltinRegistry() *Registry {
 	})
 	registerAriaPlugins(register)
 	registerGroundhogPlugins(register)
+	// MBE_PORYGON_PAPER_REPRO_20260920_V7: additive paper-driven Porygon plugins.
+	registerPorygonPlugins(register)
 	register("state_access", "direct_state_access", func(c map[string]any) (Plugin, error) {
 		return builtinStateAccess{makeBasic("state_access", "direct_state_access", c)}, nil
 	})
@@ -4535,6 +5012,9 @@ func InstantiatePlugins(profile map[string]PluginConfig) (RuntimePlugins, error)
 		return p, err
 	}
 	if err := validateLiteratureBaselineCombination(p); err != nil {
+		return p, err
+	}
+	if err := validatePorygonPluginCombination(p); err != nil {
 		return p, err
 	}
 	return p, nil
