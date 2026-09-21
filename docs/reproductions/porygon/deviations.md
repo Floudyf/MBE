@@ -1,28 +1,8 @@
-# Porygon Deviations and Truth Boundary
+# Porygon reproduction deviations — v8
 
-## Implemented
-
-- transaction-block body/access commitments;
-- validator-side data-availability/body recomputation;
-- deterministic global ordering;
-- W/O/E/M logical protocol pipeline;
-- Cross-Batch Witness logical overlap;
-- execution committee / ESC configuration;
-- deterministic execution sharding;
-- real parallel execution of conflict-free ESC waves;
-- single execution for cross-shard transactions;
-- deterministic multi-key update materialization and lock evidence;
-- serial-oracle root equivalence checks.
-
-## MBE adaptations
-
-- BA*/paper committee consensus -> shared MBE PBFT-style consensus for formal comparison fairness;
-- paper account suffix partition -> deterministic key hash modulo ESC count;
-- Porygon state transfer -> existing MBE stateless remote-state request/response transport, without MetaTrack version-chain control metadata;
-- business transaction semantics -> MBE canonical transaction semantics.
-
-## Important timing truth boundary
-
-The current integration records W/O/E/M and Cross-Batch Witness as deterministic **logical protocol slots**. It does not claim that MBE's shared block-synchronous PBFT runtime physically overlaps four wall-clock stages across different blocks. Metrics explicitly publish `porygon_pipeline_timing_truth_boundary=logical_protocol_slots;wall_clock_overlap_not_claimed`.
-
-This prevents simulated overlap from being reported as measured speedup.
+1. **Consensus adaptation.** The paper's ordering consensus is not reproduced as BA★; MBE's shared PBFT is used so all baselines keep the same consensus layer.
+2. **Single physical ordering domain.** MBE physical shards are not Porygon ESCs. Porygon requires `topology.shards == 1`; ESCs are logical execution lanes.
+3. **Storage-node deployment.** MBE v8 does not instantiate separate physical Porygon Storage Node processes. Stateless visibility is approximated by projecting each execution snapshot to its signed AccessList. This boundary is exported in metrics and must be disclosed in the paper.
+4. **Pipeline timing.** W/O/E/C and Cross-Batch Witness are represented as logical protocol slots. Because shared MBE PBFT is one-height-in-flight, cross-height wall-clock pipeline speedup is not claimed.
+5. **Generic smart-contract state mapping.** The paper's account partition is adapted to MBE workloads: sender identity selects the execution ESC and generic state keys are deterministically mapped to logical state shards.
+6. **Conservative state locking.** Cross-ESC state locks are derived from declared AccessList keys; this may serialize more work than an optimized implementation but preserves correctness.

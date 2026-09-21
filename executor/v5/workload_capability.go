@@ -80,10 +80,12 @@ func PreflightWorkloadCapabilities(ctx context.Context, plan Plan, dataDir strin
 }
 
 func uniquePlanShardCount(nodes []NodePlan) int {
+	// MBE_PORYGON_UNIFIED_SHARD_V10_20260921: preflight must count execution shards; Porygon has one consensus
+	// domain but N execution shards selected by the frontend topology.
 	seen := map[string]bool{}
 	for _, node := range nodes {
-		if node.ShardID != "" {
-			seen[node.ShardID] = true
+		if shardID := effectiveExecutionShardID(node); shardID != "" {
+			seen[shardID] = true
 		}
 	}
 	if len(seen) == 0 {

@@ -1318,6 +1318,12 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		return r.handlePBFTNewView(ctx, msg)
 	case p2p.MessagePBFTCheckpoint:
 		return r.handlePBFTCheckpoint(ctx, msg)
+	// MBE_PORYGON_ESC_OWNERSHIP_TIMING_TRUTH_V19_20260921: ESC business
+	// execution results are exchanged inside the single global ordering domain.
+	case porygonESCWaveResultMessage:
+		return r.handlePorygonESCWaveResult(ctx, msg)
+	case porygonESCWaveCertificateMessage:
+		return r.handlePorygonESCWaveCertificate(ctx, msg)
 	case p2p.MessageXShardRelay:
 		relay, err := p2p.DecodePayload[Relay](msg)
 		if err != nil {
@@ -2218,7 +2224,9 @@ func (r *NodeRuntime) buildSystemDeltaDrainBlock(now time.Time, ready []realbloc
 
 func (r *NodeRuntime) scheduleBlock(block realblock.Block) (realblock.Block, error) {
 	if planner, ok := r.plugins.Scheduler.(ConsensusExecutionPlanner); ok {
+		planningStarted := time.Now()
 		planned, err := planner.PlanBlock(block)
+		r.addRuntimeMetric("consensus_planner_build_us", time.Since(planningStarted).Microseconds())
 		if err != nil {
 			return block, err
 		}
@@ -2379,7 +2387,7 @@ func (r *NodeRuntime) hasVerifiedExecutionPlan(block realblock.Block) bool {
 
 func (r *NodeRuntime) verifyProposalEvidenceEnvelope(block realblock.Block) error {
 	envelope := block.ProposalEvidence
-	// MBE_PORYGON_PAPER_REPRO_20260920_V7: opt-in proposal-evidence verifier; only Porygon implements this hook.
+	// MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: opt-in proposal-evidence verifier; only Porygon implements this hook.
 	if verifier, ok := r.plugins.BlockProducer.(ProposalEvidenceVerifier); ok {
 		return verifier.VerifyProposalEvidence(block)
 	}
@@ -3465,19 +3473,15 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	}
 	r.mu.Unlock()
 	r.setCommitPhase("state_checkpoint", block)
-	// The built-in durable store can atomically capture the KV snapshot and the
-	// exact matching authenticated root. This removes cross-block full-tree
-	// reconstruction without ever pairing a snapshot with a different DB version.
-	// Other storage plugins and multi-shard remote overlays retain the full-build
-	// executor fallback.
+	// MBE_MULTISHARD_AUTHENTICATED_COMMITMENT_V14A
+	// Capture the KV snapshot and its exact authenticated commitment atomically
+	// whenever the storage plugin supports it, independent of shard count.
+	// Remote execution overlays are applied to both views below; storage plugins
+	// without this optional extension retain the historical full-build fallback.
 	var stateBefore map[string]string
 	var baseStateCommitment *state.Commitment
-	if len(r.shardIDs()) == 1 {
-		if snapshotter, ok := r.plugins.StateStorage.(AuthenticatedStateSnapshotter); ok {
-			stateBefore, baseStateCommitment = snapshotter.SnapshotWithCommitment(r.db)
-		} else {
-			stateBefore = r.plugins.StateStorage.Snapshot(r.db)
-		}
+	if snapshotter, ok := r.plugins.StateStorage.(AuthenticatedStateSnapshotter); ok {
+		stateBefore, baseStateCommitment = snapshotter.SnapshotWithCommitment(r.db)
 	} else {
 		stateBefore = r.plugins.StateStorage.Snapshot(r.db)
 	}
@@ -3494,10 +3498,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	}
 	r.publishSystemStateDeltaVersions(block.SystemStateDeltas)
 	remoteDeltas := r.materializableRemoteStateDeltas(block, r.node.ShardID)
-	executionSnapshot, err := applyStateDeltaToSnapshot(stateBefore, remoteDeltas, r.node.ShardID, block.Height)
-	if len(remoteDeltas) > 0 {
-		baseStateCommitment = nil
-	}
+	executionSnapshot, baseStateCommitment, err := applyStateDeltaToSnapshotWithCommitment(stateBefore, baseStateCommitment, remoteDeltas, r.node.ShardID, block.Height)
 	if err != nil {
 		r.setCommitPhase("remote_state_cas_rejected", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
@@ -3515,6 +3516,12 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 			r.setCommitPhase("state_access_error", block)
 			return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 		}
+		// Legacy prefetch may overlay additional remote values but does not expose
+		// the touched-key set needed to update the authenticated view. Preserve
+		// correctness by falling back to executor reconstruction on that path.
+		if len(r.shardIDs()) > 1 {
+			baseStateCommitment = nil
+		}
 	}
 	r.setCommitPhase("validate_execution_plan", block)
 	if err := r.validateMetaTrackPlanDrivesExecution(block); err != nil {
@@ -3531,9 +3538,9 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	r.updateBlockExecutionProgress(execution.BlockSTMProgress{BlockHeight: block.Height, TransactionCount: len(block.TxList), CurrentTxnIndex: -1, LastProgressAtMS: time.Now().UnixMilli()})
 	var executed BlockExecutionResult
 	if versionedWaveExecution {
-		executed, err = r.executeVersionedRemoteBlock(ctx, block, executionSnapshot)
+		executed, err = r.executeVersionedRemoteBlockWithCommitment(ctx, block, executionSnapshot, baseStateCommitment)
 	} else {
-		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, StateVersionPublish: r.stateVersionPublisher(block)})
+		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonWaveExchange: r.porygonWaveExchange, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, StateVersionPublish: r.stateVersionPublisher(block)})
 	}
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
@@ -3975,6 +3982,10 @@ func versionedStateReadyNoProgressExceeded(lastProgressAt, now time.Time) bool {
 
 // MBE_STATE_ROOT_INCREMENTAL_MATERIALIZATION_V13
 func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block realblock.Block, base map[string]string) (BlockExecutionResult, error) {
+	return r.executeVersionedRemoteBlockWithCommitment(ctx, block, base, nil)
+}
+
+func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Context, block realblock.Block, base map[string]string, baseCommitment *state.Commitment) (BlockExecutionResult, error) {
 	if r.plugins.BlockExecutor == nil {
 		return BlockExecutionResult{}, fmt.Errorf("versioned remote execution requires block executor")
 	}
@@ -4031,6 +4042,8 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	workerCount := 1
 	var mergedSTM execution.BlockSTMMetrics
 	allSerialEquivalent := true
+	waveExecutionPolicy := "full_block_fallback"
+	deltaOnlyWaveCount := 0
 	started := time.Now()
 	lastProgressAt := started
 	markProgress := func() { lastProgressAt = time.Now() }
@@ -4220,9 +4233,31 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 		if err != nil {
 			return BlockExecutionResult{}, err
 		}
-		waveResult, err := r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: waveBlock, BaseStateSnapshot: waveSnapshot, NodeID: r.node.NodeID, ShardID: r.node.ShardID, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, Progress: r.updateBlockExecutionProgress})
+		// MBE_VERSIONED_WAVE_DELTA_ONLY_V14B
+		waveInput := BlockExecutionInput{
+			Block:             waveBlock,
+			BaseStateSnapshot: waveSnapshot,
+			NodeID:            r.node.NodeID,
+			ShardID:           r.node.ShardID,
+			WorkerCount:       blockExecutorWorkerCountFromProfile(r.pluginSnapshot),
+			Execution:         r.plugins.Execution,
+			Scheduler:         r.plugins.Scheduler,
+			Progress:          r.updateBlockExecutionProgress,
+		}
+		var waveResult BlockExecutionResult
+		if deltaExecutor, ok := r.plugins.BlockExecutor.(WaveDeltaExecutor); ok {
+			waveResult, err = deltaExecutor.ExecuteWave(ctx, waveInput)
+		} else {
+			waveResult, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, waveInput)
+		}
 		if err != nil {
 			return BlockExecutionResult{}, err
+		}
+		if policy := strings.TrimSpace(fmt.Sprint(waveResult.ActualMetrics["versioned_wave_execution_policy"])); policy != "" && policy != "<nil>" {
+			waveExecutionPolicy = policy
+			if policy == "delta_only_v1" {
+				deltaOnlyWaveCount++
+			}
 		}
 		if waveResult.WorkerCount > workerCount {
 			workerCount = waveResult.WorkerCount
@@ -4277,7 +4312,10 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	// response timing and wave grouping cannot change receipt roots or state roots.
 	// Build once, then update only keys written by each successful transaction.
 	normalized := copyStringMap(base)
-	materializationCommitment := state.NewCommitment(normalized)
+	// V14-A reuses the authenticated execution-view commitment when available.
+	// CloneOrBuild preserves the exact fallback for storage plugins that cannot
+	// supply an atomically matching commitment.
+	materializationCommitment := state.CloneOrBuild(baseCommitment, normalized)
 	merged := execution.Result{BlockHash: block.BlockHash, Height: block.Height, StateRootBefore: materializationCommitment.Root(), Deterministic: true, StateUpdates: map[string]string{}, WorkerCount: workerCount, BlockExecutorID: r.plugins.BlockExecutor.ID(), BlockSTMMetrics: mergedSTM}
 	if r.plugins.BlockExecutor.ID() == "block_stm_block_executor" {
 		merged.BlockExecutorID = execution.BlockSTMExecutorID
@@ -4313,6 +4351,12 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 	}
 	merged.StateDelta = executionStateDelta(base, normalized)
 	materializationDuration := time.Since(materializationStarted)
+	if merged.BlockExecutorID == execution.BlockSTMExecutorID {
+		// Temporary Block-STM waves no longer report discarded materialization.
+		// Attribute the one retained consensus-order materialization to the
+		// block-level Block-STM metric instead.
+		merged.BlockSTMMetrics.MaterializationMS = materializationDuration.Milliseconds()
+	}
 	merged.TransactionExecutionMS = executionDuration.Milliseconds()
 	merged.DeterministicMaterializationMS = materializationDuration.Milliseconds()
 	if block.ExecutionPlan != nil && block.ExecutionPlan.PlanDigest != "" {
@@ -4330,6 +4374,9 @@ func (r *NodeRuntime) executeVersionedRemoteBlock(ctx context.Context, block rea
 		actualMetrics["block_stm_internal_version_dependency_delegated_count"] = internalDelegatedCount
 	}
 	actualMetrics["versioned_state_ready_scheduler_mode"] = "per_transaction_per_key_version_frontier"
+	actualMetrics["versioned_wave_execution_policy"] = waveExecutionPolicy
+	actualMetrics["versioned_wave_delta_only_count"] = deltaOnlyWaveCount
+	actualMetrics["versioned_wave_full_fallback_count"] = waveCount - deltaOnlyWaveCount
 	actualMetrics["versioned_state_ready_execution_ms"] = time.Since(started).Milliseconds()
 	actualMetrics["transaction_execution_us"] = executionDuration.Microseconds()
 	actualMetrics["deterministic_materialization_us"] = materializationDuration.Microseconds()
@@ -4992,8 +5039,16 @@ func (r *NodeRuntime) stateFetchSnapshot(request StateFetchRequest) (map[string]
 		return snapshot, snapshotRoot
 	}
 
-	fresh := r.plugins.StateStorage.Snapshot(r.db)
-	freshRoot := state.RootOfSnapshot(fresh)
+	var fresh map[string]string
+	var freshRoot string
+	if snapshotter, ok := r.plugins.StateStorage.(AuthenticatedStateSnapshotter); ok {
+		var commitment *state.Commitment
+		fresh, commitment = snapshotter.SnapshotWithCommitment(r.db)
+		freshRoot = commitment.Root()
+	} else {
+		fresh = r.plugins.StateStorage.Snapshot(r.db)
+		freshRoot = state.RootOfSnapshot(fresh)
+	}
 
 	r.mu.Lock()
 	if r.stateFetchSnapshots == nil {
@@ -5930,6 +5985,52 @@ func applyStateDeltaToSnapshot(snapshot map[string]string, updates []state.State
 	return out, nil
 }
 
+// MBE_MULTISHARD_AUTHENTICATED_COMMITMENT_V14A
+// applyStateDeltaToSnapshotWithCommitment preserves the exact state-delta
+// semantics above while carrying forward an authenticated commitment that is
+// already proven to match snapshot. The base commitment is path-copy cloned;
+// failures cannot mutate the caller's authenticated root.
+func applyStateDeltaToSnapshotWithCommitment(snapshot map[string]string, baseCommitment *state.Commitment, updates []state.StateKV, namespace string, blockHeight uint64) (map[string]string, *state.Commitment, error) {
+	if len(updates) == 0 {
+		if baseCommitment != nil {
+			return snapshot, baseCommitment.Clone(), nil
+		}
+		return snapshot, nil, nil
+	}
+
+	out, err := applyStateDeltaToSnapshot(snapshot, updates, namespace, blockHeight)
+	if err != nil {
+		return nil, nil, err
+	}
+	if baseCommitment == nil {
+		// Optional storage plugins that cannot provide an atomically matching
+		// commitment retain the historical executor full-build fallback.
+		return out, nil, nil
+	}
+
+	commitment := baseCommitment.Clone()
+	touched := map[string]bool{}
+	for _, item := range updates {
+		if item.OrderingNoop {
+			continue
+		}
+		key := item.Key
+		if !strings.Contains(key, "::") {
+			key = namespace + "::" + key
+		}
+		touched[key] = true
+	}
+	keys := make([]string, 0, len(touched))
+	for key := range touched {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		commitment.Set(key, out[key])
+	}
+	return out, commitment, nil
+}
+
 func stateDeltaApplyAckFromRequest(request StateDeltaApplyRequest, qualifiedKey, valueDigest, stateRoot string) StateDeltaApplyAck {
 	return StateDeltaApplyAck{RequestID: request.RequestID, TxID: request.TxID, TxIDs: append([]string(nil), request.TxIDs...), BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, ValueDigest: valueDigest, UpdateSemantics: request.UpdateSemantics, Delta: request.Delta, BaseValueDigest: request.BaseValueDigest, ApplyOrigin: request.ApplyOrigin, DeltaKind: request.DeltaKind, HasInitialValue: request.HasInitialValue, InitialValue: request.InitialValue, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, PreviousVersion: request.PreviousVersion, ProducedVersion: request.ProducedVersion, OrderingNoop: request.OrderingNoop, StateRoot: stateRoot, Success: true}
 }
@@ -6789,7 +6890,7 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	businessStateDigest := canonicalBusinessStateDigest(r.plugins.StateStorage.Snapshot(r.db))
 	stateReadySummary := summarizeStateReadyEvidence(blockExecutionSummaries)
 	classificationSummary := summarizeMetaTrackClassificationEvidence(blockExecutionSummaries)
-	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "metatrack_classification_conflict_edge_count": classificationSummary.conflictEdgeCount, "metatrack_classification_dependency_chain_max": classificationSummary.dependencyChainMax, "metatrack_classification_nontrivial_scc_count": classificationSummary.nontrivialSCCCount, "metatrack_classification_ambiguous_conflict_pair_count": classificationSummary.ambiguousConflictPairCount, "metatrack_classification_semantic_unsafe_unique_count": classificationSummary.semanticUnsafeUniqueCount, "metatrack_effective_frontier_policy": classificationSummary.effectiveFrontierPolicy, "metatrack_effective_frontier_width_zero_count": classificationSummary.effectiveFrontierWidthZeroCount, "metatrack_effective_frontier_width_one_count": classificationSummary.effectiveFrontierWidthOneCount, "metatrack_effective_frontier_width_multi_count": classificationSummary.effectiveFrontierWidthMultiCount, "metatrack_effective_frontier_width_max": classificationSummary.effectiveFrontierWidthMax, "metatrack_effective_frontier_raw_producer_count": classificationSummary.effectiveFrontierRawProducerCount, "metatrack_effective_frontier_reduced_producer_count": classificationSummary.effectiveFrontierReducedProducerCount, "metatrack_effective_frontier_track_demotion_count": classificationSummary.effectiveFrontierTrackDemotionCount, "metatrack_frontier_seal_count": classificationSummary.frontierSealCount, "metatrack_terminal_access_violation_count": classificationSummary.terminalAccessViolationCount, "metatrack_frontier_required_version_count": classificationSummary.frontierRequiredVersionCount, "metatrack_frontier_write_slot_count": classificationSummary.frontierWriteSlotCount, "metatrack_version_ticket_issued_count": classificationSummary.versionTicketIssuedCount, "metatrack_version_ticket_released_count": classificationSummary.versionTicketReleasedCount, "metatrack_frontier_seal_build_us": classificationSummary.frontierSealBuildUS, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "metatrack_classification_conflict_edge_count": classificationSummary.conflictEdgeCount, "metatrack_classification_dependency_chain_max": classificationSummary.dependencyChainMax, "metatrack_classification_nontrivial_scc_count": classificationSummary.nontrivialSCCCount, "metatrack_classification_ambiguous_conflict_pair_count": classificationSummary.ambiguousConflictPairCount, "metatrack_classification_semantic_unsafe_unique_count": classificationSummary.semanticUnsafeUniqueCount, "metatrack_effective_frontier_policy": classificationSummary.effectiveFrontierPolicy, "metatrack_effective_frontier_width_zero_count": classificationSummary.effectiveFrontierWidthZeroCount, "metatrack_effective_frontier_width_one_count": classificationSummary.effectiveFrontierWidthOneCount, "metatrack_effective_frontier_width_multi_count": classificationSummary.effectiveFrontierWidthMultiCount, "metatrack_effective_frontier_width_max": classificationSummary.effectiveFrontierWidthMax, "metatrack_effective_frontier_raw_producer_count": classificationSummary.effectiveFrontierRawProducerCount, "metatrack_effective_frontier_reduced_producer_count": classificationSummary.effectiveFrontierReducedProducerCount, "metatrack_effective_frontier_track_demotion_count": classificationSummary.effectiveFrontierTrackDemotionCount, "metatrack_frontier_seal_count": classificationSummary.frontierSealCount, "metatrack_terminal_access_violation_count": classificationSummary.terminalAccessViolationCount, "metatrack_frontier_required_version_count": classificationSummary.frontierRequiredVersionCount, "metatrack_frontier_write_slot_count": classificationSummary.frontierWriteSlotCount, "metatrack_version_ticket_issued_count": classificationSummary.versionTicketIssuedCount, "metatrack_version_ticket_released_count": classificationSummary.versionTicketReleasedCount, "metatrack_frontier_seal_build_us": classificationSummary.frontierSealBuildUS, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "versioned_wave_execution_policy": stateReadySummary.versionedWaveExecutionPolicy, "versioned_wave_delta_only_count": stateReadySummary.versionedWaveDeltaOnlyCount, "versioned_wave_full_fallback_count": stateReadySummary.versionedWaveFullFallbackCount, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
 }
 
 // MBE_METATRACK_EFFECTIVE_FRONTIER_OBSERVABILITY_V12
@@ -6850,19 +6951,22 @@ func summarizeMetaTrackClassificationEvidence(blocks []map[string]any) metaTrack
 }
 
 type stateReadyEvidenceSummary struct {
-	waitCount               int64
-	resumeCount             int64
-	waitMS                  int64
-	fetchCount              int64
-	fetchCompletedCount     int64
-	mode                    string
-	versionedWaveCount      int64
-	versionedWaitCount      int64
-	versionedResolvedCount  int64
-	versionedProbeCount     int64
-	versionedProbeLatencyMS int64
-	versionedMaxWaveWidth   int64
-	versionedMode           string
+	waitCount                      int64
+	resumeCount                    int64
+	waitMS                         int64
+	fetchCount                     int64
+	fetchCompletedCount            int64
+	mode                           string
+	versionedWaveCount             int64
+	versionedWaitCount             int64
+	versionedResolvedCount         int64
+	versionedProbeCount            int64
+	versionedProbeLatencyMS        int64
+	versionedMaxWaveWidth          int64
+	versionedMode                  string
+	versionedWaveExecutionPolicy   string // MBE_VERSIONED_WAVE_OBSERVABILITY_CLOSURE_V14B1
+	versionedWaveDeltaOnlyCount    int64
+	versionedWaveFullFallbackCount int64
 }
 
 func summarizeStateReadyEvidence(blocks []map[string]any) stateReadyEvidenceSummary {
@@ -6887,6 +6991,15 @@ func summarizeStateReadyEvidence(blocks []map[string]any) stateReadyEvidenceSumm
 		if mode := strings.TrimSpace(fmt.Sprint(block["versioned_state_ready_scheduler_mode"])); mode != "" && mode != "<nil>" {
 			out.versionedMode = mode
 		}
+		if policy := strings.TrimSpace(fmt.Sprint(block["versioned_wave_execution_policy"])); policy != "" && policy != "<nil>" {
+			if out.versionedWaveExecutionPolicy == "" {
+				out.versionedWaveExecutionPolicy = policy
+			} else if out.versionedWaveExecutionPolicy != policy {
+				out.versionedWaveExecutionPolicy = "mixed"
+			}
+		}
+		out.versionedWaveDeltaOnlyCount += int64FromAny(block["versioned_wave_delta_only_count"])
+		out.versionedWaveFullFallbackCount += int64FromAny(block["versioned_wave_full_fallback_count"])
 	}
 	return out
 }

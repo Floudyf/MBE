@@ -8,6 +8,10 @@ from pydantic import BaseModel, Field
 class V5CompiledNodeConfig(BaseModel):
     node_id: str
     shard_id: str
+    # MBE_PORYGON_UNIFIED_SHARD_V10_20260921: execution and consensus identities are distinct when a method such
+    # as Porygon uses one global ordering domain with multiple execution shards.
+    execution_shard_id: str = ""
+    consensus_domain_id: str = ""
     role: str
     leader: bool
     listen_addr: str

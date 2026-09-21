@@ -137,16 +137,24 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			_ = conn.Close()
 		}
 	}()
-	shards := len(leaders)
+	// MBE_PORYGON_UNIFIED_SHARD_V10_20260921: workload sharding follows execution shards, not PBFT leader count.
+	executionSeen := map[string]bool{}
+	for _, node := range plan.NodeConfigs {
+		executionSeen[effectiveExecutionShardID(node)] = true
+	}
+	shardIDs := make([]string, 0, len(executionSeen))
+	for shardID := range executionSeen {
+		if shardID != "" {
+			shardIDs = append(shardIDs, shardID)
+		}
+	}
+	sort.Strings(shardIDs)
+	shards := len(shardIDs)
 	if shards == 0 {
-		return fmt.Errorf("plan contains no shard leaders")
+		return fmt.Errorf("plan contains no execution shards")
 	}
 	if shards < 2 && plan.WorkloadPlan.CrossShardRatio > 0 {
 		return fmt.Errorf("cross_shard_ratio requires at least 2 shards")
-	}
-	shardIDs := make([]string, 0, shards)
-	for shardIndex := 0; shardIndex < shards; shardIndex++ {
-		shardIDs = append(shardIDs, fmt.Sprintf("s%d", shardIndex))
 	}
 	iterator, err := plugins.Workload.NewIterator(plan.WorkloadPlan, shards, outDir, plugins.Sharding)
 	if err != nil {
@@ -164,11 +172,22 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	batch := []WorkloadRecord{}
 	lastWriterOrdinal := map[string]uint64{}
 	statelessDirect := usesStatelessDirectExecution(plugins.Routing)
+	// MBE_PORYGON_UNIFIED_SHARD_V16_FINALITY_CAPABILITY_20260921: finality
+	// capability is separate from payload/metadata runtime capabilities.
+	finalityMode := crossShardFinalityMode(plugins.Routing)
 	bindExecutionRouting := routingBindsExecutionMetadata(plugins.Routing)
 	bindBatchProjectionMetadata := routingBindsBatchProjectionMetadata(plugins.Routing)
 	submitRecord := func(record WorkloadRecord, route RoutingDecision) error {
 		executionShard := route.ShardID
 		shardID := workloadIngressShard(record, route, statelessDirect)
+		if plugins.Routing.ID() == porygonRoutingID {
+			for _, node := range plan.NodeConfigs {
+				if effectiveExecutionShardID(node) == executionShard {
+					shardID = effectiveConsensusDomainID(node)
+					break
+				}
+			}
+		}
 		leader, ok := leaders[shardID]
 		if !ok {
 			return fmt.Errorf("no leader for %s", shardID)
@@ -435,7 +454,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if err := SaveJSON(filepath.Join(outDir, "workload_identity_mapping_summary.json"), map[string]any{"identity_count": replaySummary.IdentityCount, "mapping_digest": replaySummary.MappingDigest, "nonce_continuity": replaySummary.NonceContinuity, "signature_pass_count": replaySummary.SignaturePassCount, "identity_mapping_version": replaySummary.IdentityMappingVersion}); err != nil {
 		return err
 	}
-	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "replay_mode": replaySummary.ReplayMode, "target_submission_tps": replaySummary.TargetSubmissionTPS, "observed_submission_tps": replaySummary.ObservedSubmissionTPS, "submission_duration_ms": replaySummary.SubmissionDurationMS, "pacing_schedule": replaySummary.PacingSchedule, "pacing_late_release_count": replaySummary.PacingLateReleaseCount, "pacing_max_schedule_lag_ms": replaySummary.PacingMaxScheduleLagMS, "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows)), "cross_shard_execution_mode": map[bool]string{true: "stateless_direct_execution", false: "legacy_lock_relay_finalize"}[statelessDirect]})
+	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "replay_mode": replaySummary.ReplayMode, "target_submission_tps": replaySummary.TargetSubmissionTPS, "observed_submission_tps": replaySummary.ObservedSubmissionTPS, "submission_duration_ms": replaySummary.SubmissionDurationMS, "pacing_schedule": replaySummary.PacingSchedule, "pacing_late_release_count": replaySummary.PacingLateReleaseCount, "pacing_max_schedule_lag_ms": replaySummary.PacingMaxScheduleLagMS, "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows)), "cross_shard_execution_mode": finalityMode})
 }
 
 func stateVersionDependenciesForRecord(record WorkloadRecord, ordinal uint64, lastWriter map[string]uint64) []tx.StateVersionDependency {
@@ -479,6 +498,7 @@ func stateVersionDependenciesForRecord(record WorkloadRecord, ordinal uint64, la
 	return out
 }
 
+// MBE_PORYGON_UNIFIED_SHARD_V10_20260921
 func workloadIngressShard(record WorkloadRecord, route RoutingDecision, statelessDirect bool) string {
 	if statelessDirect {
 		return route.ShardID

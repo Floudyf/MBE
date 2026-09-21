@@ -1,7 +1,6 @@
 package v5
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -21,13 +20,13 @@ const (
 	porygonStateAccessID   = "porygon_remote_state_access"
 	porygonCrossShardID    = "porygon_cross_shard_coordinator"
 
-	porygonProposalEvidenceID = "porygon_transaction_block_v1"
-	porygonPlanAlgorithmID    = "porygon_3d_parallelism_plan_v1"
+	porygonProposalEvidenceID = "porygon_transaction_block_v2"
+	porygonPlanAlgorithmID    = "porygon_3d_parallelism_plan_v3"
 )
 
 type porygonTransactionBlockEvidence struct {
 	Version             string   `json:"version"`
-	ShardID             string   `json:"shard_id"`
+	OrderingDomain      string   `json:"ordering_domain"`
 	Height              uint64   `json:"height"`
 	TransactionCount    int      `json:"transaction_count"`
 	TransactionIDs      []string `json:"transaction_ids"`
@@ -43,6 +42,8 @@ type porygonTxAssignment struct {
 	TxID           string   `json:"tx_id"`
 	OriginalIndex  int      `json:"original_index"`
 	ExecutionShard int      `json:"execution_shard"`
+	StateShards    []int    `json:"state_shards"`
+	WriteShards    []int    `json:"write_shards"`
 	InvolvedShards []int    `json:"involved_shards"`
 	CrossShard     bool     `json:"cross_shard"`
 	Wave           int      `json:"wave"`
@@ -60,6 +61,8 @@ type porygonExecutionPlan struct {
 	Version                  string                 `json:"version"`
 	AlgorithmID              string                 `json:"algorithm_id"`
 	BlockHeight              uint64                 `json:"block_height"`
+	OrderingDomain           string                 `json:"ordering_domain"`
+	PhysicalShardCount       int                    `json:"physical_shard_count"`
 	TransactionBlockDigest   string                 `json:"transaction_block_digest"`
 	TransactionRoot          string                 `json:"transaction_root"`
 	AccessRoot               string                 `json:"access_root"`
@@ -87,52 +90,41 @@ type porygonScheduler struct{ basicPlugin }
 type porygonStateAccess struct{ builtinStateAccess }
 type porygonCrossShard struct{ basicPlugin }
 
-// ProposalEvidenceVerifier is an opt-in block-producer validation hook.  The
-// shared runtime uses it only when the selected producer implements it, so the
-// existing Aria/Groundhog validation path is unchanged.
+// ProposalEvidenceVerifier is an opt-in block-producer validation hook used by
+// the v7+ shared runtime. Existing Aria/Groundhog validation is untouched.
 type ProposalEvidenceVerifier interface {
 	VerifyProposalEvidence(realblock.Block) error
 }
 
+// porygonStatelessRouting deliberately implements only RoutingPlugin.
+// It must not implement BatchRoutingPlugin or RoutingRuntimeCapabilities:
+// those interfaces activate the shared MetaTrack/stateless remote-state CAS
+// control plane, which is not Porygon's OC/ESC execution model.
 type porygonStatelessRouting struct{ basicPlugin }
 
-func (p porygonStatelessRouting) Route(input RoutingInput) RoutingDecision {
-	return statelessHashRouting{p.basicPlugin}.Route(input)
-}
-func (p porygonStatelessRouting) StatelessDirectExecution() bool     { return true }
-func (p porygonStatelessRouting) BindExecutionRoutingMetadata() bool { return false }
-func (p porygonStatelessRouting) BindBatchProjectionMetadata() bool  { return false }
-func (p porygonStatelessRouting) BatchExecutionPlanAlgorithmID() string {
-	return "porygon_stateless_batch_execution_plan_v1"
-}
-func (p porygonStatelessRouting) SignedBatchExecutionPlan() bool  { return false }
-func (p porygonStatelessRouting) NativeVersionedStateReady() bool { return false }
-func (p porygonStatelessRouting) StatelessVersionAdmission() bool { return false }
-func (p porygonStatelessRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
-	// Porygon is an independent baseline.  The current MetaTrack layered schema
-	// may carry a SchedulingAccessList beside the real execution AccessList.
-	// Never let that MetaTrack-only planning layer change Porygon placement or
-	// access evidence: sanitize it before reusing the stateless-home planner.
-	records := append([]WorkloadRecord(nil), input.Records...)
-	for index := range records {
-		records[index].SchedulingAccessList = nil
-		records[index].SchedulingAccessDigest = ""
-		records[index].SchedulingAccessSchema = ""
-		records[index].SchedulingAccessSource = ""
-	}
-	input.Records = records
-	plan := statelessHashRouting{p.basicPlugin}.PlanBatch(input)
-	plan.PlacementPolicy = "porygon_state_home_hash_v1"
-	plan.TransactionPolicy = "porygon_single_execution_shard_v1"
-	plan.PlanDigest = routingPlanDigest(plan)
-	return plan
+// MBE_PORYGON_UNIFIED_SHARD_V16_FINALITY_CAPABILITY_20260921:
+// Workload-level cross-shard classification does not invoke the legacy
+// relay/finalize protocol in Porygon. One global ordering-domain durable commit
+// is the terminal protocol outcome. This does NOT make Porygon a
+// RoutingRuntimeCapabilities or BatchRoutingPlugin implementation.
+func (p porygonStatelessRouting) CrossShardFinalityMode() string {
+	return CrossShardFinalityPorygonGlobalCommit
 }
 
+func (p porygonStatelessRouting) Route(input RoutingInput) RoutingDecision {
+	decision := hashRouting{p.basicPlugin}.Route(input)
+	decision.Reason = "porygon_execution_shard_route"
+	return decision
+}
+
+// MBE_PORYGON_ESC_OWNERSHIP_TIMING_TRUTH_V19_20260921: common block_size
+// is the authoritative formal-experiment control. transaction_block_size is
+// retained only as a legacy fallback when block_size is genuinely absent.
 func (p porygonBlockProducer) BlockSize() int {
-	if value := intValue(p.config["transaction_block_size"]); value > 0 {
+	if value := intValue(p.config["block_size"]); value > 0 {
 		return value
 	}
-	if value := intValue(p.config["block_size"]); value > 0 {
+	if value := intValue(p.config["transaction_block_size"]); value > 0 {
 		return value
 	}
 	return 100
@@ -144,7 +136,7 @@ func (p porygonBlockProducer) Interval() time.Duration {
 	return 75 * time.Millisecond
 }
 func (p porygonBlockProducer) ShouldProduce(input BlockProductionInput) bool {
-	return (input.Pool != nil && input.Pool.Len() > 0) || input.SystemDeltaReady
+	return input.Pool != nil && input.Pool.Len() > 0
 }
 func (p porygonBlockProducer) BuildCandidate(input BlockProductionInput) (realblock.Block, error) {
 	if input.Proposer == nil || input.Pool == nil {
@@ -196,8 +188,8 @@ func (p porygonBlockProducer) VerifyProposalEvidence(block realblock.Block) erro
 func buildPorygonTransactionBlockEvidence(block realblock.Block, threshold int) porygonTransactionBlockEvidence {
 	txIDs := transactionIDs(block.TxList)
 	return porygonTransactionBlockEvidence{
-		Version:             "1.0.0",
-		ShardID:             block.ShardID,
+		Version:             "2.0.0",
+		OrderingDomain:      block.ShardID,
 		Height:              block.Height,
 		TransactionCount:    len(block.TxList),
 		TransactionIDs:      txIDs,
@@ -219,7 +211,7 @@ func decodePorygonTransactionBlockEvidence(block realblock.Block) (porygonTransa
 		return evidence, fmt.Errorf("decode porygon transaction block evidence: %w", err)
 	}
 	expected := buildPorygonTransactionBlockEvidence(block, evidence.WitnessThreshold)
-	if evidence.ShardID != expected.ShardID || evidence.Height != expected.Height || evidence.TransactionCount != expected.TransactionCount ||
+	if evidence.OrderingDomain != expected.OrderingDomain || evidence.Height != expected.Height || evidence.TransactionCount != expected.TransactionCount ||
 		evidence.TransactionRoot != expected.TransactionRoot || evidence.AccessRoot != expected.AccessRoot || evidence.FullBodyDigest != expected.FullBodyDigest ||
 		!sameStringList(evidence.TransactionIDs, expected.TransactionIDs) {
 		return evidence, fmt.Errorf("porygon transaction block evidence mismatch")
@@ -260,6 +252,9 @@ func (p porygonScheduler) VerifyBlockPlan(block realblock.Block) error {
 	if block.ExecutionPlan == nil || block.ExecutionPlan.AlgorithmID != porygonPlanAlgorithmID {
 		return fmt.Errorf("porygon execution plan missing")
 	}
+	if stableTextDigest(string(block.ExecutionPlan.Payload)) != block.ExecutionPlan.PayloadDigest {
+		return fmt.Errorf("porygon execution plan payload digest mismatch")
+	}
 	var supplied porygonExecutionPlan
 	if err := json.Unmarshal(block.ExecutionPlan.Payload, &supplied); err != nil {
 		return fmt.Errorf("decode porygon plan: %w", err)
@@ -294,9 +289,11 @@ func buildPorygonPlan(block realblock.Block, config map[string]any) (porygonExec
 	crossBatchWitness := porygonBool(config, "cross_batch_witness", true)
 
 	plan := porygonExecutionPlan{
-		Version:                 "1.0.0",
+		Version:                 "3.0.0",
 		AlgorithmID:             porygonPlanAlgorithmID,
 		BlockHeight:             block.Height,
+		OrderingDomain:          block.ShardID,
+		PhysicalShardCount:      1,
 		TransactionBlockDigest:  evidence.FullBodyDigest,
 		TransactionRoot:         evidence.TransactionRoot,
 		AccessRoot:              evidence.AccessRoot,
@@ -308,62 +305,65 @@ func buildPorygonPlan(block realblock.Block, config map[string]any) (porygonExec
 		PipelineEnabled:         pipelineEnabled,
 	}
 
-	prior := []porygonTxAssignment{}
-	maxWave := -1
-	lastCrossWave := -1
+	assignments := make([]porygonTxAssignment, 0, len(block.TxList))
 	waves := map[int][]string{}
+	maxWave := -1
 	for index, item := range block.TxList {
 		accesses := porygonCanonicalAccesses(item)
-		involvedSet := map[int]bool{}
-		locked := []string{}
+		if len(accesses) == 0 {
+			return porygonExecutionPlan{}, fmt.Errorf("porygon requires signed AccessList for transaction %s", item.TxID)
+		}
+		executionShard := porygonAccountShard(item, shardCount)
+		stateShardSet := map[int]bool{}
+		writeShardSet := map[int]bool{}
+		lockKeys := make([]string, 0, len(accesses))
 		for _, access := range accesses {
-			if access.Key == "" {
-				continue
+			if strings.TrimSpace(access.Key) == "" {
+				return porygonExecutionPlan{}, fmt.Errorf("porygon access list contains empty key for transaction %s", item.TxID)
 			}
-			involvedSet[porygonExecutionShard(access.Key, shardCount)] = true
+			stateShard := porygonStateShard(access.Key, shardCount)
+			stateShardSet[stateShard] = true
+			lockKeys = append(lockKeys, access.Key)
 			if isWriteMode(access.Mode) {
-				locked = append(locked, access.Key)
+				writeShardSet[stateShard] = true
 			}
 		}
-		involved := make([]int, 0, len(involvedSet))
-		for shard := range involvedSet {
-			involved = append(involved, shard)
+		stateShards := sortedIntSet(stateShardSet)
+		writeShards := sortedIntSet(writeShardSet)
+		involvedSet := map[int]bool{executionShard: true}
+		for _, shard := range stateShards {
+			involvedSet[shard] = true
 		}
-		sort.Ints(involved)
-		sort.Strings(locked)
-		cross := len(involved) > 1
-		executionShard := 0
-		if len(involved) > 0 {
-			executionShard = involved[0]
+		involved := sortedIntSet(involvedSet)
+		current := porygonTxAssignment{
+			TxID:           item.TxID,
+			OriginalIndex:  index,
+			ExecutionShard: executionShard,
+			StateShards:    stateShards,
+			WriteShards:    writeShards,
+			InvolvedShards: involved,
+			CrossShard:     len(involved) > 1,
+			LockedKeys:     uniqueStrings(lockKeys),
 		}
 		wave := 0
-		if lastCrossWave >= 0 {
-			wave = lastCrossWave + 1
-		}
-		for _, previous := range prior {
-			if previous.Wave >= wave && porygonAssignmentsConflict(previous, item, block.TxList) {
+		for previousIndex, previous := range assignments {
+			if porygonAssignmentsConflict(previous, current, block.TxList[previousIndex], item) && wave <= previous.Wave {
 				wave = previous.Wave + 1
 			}
 		}
-		if cross {
-			if maxWave >= wave {
-				wave = maxWave + 1
-			}
-			lastCrossWave = wave
-		}
+		current.Wave = wave
+		assignments = append(assignments, current)
+		plan.Assignments = append(plan.Assignments, current)
+		waves[wave] = append(waves[wave], item.TxID)
+		plan.SerializationOrder = append(plan.SerializationOrder, item.TxID)
 		if wave > maxWave {
 			maxWave = wave
 		}
-		assignment := porygonTxAssignment{TxID: item.TxID, OriginalIndex: index, ExecutionShard: executionShard, InvolvedShards: involved, CrossShard: cross, Wave: wave, LockedKeys: uniqueStrings(locked)}
-		prior = append(prior, assignment)
-		plan.Assignments = append(plan.Assignments, assignment)
-		waves[wave] = append(waves[wave], item.TxID)
-		plan.SerializationOrder = append(plan.SerializationOrder, item.TxID)
-		if cross {
+		if current.CrossShard {
 			plan.CrossShardTransactionCnt++
 			plan.SingleShardExecutionCnt++
-			plan.MultiShardUpdateCnt += len(involved)
-			plan.StateLockCount += len(assignment.LockedKeys)
+			plan.MultiShardUpdateCnt += len(current.WriteShards)
+			plan.StateLockCount += len(current.LockedKeys)
 		} else {
 			plan.IntraShardTransactionCnt++
 		}
@@ -399,7 +399,7 @@ func porygonPipelineForHeight(height uint64, committeeCount int, enabled, crossB
 		{BatchHeight: height, Stage: "commit", LogicalSlot: base + 3, Committee: "OC"},
 	}
 	if crossBatchWitness {
-		stages = append(stages, porygonPipelineStage{BatchHeight: height + 1, Stage: "cross_batch_witness", LogicalSlot: base + 1, Committee: porygonECName(height, committeeCount)})
+		stages = append(stages, porygonPipelineStage{BatchHeight: height + 1, Stage: "cross_batch_witness", LogicalSlot: base + 1, Committee: porygonECName(height+1, committeeCount)})
 	}
 	return stages
 }
@@ -411,16 +411,17 @@ func porygonECName(height uint64, count int) string {
 	return fmt.Sprintf("EC%d", int(height%uint64(count))+1)
 }
 
-func porygonAssignmentsConflict(previous porygonTxAssignment, current tx.SignedTransaction, blockItems []tx.SignedTransaction) bool {
-	if previous.CrossShard {
+func porygonAssignmentsConflict(previous, current porygonTxAssignment, previousItem, currentItem tx.SignedTransaction) bool {
+	// One ESC is modeled as a sequential execution lane. Independent ESCs may
+	// execute concurrently when their declared state locks do not conflict.
+	if previous.ExecutionShard == current.ExecutionShard {
 		return true
 	}
-	var prior tx.SignedTransaction
-	if previous.OriginalIndex >= 0 && previous.OriginalIndex < len(blockItems) {
-		prior = blockItems[previous.OriginalIndex]
+	if (previous.CrossShard || current.CrossShard) && porygonStringSetsOverlap(previous.LockedKeys, current.LockedKeys) {
+		return true
 	}
-	for _, left := range porygonCanonicalAccesses(prior) {
-		for _, right := range porygonCanonicalAccesses(current) {
+	for _, left := range porygonCanonicalAccesses(previousItem) {
+		for _, right := range porygonCanonicalAccesses(currentItem) {
 			if accessItemsConflict(left, right) {
 				return true
 			}
@@ -430,19 +431,20 @@ func porygonAssignmentsConflict(previous porygonTxAssignment, current tx.SignedT
 }
 
 func porygonCanonicalAccesses(item tx.SignedTransaction) []tx.AccessItem {
-	// Porygon must bind the execution AccessList itself, never MetaTrack's
-	// SchedulingAccessList overlay introduced by the declared-access frontier.
+	// Deliberately bind only the signed execution AccessList. Never consult the
+	// MetaTrack SchedulingAccessList or future execution observations.
 	accesses := append([]tx.AccessItem(nil), item.AccessList...)
-	if len(accesses) == 0 {
-		for _, key := range item.StateKeys {
-			accesses = append(accesses, tx.AccessItem{Key: key, Mode: tx.AccessReadWrite, UpdateSemantics: "legacy_state_key"})
-		}
-	}
 	sort.Slice(accesses, func(i, j int) bool {
 		if accesses[i].Key != accesses[j].Key {
 			return accesses[i].Key < accesses[j].Key
 		}
-		return accesses[i].Mode < accesses[j].Mode
+		if accesses[i].Mode != accesses[j].Mode {
+			return accesses[i].Mode < accesses[j].Mode
+		}
+		if accesses[i].UpdateSemantics != accesses[j].UpdateSemantics {
+			return accesses[i].UpdateSemantics < accesses[j].UpdateSemantics
+		}
+		return accesses[i].Delta < accesses[j].Delta
 	})
 	return accesses
 }
@@ -455,11 +457,50 @@ func porygonAccessRoot(items []tx.SignedTransaction) string {
 	return stableJSONDigest(rows)
 }
 
-func porygonExecutionShard(key string, count int) int {
+func porygonAccountShard(item tx.SignedTransaction, count int) int {
+	if count < 1 {
+		return 0
+	}
+	identity := strings.TrimSpace(item.Sender)
+	if identity == "" {
+		identity = strings.TrimSpace(item.LogicalTxID)
+	}
+	if identity == "" {
+		identity = strings.TrimSpace(item.TxID)
+	}
+	return stableKey([]string{strings.ToLower(identity)}) % count
+}
+
+func porygonStateShard(key string, count int) int {
 	if count < 1 {
 		return 0
 	}
 	return stableKey([]string{strings.ToLower(strings.TrimSpace(key))}) % count
+}
+
+func sortedIntSet(values map[int]bool) []int {
+	out := make([]int, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func porygonStringSetsOverlap(left, right []string) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	seen := make(map[string]bool, len(left))
+	for _, value := range left {
+		seen[value] = true
+	}
+	for _, value := range right {
+		if seen[value] {
+			return true
+		}
+	}
+	return false
 }
 
 func porygonWitnessThreshold(config map[string]any) int {
@@ -487,35 +528,24 @@ func porygonBool(config map[string]any, key string, fallback bool) bool {
 	return fallback
 }
 
-func (p porygonStateAccess) AccessMode() string { return "porygon_remote_stateless" }
+func (p porygonStateAccess) AccessMode() string { return "porygon_signed_access_projection" }
 
-func (p porygonCrossShard) IsCrossShard(item tx.SignedTransaction) bool {
-	if strings.HasPrefix(item.Payload, "v5_cross:") {
-		return true
-	}
-	count := intValue(p.config["execution_shard_count"])
-	if count < 1 {
-		count = 4
-	}
-	shards := map[int]bool{}
-	for _, access := range porygonCanonicalAccesses(item) {
-		if access.Key != "" {
-			shards[porygonExecutionShard(access.Key, count)] = true
-		}
-	}
-	return len(shards) > 1
-}
+// Logical cross-ESC coordination is owned entirely by the Porygon consensus-
+// bound plan and block executor. Returning false here is intentional: the MBE
+// CrossShardPlugin interface drives the physical Relay/Finalize protocol for
+// independent ledger shards, which would be semantically wrong for Porygon ESCs.
+func (p porygonCrossShard) IsCrossShard(tx.SignedTransaction) bool { return false }
 func (p porygonCrossShard) SourceLock(input CrossShardRelayInput) CrossShardEvent {
-	return CrossShardEvent{TxID: input.Tx.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "PorygonStateLock", Success: true}
+	return CrossShardEvent{TxID: input.Tx.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "PorygonLogicalStateLock", Success: true}
 }
 func (p porygonCrossShard) TargetCommit(input CrossShardFinalizeInput) CrossShardEvent {
-	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "PorygonMultiShardUpdate", Success: true}
+	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "PorygonLogicalMultiShardUpdate", Success: true}
 }
 func (p porygonCrossShard) HandleFinalize(input CrossShardFinalizeInput) CrossShardEvent {
-	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "PorygonUnlock", Success: true}
+	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "PorygonLogicalUnlock", Success: true}
 }
 func (p porygonCrossShard) TimeoutRefund(input CrossShardFinalizeInput, reason string) CrossShardEvent {
-	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "PorygonAbort", Success: false, Error: reason}
+	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "PorygonLogicalAbort", Success: false, Error: reason}
 }
 func (p porygonCrossShard) BuildRelay(input CrossShardRelayInput) Relay {
 	return Relay{Tx: input.Tx, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard}
@@ -579,16 +609,46 @@ func validatePorygonPluginCombination(plugins RuntimePlugins) error {
 	if plugins.Commit == nil || plugins.Commit.ID() != "normal_commit" {
 		return fmt.Errorf("Porygon requires commit:normal_commit")
 	}
+	scheduler, schedulerOK := plugins.Scheduler.(porygonScheduler)
+	executor, executorOK := plugins.BlockExecutor.(porygonBlockExecutor)
+	if schedulerOK && executorOK {
+		for _, key := range []string{"execution_shard_count", "execution_committee_count"} {
+			left := intValue(scheduler.config[key])
+			right := intValue(executor.config[key])
+			if left == 0 {
+				if key == "execution_shard_count" {
+					left = 4
+				} else {
+					left = 3
+				}
+			}
+			if right == 0 {
+				if key == "execution_shard_count" {
+					right = 4
+				} else {
+					right = 3
+				}
+			}
+			if left != right {
+				return fmt.Errorf("Porygon scheduler and block executor %s must match", key)
+			}
+		}
+		for _, key := range []string{"pipeline_enabled", "cross_batch_witness"} {
+			if porygonBool(scheduler.config, key, true) != porygonBool(executor.config, key, true) {
+				return fmt.Errorf("Porygon scheduler and block executor %s must match", key)
+			}
+		}
+	}
 	return nil
 }
 
-// Compile-time interface assertions keep the additive integration honest.
-var _ RoutingRuntimeCapabilities = porygonStatelessRouting{}
-var _ BatchRoutingPlugin = porygonStatelessRouting{}
+// Compile-time assertions intentionally exclude BatchRoutingPlugin and
+// RoutingRuntimeCapabilities. Re-adding either would reactivate MetaTrack's
+// remote-state/CAS runtime path and is therefore a correctness regression.
+var _ RoutingPlugin = porygonStatelessRouting{}
 var _ BlockProducerPlugin = porygonBlockProducer{}
 var _ ProposalEvidenceVerifier = porygonBlockProducer{}
 var _ ExecutionPlugin = porygonExecution{}
 var _ ConsensusExecutionPlanner = porygonScheduler{}
 var _ StateAccessPlugin = porygonStateAccess{}
 var _ CrossShardPlugin = porygonCrossShard{}
-var _ = context.Background

@@ -11,14 +11,16 @@ type PluginConfig struct {
 	Config   map[string]any `json:"config"`
 }
 type NodePlan struct {
-	NodeID        string                  `json:"node_id"`
-	ShardID       string                  `json:"shard_id"`
-	Role          string                  `json:"role"`
-	Leader        bool                    `json:"leader"`
-	ListenAddr    string                  `json:"listen_addr"`
-	DataDir       string                  `json:"data_dir"`
-	Validators    []string                `json:"validators"`
-	PluginProfile map[string]PluginConfig `json:"plugin_profile"`
+	NodeID            string                  `json:"node_id"`
+	ShardID           string                  `json:"shard_id"`
+	ExecutionShardID  string                  `json:"execution_shard_id,omitempty"`
+	ConsensusDomainID string                  `json:"consensus_domain_id,omitempty"`
+	Role              string                  `json:"role"`
+	Leader            bool                    `json:"leader"`
+	ListenAddr        string                  `json:"listen_addr"`
+	DataDir           string                  `json:"data_dir"`
+	Validators        []string                `json:"validators"`
+	PluginProfile     map[string]PluginConfig `json:"plugin_profile"`
 }
 type WorkloadPlan struct {
 	PluginID                 string         `json:"plugin_id"`
@@ -110,4 +112,19 @@ func SaveJSON(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, append(raw, '\n'), 0o644)
+}
+
+// MBE_PORYGON_UNIFIED_SHARD_V10_20260921: preserve all legacy plans while separating execution-shard identity
+// from the runtime consensus-domain identity for Porygon.
+func effectiveExecutionShardID(node NodePlan) string {
+	if node.ExecutionShardID != "" {
+		return node.ExecutionShardID
+	}
+	return node.ShardID
+}
+func effectiveConsensusDomainID(node NodePlan) string {
+	if node.ConsensusDomainID != "" {
+		return node.ConsensusDomainID
+	}
+	return node.ShardID
 }

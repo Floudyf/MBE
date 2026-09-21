@@ -144,17 +144,35 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     profile = {}
     for selection in compatibility.resolved_plugins:
-        entry = {"plugin_id": selection.plugin_id, "config": selection.config}
+        entry = {"plugin_id": selection.plugin_id, "config": dict(selection.config)}
         if selection.category == "block_executor":
             entry["migrated_default"] = bool(selection.config.get("migrated_default"))
         profile[selection.category] = entry
+    # MBE_PORYGON_UNIFIED_SHARD_V10_20260921: topology.shards is the authoritative Porygon execution-shard count.
+    porygon_selected = profile.get("block_executor", {}).get("plugin_id") == "porygon_block_executor"
+    if porygon_selected:
+        for category in ("scheduler", "block_executor", "cross_shard"):
+            if category in profile:
+                profile[category]["config"] = dict(profile[category].get("config") or {})
+                profile[category]["config"]["execution_shard_count"] = spec.topology.shards
     nodes: list[V5CompiledNodeConfig] = []
+    all_node_ids = [f"n{index}" for index in range(spec.topology.nodes)]
     for index in range(spec.topology.nodes):
-        shard_index = index // spec.topology.validators_per_shard
+        execution_shard_index = index // spec.topology.validators_per_shard
+        execution_shard_id = f"s{execution_shard_index}"
         node_id = f"n{index}"
-        validators = [f"n{shard_index * spec.topology.validators_per_shard + offset}" for offset in range(spec.topology.validators_per_shard)]
-        nodes.append(V5CompiledNodeConfig(node_id=node_id, shard_id=f"s{shard_index}", role="leader" if node_id == validators[0] else "validator", leader=node_id == validators[0], listen_addr="127.0.0.1:0", data_dir=str(run_dir / "nodes" / node_id), validators=validators, plugin_profile=profile))
-    snapshot = [STORE.get(item.plugin_id).model_dump() | {"selected_config": item.config} for item in compatibility.resolved_plugins]
+        if porygon_selected:
+            validators = list(all_node_ids)
+            shard_id = "porygon-global"
+            consensus_domain_id = "porygon-global"
+            leader = index == 0
+        else:
+            validators = [f"n{execution_shard_index * spec.topology.validators_per_shard + offset}" for offset in range(spec.topology.validators_per_shard)]
+            shard_id = execution_shard_id
+            consensus_domain_id = shard_id
+            leader = node_id == validators[0]
+        nodes.append(V5CompiledNodeConfig(node_id=node_id, shard_id=shard_id, execution_shard_id=execution_shard_id, consensus_domain_id=consensus_domain_id, role="leader" if leader else "validator", leader=leader, listen_addr="127.0.0.1:0", data_dir=str(run_dir / "nodes" / node_id), validators=validators, plugin_profile=profile))
+    snapshot = [STORE.get(item.plugin_id).model_dump() | {"selected_config": profile[item.category]["config"]} for item in compatibility.resolved_plugins]
     workload = _compile_workload_plan(spec, profile, run_dir)
     materialized_blockers = validate_materialized_workload(spec, profile, workload)
     if materialized_blockers:

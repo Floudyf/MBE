@@ -1,17 +1,14 @@
-# Porygon Correctness Invariants
+# Porygon v8 correctness invariants
 
-1. A transaction block is invalid if its transaction body, transaction root or access root differs from proposal evidence.
-2. Every voting validator can recompute the complete transaction block before accepting the Porygon plan.
-3. The execution plan is consensus-bound and validator-recomputable.
-4. The global transaction serialization order equals the consensus block order.
-5. Every transaction has exactly one deterministic execution ESC.
-6. Every declared state key maps to exactly one deterministic ESC.
-7. A cross-shard transaction executes exactly once.
-8. Cross-shard transactions record every involved ESC and every declared write lock key.
-9. Conflicting transactions never execute in the same parallel wave.
-10. Cross-shard transactions act as wave barriers.
-11. A wave reads one immutable wave-start snapshot.
-12. Wave outputs are materialized deterministically.
-13. Every transaction produces exactly one final receipt and TxDelta.
-14. Repeated execution with the same block/config produces the same Porygon plan digest.
-15. Final Porygon state root and receipt root must equal the serial oracle for the same ordered block.
+- `porygon_stateless_routing` implements `RoutingPlugin` only; it must not implement `BatchRoutingPlugin` or `RoutingRuntimeCapabilities`.
+- Formal runs require exactly one physical MBE shard/PBFT ordering domain.
+- Porygon never consumes `SchedulingAccessList` or MetaTrack state-version metadata.
+- Porygon logical cross-shard classification never enters MBE Relay/Finalize.
+- Every transaction has exactly one execution ESC and one business execution attempt.
+- Same-ESC transactions are ordered; declared state conflicts preserve global OC order.
+- Disjoint transactions on different ESCs may execute in the same wave.
+- Actual read/write keys must be covered by the signed AccessList; violations fail closed as deterministic execution errors.
+- Multi-state writes are materialized deterministically and atomically at the MBE commit boundary.
+- All validators recompute and verify proposal/plan evidence.
+- Final state must match the deterministic serialization oracle for supported workload semantics.
+- Pipeline evidence must retain `wall_clock_overlap_not_claimed`.

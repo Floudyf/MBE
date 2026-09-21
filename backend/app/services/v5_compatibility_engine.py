@@ -230,7 +230,7 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         if spec.topology.shards != 1:
             blockers.append("Batch-SI core literature reproduction requires exactly 1 shard; multi-shard Batch-SI must be labeled as an extension")
         warnings.append("Batch-SI literature baseline uses one shard; batches are sequential and transactions inside one batch use a common immutable snapshot")
-    # MBE_PORYGON_PAPER_REPRO_20260920_V7: additive Porygon composition guard.
+    # MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: Porygon is one physical MBE/PBFT ordering domain plus logical ESCs.
     porygon_selected = any(
         selected and selected.plugin_id.startswith("porygon_")
         for selected in by_category.values()
@@ -252,12 +252,34 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
             selected = by_category.get(category)
             if not selected or selected.plugin_id != plugin_id:
                 blockers.append(f"Porygon requires {category}:{plugin_id}")
+        # MBE_PORYGON_UNIFIED_SHARD_V10_20260921: frontend topology.shards is authoritative for Porygon ESC count.
         scheduler_cfg = by_category.get("scheduler").config if by_category.get("scheduler") else {}
+        executor_cfg = by_category.get("block_executor").config if by_category.get("block_executor") else {}
         cross_cfg = by_category.get("cross_shard").config if by_category.get("cross_shard") else {}
+        for cfg in (scheduler_cfg, executor_cfg, cross_cfg):
+            cfg["execution_shard_count"] = spec.topology.shards
+        # MBE_PORYGON_UNIFIED_SHARD_V14_TEST_ALIGNMENT_20260921: a synthetic
+        # cross-shard workload is meaningful only when the frontend exposes at
+        # least two Porygon execution shards/ESCs. Multi-shard Porygon itself
+        # is supported; only the impossible one-shard cross-shard case blocks.
+        if float(workload_config.get("cross_shard_ratio", 0.0) or 0.0) > 0.0 and spec.topology.shards < 2:
+            blockers.append("Porygon cross_shard_ratio>0 requires at least 2 execution shards")
         shard_count = int(scheduler_cfg.get("execution_shard_count", 4) or 4)
+        if shard_count < 1:
+            blockers.append("Porygon execution_shard_count must be >= 1")
+        if int(executor_cfg.get("execution_shard_count", shard_count) or shard_count) != shard_count:
+            blockers.append("Porygon scheduler and block executor execution_shard_count must match")
         if int(cross_cfg.get("execution_shard_count", shard_count) or shard_count) != shard_count:
             blockers.append("Porygon scheduler and cross-shard execution_shard_count must match")
-        warnings.append("Porygon uses the common MBE PBFT consensus for fair comparison; W/O/E/M pipeline timing is exported as logical protocol-slot evidence and is not claimed as wall-clock overlap")
+        committee_count = int(scheduler_cfg.get("execution_committee_count", 3) or 3)
+        if int(executor_cfg.get("execution_committee_count", committee_count) or committee_count) != committee_count:
+            blockers.append("Porygon scheduler and block executor execution_committee_count must match")
+        for key in ("pipeline_enabled", "cross_batch_witness"):
+            if bool(scheduler_cfg.get(key, True)) != bool(executor_cfg.get(key, True)):
+                blockers.append(f"Porygon scheduler and block executor {key} must match")
+        warnings.append("Porygon maps frontend topology.shards to execution shards/ESCs while all nodes share one global PBFT ordering domain; MetaTrack remote StateVersions/CAS and MBE Relay/Finalize remain disabled")
+        warnings.append("Porygon pipeline evidence is logical Witness/Ordering/Execution/Commit protocol-slot evidence; current shared PBFT runtime does not claim cross-height wall-clock overlap")
+        warnings.append("Porygon storage-node separation is represented by signed AccessList execution projection over MBE persistent state; separate physical Storage Nodes are not claimed")
 
     if spec.execution_backend == "real_cluster" and blockers:
         warnings.append("real_cluster is blocked and will not fall back to simulation or V4 smoke")

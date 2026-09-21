@@ -237,7 +237,7 @@ STATELESS_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
 }
 
 
-# MBE_PORYGON_PAPER_REPRO_20260920_V7: separate family so existing STATELESS_BUILTIN_METHODS tests/semantics remain unchanged.
+# MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: separate family so existing STATELESS_BUILTIN_METHODS tests/semantics remain unchanged.
 PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     "stateless_porygon": V5FormalMethod(
         method_id="stateless_porygon",
@@ -254,10 +254,9 @@ PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "normal_commit",
         },
         plugin_config_overrides={
-            "block_producer": {"transaction_block_size": 100, "witness_threshold": 1},
-            "scheduler": {"execution_shard_count": 4, "execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True},
-            "block_executor": {"worker_count": 4},
-            "cross_shard": {"execution_shard_count": 4},
+            "block_producer": {"witness_threshold": 1},
+            "scheduler": {"execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True},
+            "block_executor": {"worker_count": 4, "execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True},
         },
     ),
 }
@@ -366,11 +365,19 @@ def _verified_method(method: V5FormalMethod) -> V5FormalMethod:
     return V5FormalMethod(method_id=method.method_id, display_name=saved["name"], plugin_overrides=expected, plugin_config_overrides=expected_config_overrides, role=role)
 
 
+# MBE_PORYGON_UNIFIED_SHARD_V15_BUILTIN_PAYLOAD_PARITY_20260921: empty
+# per-category override maps are semantically identical to an omitted override.
+# Keep all non-empty builtin method configuration strict.
+def _normalized_builtin_config_overrides(value: dict[str, dict]) -> dict[str, dict]:
+    return {category: dict(config) for category, config in value.items() if config}
+
+
 def _builtin_method_payload_matches(method: V5FormalMethod, expected: V5FormalMethod) -> bool:
     return (
         method.display_name == expected.display_name
         and method.plugin_overrides == expected.plugin_overrides
-        and method.plugin_config_overrides == expected.plugin_config_overrides
+        and _normalized_builtin_config_overrides(method.plugin_config_overrides)
+        == _normalized_builtin_config_overrides(expected.plugin_config_overrides)
     )
 
 

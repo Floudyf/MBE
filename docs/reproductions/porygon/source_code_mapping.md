@@ -1,17 +1,24 @@
-# Porygon Source Code Mapping
+# Porygon v8 source-code mapping
 
-| Paper mechanism | MBE implementation |
-| --- | --- |
-| Transaction Block | `porygonTransactionBlockEvidence` + `porygon_transaction_block_producer` |
-| Witness / data availability | proposal body/access roots + Porygon `ProposalEvidenceVerifier` validator recomputation before PBFT |
-| Ordering Committee global order | `porygon_pipeline_scheduler` serialization order |
-| Execution Committee | `execution_committee_count` configuration + pipeline committee assignment |
-| Execution Sub-Committee | deterministic `porygonExecutionShard` mapping |
-| W/O/E/M | `porygonPipelineStage` logical protocol schedule |
-| Cross-Batch Witness | `cross_batch_witness` pipeline stage |
-| Single-Shard Execution | one `ExecutionShard` per `porygonTxAssignment` |
-| Multi-Shard Update | involved ESC list + deterministic multi-key materialization |
-| State locking | `LockedKeys` evidence for cross-shard writes |
-| Stateless state access | real transaction `AccessList` + `porygon_remote_state_access` + shared remote-state transport; MetaTrack `SchedulingAccessList` and version-chain control are excluded |
-| Deterministic execution | `porygon_block_executor` conflict-safe parallel waves |
-| Correctness oracle | serial state-root / receipt-root regression test |
+- `executor/v5/porygon_plugins.go`
+  - single physical ordering-domain routing
+  - Transaction Block witness evidence
+  - sender→ESC and state-key→logical-shard mapping
+  - conflict/lock wave planning
+  - W/O/E/C and Cross-Batch Witness protocol-slot evidence
+  - physical Relay disablement
+- `executor/v5/porygon_executor.go`
+  - signed-AccessList state projection
+  - fixed worker-pool ESC wave execution
+  - access-closure verification
+  - exactly-once business execution evidence
+  - atomic deterministic multi-key materialization
+  - Porygon truth-boundary metrics
+- `executor/v5/porygon_plugins_test.go`
+  - control-plane isolation, ESC distribution, cross-ESC parallelism, global conflict order, oracle, access fail-closed and tamper tests
+- `backend/app/services/v5_compatibility_engine.py`
+  - one-physical-shard guard and configuration matching
+- `backend/app/services/v5_formal_plan_validator.py`
+  - builtin Porygon method profile
+- `backend/app/services/v5_metric_extractor.py`
+  - mechanism-evidence extraction

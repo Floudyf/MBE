@@ -78,6 +78,7 @@ type BlockSTMExecutor struct {
 	Metrics                BlockSTMMetrics
 	Progress               func(BlockSTMProgress)
 	serialSemantics        *SerialExecutor
+	deltaOnly              bool // MBE_VERSIONED_WAVE_DELTA_ONLY_V14B
 }
 
 func NewBlockSTMExecutor(workerCount int) *BlockSTMExecutor {
@@ -88,6 +89,19 @@ func NewBlockSTMExecutor(workerCount int) *BlockSTMExecutor {
 }
 
 func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
+	return e.ExecuteBlockWithCommitment(ctx, b, base, nil)
+}
+
+// ExecuteBlockDeltas is intentionally available only to the
+// performance/oracle-off path used by stateless versioned temporary waves.
+// Other configurations preserve the historical full block execution.
+func (e *BlockSTMExecutor) ExecuteBlockDeltas(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
+	if e.ExecutionMode != "performance" || e.OracleMode != "off" {
+		return e.ExecuteBlockWithCommitment(ctx, b, base, nil)
+	}
+	previous := e.deltaOnly
+	e.deltaOnly = true
+	defer func() { e.deltaOnly = previous }()
 	return e.ExecuteBlockWithCommitment(ctx, b, base, nil)
 }
 
@@ -475,6 +489,57 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 	}
 
 	metrics.TransactionExecutionMS = time.Since(executionStarted).Milliseconds()
+
+	if e.deltaOnly {
+		result := Result{
+			BlockHash:       b.BlockHash,
+			Height:          b.Height,
+			Deterministic:   true,
+			EVMExecution:    false,
+			FabricExecution: false,
+			StateUpdates:    map[string]string{},
+			BlockExecutorID: BlockSTMExecutorID,
+			ExecutorVersion: BlockSTMExecutorVersion,
+			WorkerCount:     workerCount,
+		}
+		for index, item := range b.TxList {
+			if !validated[index] {
+				return Result{}, fmt.Errorf("block-stm missing validated incarnation for tx %s", item.TxID)
+			}
+			receipt := receipts[index]
+			if receipt.TxID == "" {
+				return Result{}, fmt.Errorf("block-stm missing validated receipt for tx %s", item.TxID)
+			}
+			delta := TxDelta{
+				TxID:          item.TxID,
+				OriginalIndex: index,
+				ReadSet:       readSets[index],
+				WriteSet:      writeSets[index],
+				Receipt:       receipt,
+				Success:       receipt.Success,
+				Error:         receipt.Error,
+			}
+			result.TxDeltas = append(result.TxDeltas, delta)
+			result.Receipts = append(result.Receipts, receipt)
+			if receipt.Success {
+				result.SuccessfulTxs++
+			} else {
+				result.FailedTxs++
+			}
+			metrics.CommittedTransactionCount++
+			metrics.IncarnationHistogram[incarnations[index]]++
+			if incarnations[index] > metrics.MaximumIncarnation {
+				metrics.MaximumIncarnation = incarnations[index]
+			}
+		}
+		result.TransactionExecutionMS = metrics.TransactionExecutionMS
+		result.BlockSTMMetrics = metrics
+		result.SerialEquivalent = true
+		e.Metrics = metrics
+		reportProgress(-1, metrics.MaximumIncarnation, 0)
+		return result, nil
+	}
+
 	serialWorking := copySnapshot(base)
 	commitmentStarted := time.Now()
 	commitment := state.CloneOrBuild(baseCommitment, serialWorking)

@@ -258,6 +258,9 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "versioned_state_probe_latency_ms": cluster.get("versioned_state_probe_latency_ms"),
         "versioned_state_ready_max_wave_width": cluster.get("versioned_state_ready_max_wave_width"),
         "versioned_state_ready_scheduler_mode": cluster.get("versioned_state_ready_scheduler_mode"),
+        "versioned_wave_execution_policy": cluster.get("versioned_wave_execution_policy"),  # MBE_VERSIONED_WAVE_OBSERVABILITY_CLOSURE_V14B1
+        "versioned_wave_delta_only_count": cluster.get("versioned_wave_delta_only_count"),
+        "versioned_wave_full_fallback_count": cluster.get("versioned_wave_full_fallback_count"),
         "source_artifacts": list(required_artifacts),
         "missing": missing,
     }
@@ -466,6 +469,43 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
         return total
 
     metrics["block_execution_ms"] = total_int("block_execution_ms")
+
+    # MBE_PORYGON_ESC_OWNERSHIP_TIMING_TRUTH_V19_20260921: distinguish
+    # resource-sum timing from parallel-shard wall-clock critical path.
+    per_leader_block_ms: list[float] = []
+    per_leader_business_us: list[float] = []
+    for summary in summaries:
+        summary_blocks = summary.get("blocks") if isinstance(summary.get("blocks"), list) else []
+        per_leader_block_ms.append(sum(float(block.get("block_execution_ms") or 0) for block in summary_blocks if isinstance(block, dict)))
+        business_us = 0.0
+        for block in summary_blocks:
+            if not isinstance(block, dict):
+                continue
+            raw = block.get("transaction_execution_us")
+            if raw is not None and not isinstance(raw, bool):
+                try:
+                    business_us += float(raw)
+                    continue
+                except (TypeError, ValueError):
+                    pass
+            business_us += float(_int(block.get("transaction_execution_ms"))) * 1000.0
+        per_leader_business_us.append(business_us)
+    metrics["execution_cpu_sum_ms"] = sum(per_leader_block_ms)
+    metrics["execution_critical_path_ms"] = max(per_leader_block_ms, default=0.0)
+    metrics["business_execution_cpu_sum_ms"] = sum(per_leader_business_us) / 1000.0
+    metrics["business_execution_critical_path_ms"] = max(per_leader_business_us, default=0.0) / 1000.0
+    metrics["execution_critical_path_truth_scope"] = "max_of_per_consensus_domain_leader_sequential_block_sums"
+
+    planner_us_by_leader: list[float] = []
+    for path in _batch_si_leader_summary_paths(run_dir):
+        runtime_metrics = _read_json(path.parent / "runtime_metrics.json")
+        counts = runtime_metrics.get("counts") if isinstance(runtime_metrics.get("counts"), dict) else {}
+        planner_us_by_leader.append(float(_int(counts.get("consensus_planner_build_us"))))
+    if any(value > 0 for value in planner_us_by_leader):
+        metrics["planner_build_cpu_sum_ms"] = sum(planner_us_by_leader) / 1000.0
+        metrics["planner_build_critical_path_ms"] = max(planner_us_by_leader, default=0.0) / 1000.0
+        metrics["planner_build_timing_truth_scope"] = "proposal_leader_consensus_plan_build_only"
+
     transaction_us = total_number("transaction_execution_us")
     materialization_us = total_number("deterministic_materialization_us")
     metrics["transaction_execution_ms"] = (
@@ -534,7 +574,7 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
             if rel not in metrics["source_artifacts"]:
                 metrics["source_artifacts"].append(rel)
 
-# MBE_PORYGON_PAPER_REPRO_20260920_V7: derive Porygon mechanism evidence from leader-per-shard block summaries.
+# MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: derive Porygon v8 mechanism evidence from leader block summaries.
 def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
     summaries = [item for item in summaries if item and item.get("block_executor_id") == "porygon_block_executor"]
@@ -553,13 +593,43 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     def maximum(name: str) -> int:
         return max((_int(block.get(name)) for block in blocks), default=0)
 
+    # MBE_PORYGON_UNIFIED_SHARD_V10_20260921: expose the unified frontend-shard -> Porygon execution-shard topology.
+    compiled = _read_json(run_dir / "compiled_run_plan.json")
+    node_configs = compiled.get("node_configs") if isinstance(compiled.get("node_configs"), list) else []
+    execution_members: dict[str, list[str]] = {}
+    consensus_domains: dict[str, list[str]] = {}
+    for node in node_configs:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("node_id") or "")
+        execution_shard = str(node.get("execution_shard_id") or node.get("shard_id") or "")
+        consensus_domain = str(node.get("consensus_domain_id") or node.get("shard_id") or "")
+        if execution_shard and node_id:
+            execution_members.setdefault(execution_shard, []).append(node_id)
+        if consensus_domain and node_id:
+            consensus_domains.setdefault(consensus_domain, []).append(node_id)
+    shard_tx_counts: dict[str, int] = {}
+    for block in blocks:
+        histogram = block.get("porygon_execution_shard_histogram")
+        if isinstance(histogram, dict):
+            for shard_id, raw in histogram.items():
+                shard_tx_counts[str(shard_id)] = shard_tx_counts.get(str(shard_id), 0) + _int(raw)
+    total_shard_txs = sum(shard_tx_counts.values())
+    max_shard_share = (max(shard_tx_counts.values()) / total_shard_txs) if total_shard_txs and shard_tx_counts else None
     metrics.update({
+        "porygon_topology_shard_count": len(execution_members),
+        "porygon_ordering_domain_count": len(consensus_domains),
+        "porygon_execution_shard_members": execution_members,
+        "porygon_consensus_domains": consensus_domains,
+        "porygon_execution_shard_transaction_counts": shard_tx_counts,
+        "porygon_max_execution_shard_share": max_shard_share,
         "porygon_metrics_available": True,
         "porygon_witnessed_block_count": total("porygon_witnessed_block_count"),
         "porygon_cross_batch_witness_count": total("porygon_cross_batch_witness_count"),
         "porygon_pipeline_overlap_slot_count": total("porygon_pipeline_overlap_slot_count"),
         "porygon_execution_committee_count": maximum("porygon_execution_committee_count"),
         "porygon_execution_shard_count": maximum("porygon_execution_shard_count"),
+        "porygon_active_execution_shard_count": maximum("porygon_active_execution_shard_count"),
         "porygon_execution_wave_count": total("porygon_execution_wave_count"),
         "porygon_maximum_wave_width": maximum("porygon_maximum_wave_width"),
         "porygon_intra_shard_transaction_count": total("porygon_intra_shard_transaction_count"),
@@ -567,15 +637,62 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "porygon_single_shard_execution_count": total("porygon_single_shard_execution_count"),
         "porygon_multi_shard_update_count": total("porygon_multi_shard_update_count"),
         "porygon_state_lock_count": total("porygon_state_lock_count"),
+        "porygon_meta_remote_state_control_plane_used": any(bool(block.get("porygon_meta_remote_state_control_plane_used")) for block in blocks),
+        "porygon_physical_relay_protocol_used": any(bool(block.get("porygon_physical_relay_protocol_used")) for block in blocks),
         "porygon_pipeline_timing_truth_boundary": next((block.get("porygon_pipeline_timing_truth_boundary") for block in blocks if block.get("porygon_pipeline_timing_truth_boundary")), None),
         "porygon_mbe_consensus_adaptation": next((block.get("porygon_mbe_consensus_adaptation") for block in blocks if block.get("porygon_mbe_consensus_adaptation")), None),
+        "porygon_storage_node_adaptation": next((block.get("porygon_storage_node_adaptation") for block in blocks if block.get("porygon_storage_node_adaptation")), None),
     })
     for path in _batch_si_leader_summary_paths(run_dir):
         if path.is_file():
             rel = str(path.relative_to(run_dir)).replace("\\", "/")
             if rel not in metrics["source_artifacts"]:
                 metrics["source_artifacts"].append(rel)
-
+    # MBE_PORYGON_ESC_OWNERSHIP_TIMING_TRUTH_V19_20260921: audit real ESC
+    # business-execution ownership from every replica. Algorithmic timing
+    # also keeps one deterministic representative per ESC so PBFT replicas do
+    # not multiply the logical execution cost.
+    all_porygon_summaries = []
+    for path in sorted((run_dir / "nodes").glob("*/block_execution_summary.json")):
+        payload = _read_json(path)
+        if payload.get("block_executor_id") == "porygon_block_executor":
+            all_porygon_summaries.append((path.parent.name, payload))
+    local_count_by_node: dict[str, int] = {}
+    business_us_by_node: dict[str, float] = {}
+    exchange_wait_us_by_node: dict[str, float] = {}
+    critical_us_by_node: dict[str, float] = {}
+    for node_id, summary in all_porygon_summaries:
+        node_blocks = summary.get("blocks") if isinstance(summary.get("blocks"), list) else []
+        local_count_by_node[node_id] = sum(_int(block.get("porygon_local_business_execution_count")) for block in node_blocks if isinstance(block, dict))
+        business_us_by_node[node_id] = sum(float(block.get("porygon_business_execution_us") or 0) for block in node_blocks if isinstance(block, dict))
+        exchange_wait_us_by_node[node_id] = sum(float(block.get("porygon_result_exchange_wait_us") or 0) for block in node_blocks if isinstance(block, dict))
+        critical_us_by_node[node_id] = sum(float(block.get("porygon_execution_critical_path_us") or 0) for block in node_blocks if isinstance(block, dict))
+    representative_nodes = [sorted(members)[0] for _, members in sorted(execution_members.items()) if members]
+    # MBE_PORYGON_ESC_OWNERSHIP_METRIC_KEYFIX_V24_20260921: topology uses s0/s1
+    # while historical Porygon execution histograms use esc_0/esc_1. Preserve the
+    # published histogram keys, but normalize aliases when deriving expected per-node
+    # business execution ownership.
+    def ownership_expected_count(execution_shard_id: str) -> int:
+        if execution_shard_id in shard_tx_counts:
+            return shard_tx_counts[execution_shard_id]
+        if execution_shard_id.startswith("s") and execution_shard_id[1:].isdigit():
+            return shard_tx_counts.get(f"esc_{execution_shard_id[1:]}", 0)
+        if execution_shard_id.startswith("esc_") and execution_shard_id[4:].isdigit():
+            return shard_tx_counts.get(f"s{execution_shard_id[4:]}", 0)
+        return 0
+    expected_by_node = {node_id: ownership_expected_count(shard_id) for shard_id, members in execution_members.items() for node_id in members}
+    ownership_verified = bool(local_count_by_node) and bool(expected_by_node) and all(local_count_by_node.get(node_id) == expected for node_id, expected in expected_by_node.items())
+    metrics.update({
+        "porygon_local_business_execution_count_by_node": local_count_by_node,
+        "porygon_expected_business_execution_count_by_node": expected_by_node,
+        "porygon_esc_ownership_verified": ownership_verified,
+        "porygon_business_execution_replica_cpu_sum_ms": sum(business_us_by_node.values()) / 1000.0,
+        "porygon_business_execution_esc_representative_sum_ms": sum(business_us_by_node.get(node_id, 0.0) for node_id in representative_nodes) / 1000.0,
+        "porygon_result_exchange_wait_replica_sum_ms": sum(exchange_wait_us_by_node.values()) / 1000.0,
+        "porygon_execution_critical_path_ms": max(critical_us_by_node.values(), default=0.0) / 1000.0,
+        "porygon_timing_truth_scope": "business_cpu_and_esc_exchange_reported_separately;critical_path_is_max_replica_wave_barrier_wall_time",
+        "porygon_transaction_execution_ms_truth_scope": "leader_local_owned_business_execution_only;use_porygon_execution_critical_path_ms_for_wall_clock",
+    })
 
 def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     aggregate_path = run_dir / "aggregate" / "block_stm_aggregate_summary.json"

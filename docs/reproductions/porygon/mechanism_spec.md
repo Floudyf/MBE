@@ -1,23 +1,19 @@
-# Porygon Mechanism Specification
+# Porygon mechanism specification — MBE v8
 
-The MBE Porygon baseline models the paper's three parallel dimensions:
+## Ordering and execution domains
 
-1. **Storage / stateless separation.** Transaction/state homes remain authoritative at the storage side; Porygon execution uses the existing stateless remote-state path rather than MetaTrack placement.
-2. **Cross-batch protocol pipeline.** Every transaction block has Witness, Ordering, Execution and Commit stages. The plan records committee assignment and Cross-Batch Witness overlap in deterministic logical protocol slots.
-3. **Intra-block execution sharding.** Declared state keys are deterministically assigned to execution sub-committees (ESCs). Transactions touching one ESC are intra-shard; transactions touching multiple ESCs are cross-shard.
+Porygon v8 uses **one physical MBE/PBFT shard as the Ordering Committee adaptation**. `execution_shard_count` creates logical Execution Sub-Committees (ESCs) inside that common ordering domain. MBE physical shards are not treated as Porygon ESCs.
 
-## Transaction block and witness
+Transactions retain block order as the global OC order. Execution ESC is deterministically selected from the signed sender identity. Declared state keys are independently mapped to logical state shards. A transaction is logical cross-shard when its execution ESC plus accessed state ownership spans more than one logical shard.
 
-The proposer binds the complete transaction body, transaction IDs and execution `AccessList` values into proposal evidence (never the MetaTrack-only `SchedulingAccessList`). Every PBFT validator recomputes these roots before accepting the deterministic execution plan. The MBE witness truth boundary is therefore `full_body_validator_recompute_before_pbft_vote`, not a fabricated signature count.
+## Access and locking
 
-## Ordering
-
-The scheduler preserves the consensus transaction order as the global Porygon order. A deterministic plan commits ESC assignments, cross-shard classification, lock keys and conflict-safe execution waves before PBFT.
+Only the signed `AccessList` is used. `SchedulingAccessList`, MetaTrack `StateVersions`, runtime-discovered future accesses, and the generic remote CAS path are excluded. Logical cross-shard locking is conservatively derived from the signed AccessList. Two transactions on different ESCs may share a wave only when their declared locks/dependencies do not conflict.
 
 ## Execution
 
-Transactions in a wave have no conflicting declared accesses and execute in parallel against the same immutable wave snapshot. Conflicting transactions advance to later waves. Cross-shard transactions are barriers: they execute exactly once on one deterministic ESC and their multi-key delta is materialized atomically after the wave.
+Each transaction executes exactly once on one logical ESC. Each wave uses a common immutable snapshot. Actual reads/writes are checked against the signed AccessList and undeclared access fails closed. Results are deterministically materialized into the single common state domain, representing Multi-Shard Update atomically at the MBE adaptation boundary.
 
-## Commit
+## Pipeline
 
-Execution results are materialized in deterministic consensus order and committed through MBE's shared durable commit path. Final state/receipt roots must match the serial oracle for the same ordered block.
+Witness / Ordering / Execution / Commit and Cross-Batch Witness are exported as deterministic protocol-slot evidence. Current MBE PBFT permits only one consensus height in flight, so v8 explicitly does **not** claim real cross-height wall-clock overlap.

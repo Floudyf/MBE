@@ -948,6 +948,8 @@ def _metatrack_control_plane_evidence(run_dir: Path, summary: dict) -> dict:
         "versioned_state_ready_resolved_token_count": "versioned_state_ready_resolved_token_count",
         "versioned_state_probe_count": "versioned_state_probe_count",
         "versioned_state_probe_latency_ms": "versioned_state_probe_latency_ms",
+        "versioned_wave_delta_only_count": "versioned_wave_delta_only_count",  # MBE_VERSIONED_WAVE_OBSERVABILITY_CLOSURE_V14B1
+        "versioned_wave_full_fallback_count": "versioned_wave_full_fallback_count",
     }
     for source, target in {**native_fields, **versioned_fields}.items():
         total_value = 0
@@ -972,6 +974,8 @@ def _metatrack_control_plane_evidence(run_dir: Path, summary: dict) -> dict:
     versioned_modes = sorted({str(item.get("versioned_state_ready_scheduler_mode") or "").strip() for item in representatives.values() if str(item.get("versioned_state_ready_scheduler_mode") or "").strip()})
     out["versioned_state_ready_scheduler_modes"] = versioned_modes
     out["versioned_state_ready_scheduler_mode"] = versioned_modes[0] if len(versioned_modes) == 1 else ("mixed" if versioned_modes else "")
+    wave_policies = sorted({str(item.get("versioned_wave_execution_policy") or "").strip() for item in representatives.values() if str(item.get("versioned_wave_execution_policy") or "").strip()})
+    out["versioned_wave_execution_policy"] = wave_policies[0] if len(wave_policies) == 1 else ("mixed" if wave_policies else "")
     return out
 
 

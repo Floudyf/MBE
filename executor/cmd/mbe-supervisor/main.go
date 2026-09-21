@@ -150,6 +150,9 @@ type v5NodeSummary struct {
 	VersionedStateProbeLatencyMS                      int64   `json:"versioned_state_probe_latency_ms"`
 	VersionedStateReadyMaxWaveWidth                   int64   `json:"versioned_state_ready_max_wave_width"`
 	VersionedStateReadySchedulerMode                  string  `json:"versioned_state_ready_scheduler_mode"`
+	VersionedWaveExecutionPolicy                      string  `json:"versioned_wave_execution_policy"` // MBE_VERSIONED_WAVE_OBSERVABILITY_CLOSURE_V14B1
+	VersionedWaveDeltaOnlyCount                       int64   `json:"versioned_wave_delta_only_count"`
+	VersionedWaveFullFallbackCount                    int64   `json:"versioned_wave_full_fallback_count"`
 	RealPBFT                                          bool    `json:"real_pbft_style_messages"`
 	BlockExecutorID                                   string  `json:"block_executor_id"`
 	BlockExecutorVersion                              string  `json:"block_executor_version"`
@@ -341,21 +344,18 @@ func runV5(planPath, dataDir string) error {
 	if err != nil {
 		return err
 	}
-	finality, err := deriveFinalityArtifacts(dataDir, plan.NodeConfigs, planUsesStatelessDirectExecution(plan))
+	// MBE_PORYGON_UNIFIED_SHARD_V16_FINALITY_CAPABILITY_20260921
+	finalityMode := planCrossShardFinalityMode(plan)
+	finality, err := deriveFinalityArtifactsWithMode(dataDir, plan.NodeConfigs, finalityMode)
 	if err != nil {
 		return err
 	}
 	summary["finality_evidence"] = finality
-	if planUsesStatelessDirectExecution(plan) {
-		summary["cross_shard_execution_mode"] = "stateless_direct_execution"
-		summary["legacy_cross_shard_protocol"] = false
-	} else {
-		summary["cross_shard_execution_mode"] = "legacy_lock_relay_finalize"
-		summary["legacy_cross_shard_protocol"] = true
-	}
+	summary["cross_shard_execution_mode"] = finalityMode
+	summary["legacy_cross_shard_protocol"] = finalityMode == v5.CrossShardFinalityLegacyRelay
 	if value, ok := finality["cross_shard_finalized_unique_count"].(int); ok {
 		summary["cross_shard_success_count"] = value
-		summary["real_cross_shard_network"] = value > 0
+		summary["real_cross_shard_network"] = value > 0 && finalityMode != v5.CrossShardFinalityPorygonGlobalCommit
 	}
 	if value, ok := finality["cross_shard_refunded_unique_count"].(int); ok {
 		summary["cross_shard_refund_count"] = value
@@ -371,6 +371,14 @@ func runV5(planPath, dataDir string) error {
 
 func planUsesStatelessDirectExecution(plan v5.Plan) bool {
 	return v5.PlanUsesStatelessDirectExecution(plan)
+}
+
+func planCrossShardFinalityMode(plan v5.Plan) string {
+	return v5.PlanCrossShardFinalityMode(plan)
+}
+
+func planUsesDirectCommitFinality(plan v5.Plan) bool {
+	return v5.PlanUsesDirectCommitFinality(plan)
 }
 
 func readRuntimeStatusWithRetry(path string, attempts int, delay time.Duration) (map[string]any, bool) {
@@ -446,7 +454,7 @@ func observeDrainProgress(previous progressSnapshot, initialized bool, current p
 
 func drainV5(plan v5.Plan, dataDir string) error {
 	started := time.Now()
-	statelessDirect := planUsesStatelessDirectExecution(plan)
+	directCommitFinality := planUsesDirectCommitFinality(plan)
 	submitted := plan.WorkloadPlan.TxCount
 	classification, err := loadSubmissionClassification(dataDir, submitted)
 	if err != nil {
@@ -502,7 +510,7 @@ func drainV5(plan v5.Plan, dataDir string) error {
 			}
 			heights[shard][fmt.Sprint(status["committed_height"])] = true
 		}
-		liveTerminal, _, err := deriveLiveTerminalWithExpected(classification, statuses, statelessDirect, validatorCountByShard(plan.NodeConfigs))
+		liveTerminal, _, err := deriveLiveTerminalWithExpected(classification, statuses, directCommitFinality, validatorCountByShard(plan.NodeConfigs))
 		if err != nil {
 			_ = v5.SaveJSON(filepath.Join(dataDir, "stalled_runtime_report.json"), map[string]any{"classifiers": []string{"terminal_accounting_missing"}, "phase": "FAILED", "reason": err.Error(), "submitted": submitted})
 			return err
@@ -1159,7 +1167,19 @@ func validatorCountByShard(nodes []v5.NodePlan) map[string]int {
 	return out
 }
 
+// MBE_PORYGON_UNIFIED_SHARD_V17_FINALITY_API_COMPAT_20260921:
+// Preserve the historical bool API used by existing supervisor tests and
+// internal callers. New protocol-aware code uses the explicit mode helper.
 func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirect bool) (map[string]any, error) {
+	mode := v5.CrossShardFinalityLegacyRelay
+	if statelessDirect {
+		mode = v5.CrossShardFinalityStatelessDirect
+	}
+	return deriveFinalityArtifactsWithMode(dataDir, nodes, mode)
+}
+
+func deriveFinalityArtifactsWithMode(dataDir string, nodes []v5.NodePlan, finalityMode string) (map[string]any, error) {
+	directCommitFinality := finalityMode == v5.CrossShardFinalityStatelessDirect || finalityMode == v5.CrossShardFinalityPorygonGlobalCommit
 	drain, err := readDrainStatus(dataDir)
 	if err != nil {
 		return nil, err
@@ -1279,7 +1299,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 		}
 		authoritative := false
 		if entry.cross {
-			if statelessDirect {
+			if directCommitFinality {
 				authoritative = stage == "durable_committed"
 			} else {
 				authoritative = stage == "sourcefinalize" || stage == "refund"
@@ -1333,7 +1353,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 			}
 			switch stage {
 			case "durable_committed":
-				if statelessDirect {
+				if directCommitFinality {
 					crossFinalized++
 				}
 			case "sourcefinalize":
@@ -1409,7 +1429,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 		return nil, err
 	}
 	terminalUnique := intraTerminal + crossFinalized + crossRefunded + crossFailed
-	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle_and_drain_completion", "finality_semantics_version": "authoritative_protocol_outcome_with_classified_failure_v2", "cross_shard_execution_mode": map[bool]string{true: "stateless_direct_execution", false: "legacy_lock_relay_finalize"}[statelessDirect], "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "intra_shard_terminal_unique_count": intraTerminal, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": timing.EndToEndTPS, "logical_window_start_ms": timing.LogicalWindowStartMS, "logical_window_end_ms": timing.LogicalWindowEndMS, "logical_finality_duration_ms": timing.LogicalFinalityDurationMS, "logical_finality_tps": timing.LogicalFinalityTPS, "drain_started_at_ms": timing.DrainStartedAtMS, "drain_finished_at_ms": timing.DrainFinishedAtMS, "drain_duration_ms": timing.DrainDurationMS, "system_delta_drain_block_count": timing.SystemDeltaDrainBlockCount, "completion_window_start_ms": timing.CompletionWindowStartMS, "completion_window_end_ms": timing.CompletionWindowEndMS, "completion_duration_ms": timing.CompletionDurationMS, "end_to_end_tps": timing.EndToEndTPS, "tail_completion_overhead_ms": timing.TailCompletionOverheadMS, "tcp_send_latency_excluded": true}
+	summary := map[string]any{"metric_truth": "derived_from_raw_runtime_lifecycle_and_drain_completion", "finality_semantics_version": "authoritative_protocol_outcome_with_classified_failure_v2", "cross_shard_execution_mode": finalityMode, "logical_transaction_count": len(byLogical), "submitted_unique_tx_count": len(byLogical), "intra_shard_committed_unique_count": intraCommitted, "intra_shard_terminal_unique_count": intraTerminal, "cross_shard_requested_unique_count": crossRequested, "cross_shard_target_committed_unique_count": crossTarget, "cross_shard_finalized_unique_count": crossFinalized, "cross_shard_refunded_unique_count": crossRefunded, "cross_shard_failed_unique_count": crossFailed, "terminal_unique_tx_count": terminalUnique, "incomplete_unique_tx_count": len(byLogical) - terminalUnique, "finalized_unique_logical_tx_count": finalized, "p50_finality_ms": percentile(.50), "p95_finality_ms": percentile(.95), "p99_finality_ms": percentile(.99), "throughput_tps": timing.EndToEndTPS, "logical_window_start_ms": timing.LogicalWindowStartMS, "logical_window_end_ms": timing.LogicalWindowEndMS, "logical_finality_duration_ms": timing.LogicalFinalityDurationMS, "logical_finality_tps": timing.LogicalFinalityTPS, "drain_started_at_ms": timing.DrainStartedAtMS, "drain_finished_at_ms": timing.DrainFinishedAtMS, "drain_duration_ms": timing.DrainDurationMS, "system_delta_drain_block_count": timing.SystemDeltaDrainBlockCount, "completion_window_start_ms": timing.CompletionWindowStartMS, "completion_window_end_ms": timing.CompletionWindowEndMS, "completion_duration_ms": timing.CompletionDurationMS, "end_to_end_tps": timing.EndToEndTPS, "tail_completion_overhead_ms": timing.TailCompletionOverheadMS, "tcp_send_latency_excluded": true}
 	return summary, v5.SaveJSON(filepath.Join(dataDir, "finality_summary.json"), summary)
 }
 
@@ -1742,6 +1762,9 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	versionedProbeLatencyByShard := map[string]int64{}
 	versionedMaxWaveWidth := int64(0)
 	versionedModes := map[string]bool{}
+	versionedWavePolicies := map[string]bool{}
+	versionedWaveDeltaOnlyByShard := map[string]int64{}
+	versionedWaveFullFallbackByShard := map[string]int64{}
 	classificationConflictEdgesByShard := map[string]int64{}
 	classificationSCCByShard := map[string]int64{}
 	classificationAmbiguousByShard := map[string]int64{}
@@ -1920,6 +1943,15 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		if item.VersionedStateReadySchedulerMode != "" {
 			versionedModes[item.VersionedStateReadySchedulerMode] = true
 		}
+		if item.VersionedWaveExecutionPolicy != "" {
+			versionedWavePolicies[item.VersionedWaveExecutionPolicy] = true
+		}
+		if item.VersionedWaveDeltaOnlyCount > versionedWaveDeltaOnlyByShard[item.ShardID] {
+			versionedWaveDeltaOnlyByShard[item.ShardID] = item.VersionedWaveDeltaOnlyCount
+		}
+		if item.VersionedWaveFullFallbackCount > versionedWaveFullFallbackByShard[item.ShardID] {
+			versionedWaveFullFallbackByShard[item.ShardID] = item.VersionedWaveFullFallbackCount
+		}
 		network, _ := os.ReadFile(filepath.Join(node.DataDir, "network_log.csv"))
 		faultEvidence = faultEvidence || strings.Contains(string(network), "fault_")
 	}
@@ -1993,6 +2025,7 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	}
 	stateReadyMode := singleMapKey(stateReadyModes)
 	versionedStateReadyMode := singleMapKey(versionedModes)
+	versionedWaveExecutionPolicy := singleMapKey(versionedWavePolicies)
 	return map[string]any{
 		"runtime_stage":                                          "v5_1_real_plugin_driven_multi_process_multishard_runtime",
 		"runtime_truth":                                          "v5_real_cluster_candidate",
@@ -2087,6 +2120,9 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		"versioned_state_probe_latency_ms":                       sumInt64(versionedProbeLatencyByShard),
 		"versioned_state_ready_max_wave_width":                   versionedMaxWaveWidth,
 		"versioned_state_ready_scheduler_mode":                   versionedStateReadyMode,
+		"versioned_wave_execution_policy":                        versionedWaveExecutionPolicy,
+		"versioned_wave_delta_only_count":                        sumInt64(versionedWaveDeltaOnlyByShard),
+		"versioned_wave_full_fallback_count":                     sumInt64(versionedWaveFullFallbackByShard),
 		"remote_state_access_count":                              remoteStateAccessCount,
 		"remote_state_read_count":                                remoteStateReadCount,
 		"remote_state_write_apply_count":                         remoteStateWriteApplyCount,

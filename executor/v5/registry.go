@@ -60,6 +60,24 @@ type BatchRoutingPlugin interface {
 	PlanBatch(BatchRoutingInput) BatchRoutingPlan
 }
 
+// MBE_PORYGON_UNIFIED_SHARD_V16_FINALITY_CAPABILITY_20260921:
+// CrossShardFinalityCapability is intentionally independent from
+// RoutingRuntimeCapabilities. It controls only which protocol event makes a
+// workload-classified cross-shard transaction terminal. Porygon implements
+// this capability without implementing BatchRoutingPlugin or
+// RoutingRuntimeCapabilities, so MetaTrack/versioned remote-state control
+// remains disabled.
+type CrossShardFinalityCapability interface {
+	RoutingPlugin
+	CrossShardFinalityMode() string
+}
+
+const (
+	CrossShardFinalityLegacyRelay         = "legacy_lock_relay_finalize"
+	CrossShardFinalityStatelessDirect     = "stateless_direct_execution"
+	CrossShardFinalityPorygonGlobalCommit = "porygon_global_ordering_durable_commit"
+)
+
 // RoutingRuntimeCapabilities keeps algorithm-specific runtime behavior owned by
 // the routing plugin instead of branching on plugin IDs in shared runtime code.
 type RoutingRuntimeCapabilities interface {
@@ -83,6 +101,23 @@ func routingRuntimeCapabilitiesOf(r RoutingPlugin) (RoutingRuntimeCapabilities, 
 func usesStatelessDirectExecution(r RoutingPlugin) bool {
 	c, ok := routingRuntimeCapabilitiesOf(r)
 	return ok && c.StatelessDirectExecution()
+}
+
+func crossShardFinalityMode(r RoutingPlugin) string {
+	if c, ok := r.(CrossShardFinalityCapability); ok {
+		if mode := c.CrossShardFinalityMode(); mode != "" {
+			return mode
+		}
+	}
+	if usesStatelessDirectExecution(r) {
+		return CrossShardFinalityStatelessDirect
+	}
+	return CrossShardFinalityLegacyRelay
+}
+
+func usesDirectCommitFinality(r RoutingPlugin) bool {
+	mode := crossShardFinalityMode(r)
+	return mode == CrossShardFinalityStatelessDirect || mode == CrossShardFinalityPorygonGlobalCommit
 }
 func routingBindsExecutionMetadata(r RoutingPlugin) bool {
 	c, ok := routingRuntimeCapabilitiesOf(r)
@@ -132,6 +167,30 @@ func PlanUsesStatelessDirectExecution(plan Plan) bool {
 	}
 	r, ok := p.(RoutingPlugin)
 	return ok && usesStatelessDirectExecution(r)
+}
+
+func PlanCrossShardFinalityMode(plan Plan) string {
+	if len(plan.NodeConfigs) == 0 {
+		return CrossShardFinalityLegacyRelay
+	}
+	cfg, ok := plan.NodeConfigs[0].PluginProfile["routing"]
+	if !ok || cfg.PluginID == "" {
+		return CrossShardFinalityLegacyRelay
+	}
+	p, err := BuiltinRegistry().Create("routing", cfg.PluginID, cfg.Config)
+	if err != nil {
+		return CrossShardFinalityLegacyRelay
+	}
+	r, ok := p.(RoutingPlugin)
+	if !ok {
+		return CrossShardFinalityLegacyRelay
+	}
+	return crossShardFinalityMode(r)
+}
+
+func PlanUsesDirectCommitFinality(plan Plan) bool {
+	mode := PlanCrossShardFinalityMode(plan)
+	return mode == CrossShardFinalityStatelessDirect || mode == CrossShardFinalityPorygonGlobalCommit
 }
 
 type BlockProducerPlugin interface {
@@ -187,6 +246,16 @@ type BlockExecutorPlugin interface {
 	Plugin
 	ExecuteBlock(context.Context, BlockExecutionInput) (BlockExecutionResult, error)
 }
+
+// MBE_VERSIONED_WAVE_DELTA_ONLY_V14B
+// WaveDeltaExecutor is an optional internal fast path for temporary StateReady
+// waves. It must preserve the executor's transaction semantics and algorithm
+// metrics while omitting durable block-level state-root/state-update
+// materialization that the enclosing versioned block will perform exactly once.
+type WaveDeltaExecutor interface {
+	ExecuteWave(context.Context, BlockExecutionInput) (BlockExecutionResult, error)
+}
+
 type StateAccessPlugin interface {
 	Plugin
 	AccessMode() string
@@ -363,11 +432,15 @@ type RemoteStateFetchFunc func(context.Context, tx.SignedTransaction, tx.AccessI
 type StateVersionPublishFunc func(context.Context, tx.SignedTransaction, execution.TxDelta, map[string]string) error
 
 type BlockExecutionInput struct {
-	Block                 realblock.Block
-	BaseStateSnapshot     map[string]string
-	BaseStateCommitment   *state.Commitment
-	NodeID                string
-	ShardID               string
+	Block               realblock.Block
+	BaseStateSnapshot   map[string]string
+	BaseStateCommitment *state.Commitment
+	NodeID              string
+	ShardID             string
+	// MBE_PORYGON_ESC_OWNERSHIP_TIMING_TRUTH_V19_20260921: execution-shard
+	// identity is distinct from the global PBFT ordering-domain ShardID.
+	ExecutionShardID      string
+	PorygonWaveExchange   PorygonWaveExchangeFunc
 	WorkerCount           int
 	Execution             ExecutionPlugin
 	Scheduler             SchedulerPlugin
@@ -2929,6 +3002,25 @@ func (p serialBlockExecutor) ExecuteBlock(_ context.Context, input BlockExecutio
 	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: workerCount, TransactionExecutionMS: result.TransactionExecutionMS, DeterministicApplyMS: result.DeterministicMaterializationMS, StateCommitmentMS: result.StateCommitmentMS, StateRootVersion: result.StateRootVersion}, nil
 }
 
+// ExecuteWave preserves Serial's strict transaction order and transaction-local
+// overlay semantics, but deliberately omits roots/full StateUpdates/StateDelta.
+func (p serialBlockExecutor) ExecuteWave(_ context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
+	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
+	if workerCount < 1 {
+		workerCount = 1
+	}
+	executor := execution.NewSerialExecutor()
+	result := executor.ExecuteBlockDeltas(input.Block, input.BaseStateSnapshot)
+	return BlockExecutionResult{
+		ExecutionResult:        result,
+		WorkerCount:            workerCount,
+		TransactionExecutionMS: result.TransactionExecutionMS,
+		ActualMetrics: map[string]any{
+			"versioned_wave_execution_policy": "delta_only_v1",
+		},
+	}, nil
+}
+
 type ariaBlockExecutor struct{ basicPlugin }
 
 func (p ariaBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
@@ -3078,6 +3170,59 @@ func (p blockSTMBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExec
 		delta = append(delta, state.StateKV{Key: item.Key, Value: item.Value})
 	}
 	return BlockExecutionResult{ExecutionResult: result, StateDelta: delta, PlanDigest: result.PlanDigest, WorkerCount: result.WorkerCount, TransactionExecutionMS: result.TransactionExecutionMS, DeterministicApplyMS: result.DeterministicMaterializationMS, StateCommitmentMS: result.StateCommitmentMS, StateRootVersion: result.StateRootVersion, ActualMetrics: actualMetrics}, nil
+}
+
+// ExecuteWave uses the exact same Block-STM scheduler/validation/incarnation
+// implementation as ExecuteBlock. In the paper-performance configuration
+// (performance + oracle off), only the post-validation durable materialization
+// is skipped. Correctness/oracle configurations fail safe to the historical
+// full ExecuteBlock path.
+func (p blockSTMBlockExecutor) ExecuteWave(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
+	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
+	executor := execution.NewBlockSTMExecutor(workerCount)
+	executor.Progress = input.Progress
+	if mode := strings.TrimSpace(fmt.Sprint(p.config["execution_mode"])); mode == "correctness" || mode == "performance" {
+		executor.ExecutionMode = mode
+	}
+	if oracle := strings.TrimSpace(fmt.Sprint(p.config["oracle_mode"])); oracle == "full" || oracle == "sampled" || oracle == "off" {
+		executor.OracleMode = oracle
+	}
+	if raw, ok := p.config["maximum_incarnations"]; ok {
+		if maxIncarnations := intValue(raw); maxIncarnations >= 0 {
+			executor.MaximumIncarnations = maxIncarnations
+		}
+	}
+	if action := strings.TrimSpace(fmt.Sprint(p.config["incarnation_limit_action"])); action == "fail" || action == "serial_fallback" {
+		executor.IncarnationLimitAction = action
+	}
+
+	deltaOnly := executor.ExecutionMode == "performance" && executor.OracleMode == "off"
+	var result execution.Result
+	var err error
+	if deltaOnly {
+		result, err = executor.ExecuteBlockDeltas(ctx, input.Block, input.BaseStateSnapshot)
+	} else {
+		result, err = executor.ExecuteBlockWithCommitment(ctx, input.Block, input.BaseStateSnapshot, nil)
+	}
+	if err != nil {
+		return BlockExecutionResult{}, err
+	}
+	result.BlockSTMMetrics = executor.Metrics
+	policy := "full_block_fallback"
+	if deltaOnly {
+		policy = "delta_only_v1"
+	}
+	return BlockExecutionResult{
+		ExecutionResult:        result,
+		WorkerCount:            result.WorkerCount,
+		TransactionExecutionMS: result.TransactionExecutionMS,
+		DeterministicApplyMS:   result.DeterministicMaterializationMS,
+		StateCommitmentMS:      result.StateCommitmentMS,
+		StateRootVersion:       result.StateRootVersion,
+		ActualMetrics: map[string]any{
+			"versioned_wave_execution_policy": policy,
+		},
+	}, nil
 }
 
 const metaTrackBlockExecutorID = "metatrack_block_executor"
@@ -4874,7 +5019,7 @@ func BuiltinRegistry() *Registry {
 	})
 	registerAriaPlugins(register)
 	registerGroundhogPlugins(register)
-	// MBE_PORYGON_PAPER_REPRO_20260920_V7: additive paper-driven Porygon plugins.
+	// MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: additive paper-driven Porygon plugins.
 	registerPorygonPlugins(register)
 	register("state_access", "direct_state_access", func(c map[string]any) (Plugin, error) {
 		return builtinStateAccess{makeBasic("state_access", "direct_state_access", c)}, nil

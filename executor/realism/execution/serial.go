@@ -148,6 +148,61 @@ func (e *SerialExecutor) ExecuteBlockWithCommitment(b block.Block, base map[stri
 // snapshot and returns only the receipt and logical delta required by
 // speculative schedulers. It avoids constructing a one-transaction block
 // result and avoids durable state-root hashing for tentative work.
+// MBE_VERSIONED_WAVE_DELTA_ONLY_V14B
+// ExecuteBlockDeltas runs the same strict sequential transaction semantics as
+// ExecuteBlockWithCommitment while omitting authenticated roots, the copied
+// final StateUpdates map, and full-block StateDelta construction. The caller
+// owns the one durable materialization for the enclosing versioned block.
+func (e *SerialExecutor) ExecuteBlockDeltas(b block.Block, base map[string]string) Result {
+	working := copySnapshot(base)
+	var transactionExecutionDuration time.Duration
+	result := Result{
+		BlockHash:       b.BlockHash,
+		Height:          b.Height,
+		Deterministic:   true,
+		EVMExecution:    false,
+		FabricExecution: false,
+		StateUpdates:    map[string]string{},
+		BlockExecutorID: SerialBlockExecutorID,
+		ExecutorVersion: SerialBlockExecutorVersion,
+		WorkerCount:     1,
+	}
+	for index, item := range b.TxList {
+		overlay := newSerialBlockTxOverlay(b.ShardID, working)
+		executionStarted := time.Now()
+		receipt := e.executeTxWithoutStateRoot(b, overlay, item)
+		transactionExecutionDuration += time.Since(executionStarted)
+
+		keys := make([]string, 0, len(overlay.writes))
+		for key := range overlay.writes {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			working[overlay.key(key)] = overlay.writes[key]
+		}
+
+		delta := TxDelta{
+			TxID:          item.TxID,
+			OriginalIndex: index,
+			ReadSet:       append([]ReadObservation(nil), overlay.reads...),
+			WriteSet:      overlay.logicalWrites(),
+			Receipt:       receipt,
+			Success:       receipt.Success,
+			Error:         receipt.Error,
+		}
+		result.TxDeltas = append(result.TxDeltas, delta)
+		result.Receipts = append(result.Receipts, receipt)
+		if receipt.Success {
+			result.SuccessfulTxs++
+		} else {
+			result.FailedTxs++
+		}
+	}
+	result.TransactionExecutionMS = transactionExecutionDuration.Milliseconds()
+	return result
+}
+
 func (e *SerialExecutor) ExecuteTransaction(b block.Block, item tx.SignedTransaction, base map[string]string, originalIndex int) (Receipt, TxDelta) {
 	overlay := newTxOverlay(b.ShardID, base)
 	receipt := e.executeTxWithoutStateRoot(b, overlay, item)
