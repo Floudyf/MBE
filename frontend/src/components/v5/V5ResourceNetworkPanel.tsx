@@ -9,21 +9,31 @@ type Row = {
   cpuCores: number | null;
   peakRSS: number | null;
   meanRSS: number | null;
+  meanRSSPerValidator: number | null;
   networkBytes: number | null;
   messages: number | null;
   messagesPerTx: number | null;
   bytesPerTx: number | null;
   categories: Record<string, { message_count?: number; bytes?: number }>;
+  scopes: Record<string, { message_count?: number; bytes?: number }>;
 };
 
 const categoryLabels: Record<string, string> = {
   client_ingress: "客户端入口",
   transaction_gossip: "交易传播（Gossip）",
   consensus: "共识消息",
-  cross_shard: "跨分片",
-  remote_state: "远程状态",
+  porygon_esc: "Porygon ESC 协调",
+  cross_shard: "传统跨片 Relay/Finalize",
+  remote_state: "远程状态与版本就绪",
   recovery_control: "恢复与控制",
   other: "其他",
+};
+
+const scopeLabels: Record<string, string> = {
+  client: "客户端 → 节点",
+  intra_execution_shard: "执行分片内",
+  inter_execution_shard: "执行分片间",
+  unknown: "范围未知",
 };
 
 export default function V5ResourceNetworkPanel({ children }: { children: V5FormalChildRun[] }) {
@@ -46,9 +56,9 @@ export default function V5ResourceNetworkPanel({ children }: { children: V5Forma
     <ResourceComparisonCharts rows={rows} />
     <div className="table-wrap">
       <table className="v5-observability-table">
-        <thead><tr><th>方法</th><th>样本数</th><th>平均 CPU 核</th><th>峰值 RSS</th><th>平均 RSS</th><th>网络流量</th><th>消息数</th><th>消息/终态交易</th><th>KiB/终态交易</th></tr></thead>
+        <thead><tr><th>方法</th><th>样本数</th><th>平均 CPU 核</th><th>集群峰值 RSS</th><th>集群平均 RSS</th><th>平均每验证节点 RSS</th><th>网络流量</th><th>消息数</th><th>消息/终态交易</th><th>KiB/终态交易</th></tr></thead>
         <tbody>{rows.map((row) => <tr key={row.methodId}>
-          <td>{row.methodName}</td><td>{row.sampleCount}</td><td>{formatNumber(row.cpuCores, 3)}</td><td>{formatBytes(row.peakRSS)}</td><td>{formatBytes(row.meanRSS)}</td><td>{formatBytes(row.networkBytes)}</td><td>{formatNumber(row.messages, 0)}</td><td>{formatNumber(row.messagesPerTx, 3)}</td><td>{row.bytesPerTx === null ? "—" : formatNumber(row.bytesPerTx / 1024, 3)}</td>
+          <td>{row.methodName}</td><td>{row.sampleCount}</td><td>{formatNumber(row.cpuCores, 3)}</td><td>{formatBytes(row.peakRSS)}</td><td>{formatBytes(row.meanRSS)}</td><td>{formatBytes(row.meanRSSPerValidator)}</td><td>{formatBytes(row.networkBytes)}</td><td>{formatNumber(row.messages, 0)}</td><td>{formatNumber(row.messagesPerTx, 3)}</td><td>{row.bytesPerTx === null ? "—" : formatNumber(row.bytesPerTx / 1024, 3)}</td>
         </tr>)}</tbody>
       </table>
     </div>
@@ -56,6 +66,12 @@ export default function V5ResourceNetworkPanel({ children }: { children: V5Forma
     <div className="table-wrap"><table className="v5-network-composition-table">
       <thead><tr><th>方法</th>{Object.keys(categoryLabels).map((key) => <th key={key}>{categoryLabels[key]}</th>)}</tr></thead>
       <tbody>{rows.map((row) => <tr key={`network-${row.methodId}`}><td>{row.methodName}</td>{Object.keys(categoryLabels).map((key) => <td key={key}>{formatBytes(row.categories[key]?.bytes ?? null)}</td>)}</tr>)}</tbody>
+    </table></div>
+    <h4>通信范围</h4>
+    <p className="muted">协议类别与通信范围分开统计；“执行分片间”按节点 execution_shard_id 判断，不等同于旧 Relay/Finalize 协议。</p>
+    <div className="table-wrap"><table className="v5-network-scope-table">
+      <thead><tr><th>方法</th>{Object.keys(scopeLabels).map((key) => <th key={key}>{scopeLabels[key]}</th>)}</tr></thead>
+      <tbody>{rows.map((row) => <tr key={`scope-${row.methodId}`}><td>{row.methodName}</td>{Object.keys(scopeLabels).map((key) => <td key={key}>{formatBytes(row.scopes[key]?.bytes ?? null)}</td>)}</tr>)}</tbody>
     </table></div>
   </section>;
 }
@@ -86,7 +102,8 @@ function aggregate(children: V5FormalChildRun[]): Row[] {
   }
   return [...buckets.entries()].map(([methodId, items]) => {
     const metrics = items.map(childMetrics);
-    const categories = mergeCategories(metrics.map((item) => asRecord(item.network_categories)));
+    const categories = mergeNamedBuckets(metrics.map((item) => asRecord(item.network_categories)), Object.keys(categoryLabels));
+    const scopes = mergeNamedBuckets(metrics.map((item) => asRecord(item.network_scope_categories)), Object.keys(scopeLabels));
     return {
       methodId,
       methodName: shortMethodName(methodId, items[0]?.method?.display_name ?? methodId),
@@ -94,11 +111,13 @@ function aggregate(children: V5FormalChildRun[]): Row[] {
       cpuCores: mean(metrics.map((item) => number(item.average_cluster_cpu_cores))),
       peakRSS: mean(metrics.map((item) => number(item.cluster_rss_peak_bytes))),
       meanRSS: mean(metrics.map((item) => number(item.cluster_rss_mean_bytes))),
+      meanRSSPerValidator: mean(metrics.map((item) => number(item.cluster_rss_mean_per_sampled_validator_bytes))),
       networkBytes: mean(metrics.map((item) => number(item.delivered_network_bytes))),
       messages: mean(metrics.map((item) => number(item.delivered_network_message_count))),
       messagesPerTx: mean(metrics.map((item) => number(item.network_messages_per_terminal_tx))),
       bytesPerTx: mean(metrics.map((item) => number(item.network_bytes_per_terminal_tx))),
       categories,
+      scopes,
     };
   }).sort((a, b) => a.methodName.localeCompare(b.methodName));
 }
@@ -107,9 +126,9 @@ function childMetrics(child: V5FormalChildRun): Record<string, unknown> {
   return asRecord(child.metrics);
 }
 
-function mergeCategories(values: Array<Record<string, unknown>>): Record<string, { message_count?: number; bytes?: number }> {
+function mergeNamedBuckets(values: Array<Record<string, unknown>>, keys: string[]): Record<string, { message_count?: number; bytes?: number }> {
   const out: Record<string, { message_count?: number; bytes?: number }> = {};
-  for (const key of Object.keys(categoryLabels)) {
+  for (const key of keys) {
     const rows = values.map((value) => asRecord(value[key]));
     out[key] = { message_count: mean(rows.map((row) => number(row.message_count))) ?? undefined, bytes: mean(rows.map((row) => number(row.bytes))) ?? undefined };
   }

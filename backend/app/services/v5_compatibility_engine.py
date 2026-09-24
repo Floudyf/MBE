@@ -141,18 +141,21 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         required = {
             "transaction_admission": "metatrack_strict_admission_v1",
             "execution": "dual_track_execution",
-            "scheduler": "fast_first_scheduler",
             "block_executor": "metatrack_block_executor",
         }
         for category, plugin_id in required.items():
             selected = by_category.get(category)
             if not selected or selected.plugin_id != plugin_id:
                 blockers.append(f"MetaTrack declared_access_frontier_v2 requires {category}:{plugin_id}")
+        allowed_schedulers = {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler"}
+        selected_scheduler = by_category.get("scheduler")
+        if not selected_scheduler or selected_scheduler.plugin_id not in allowed_schedulers:
+            blockers.append("MetaTrack declared_access_frontier_v2 requires scheduler:fast_first_scheduler, scheduler:ready_round_control_scheduler, or scheduler:dependency_influence_scheduler")
         selected_executor = by_category.get("block_executor")
         if selected_executor and selected_executor.plugin_id == "metatrack_block_executor" and selected_executor.config.get("control_policy") != "declared_access_frontier_v2":
             blockers.append("MetaTrack routing and block executor control_policy must match declared_access_frontier_v2")
-    if scheduler and scheduler.plugin_id == "fast_first_scheduler" and (not execution or execution.plugin_id != "dual_track_execution"):
-        blockers.append("fast_first_scheduler requires dual_track_execution")
+    if scheduler and scheduler.plugin_id in {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler"} and (not execution or execution.plugin_id != "dual_track_execution"):
+        blockers.append(f"{scheduler.plugin_id} requires dual_track_execution")
     block_producer = by_category.get("block_producer")
     block_executor = by_category.get("block_executor")
     aria_producer = bool(block_producer and block_producer.plugin_id == "aria_block_producer")
@@ -230,6 +233,54 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         if spec.topology.shards != 1:
             blockers.append("Batch-SI core literature reproduction requires exactly 1 shard; multi-shard Batch-SI must be labeled as an extension")
         warnings.append("Batch-SI literature baseline uses one shard; batches are sequential and transactions inside one batch use a common immutable snapshot")
+    # MBE_CALVIN_DUAL_REPRO_V2_20260923: Calvin is one PBFT ordering domain plus partitioned execution/state homes.
+    calvin_stateful = bool(block_executor and block_executor.plugin_id == "calvin_block_executor")
+    calvin_stateless = bool(block_executor and block_executor.plugin_id == "stateless_calvin_block_executor")
+    # Activation is deliberately gated ONLY by the Calvin block executor.
+    # This mirrors the existing Aria/Groundhog/Porygon compatibility pattern and
+    # prevents optional Calvin plugins from imposing requirements on unrelated
+    # profiles when the catalog fills defaults or a user is composing a method.
+    calvin_selected = calvin_stateful or calvin_stateless
+    if calvin_selected:
+        if calvin_stateful == calvin_stateless:
+            blockers.append("Calvin profile must select exactly one of stateful or stateless block executor")
+        required = {
+            "transaction_admission": "calvin_declared_access_admission",
+            "consensus": "pbft_style_consensus",
+            "network": "localhost_tcp_typed_network",
+            "execution": "calvin_execution",
+            "scheduler": "calvin_deterministic_scheduler",
+            "state_storage": "calvin_partition_state_store",
+            "cross_shard": "calvin_no_2pc_coordinator",
+            "commit": "normal_commit",
+        }
+        required["scheduler"] = "stateless_calvin_deterministic_scheduler" if calvin_stateless else "calvin_deterministic_scheduler"
+        if calvin_stateful:
+            required.update({
+                "routing": "calvin_global_routing",
+                "block_executor": "calvin_block_executor",
+                "state_access": "calvin_partition_state_access",
+            })
+        if calvin_stateless:
+            required.update({
+                "routing": "stateless_calvin_global_routing",
+                "block_executor": "stateless_calvin_block_executor",
+                "state_access": "stateless_calvin_state_access",
+            })
+        for category, plugin_id in required.items():
+            selected = by_category.get(category)
+            if not selected or selected.plugin_id != plugin_id:
+                blockers.append(f"Calvin requires {category}:{plugin_id}")
+        if float(workload_config.get("cross_shard_ratio", 0.0) or 0.0) > 0.0 and spec.topology.shards < 2:
+            blockers.append("Calvin cross_shard_ratio>0 requires at least 2 execution/state partitions")
+        if spec.topology.shards > 1 and _cross_shard_fault_unsupported(spec.fault_policy):
+            blockers.append("Calvin multi-partition fault/restart/drop experiments are blocked in v2 until participant READ_RESULT/outcome replay and leader failover are formally reproduced")
+        if calvin_stateless:
+            warnings.append("Stateless Calvin is an explicit MBE compatibility/adaptation baseline: Calvin ordering/locking is retained; exact predecessor/producer versions are derived from the consensus-bound Calvin block order, while execution shards fetch signed-AccessList state from deterministic persistent homes and write produced state back to those homes. It does not use MetaTrack StateReady/frontier/dual-track semantics and is not claimed as original Calvin or a storage-free network")
+        else:
+            warnings.append("Calvin uses the common MBE PBFT layer as the replicated global ordering service while retaining paper-faithful deterministic FIFO S/X locking and READ_RESULT participant execution")
+        warnings.append("Calvin disables MBE Relay/Finalize, traditional 2PC, MetaTrack StateReady/CAS/frontier control and commutative aggregation")
+
     # MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: Porygon is one physical MBE/PBFT ordering domain plus logical ESCs.
     porygon_selected = any(
         selected and selected.plugin_id.startswith("porygon_")

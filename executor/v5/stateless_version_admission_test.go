@@ -47,10 +47,23 @@ func statelessVersionAdmissionTestRuntimes(t *testing.T) (*NodeRuntime, *NodeRun
 			if err != nil {
 				return err
 			}
-			if request.AccessKind != statelessVersionAdmissionProbeAccessKind {
+			if request.AccessKind != statelessVersionAdmissionProbeAccessKind && request.AccessKind != statelessVersionAdmissionWatchAccessKind {
 				return fmt.Errorf("unexpected access kind %s", request.AccessKind)
 			}
 			value, ready := target.stateVersionValue(request.Key, request.RequiredVersion)
+			if request.AccessKind == statelessVersionAdmissionWatchAccessKind && !ready {
+				target.mu.Lock()
+				signal := target.stateVersionSignalLocked(request.Key, request.RequiredVersion)
+				target.mu.Unlock()
+				go func() {
+					<-signal
+					value, _ := target.stateVersionValue(request.Key, request.RequiredVersion)
+					response := StateFetchResponse{RequestID: request.RequestID, TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: request.HomeShard + "::" + request.Key, Value: value, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: target.plugins.StateStorage.Root(target.db), StateVersion: request.RequiredVersion, Versioned: true, Success: true}
+					response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
+					from.handleStateFetchResponse(response)
+				}()
+				return nil
+			}
 			response := StateFetchResponse{RequestID: request.RequestID, TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: request.HomeShard + "::" + request.Key, Value: value, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: target.plugins.StateStorage.Root(target.db), StateVersion: request.RequiredVersion, Versioned: true, Success: ready}
 			if !ready {
 				response.Error = "state_version_not_ready"
@@ -103,6 +116,19 @@ func TestStatelessVersionAdmissionDefersExternalFutureVersionAndResumes(t *testi
 		t.Fatalf("future exact version was admitted: admitted=%d deferred=%#v", len(admitted.TxList), deferred)
 	}
 	s0.publishStateVersion(key, 1, "v1")
+	deadline := time.Now().Add(time.Second)
+	for {
+		s1.mu.Lock()
+		ready := s1.stateVersionAdmissionReady[statelessVersionAdmissionToken(key, 1)]
+		s1.mu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("published exact version did not wake admission watch")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	admitted, deferred, err = s1.admitStatelessVersionCandidate(context.Background(), block)
 	if err != nil {
 		t.Fatal(err)

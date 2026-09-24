@@ -30,9 +30,10 @@ def test_truth_boundaries_disclose_reimplementation_scope():
 
 
 def test_existing_builtin_family_is_not_rewritten_by_literature_baselines():
-    # The three added paper baselines live in their own registry family. Existing
-    # Serial/Block-STM/Aria/Groundhog/MetaTrack payloads remain registry-locked.
-    assert list(BUILTIN_METHODS) == [
+    # The paper baselines live in their own registry family. This invariant is
+    # about preserving the historical builtin payloads; it must not prohibit a
+    # later, independently registered builtin such as metatrack_influence.
+    legacy_builtin_ids = [
         "hash_serial",
         "hash_block_stm",
         "hash_aria",
@@ -40,6 +41,9 @@ def test_existing_builtin_family_is_not_rewritten_by_literature_baselines():
         "metatrack_serial",
         "metatrack_block_stm",
     ]
+    assert all(method_id in BUILTIN_METHODS for method_id in legacy_builtin_ids)
+    assert [method_id for method_id in BUILTIN_METHODS if method_id in legacy_builtin_ids] == legacy_builtin_ids
+    assert not (set(EXPECTED) & set(BUILTIN_METHODS))
 
 
 def _canonical_base_spec() -> V5ExperimentSpec:

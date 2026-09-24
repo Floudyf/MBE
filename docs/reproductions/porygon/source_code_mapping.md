@@ -16,6 +16,8 @@
   - Porygon truth-boundary metrics
 - `executor/v5/porygon_plugins_test.go`
   - control-plane isolation, ESC distribution, cross-ESC parallelism, global conflict order, oracle, access fail-closed and tamper tests
+- `executor/v5/porygon_esc_security_v26.go` / `porygon_esc_security_v26_test.go`
+  - PBFT-identity-backed ESC result attestations, quorum certificate verification, bounded certificate cache, request/retransmission recovery, and minority-send tolerance
 - `backend/app/services/v5_compatibility_engine.py`
   - one-physical-shard guard and configuration matching
 - `backend/app/services/v5_formal_plan_validator.py`

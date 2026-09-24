@@ -457,6 +457,177 @@ def _multishard_correctness_blockers(summary: dict) -> list[str]:
     return list(dict.fromkeys(blockers))
 
 
+
+def _calvin_execution_shards(run_dir: Path) -> tuple[dict[str, str], list[str], list[str]]:
+    path = run_dir / "compiled_run_plan.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {}, [], [f"calvin_oracle_plan_unreadable:{type(exc).__name__}"]
+    nodes = payload.get("node_configs") if isinstance(payload.get("node_configs"), list) else []
+    by_node: dict[str, str] = {}
+    for row in nodes:
+        if not isinstance(row, dict):
+            continue
+        node = str(row.get("node_id") or "").strip()
+        shard = str(row.get("execution_shard_id") or row.get("shard_id") or "").strip()
+        if node and shard:
+            by_node[node] = shard
+    shards = sorted(set(by_node.values()))
+    return by_node, shards, ([] if by_node and shards else ["calvin_oracle_missing_execution_shards"])
+
+
+def _calvin_state_home(key: str, shards: list[str]) -> str:
+    if not shards:
+        return ""
+    prefix, sep, _ = key.partition("::")
+    if sep and prefix in shards:
+        return prefix
+    return shards[sum(ord(ch) for ch in key) % len(shards)]
+
+
+def _calvin_actual_business_digests(run_dir: Path, node_shards: dict[str, str], shards: list[str]) -> tuple[dict[str, str], list[str]]:
+    values: dict[str, set[str]] = {shard: set() for shard in shards}
+    blockers: list[str] = []
+    for path in sorted((run_dir / "nodes").glob("*/node_summary.json")):
+        node = path.parent.name
+        shard = node_shards.get(node, "")
+        if not shard:
+            blockers.append(f"calvin_oracle_node_without_execution_shard:{node}")
+            continue
+        try:
+            row = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            blockers.append(f"node_summary_unreadable:{node}:{type(exc).__name__}")
+            continue
+        digest = str(row.get("business_state_digest") or "").strip()
+        if not digest:
+            blockers.append(f"node_summary_missing_business_digest:{node}")
+            continue
+        values.setdefault(shard, set()).add(digest)
+    out: dict[str, str] = {}
+    for shard in shards:
+        digests = values.get(shard) or set()
+        if len(digests) != 1:
+            blockers.append(f"calvin_business_state_digest_replica_mismatch:{shard}")
+        else:
+            out[shard] = next(iter(digests))
+    return out, blockers
+
+
+def _calvin_initial_state_evidence(run_dir: Path, node_shards: dict[str, str], shards: list[str]) -> tuple[dict[str, str], list[str]]:
+    values: dict[str, set[str]] = {shard: set() for shard in shards}
+    blockers: list[str] = []
+    for node, shard in sorted(node_shards.items()):
+        node_dir = run_dir / "nodes" / node
+        blocks, chain_blockers = _load_committed_blocks(node_dir / "committed_chain.csv")
+        blockers.extend(chain_blockers)
+        if not blocks:
+            blockers.append(f"initial_chain_empty:{node}")
+            continue
+        first = blocks[0]
+        root = str(first.get("state_root_before") or "").strip()
+        if root in _LEGACY_INITIAL_ROOT_PLACEHOLDERS:
+            persistence_root, persistence_blockers = _persistence_root_before(node_dir, str(first["block_hash"]))
+            blockers.extend(persistence_blockers)
+            execution_root, execution_blockers = _execution_root_before(node_dir, str(first["block_hash"]))
+            blockers.extend(execution_blockers)
+            root = persistence_root or execution_root
+        if not root:
+            blockers.append(f"calvin_oracle_initial_state_unresolved:{node}")
+            continue
+        values.setdefault(shard, set()).add(root)
+    roots: dict[str, str] = {}
+    for shard in shards:
+        candidates = values.get(shard) or set()
+        if len(candidates) != 1:
+            blockers.append(f"calvin_initial_state_root_replica_mismatch:{shard}")
+            continue
+        roots[shard] = next(iter(candidates))
+        if roots[shard] != EMPTY_STATE_ROOT:
+            blockers.append(f"calvin_oracle_nonempty_initial_state_unsupported:{shard}")
+    return roots, blockers
+
+
+def _evaluate_calvin_partitioned(run_dir: Path, summary: dict[str, Any]) -> dict[str, Any]:
+    blockers: list[str] = []
+    node_shards, shards, shard_blockers = _calvin_execution_shards(run_dir)
+    blockers.extend(shard_blockers)
+    access_path = run_dir / "client" / "resolved_access_lists.jsonl.gz"
+    if access_path.is_file():
+        access_entries, input_digest, access_blockers = _load_access_entries(access_path)
+        blockers.extend(access_blockers)
+    else:
+        access_entries, input_digest = {}, ""
+        blockers.append("serial_oracle_missing_resolved_access_lists")
+    _, initial_blockers = _calvin_initial_state_evidence(run_dir, node_shards, shards) if shards else ({}, [])
+    blockers.extend(initial_blockers)
+    actual_by_shard, actual_blockers = _calvin_actual_business_digests(run_dir, node_shards, shards) if shards else ({}, [])
+    blockers.extend(actual_blockers)
+    node_orders: dict[str, list[str]] = {}
+    node_signatures: dict[str, list[tuple[int, str, int]]] = {}
+    node_reexec: dict[str, int] = {}
+    for node in sorted(node_shards):
+        node_dir = run_dir / "nodes" / node
+        order, signature, reexecution_count, order_blockers = _committed_tx_order(node_dir)
+        blockers.extend(order_blockers)
+        node_orders[node] = order
+        node_signatures[node] = signature
+        node_reexec[node] = reexecution_count
+    reference_node = sorted(node_orders)[0] if node_orders else ""
+    order = node_orders.get(reference_node, [])
+    signature = node_signatures.get(reference_node, [])
+    if node_orders and any(candidate != order for candidate in node_orders.values()): blockers.append("calvin_oracle_replica_global_order_mismatch")
+    if node_signatures and any(candidate != signature for candidate in node_signatures.values()): blockers.append("calvin_oracle_replica_committed_chain_mismatch")
+    expected = set(access_entries)
+    if len(order) != len(expected) or set(order) != expected or len(order) != len(set(order)): blockers.append("calvin_oracle_committed_transaction_set_mismatch")
+    replay_by_shard: dict[str, dict[str, str]] = {shard: {} for shard in shards}
+    logical_order: list[str] = []
+    if not blockers:
+        for tx_id in order:
+            entry = access_entries[tx_id]; logical_id = str(entry.get("logical_id") or tx_id); logical_order.append(logical_id)
+            for access in entry.get("access_list") or []:
+                key = str(access.get("key") or ""); mode = str(access.get("mode") or ""); semantics = str(access.get("update_semantics") or "")
+                home = _calvin_state_home(key, shards); state = replay_by_shard[home]; qualified = _qualify(home, key)
+                if mode == "read": continue
+                if mode == "read_write": state[qualified] = _stable_direct_access_value(logical_tx_id=logical_id, key=key, semantics=semantics, previous=state.get(qualified, ""))
+                elif mode == "write": state[qualified] = _stable_direct_access_value(logical_tx_id=logical_id, key=key, semantics=semantics, previous="")
+                elif mode == "commutative_delta":
+                    try: current = int(state.get(qualified, "") or "0")
+                    except ValueError: blockers.append(f"calvin_oracle_non_integer_commutative_base:{key}"); break
+                    state[qualified] = str(current + int(access.get("delta") or 0))
+                else: blockers.append(f"calvin_oracle_unsupported_mode:{mode}"); break
+            if blockers: break
+    replay_by_shard_digest = {shard: _business_state_digest(replay_by_shard[shard]) for shard in shards} if not blockers else {}
+    for shard in shards:
+        if replay_by_shard_digest.get(shard) and actual_by_shard.get(shard) != replay_by_shard_digest[shard]: blockers.append(f"calvin_oracle_partition_business_digest_mismatch:{shard}")
+    replay_global = _canonical_digest(dict(sorted(replay_by_shard_digest.items()))) if replay_by_shard_digest else ""
+    actual_global = _canonical_digest(dict(sorted(actual_by_shard.items()))) if len(actual_by_shard) == len(shards) and shards else ""
+    summary_global = str(summary.get("global_business_state_digest") or "").strip()
+    if replay_global and actual_global != replay_global: blockers.append("calvin_oracle_global_business_digest_mismatch")
+    if summary_global and actual_global and summary_global != actual_global: blockers.append("calvin_oracle_summary_global_business_digest_mismatch")
+    blockers = list(dict.fromkeys(blockers)); valid = not blockers and bool(order) and bool(shards)
+    return {
+        "serial_order_oracle_schema": SCHEMA_VERSION, "serial_order_oracle_status": "passed" if valid else "failed",
+        "serial_order_replay_applicable": True, "serial_order_replay_not_applicable_reason": "", "serial_order_replay_equivalent": valid,
+        "serial_order_replay_blockers": blockers, "serial_order_replay_structural_blockers": blockers,
+        "serial_order_replay_supported_scope": "calvin_global_order_partitioned_empty_initial_v1", "serial_order_replay_identity_basis": "tx_id",
+        "serial_order_replay_order_basis": "global_pbft_committed_chain_then_transaction_execution_trace", "serial_order_replay_original_index_semantics": "block_local_diagnostic_only",
+        "serial_order_replay_initial_state_empty": not any(item.startswith("calvin_oracle_nonempty_initial_state_unsupported") for item in blockers),
+        "serial_order_replay_initial_state_root": "partitioned", "serial_order_replay_initial_state_sources": {}, "serial_order_replay_shard_id": "calvin-partitioned",
+        "serial_order_replay_transaction_count": len(order), "serial_order_replay_unique_transaction_count": len(set(order)), "serial_order_replay_committed_block_count": len(signature),
+        "serial_order_replay_trace_reexecution_count": node_reexec.get(reference_node, 0), "serial_order_replay_input_digest": input_digest,
+        "serial_order_replay_commit_order_digest": _canonical_digest(logical_order) if logical_order else "", "serial_order_replay_tx_id_order_digest": _canonical_digest(order) if order else "",
+        "serial_order_replay_business_state_digest": replay_global, "serial_order_actual_business_state_digest": actual_global,
+        "serial_order_replay_global_business_state_digest": replay_global, "serial_order_actual_global_business_state_digest": actual_global,
+        "serial_order_replay_business_key_count": sum(len(state) for state in replay_by_shard.values()),
+        "serial_order_replay_replica_order_consistent": bool(node_orders) and all(candidate == order for candidate in node_orders.values()), "serial_order_replay_replica_count": len(node_orders),
+        "serial_order_replay_reference_node": reference_node, "calvin_oracle_execution_shards": shards,
+        "calvin_oracle_replay_partition_digests": replay_by_shard_digest, "calvin_oracle_actual_partition_digests": actual_by_shard,
+        "method_correctness_oracle_kind": "calvin_partitioned_global_order_serial_replay_v1", "method_correctness_oracle_status": "passed" if valid else "failed",
+        "method_correctness_oracle_valid": valid, "method_correctness_oracle_blockers": blockers, "method_correctness_oracle_scope": "calvin_global_order_partitioned_empty_initial_v1",
+    }
+
 def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, Any]:
     """Validate durable transaction identity/order and method-appropriate state correctness.
 
@@ -475,6 +646,8 @@ def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, 
     summary = result_summary if isinstance(result_summary, dict) else {}
     executor_id = str(summary.get("block_executor_id") or "")
     groundhog_mode = executor_id == "groundhog_block_executor"
+    if executor_id in {"calvin_block_executor", "stateless_calvin_block_executor"}:
+        return _evaluate_calvin_partitioned(run_dir, summary)
     blockers: list[str] = []
     shard_id, initial_root, initial_blockers, initial_sources = _initial_state_evidence(run_dir)
     blockers.extend(initial_blockers)

@@ -36,16 +36,22 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "hash_cg", title: "CG / Nezha", description: "Nezha 作者传统 CG：官方冲突多重图、Tarjan/JohnsonCE/BreakCycles 与 BasicTopologicalSort 参考序列；MBE Worker 仅作为执行资源适配。", family: "stateful", comparisonVisible: true, mainVisible: false },
   { methodId: "hash_acg", title: "ACG / Nezha", description: "Batch-SI 原论文对照组：地址冲突图与层次调度。", family: "stateful", comparisonVisible: true, mainVisible: false },
   { methodId: "hash_bsx", title: "BSX", description: "Batch-SI 原论文对照组：无向冲突图 + 确定性图着色。", family: "stateful", comparisonVisible: true, mainVisible: false },
+  { methodId: "stateful_calvin", title: "Calvin", description: "SIGMOD 2012：全局确定性顺序 + 分区常驻状态 + FIFO S/X 锁队列 + READ_RESULT 参与者执行；排序复制层统一适配为 MBE PBFT。", family: "stateful", comparisonVisible: true, mainVisible: false },
   { methodId: "hash_batch_si", title: "Batch-SI", description: "AWRT + WRBP + OFAS + 批快照并行。", family: "batch_si", comparisonVisible: true, mainVisible: true, ablationTarget: "batch_si", isFullVariant: true },
   { methodId: "hash_batch_si_no_wrbp", title: "w/o WRBP", description: "以顺序分批替代写机会批次回填，验证 WRBP 的批宽贡献。", family: "batch_si", comparisonVisible: false, mainVisible: false, ablationTarget: "batch_si" },
   { methodId: "hash_batch_si_no_ofas", title: "w/o OFAS", description: "使用 Batch-SI 内部完整依赖图排序替代 OFAS。", family: "batch_si", comparisonVisible: false, mainVisible: false, ablationTarget: "batch_si" },
   { methodId: "hash_batch_si_serial_batch", title: "w/o Snapshot Parallelism", description: "保持相同分批与排序，将批内执行改为单 Worker。", family: "batch_si", comparisonVisible: false, mainVisible: false, ablationTarget: "batch_si" },
   { methodId: "hash_batch_si_txid_priority", title: "w/o OFAS Priority", description: "保留 OFAS 正确性规则，仅取消论文读次数优先级。", family: "batch_si", comparisonVisible: false, mainVisible: false, ablationTarget: "batch_si" },
+  { methodId: "stateless_calvin", title: "Stateless Calvin", description: "Calvin 无状态兼容适配：保留全局确定性顺序与 S/X 锁调度，状态前驱/生产版本由 PBFT 共识绑定的 Calvin 块顺序生成，再按签名 AccessList 从状态归属分区真实取值并写回；不使用 MetaTrack 双轨、StateReady 或前沿控制。 /* MBE_CALVIN_CONSENSUS_VERSION_PLAN_V34 */", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "stateless_hash_serial", title: "Stateless Hash + Serial", description: "无状态哈希路由的串行兼容参考。", family: "stateless", comparisonVisible: true, mainVisible: false },
   // MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR
   { methodId: "stateless_porygon", title: "Porygon", description: "ICDE 2024：前端分片数直接映射为执行分片/ESC 数；所有节点共享一个全局 Ordering/PBFT 域，跨 ESC 按 Porygon 单片执行与多片更新语义处理。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "stateless_hash_block_stm", title: "Stateless Hash + Block-STM", description: "无状态哈希路由与 Block-STM 后端组合。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "metatrack_serial", title: "MetaTrack", description: "状态共访存路由与双轨执行的完整方案。", family: "metatrack", comparisonVisible: true, mainVisible: true },
+  // MBE_METATRACK_READY_ROUND_FRONTEND_V35
+  { methodId: "metatrack_ready_round_control", title: "MetaTrack（就绪轮次对照）", description: "与候选方案使用相同的非等待就绪轮次和统一 Worker 队列；旧轮次优先，轮次内保持快速轨优先并按规范顺序，用于隔离 H/D 优先本身的贡献。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  // MBE_METATRACK_DEPENDENCY_INFLUENCE_FRONTEND_V34_3_4
+  { methodId: "metatrack_influence", title: "MetaTrack（依赖关键交易优先）", description: "与 MetaTrack 保持相同分片、依赖、StateReady 与执行语义；仅在已经 Ready 的交易之间按 H↓、D↓、规范顺序优先调度。", family: "metatrack", comparisonVisible: true, mainVisible: false },
   { methodId: "metatrack_block_stm", title: "MetaTrack + Block-STM", description: "MetaTrack 路由与 Block-STM 执行兼容组合。", family: "metatrack", comparisonVisible: true, mainVisible: false },
 ];
 

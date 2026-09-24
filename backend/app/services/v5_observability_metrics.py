@@ -71,6 +71,7 @@ def summarize_resource_usage(run_dir: Path, finality: dict[str, Any] | None = No
     cpu_delta_ms = max(0.0, end_cpu_ms - start_cpu_ms)
     wall_ms = float(end_ms - start_ms)
     sampled_counts = [row["sampled_process_count"] for row in rss_rows]
+    per_validator_rss = [row["cluster_rss_bytes"] / row["sampled_process_count"] for row in rss_rows if row["sampled_process_count"] > 0]
     expected = int(raw_summary.get("expected_process_count") or max((row["expected_process_count"] for row in rows), default=0))
     expected_samples = max(1, math.floor(wall_ms / max(float(raw_summary.get("sample_interval_ms") or 500), 1.0)) + 1)
     coverage = min(1.0, len(window_rows) / expected_samples) if expected_samples else None
@@ -82,6 +83,8 @@ def summarize_resource_usage(run_dir: Path, finality: dict[str, Any] | None = No
         "cluster_rss_peak_bytes": max(rss_values) if rss_values else None,
         "cluster_rss_mean_bytes": (sum(rss_values) / len(rss_values)) if rss_values else None,
         "cluster_rss_p95_bytes": _percentile(rss_values, 0.95) if rss_values else None,
+        "cluster_rss_mean_per_sampled_validator_bytes": (sum(per_validator_rss) / len(per_validator_rss)) if per_validator_rss else None,
+        "cluster_rss_peak_per_sampled_validator_bytes": max(per_validator_rss) if per_validator_rss else None,
         "resource_sample_count": len(window_rows),
         "resource_sample_interval_ms": raw_summary.get("sample_interval_ms"),
         "resource_sampling_coverage": coverage,
@@ -125,12 +128,14 @@ def summarize_network_usage(
         "available": False,
         "metrics": {},
         "categories": {},
+        "scope_categories": {},
         "message_types": {},
     }
     if start_ms is None or end_ms is None or end_ms < start_ms:
         base["unavailable_reason"] = "completion_window_missing"
         return base
 
+    node_execution_shards = _node_execution_shards(run_dir)
     delivered: list[dict[str, Any]] = []
     send_failures = 0
     receive_failures = 0
@@ -173,11 +178,15 @@ def summarize_network_usage(
         return base
 
     categories: dict[str, dict[str, int]] = defaultdict(lambda: {"message_count": 0, "bytes": 0})
+    scope_categories: dict[str, dict[str, int]] = defaultdict(lambda: {"message_count": 0, "bytes": 0})
     message_types: dict[str, dict[str, int]] = defaultdict(lambda: {"message_count": 0, "bytes": 0})
     for row in delivered:
         category = classify_network_message(row["message_type"], row["peer_id"])
+        scope = classify_network_scope(row["node_id"], row["peer_id"], node_execution_shards)
         categories[category]["message_count"] += 1
         categories[category]["bytes"] += row["bytes"]
+        scope_categories[scope]["message_count"] += 1
+        scope_categories[scope]["bytes"] += row["bytes"]
         message_types[row["message_type"]]["message_count"] += 1
         message_types[row["message_type"]]["bytes"] += row["bytes"]
 
@@ -189,6 +198,14 @@ def summarize_network_usage(
     for name in NETWORK_CATEGORIES:
         item = categories[name]
         category_payload[name] = {
+            **item,
+            "message_share_percent": (100.0 * item["message_count"] / total_messages) if total_messages else 0.0,
+            "byte_share_percent": (100.0 * item["bytes"] / total_bytes) if total_bytes else 0.0,
+        }
+    scope_payload: dict[str, dict[str, float | int]] = {}
+    for name in NETWORK_SCOPE_CATEGORIES:
+        item = scope_categories[name]
+        scope_payload[name] = {
             **item,
             "message_share_percent": (100.0 * item["message_count"] / total_messages) if total_messages else 0.0,
             "byte_share_percent": (100.0 * item["bytes"] / total_bytes) if total_bytes else 0.0,
@@ -236,9 +253,12 @@ def summarize_network_usage(
     base["available"] = True
     base["metrics"] = metrics
     base["categories"] = category_payload
+    base["scope_categories"] = scope_payload
     base["message_types"] = dict(sorted(message_types.items()))
     base["category_message_count_invariant"] = sum(item["message_count"] for item in category_payload.values()) == total_messages
     base["category_byte_count_invariant"] = sum(item["bytes"] for item in category_payload.values()) == total_bytes
+    base["scope_message_count_invariant"] = sum(item["message_count"] for item in scope_payload.values()) == total_messages
+    base["scope_byte_count_invariant"] = sum(item["bytes"] for item in scope_payload.values()) == total_bytes
     return base
 
 
@@ -246,10 +266,18 @@ NETWORK_CATEGORIES = (
     "client_ingress",
     "transaction_gossip",
     "consensus",
+    "porygon_esc",
     "cross_shard",
     "remote_state",
     "recovery_control",
     "other",
+)
+
+NETWORK_SCOPE_CATEGORIES = (
+    "client",
+    "intra_execution_shard",
+    "inter_execution_shard",
+    "unknown",
 )
 
 
@@ -262,6 +290,8 @@ def classify_network_message(message_type: str, peer_id: str = "") -> str:
         return "transaction_gossip"
     if kind.startswith("PBFT_") or kind == "BLOCK_PROPOSAL":
         return "consensus"
+    if kind.startswith("PORYGON_ESC_"):
+        return "porygon_esc"
     if "XSHARD" in kind or "CROSS_SHARD" in kind or kind in {"V5_XSHARD_FINALIZE", "V5_XSHARD_FINALIZE_ACK"}:
         return "cross_shard"
     if "STATE_FETCH" in kind or "STATE_DELTA" in kind or "STATE_ACCESS" in kind or "REMOTE_STATE" in kind:
@@ -269,6 +299,30 @@ def classify_network_message(message_type: str, peer_id: str = "") -> str:
     if "CATCHUP" in kind or kind in {"NODE_HELLO", "NODE_SHUTDOWN"}:
         return "recovery_control"
     return "other"
+
+
+def _node_execution_shards(run_dir: Path) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for path in sorted((Path(run_dir) / "nodes").glob("*/node_runtime_status.json")):
+        status = _read_json(path)
+        node_id = str(status.get("node_id") or "").strip()
+        shard_id = str(status.get("execution_shard_id") or status.get("shard_id") or "").strip()
+        if node_id and shard_id:
+            out[node_id] = shard_id
+    return out
+
+
+def classify_network_scope(node_id: str, peer_id: str, node_execution_shards: dict[str, str]) -> str:
+    peer = str(peer_id or "").strip()
+    if peer.lower() == "mbe-client":
+        return "client"
+    receiver_shard = node_execution_shards.get(str(node_id or "").strip())
+    sender_shard = node_execution_shards.get(peer)
+    if not receiver_shard or not sender_shard:
+        return "unknown"
+    if receiver_shard == sender_shard:
+        return "intra_execution_shard"
+    return "inter_execution_shard"
 
 
 def _read_resource_rows(path: Path) -> list[dict[str, Any]]:
@@ -353,6 +407,10 @@ def _write_network_csv(path: Path, network: dict[str, Any]) -> None:
         for name in NETWORK_CATEGORIES:
             item = categories.get(name) if isinstance(categories.get(name), dict) else {}
             writer.writerow({"scope": "category", "category": name, "message_type": "", **item})
+        scopes = network.get("scope_categories") if isinstance(network.get("scope_categories"), dict) else {}
+        for name in NETWORK_SCOPE_CATEGORIES:
+            item = scopes.get(name) if isinstance(scopes.get(name), dict) else {}
+            writer.writerow({"scope": "communication_scope", "category": name, "message_type": "", **item})
         for name, item in sorted(message_types.items()):
             if not isinstance(item, dict):
                 continue

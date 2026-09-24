@@ -149,6 +149,42 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2"},
         },
     ),
+    # MBE_METATRACK_READY_ROUND_SCHEDULER_V35
+    "metatrack_ready_round_control": V5FormalMethod(
+        method_id="metatrack_ready_round_control",
+        display_name="MetaTrack（就绪轮次对照）",
+        role="ablation",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "execution": "dual_track_execution",
+            "scheduler": "ready_round_control_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100},
+            "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2"},
+        },
+    ),
+    # MBE_METATRACK_DEPENDENCY_INFLUENCE_SCHEDULER_V34
+    "metatrack_influence": V5FormalMethod(
+        method_id="metatrack_influence",
+        display_name="MetaTrack（依赖关键交易优先）",
+        role="ablation",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "execution": "dual_track_execution",
+            "scheduler": "dependency_influence_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100},
+            "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2"},
+        },
+    ),
     "metatrack_block_stm": V5FormalMethod(
         method_id="metatrack_block_stm",
         display_name="MetaTrack with Block-STM backend",
@@ -237,6 +273,40 @@ STATELESS_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
 }
 
 
+CALVIN_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+    "stateful_calvin": V5FormalMethod(
+        method_id="stateful_calvin", display_name="Calvin", role="baseline",
+        plugin_overrides={
+            "transaction_admission": "calvin_declared_access_admission",
+            "routing": "calvin_global_routing",
+            "execution": "calvin_execution",
+            "scheduler": "calvin_deterministic_scheduler",
+            "block_executor": "calvin_block_executor",
+            "state_access": "calvin_partition_state_access",
+            "state_storage": "calvin_partition_state_store",
+            "cross_shard": "calvin_no_2pc_coordinator",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "read_result_timeout_ms": 0, "outcome_timeout_ms": 0}},
+    ),
+    "stateless_calvin": V5FormalMethod(
+        method_id="stateless_calvin", display_name="Stateless Calvin", role="compatibility",
+        plugin_overrides={
+            "transaction_admission": "calvin_declared_access_admission",
+            "routing": "stateless_calvin_global_routing",
+            "execution": "calvin_execution",
+            "scheduler": "stateless_calvin_deterministic_scheduler",
+            "block_executor": "stateless_calvin_block_executor",
+            "state_access": "stateless_calvin_state_access",
+            "state_storage": "calvin_partition_state_store",
+            "cross_shard": "calvin_no_2pc_coordinator",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "read_result_timeout_ms": 0, "outcome_timeout_ms": 0}},
+    ),
+}
+
+
 # MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: separate family so existing STATELESS_BUILTIN_METHODS tests/semantics remain unchanged.
 PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     "stateless_porygon": V5FormalMethod(
@@ -262,7 +332,7 @@ PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
 }
 
 
-ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS}
+ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **CALVIN_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS}
 
 
 

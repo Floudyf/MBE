@@ -466,6 +466,29 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
 
 
 def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[str, object]:
+    if method_id == "stateful_calvin" or snapshot.get("block_executor") == "calvin_block_executor":
+        return {
+            "comparison_semantics_class": "calvin_deterministic_locking_stateful_pbft_adapted_v2",
+            "state_access_semantics": "partition_resident_state_plus_read_result_forwarding",
+            "state_home_mapping_policy": "deterministic_execution_shard_partition",
+            "remote_fetch_policy": "calvin_passive_participant_read_result",
+            "remote_writeback_policy": "active_participant_local_write_only",
+            "proof_policy": "pbft_bound_global_transaction_order_plus_deterministic_lock_queues",
+            "legacy_cross_shard_protocol": False,
+            "measurement_boundary": "client_submit_to_calvin_global_durable_commit",
+        }
+    if method_id == "stateless_calvin" or snapshot.get("block_executor") == "stateless_calvin_block_executor":
+        return {
+            "comparison_semantics_class": "stateless_calvin_consensus_version_plan_adaptation_v4",
+            "state_access_semantics": "signed_access_remote_home_fetch_plus_same_block_home_writeback",
+            "state_home_mapping_policy": "deterministic_state_key_partition_home",
+            "remote_fetch_policy": "block_start_committed_value_or_consensus_bound_exact_predecessor_after_calvin_lock_ready",
+            "remote_writeback_policy": "execution_shard_leader_to_home_replicas_same_globally_ordered_block",
+            "version_plan_policy": "pbft_bound_calvin_block_order_not_client_source_order",
+            "proof_policy": "pbft_bound_global_transaction_order_plus_consensus_version_plan_plus_deterministic_lock_queues_plus_partition_home_state",
+            "legacy_cross_shard_protocol": False,
+            "measurement_boundary": "client_submit_to_stateless_calvin_global_durable_commit",
+        }
     # MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: Porygon method-specific semantics precede generic stateless profiles.
     if method_id == "stateless_porygon" or snapshot.get("block_executor") == "porygon_block_executor":
         return {

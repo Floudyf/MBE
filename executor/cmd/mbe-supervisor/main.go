@@ -355,7 +355,13 @@ func runV5(planPath, dataDir string) error {
 	summary["legacy_cross_shard_protocol"] = finalityMode == v5.CrossShardFinalityLegacyRelay
 	if value, ok := finality["cross_shard_finalized_unique_count"].(int); ok {
 		summary["cross_shard_success_count"] = value
-		summary["real_cross_shard_network"] = value > 0 && finalityMode != v5.CrossShardFinalityPorygonGlobalCommit
+		if finalityMode == v5.CrossShardFinalityCalvinGlobalCommit {
+			readNet, _ := summary["calvin_read_result_network"].(bool)
+			outcomeNet, _ := summary["calvin_outcome_network"].(bool)
+			summary["real_cross_shard_network"] = readNet || outcomeNet
+		} else {
+			summary["real_cross_shard_network"] = value > 0 && finalityMode != v5.CrossShardFinalityPorygonGlobalCommit
+		}
 	}
 	if value, ok := finality["cross_shard_refunded_unique_count"].(int); ok {
 		summary["cross_shard_refund_count"] = value
@@ -767,7 +773,7 @@ func makeProgressSnapshot(terminal int, statuses []map[string]any, heights map[s
 		}
 		result.Mempool += number(status["mempool_depth"])
 		result.Reserved += number(status["reserved_tx_count"])
-		result.Pending += number(status["pending_commit_count"]) + number(status["pending_future_block_count"]) + number(status["pending_cross_shard_count"]) + number(status["pending_state_delta_count"]) + number(status["pending_state_delta_key_count"]) + number(status["ready_state_delta_count"])
+		result.Pending += number(status["pending_commit_count"]) + number(status["pending_future_block_count"]) + number(status["pending_cross_shard_count"]) + number(status["pending_state_delta_count"]) + number(status["pending_state_delta_key_count"]) + number(status["ready_state_delta_count"]) + number(status["pending_state_fetch_count"]) + number(status["pending_state_version_subscription_count"]) + number(status["pending_version_admission_watch_count"])
 		result.ProposalInFlight = result.ProposalInFlight || boolValue(status["proposal_in_flight"])
 		result.ProposalPlanningInFlight = result.ProposalPlanningInFlight || boolValue(status["proposal_planning_in_flight"])
 		if value := int64(number(status["proposal_planning_progress_at_ms"])); value > result.ProposalPlanningProgressAtMS {
@@ -843,7 +849,7 @@ func stringSlice(value any) []string {
 }
 
 func hasPendingInfrastructureWork(status map[string]any) bool {
-	for _, key := range []string{"pending_commit_count", "pending_future_block_count", "pending_cross_shard_count", "pending_state_delta_count", "pending_state_delta_key_count", "ready_state_delta_count"} {
+	for _, key := range []string{"pending_commit_count", "pending_future_block_count", "pending_cross_shard_count", "pending_state_delta_count", "pending_state_delta_key_count", "ready_state_delta_count", "pending_state_fetch_count", "pending_state_version_subscription_count", "pending_version_admission_watch_count"} {
 		if number(status[key]) != 0 {
 			return true
 		}
@@ -1179,7 +1185,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 }
 
 func deriveFinalityArtifactsWithMode(dataDir string, nodes []v5.NodePlan, finalityMode string) (map[string]any, error) {
-	directCommitFinality := finalityMode == v5.CrossShardFinalityStatelessDirect || finalityMode == v5.CrossShardFinalityPorygonGlobalCommit
+	directCommitFinality := finalityMode == v5.CrossShardFinalityStatelessDirect || finalityMode == v5.CrossShardFinalityPorygonGlobalCommit || finalityMode == v5.CrossShardFinalityCalvinGlobalCommit
 	drain, err := readDrainStatus(dataDir)
 	if err != nil {
 		return nil, err
@@ -1718,6 +1724,9 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	crossSuccess := 0
 	crossRefund := 0
 	faultEvidence := false
+	calvinReadResultNetwork := false
+	calvinOutcomeNetwork := false
+	calvinGlobalOrderingNetwork := calvinPlanHasDistributedExecution(plan)
 	remoteStateAccessCount := 0
 	remoteStateReadCount := 0
 	remoteStateWriteApplyCount := 0
@@ -1793,6 +1802,9 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		var item v5NodeSummary
 		if err := json.Unmarshal(raw, &item); err != nil {
 			return nil, err
+		}
+		if consistencyShard := calvinConsistencyShardID(node); consistencyShard != node.ShardID {
+			item.ShardID = consistencyShard
 		}
 		summaries = append(summaries, item)
 		if roots[item.ShardID] == nil {
@@ -1954,6 +1966,8 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		}
 		network, _ := os.ReadFile(filepath.Join(node.DataDir, "network_log.csv"))
 		faultEvidence = faultEvidence || strings.Contains(string(network), "fault_")
+		calvinReadResultNetwork = calvinReadResultNetwork || strings.Contains(string(network), "CALVIN_READ_RESULT_V1")
+		calvinOutcomeNetwork = calvinOutcomeNetwork || strings.Contains(string(network), "CALVIN_TX_OUTCOME_V2")
 	}
 	matrixStateConsistent, matrixReceiptConsistent, err := writeHeightRootMatrix(dataDir, plan.NodeConfigs)
 	if err != nil {
@@ -2013,8 +2027,18 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		schedulerIdleRatio = schedulerIdleRatioWeightedSum / float64(schedulerEventCount)
 	}
 	replicaDeduplicatedExecutedLogicalTxCount := 0
-	for _, count := range executedLogicalTxByShard {
-		replicaDeduplicatedExecutedLogicalTxCount += count
+	executedLogicalTruthScope := "replica_deduplicated_by_shard"
+	if calvinGlobalOrderingNetwork {
+		executedLogicalTruthScope = "global_ordering_tx_deduplicated_across_execution_shards"
+		for _, count := range executedLogicalTxByShard {
+			if count > replicaDeduplicatedExecutedLogicalTxCount {
+				replicaDeduplicatedExecutedLogicalTxCount = count
+			}
+		}
+	} else {
+		for _, count := range executedLogicalTxByShard {
+			replicaDeduplicatedExecutedLogicalTxCount += count
+		}
 	}
 	sumInt64 := func(values map[string]int64) int64 {
 		total := int64(0)
@@ -2047,7 +2071,10 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		"persistent_state":                                       true,
 		"state_root_consistent":                                  consistent,
 		"receipt_root_consistent":                                matrixReceiptConsistent,
-		"real_cross_shard_network":                               crossSuccess > 0,
+		"real_cross_shard_network":                               crossSuccess > 0 || calvinReadResultNetwork || calvinOutcomeNetwork,
+		"calvin_read_result_network":                             calvinReadResultNetwork,
+		"calvin_outcome_network":                                 calvinOutcomeNetwork,
+		"calvin_global_ordering_network":                         calvinGlobalOrderingNetwork,
 		"cross_shard_success_count":                              crossSuccess,
 		"cross_shard_refund_count":                               crossRefund,
 		"configured_block_size":                                  blockProductionAggregate["configured_block_size"],
@@ -2065,7 +2092,7 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		"physical_update_count_deprecated":                       true,
 		"executed_logical_transaction_count":                     replicaDeduplicatedExecutedLogicalTxCount,
 		"physical_replica_executed_logical_transaction_count":    physicalReplicaExecutedLogicalTxCount,
-		"executed_logical_transaction_count_truth_scope":         "replica_deduplicated_by_shard",
+		"executed_logical_transaction_count_truth_scope":         executedLogicalTruthScope,
 		"executed_transaction_instance_count":                    executedTxInstanceCount,
 		"pre_aggregation_physical_op_count":                      preAggregationPhysicalOps,
 		"post_aggregation_physical_op_count":                     postAggregationPhysicalOps,
@@ -2885,9 +2912,37 @@ func v5LogicalPath(dataDir, target string) string {
 	return filepath.ToSlash(rel)
 }
 
+func calvinConsistencyShardID(node v5.NodePlan) string {
+	if executor, ok := node.PluginProfile["block_executor"]; ok {
+		if executor.PluginID == "calvin_block_executor" || executor.PluginID == "stateless_calvin_block_executor" {
+			if strings.TrimSpace(node.ExecutionShardID) != "" {
+				return node.ExecutionShardID
+			}
+		}
+	}
+	return node.ShardID
+}
+
+func calvinPlanHasDistributedExecution(plan v5.Plan) bool {
+	selected := false
+	shards := map[string]bool{}
+	for _, node := range plan.NodeConfigs {
+		executor, ok := node.PluginProfile["block_executor"]
+		if !ok || (executor.PluginID != "calvin_block_executor" && executor.PluginID != "stateless_calvin_block_executor") {
+			continue
+		}
+		selected = true
+		if shardID := strings.TrimSpace(node.ExecutionShardID); shardID != "" {
+			shards[shardID] = true
+		}
+	}
+	return selected && len(shards) > 1
+}
+
 func writeHeightRootMatrix(dataDir string, nodes []v5.NodePlan) (bool, bool, error) {
 	type row struct{ shard, height, node, block, parent, tx, state, receipt string }
 	byHeight := map[string][]row{}
+	globalCalvinReceiptRoots := map[string]map[string]bool{}
 	for _, node := range nodes {
 		file, err := os.Open(filepath.Join(node.DataDir, "committed_chain.csv"))
 		if err != nil {
@@ -2898,12 +2953,21 @@ func writeHeightRootMatrix(dataDir string, nodes []v5.NodePlan) (bool, bool, err
 		if err != nil {
 			return false, false, err
 		}
+		consistencyShard := calvinConsistencyShardID(node)
 		for i, record := range records {
 			if i == 0 || len(record) < 11 {
 				continue
 			}
-			key := record[1] + ":" + record[2]
-			byHeight[key] = append(byHeight[key], row{record[1], record[2], record[0], record[4], record[5], record[7], record[9], record[10]})
+			shardID := record[1]
+			if consistencyShard != node.ShardID {
+				shardID = consistencyShard
+				if globalCalvinReceiptRoots[record[2]] == nil {
+					globalCalvinReceiptRoots[record[2]] = map[string]bool{}
+				}
+				globalCalvinReceiptRoots[record[2]][record[10]] = true
+			}
+			key := shardID + ":" + record[2]
+			byHeight[key] = append(byHeight[key], row{shardID, record[2], record[0], record[4], record[5], record[7], record[9], record[10]})
 		}
 	}
 	out := [][]string{}
@@ -2929,6 +2993,11 @@ func writeHeightRootMatrix(dataDir string, nodes []v5.NodePlan) (bool, bool, err
 		}
 		if !consistent && len(first) == 0 {
 			first = map[string]any{"key": key, "entries": items}
+		}
+	}
+	for _, rootsAtHeight := range globalCalvinReceiptRoots {
+		if len(rootsAtHeight) != 1 {
+			receiptConsistent = false
 		}
 	}
 	if err := metrics.WriteCSV(filepath.Join(dataDir, "height_root_matrix.csv"), []string{"shard_id", "height", "node_id", "block_hash", "state_root", "receipt_root", "consistent"}, out); err != nil {

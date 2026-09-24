@@ -1080,7 +1080,7 @@ def _completion_gate(run_dir: Path, summary: dict) -> dict:
     latest_status = _latest_node_statuses(run_dir)
     for status in latest_status:
         node_id = str(status.get("node_id", "unknown"))
-        for field in ("pending_state_delta_count", "pending_state_delta_key_count", "ready_state_delta_count", "pending_commit_count"):
+        for field in ("pending_state_delta_count", "pending_state_delta_key_count", "ready_state_delta_count", "pending_commit_count", "pending_state_fetch_count", "pending_state_version_subscription_count", "pending_version_admission_watch_count"):
             if _number(status.get(field)) != 0:
                 blockers.append(f"node_runtime_status:{node_id}:{field}_not_zero")
         if _proposal_has_pending_work(status):

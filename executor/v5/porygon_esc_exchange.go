@@ -42,10 +42,11 @@ type PorygonESCWaveResult struct {
 }
 
 type PorygonESCWaveCertificateEntry struct {
-	ExecutionShardID string               `json:"execution_shard_id"`
-	ResultDigest     string               `json:"result_digest"`
-	Voters           []string             `json:"voters"`
-	Result           PorygonESCWaveResult `json:"result"`
+	ExecutionShardID string                  `json:"execution_shard_id"`
+	ResultDigest     string                  `json:"result_digest"`
+	Voters           []string                `json:"voters"`
+	Attestations     []PorygonESCAttestation `json:"attestations,omitempty"`
+	Result           PorygonESCWaveResult    `json:"result"`
 }
 
 // PorygonESCWaveCertificate is the MBE adaptation of the OC accepting an ESC
@@ -160,15 +161,17 @@ func validatePorygonESCWaveCertificate(cert PorygonESCWaveCertificate) error {
 }
 
 type porygonESCResultBucket struct {
-	Result PorygonESCWaveResult
-	Voters map[string]bool
+	Result       PorygonESCWaveResult
+	Voters       map[string]bool
+	Attestations map[string]PorygonESCAttestation
 }
 
 type porygonESCExchangeState struct {
-	mu           sync.Mutex
-	results      map[string]map[string]map[string]*porygonESCResultBucket
-	senderDigest map[string]map[string]map[string]string
-	certificates map[string]PorygonESCWaveCertificate
+	mu               sync.Mutex
+	results          map[string]map[string]map[string]*porygonESCResultBucket
+	senderDigest     map[string]map[string]map[string]string
+	certificates     map[string]PorygonESCWaveCertificate
+	certificateOrder []string
 }
 
 var porygonESCExchangeStates sync.Map // map[*NodeRuntime]*porygonESCExchangeState
@@ -178,9 +181,10 @@ func (r *NodeRuntime) porygonESCState() *porygonESCExchangeState {
 		return value.(*porygonESCExchangeState)
 	}
 	created := &porygonESCExchangeState{
-		results:      map[string]map[string]map[string]*porygonESCResultBucket{},
-		senderDigest: map[string]map[string]map[string]string{},
-		certificates: map[string]PorygonESCWaveCertificate{},
+		results:          map[string]map[string]map[string]*porygonESCResultBucket{},
+		senderDigest:     map[string]map[string]map[string]string{},
+		certificates:     map[string]PorygonESCWaveCertificate{},
+		certificateOrder: []string{},
 	}
 	actual, _ := porygonESCExchangeStates.LoadOrStore(r, created)
 	return actual.(*porygonESCExchangeState)
@@ -222,12 +226,23 @@ func containsString(items []string, target string) bool {
 }
 
 func (r *NodeRuntime) acceptPorygonESCWaveResult(result PorygonESCWaveResult) error {
+	return r.acceptPorygonESCWaveResultWithAttestation(result, PorygonESCAttestation{})
+}
+
+func (r *NodeRuntime) acceptPorygonESCWaveResultWithAttestation(result PorygonESCWaveResult, attestation PorygonESCAttestation) error {
 	if err := validatePorygonESCWaveResult(result); err != nil {
 		return err
 	}
 	members := r.porygonExecutionShardMembers(result.ExecutionShardID)
 	if len(members) == 0 || !containsString(members, result.SenderNodeID) {
 		return fmt.Errorf("porygon ESC result sender %s is not a member of %s", result.SenderNodeID, result.ExecutionShardID)
+	}
+	if attestation.NodeID != "" {
+		if err := r.verifyPorygonESCAttestation(result, attestation); err != nil {
+			return err
+		}
+	} else if r.pbftAuthenticationRequired() {
+		return fmt.Errorf("porygon ESC result from %s is missing authenticated attestation", result.SenderNodeID)
 	}
 	key := porygonESCWaveKey(result.BlockHash, result.Wave)
 	state := r.porygonESCState()
@@ -251,10 +266,13 @@ func (r *NodeRuntime) acceptPorygonESCWaveResult(result PorygonESCWaveResult) er
 	}
 	bucket := state.results[key][result.ExecutionShardID][result.ResultDigest]
 	if bucket == nil {
-		bucket = &porygonESCResultBucket{Result: result, Voters: map[string]bool{}}
+		bucket = &porygonESCResultBucket{Result: result, Voters: map[string]bool{}, Attestations: map[string]PorygonESCAttestation{}}
 		state.results[key][result.ExecutionShardID][result.ResultDigest] = bucket
 	}
 	bucket.Voters[result.SenderNodeID] = true
+	if attestation.NodeID != "" {
+		bucket.Attestations[attestation.NodeID] = attestation
+	}
 	return nil
 }
 
@@ -290,10 +308,10 @@ func (r *NodeRuntime) tryBuildPorygonESCWaveCertificate(blockHash string, height
 			return PorygonESCWaveCertificate{}, false, nil
 		}
 		voters := sortedBoolKeys(chosen.Voters)
-		cert.Entries = append(cert.Entries, PorygonESCWaveCertificateEntry{ExecutionShardID: shardID, ResultDigest: chosen.Result.ResultDigest, Voters: voters, Result: chosen.Result})
+		cert.Entries = append(cert.Entries, PorygonESCWaveCertificateEntry{ExecutionShardID: shardID, ResultDigest: chosen.Result.ResultDigest, Voters: voters, Attestations: sortedPorygonESCAttestations(chosen.Attestations), Result: chosen.Result})
 	}
 	cert = sealPorygonESCWaveCertificate(cert)
-	state.certificates[key] = cert
+	storePorygonESCWaveCertificateLocked(state, key, cert)
 	return cert, true, nil
 }
 
@@ -330,6 +348,9 @@ func (r *NodeRuntime) validatePorygonCertificateAgainstPlan(cert PorygonESCWaveC
 			}
 			seen[voter] = true
 		}
+		if err := r.verifyPorygonCertificateEntryAttestations(entry); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -338,6 +359,11 @@ func (r *NodeRuntime) storePorygonESCWaveCertificate(cert PorygonESCWaveCertific
 	if err := validatePorygonESCWaveCertificate(cert); err != nil {
 		return err
 	}
+	for _, entry := range cert.Entries {
+		if err := r.verifyPorygonCertificateEntryAttestations(entry); err != nil {
+			return err
+		}
+	}
 	key := porygonESCWaveKey(cert.BlockHash, cert.Wave)
 	state := r.porygonESCState()
 	state.mu.Lock()
@@ -345,14 +371,16 @@ func (r *NodeRuntime) storePorygonESCWaveCertificate(cert PorygonESCWaveCertific
 	if existing, ok := state.certificates[key]; ok && existing.CertificateDigest != cert.CertificateDigest {
 		return fmt.Errorf("conflicting porygon ESC certificate for %s", key)
 	}
-	state.certificates[key] = cert
+	storePorygonESCWaveCertificateLocked(state, key, cert)
 	return nil
 }
 
-func (r *NodeRuntime) waitPorygonESCWaveCertificate(ctx context.Context, blockHash string, wave int, requiredShards []string) (PorygonESCWaveCertificate, error) {
+func (r *NodeRuntime) waitPorygonESCWaveCertificate(ctx context.Context, blockHash string, height uint64, wave int, requiredShards []string) (PorygonESCWaveCertificate, error) {
 	key := porygonESCWaveKey(blockHash, wave)
 	ticker := time.NewTicker(2 * time.Millisecond)
+	recoveryTicker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
+	defer recoveryTicker.Stop()
 	for {
 		state := r.porygonESCState()
 		state.mu.Lock()
@@ -368,6 +396,8 @@ func (r *NodeRuntime) waitPorygonESCWaveCertificate(ctx context.Context, blockHa
 		case <-ctx.Done():
 			return PorygonESCWaveCertificate{}, ctx.Err()
 		case <-ticker.C:
+		case <-recoveryTicker.C:
+			_ = r.requestPorygonESCWaveCertificate(ctx, blockHash, height, wave)
 		}
 	}
 }
@@ -378,23 +408,42 @@ func (r *NodeRuntime) releasePorygonESCWaveState(blockHash string, wave int) {
 	state.mu.Lock()
 	delete(state.results, key)
 	delete(state.senderDigest, key)
-	delete(state.certificates, key)
+	prunePorygonESCWaveCertificatesLocked(state)
 	state.mu.Unlock()
 }
 
 func (r *NodeRuntime) broadcastPorygonESCWaveCertificate(ctx context.Context, cert PorygonESCWaveCertificate) error {
+	targets := make([]string, 0, len(r.node.Validators))
 	for _, nodeID := range r.node.Validators {
 		if nodeID == "" || nodeID == r.node.NodeID {
 			continue
 		}
-		envelope, err := p2p.NewEnvelope(porygonESCWaveCertificateMessage, r.node.NodeID, nodeID, r.node.ShardID, cert.Height, r.currentPBFTView(), cert.Height, cert)
-		if err != nil {
-			return err
-		}
-		if err := r.sendToNode(ctx, nodeID, envelope); err != nil {
-			return err
+		targets = append(targets, nodeID)
+	}
+	type sendOutcome struct {
+		nodeID string
+		err    error
+	}
+	outcomes := make(chan sendOutcome, len(targets))
+	for _, nodeID := range targets {
+		nodeID := nodeID
+		go func() {
+			outcomes <- sendOutcome{nodeID: nodeID, err: r.sendPorygonESCWaveCertificateToNode(ctx, nodeID, cert)}
+		}()
+	}
+	failures := 0
+	for range targets {
+		if outcome := <-outcomes; outcome.err != nil {
+			failures++
 		}
 	}
+	if len(targets) > 0 {
+		r.addPorygonRuntimeMetric("porygon_esc_certificate_broadcast_target_count", int64(len(targets)))
+	}
+	if failures > 0 {
+		r.addPorygonRuntimeMetric("porygon_esc_certificate_broadcast_send_failure_count", int64(failures))
+	}
+	r.addPorygonRuntimeMetric("porygon_esc_certificate_broadcast_success_count", int64(len(targets)-failures))
 	return nil
 }
 
@@ -414,16 +463,21 @@ func (r *NodeRuntime) porygonWaveExchange(ctx context.Context, local PorygonESCW
 	requiredShards = sortedBoolKeys(required)
 	if required[local.ExecutionShardID] {
 		local = sealPorygonESCWaveResult(local)
+		attestation, err := r.signPorygonESCAttestation(local)
+		if err != nil {
+			return PorygonESCWaveCertificate{}, err
+		}
 		leader := r.leaderID(r.node.ShardID)
 		if leader == "" {
 			return PorygonESCWaveCertificate{}, fmt.Errorf("porygon global leader is unavailable")
 		}
 		if leader == r.node.NodeID {
-			if err := r.acceptPorygonESCWaveResult(local); err != nil {
+			if err := r.acceptPorygonESCWaveResultWithAttestation(local, attestation); err != nil {
 				return PorygonESCWaveCertificate{}, err
 			}
 		} else {
-			envelope, err := p2p.NewEnvelope(porygonESCWaveResultMessage, r.node.NodeID, leader, r.node.ShardID, local.Height, r.currentPBFTView(), local.Height, local)
+			wire := PorygonESCWaveResultWire{Result: local, Attestation: attestation}
+			envelope, err := p2p.NewEnvelope(porygonESCWaveResultMessage, r.node.NodeID, leader, r.node.ShardID, local.Height, r.currentPBFTView(), local.Height, wire)
 			if err != nil {
 				return PorygonESCWaveCertificate{}, err
 			}
@@ -456,21 +510,29 @@ func (r *NodeRuntime) porygonWaveExchange(ctx context.Context, local PorygonESCW
 			}
 		}
 	}
-	return r.waitPorygonESCWaveCertificate(ctx, local.BlockHash, local.Wave, requiredShards)
+	return r.waitPorygonESCWaveCertificate(ctx, local.BlockHash, local.Height, local.Wave, requiredShards)
 }
 
 func (r *NodeRuntime) handlePorygonESCWaveResult(ctx context.Context, msg p2p.MessageEnvelope) error {
 	if !r.isCurrentLeader() {
 		return fmt.Errorf("porygon ESC wave result sent to non-leader")
 	}
-	result, err := p2p.DecodePayload[PorygonESCWaveResult](msg)
+	wire, err := p2p.DecodePayload[PorygonESCWaveResultWire](msg)
 	if err != nil {
 		return err
 	}
+	if wire.Result.BlockHash == "" {
+		legacy, legacyErr := p2p.DecodePayload[PorygonESCWaveResult](msg)
+		if legacyErr != nil {
+			return legacyErr
+		}
+		wire.Result = legacy
+	}
+	result := wire.Result
 	if msg.FromNode != result.SenderNodeID || msg.Height != result.Height {
 		return fmt.Errorf("porygon ESC result envelope identity mismatch")
 	}
-	return r.acceptPorygonESCWaveResult(result)
+	return r.acceptPorygonESCWaveResultWithAttestation(result, wire.Attestation)
 }
 
 func (r *NodeRuntime) handlePorygonESCWaveCertificate(ctx context.Context, msg p2p.MessageEnvelope) error {

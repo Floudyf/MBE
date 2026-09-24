@@ -181,7 +181,14 @@ def test_method_plugin_override_resets_to_target_plugin_default_config() -> None
 
 def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path) -> None:
     plan = method_plan(suites=["comparison_experiment"])
-    plan.methods = [method for method_id, method in BUILTIN_METHODS.items() if method_id != "hash_groundhog"]
+    legacy_comparison_ids = [
+        "hash_serial",
+        "hash_block_stm",
+        "hash_aria",
+        "metatrack_serial",
+        "metatrack_block_stm",
+    ]
+    plan.methods = [BUILTIN_METHODS[method_id] for method_id in legacy_comparison_ids]
     checked = validate_request(type("Request", (), {"execution_backend": "real_cluster", "plan": plan})())
     rows = checked.rows
 

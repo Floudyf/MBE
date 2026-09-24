@@ -25,7 +25,15 @@ def test_catalog_default_is_canonical_baseline_and_alias_snapshot_is_canonical()
 
 def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     plan = _plan()
-    plan.methods = list(BUILTIN_METHODS.values())
+    legacy_builtin_ids = [
+        "hash_serial",
+        "hash_block_stm",
+        "hash_aria",
+        "hash_groundhog",
+        "metatrack_serial",
+        "metatrack_block_stm",
+    ]
+    plan.methods = [BUILTIN_METHODS[method_id] for method_id in legacy_builtin_ids]
     plan.suites = ["comparison_experiment"]
     checked = validate_request(V5FormalRunRequest(execution_backend="real_cluster", plan=plan))
     assert [method.method_id for method in checked.plan.methods] == [

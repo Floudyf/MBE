@@ -180,7 +180,11 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	submitRecord := func(record WorkloadRecord, route RoutingDecision) error {
 		executionShard := route.ShardID
 		shardID := workloadIngressShard(record, route, statelessDirect)
-		if plugins.Routing.ID() == porygonRoutingID {
+		if plugins.Routing.ID() == porygonRoutingID || plugins.Routing.ID() == calvinStatefulRoutingID || plugins.Routing.ID() == calvinStatelessRoutingID {
+			// Porygon and Calvin both separate logical execution/state partitions
+			// from one physical PBFT ordering domain. Keep route.ShardID as the
+			// logical workload/execution shard, but submit to that method's actual
+			// consensus-domain leader. Other routing profiles are unchanged.
 			for _, node := range plan.NodeConfigs {
 				if effectiveExecutionShardID(node) == executionShard {
 					shardID = effectiveConsensusDomainID(node)
@@ -286,7 +290,15 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			for index := range records {
 				ordinal := uint64(records[index].Index + 1)
 				records[index].RoutingOrdinal = ordinal
-				records[index].StateVersions = stateVersionDependenciesForRecord(records[index], ordinal, lastWriterOrdinal)
+				if plugins.Routing.ID() == calvinStatelessRoutingID {
+					// MBE_CALVIN_CONSENSUS_VERSION_PLAN_V34: Stateless Calvin exact
+					// predecessor/producer versions are derived only from the final
+					// consensus-bound Calvin block order. Client/source order must not
+					// be signed into ExecutionRouting.StateVersions.
+					records[index].StateVersions = nil
+				} else {
+					records[index].StateVersions = stateVersionDependenciesForRecord(records[index], ordinal, lastWriterOrdinal)
+				}
 			}
 		}
 		placements := map[int]TransactionPlacement{}

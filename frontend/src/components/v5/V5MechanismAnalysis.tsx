@@ -9,7 +9,8 @@ const COMMON: MetricDef[] = [
   { key: "worker_count", label: "工作线程数", help: "该方法真实执行路径记录的 工作线程数；Serial 通常为 1。" },
   { key: "maximum_parallel_width", label: "最大并行宽度", help: "运行期/计划证据中观察到的最大同时并行交易宽度。" },
   { key: "block_execution_ms", label: "区块执行总耗时", unit: "ms", help: "Leader 区块执行墙钟时间包络累计。" },
-  { key: "transaction_execution_ms", label: "交易执行耗时", unit: "ms", help: "算法交易执行阶段累计时间。" },
+  { key: "transaction_execution_ms", label: "交易执行耗时", unit: "ms", help: "统一算法执行时间；Porygon 使用逐区块 replica 最大关键路径后跨区块求和，其他方法保留各自正式执行阶段口径。" },
+  { key: "actual_block_fill_ratio", label: "实际区块填充率", help: "实际平均已提交交易数 ÷ 配置 block_size，用于审查不同方法的区块利用率差异。" },
   { key: "deterministic_materialization_ms", label: "确定性物化耗时", unit: "ms", help: "确定性物化/应用阶段累计时间。" },
   { key: "state_commitment_ms", label: "状态承诺耗时", unit: "ms", help: "状态承诺 / 状态根更新阶段累计时间。" },
 ];
@@ -35,17 +36,47 @@ const NATIVE_STATE_READY: MetricDef[] = [
 
 const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; metrics: MetricDef[] }> = [
   {
+    match: (id) => id.includes("stateless_hash_serial"), title: "Stateless Hash + Serial",
+    metrics: [
+      { key: "stateless_version_admission_candidate_mean_tx_count", label: "准入候选平均大小", help: "进入 exact-version 共识前准入检查的平均候选交易数。" },
+      { key: "stateless_version_admission_mean_frontier_width", label: "可执行版本前沿平均宽度", help: "每次候选中实际能安全进入 PBFT 的平均交易数。" },
+      { key: "stateless_version_admission_mean_nonempty_frontier_width", label: "非空可执行前沿平均宽度", help: "只统计实际形成 PBFT 提案的候选事件，admitted 交易数 ÷ 非空前沿事件数；可直接解释实际小区块规模。" },
+      { key: "stateless_version_admission_zero_frontier_rate", label: "零前沿候选比例", help: "候选检查时没有任何交易可安全进入 PBFT 的事件比例。" },
+      { key: "stateless_version_admission_admission_ratio", label: "版本准入率", help: "累计 admitted 交易出现次数 ÷ candidate 交易出现次数。" },
+      { key: "stateless_version_admission_external_not_ready_ratio", label: "外部精确版本未就绪比例", help: "候选中外部 exact-version token 未 materialize 的比例。" },
+      { key: "stateless_version_admission_deferred_direct_external_not_ready_count", label: "外部版本直接阻塞次数", help: "因外部 required version 未就绪而直接延期的交易出现次数。" },
+      { key: "stateless_version_admission_deferred_internal_propagation_count", label: "块内依赖传播阻塞次数", help: "自身无直接外部缺失，但其候选内 producer 尚未可执行而被传播阻塞的交易出现次数。" },
+    ],
+  },
+  {
     match: (id) => id.includes("block_stm"), title: "Block-STM",
     metrics: [
       { key: "abort_count", label: "中止事件数", help: "正式 Block-STM 中止事件计数：每个分片取 PBFT replica 最大值后跨分片求和；同一逻辑交易仍可能多次中止。" },
-      { key: "block_stm_abort_events_per_tx", label: "每交易中止事件数", help: "副本去重后的中止事件数 ÷ submitted unique 逻辑交易数。" },
+      { key: "block_stm_abort_events_per_tx", label: "每交易中止事件数", help: "副本去重后的中止事件数 ÷ submitted unique 逻辑交易数；同一交易可多次中止。" },
+      { key: "block_stm_unique_aborted_tx_count", label: "发生过中止的唯一交易数", help: "至少经历过一次 dependency/validation abort 的唯一逻辑交易数；每分片 leader 区块证据去重后求和。" },
+      { key: "block_stm_unique_aborted_tx_rate", label: "唯一交易中止比例", help: "至少中止过一次的唯一交易数 ÷ submitted unique；适合与 MetaTrack Fast fallback 比较。" },
       { key: "reexecution_count", label: "重执行次数", help: "副本去重后的 Block-STM 重执行事件计数。" },
+      { key: "block_stm_unique_reexecuted_tx_count", label: "发生过重执行的唯一交易数", help: "至少执行过 incarnation>0 的唯一逻辑交易数。" },
+      { key: "block_stm_unique_reexecuted_tx_rate", label: "唯一交易重执行比例", help: "至少重执行过一次的唯一交易数 ÷ submitted unique。" },
       { key: "reexecution_events_per_tx", label: "每交易重执行次数", help: "副本去重后的重执行事件数 ÷ submitted unique 逻辑交易数。" },
       { key: "validation_failure_count", label: "验证失败次数", help: "副本去重后的 Block-STM 验证失败事件数。" },
       { key: "dependency_wait_count", label: "依赖等待次数", help: "副本去重后的依赖等待事件计数。" },
       { key: "block_stm_internal_version_dependency_delegated_count", label: "块内版本依赖委托数", help: "无状态 exact-version 层识别为同块内部依赖并交给 Block-STM 自行验证/重执行的依赖事件数；按每分片一个 leader 的区块证据去重汇总。" },
       { key: "block_stm_internal_version_dependencies_delegated_per_tx", label: "每交易块内版本依赖委托数", help: "块内版本依赖委托数 ÷ submitted unique 逻辑交易数。" },
       { key: "maximum_incarnation_observed", label: "最大执行版本号", help: "运行中观察到的最大执行版本号。" },
+    ],
+  },
+  {
+    match: (id) => id.includes("stateless_hash_block_stm"), title: "Stateless exact-version frontier",
+    metrics: [
+      { key: "stateless_version_admission_candidate_mean_tx_count", label: "准入候选平均大小", help: "进入 exact-version 共识前准入检查的平均候选交易数。" },
+      { key: "stateless_version_admission_mean_frontier_width", label: "可执行版本前沿平均宽度", help: "每次候选中实际能安全进入 PBFT 的平均交易数。" },
+      { key: "stateless_version_admission_mean_nonempty_frontier_width", label: "非空可执行前沿平均宽度", help: "只统计实际形成 PBFT 提案的候选事件，admitted 交易数 ÷ 非空前沿事件数；可直接解释实际小区块规模。" },
+      { key: "stateless_version_admission_zero_frontier_rate", label: "零前沿候选比例", help: "候选检查时没有任何交易可安全进入 PBFT 的事件比例。" },
+      { key: "stateless_version_admission_admission_ratio", label: "版本准入率", help: "累计 admitted 交易出现次数 ÷ candidate 交易出现次数。" },
+      { key: "stateless_version_admission_external_not_ready_ratio", label: "外部精确版本未就绪比例", help: "候选中外部 exact-version token 未 materialize 的比例。" },
+      { key: "stateless_version_admission_deferred_direct_external_not_ready_count", label: "外部版本直接阻塞次数", help: "因外部 required version 未就绪而直接延期的交易出现次数。" },
+      { key: "stateless_version_admission_deferred_internal_propagation_count", label: "块内依赖传播阻塞次数", help: "自身无直接外部缺失，但其候选内 producer 尚未可执行而被传播阻塞的交易出现次数。" },
     ],
   },
   {
@@ -149,11 +180,53 @@ const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; met
     ],
   },
   {
+    match: (id) => id.includes("porygon"), title: "Porygon",
+    metrics: [
+      { key: "porygon_execution_shard_count", label: "ESC 数", help: "前端 topology.shards 映射得到的 Porygon Execution Sub-Committee 数。" },
+      { key: "porygon_execution_wave_count", label: "执行 Wave 数", help: "Porygon 共识绑定计划实际执行的 Wave 总数。" },
+      { key: "porygon_logical_state_cross_shard_ratio", label: "Porygon 逻辑跨片比例", help: "execution ESC 与签名 AccessList 状态归属共同定义的逻辑跨片比例；不是 workload source/target 跨片比例。" },
+      { key: "porygon_esc_ownership_verified", label: "ESC 归属核验", help: "各 ESC replica 的本地业务执行数量是否与共识绑定 ownership 一致。" },
+      { key: "porygon_business_execution_critical_path_ms", label: "业务执行关键路径", unit: "ms", help: "逐区块取 replica 业务执行最大值后跨区块求和。" },
+      { key: "porygon_result_exchange_wait_critical_path_ms", label: "ESC 结果交换等待关键路径", unit: "ms", help: "逐区块取 replica ESC 结果交换等待最大值后跨区块求和。" },
+      { key: "porygon_execution_critical_path_ms", label: "Porygon 执行总关键路径", unit: "ms", help: "逐区块 replica 执行关键路径最大值之和，是 Porygon 横向执行时间比较的正式字段。" },
+      { key: "porygon_leader_local_transaction_execution_ms", label: "Global Leader 本地业务执行时间", unit: "ms", help: "仅保留诊断用途；不是 Porygon 全局执行墙钟时间。" },
+      { key: "porygon_witness_threshold_configured", label: "Witness 配置阈值", help: "保留的 Porygon witness_threshold 配置值；当前 MBE 适配不把它解释为独立 Witness Committee quorum。" },
+      { key: "porygon_witness_validation_mode", label: "Witness 验证模式", help: "当前采用所有 PBFT validator 对完整 Transaction Block / Access root 重算后再投票。" },
+    ],
+  },
+  {
     match: (id) => id.includes("metatrack"), title: "MetaTrack",
     metrics: [
       { key: "fast_track_logical_tx_count", label: "快速轨交易数", help: "MetaTrack 快速轨逻辑交易数。" },
       { key: "conservative_track_logical_tx_count", label: "保守轨交易数", help: "MetaTrack 保守轨逻辑交易数。" },
       { key: "fast_track_ratio", label: "快速轨比例", help: "快速轨交易数 ÷ 已分类逻辑交易数。" },
+      { key: "metatrack_fast_fallback_count", label: "快速轨回退次数", help: "Fast tentative result 被丢弃并转入 Conservative 重新执行的次数。" },
+      { key: "metatrack_fast_fallback_rate", label: "快速轨回退率", help: "快速轨回退次数 ÷ 初始快速轨交易数；strict frontier 正常应接近 0。" },
+      { key: "metatrack_fast_discarded_execution_ms", label: "快速轨丢弃执行耗时", unit: "ms", help: "Fast 回退时已经消耗但最终丢弃的业务执行时间累计。" },
+      { key: "metatrack_conservative_reexecution_count", label: "保守轨重执行次数", help: "由 Fast 回退进入 Conservative 的 attempt>1 重执行次数。" },
+      { key: "metatrack_conservative_reexecution_share", label: "保守轨重执行占比", help: "保守轨重执行次数 ÷ 保守轨业务执行 attempt 数；不是 Block-STM 式回滚率。" },
+      { key: "metatrack_fast_business_execution_sum_ms", label: "快速轨业务执行累计耗时", unit: "ms", help: "Fast worker 真实业务 attempt 的单调时钟耗时之和；并行时可大于整体墙钟时间。" },
+      { key: "metatrack_fast_business_execution_mean_ms", label: "快速轨单次平均执行耗时", unit: "ms", help: "快速轨业务执行累计耗时 ÷ Fast attempt 数。" },
+      { key: "metatrack_fast_business_execution_p95_ms", label: "快速轨单次执行 P95", unit: "ms", help: "Fast worker 真实 business attempt 耗时的 P95。" },
+      { key: "metatrack_fast_business_execution_p99_ms", label: "快速轨单次执行 P99", unit: "ms", help: "Fast worker 真实 business attempt 耗时的 P99。" },
+      { key: "metatrack_conservative_business_execution_sum_ms", label: "保守轨业务执行累计耗时", unit: "ms", help: "Conservative worker 真实业务 attempt 的单调时钟耗时之和。" },
+      { key: "metatrack_conservative_business_execution_mean_ms", label: "保守轨单次平均执行耗时", unit: "ms", help: "保守轨业务执行累计耗时 ÷ Conservative attempt 数。" },
+      { key: "metatrack_conservative_business_execution_p95_ms", label: "保守轨单次执行 P95", unit: "ms", help: "Conservative worker 真实 business attempt 耗时的 P95。" },
+      { key: "metatrack_conservative_business_execution_p99_ms", label: "保守轨单次执行 P99", unit: "ms", help: "Conservative worker 真实 business attempt 耗时的 P99；v31 使用纳秒级单调时钟。" },
+      { key: "metatrack_fast_track_sojourn_mean_ms", label: "快速轨平均全程驻留时间", unit: "ms", help: "从进入 Fast 到该 attempt 完成/回退的真实单调时钟时间，包含依赖、StateReady、排队和业务执行。" },
+      { key: "metatrack_fast_track_sojourn_p95_ms", label: "快速轨全程驻留 P95", unit: "ms", help: "Fast attempt 全轨 sojourn time P95。" },
+      { key: "metatrack_fast_track_sojourn_p99_ms", label: "快速轨全程驻留 P99", unit: "ms", help: "Fast attempt 全轨 sojourn time P99。" },
+      { key: "metatrack_conservative_track_sojourn_mean_ms", label: "保守轨平均全程驻留时间", unit: "ms", help: "从进入 Conservative 到该 attempt 完成的真实单调时钟时间。" },
+      { key: "metatrack_conservative_track_sojourn_p95_ms", label: "保守轨全程驻留 P95", unit: "ms", help: "Conservative attempt 全轨 sojourn time P95。" },
+      { key: "metatrack_conservative_track_sojourn_p99_ms", label: "保守轨全程驻留 P99", unit: "ms", help: "Conservative attempt 全轨 sojourn time P99。" },
+      { key: "metatrack_fast_state_wait_sum_ms", label: "快速轨 StateReady 累计等待", unit: "ms", help: "Fast 交易 StateReady 等待累计；与依赖等待可能重叠，不能与 sojourn 直接相加。" },
+      { key: "metatrack_fast_dependency_wait_sum_ms", label: "快速轨依赖累计等待", unit: "ms", help: "Fast 交易等待前驱完成的累计时间。" },
+      { key: "metatrack_fast_queue_wait_sum_ms", label: "快速轨就绪队列累计等待", unit: "ms", help: "Fast 交易 ready 后到 dispatch 的累计时间。" },
+      { key: "metatrack_conservative_state_wait_sum_ms", label: "保守轨 StateReady 累计等待", unit: "ms", help: "Conservative 交易 StateReady 等待累计。" },
+      { key: "metatrack_conservative_dependency_wait_sum_ms", label: "保守轨依赖累计等待", unit: "ms", help: "Conservative 交易等待前驱完成的累计时间。" },
+      { key: "metatrack_conservative_queue_wait_sum_ms", label: "保守轨就绪队列累计等待", unit: "ms", help: "Conservative 交易 ready 后到 dispatch 的累计时间。" },
+      { key: "metatrack_business_execution_cpu_sum_ms", label: "双轨真实业务执行累计耗时", unit: "ms", help: "Fast + Conservative worker business attempt 的纳秒级累计耗时；不再把整个 StateReady 包络误标成 business CPU。" },
+      { key: "metatrack_business_execution_critical_path_ms", label: "双轨业务执行活跃关键路径", unit: "ms", help: "每分片 leader 按区块合并并行 business attempt 时间区间后求和，再取分片关键路径；不包含 StateReady/依赖等待。" },
       { key: "physical_remote_fetch_count", label: "远程状态读取数", help: "物理远程状态读取数。" },
       { key: "physical_remote_writeback_count", label: "远程状态写回数", help: "物理远程状态写回数。" },
       { key: "remote_operations_per_logical_tx", label: "每逻辑交易远程操作数", help: "远程物理操作数 ÷ 逻辑交易数。" },
@@ -202,8 +275,18 @@ function ExecutionBreakdown({ metrics }: { metrics: Record<string, unknown> }) {
   const total = number(metrics.block_execution_ms) ?? 0;
   const versionedEnvelope = number(metrics.versioned_state_ready_execution_ms) ?? 0;
   const nativeEnvelope = number(metrics.metatrack_suspend_resume_execution_ms) ?? 0;
+  const porygonCritical = number(metrics.porygon_execution_critical_path_ms) ?? 0;
+  const porygonBusiness = number(metrics.porygon_execution_critical_path_business_component_ms) ?? 0;
+  const porygonExchange = number(metrics.porygon_execution_critical_path_exchange_component_ms) ?? 0;
+  const porygonOther = number(metrics.porygon_execution_critical_path_other_component_ms) ?? 0;
   let pieces: Array<readonly [string, number]>;
-  if (transaction > 0 || materialization > 0 || commitment > 0) {
+  if (porygonCritical > 0) {
+    pieces = [
+      ["关键路径对应 Replica 的业务执行", porygonBusiness],
+      ["关键路径对应 Replica 的 ESC 结果交换等待", porygonExchange],
+      ["同一关键路径 Replica 的物化、承诺及其他开销", porygonOther],
+    ];
+  } else if (transaction > 0 || materialization > 0 || commitment > 0) {
     pieces = [
       ["交易/调度执行", transaction],
       ["确定性物化", materialization],
@@ -238,6 +321,11 @@ function aggregateMetrics(children: V5FormalChildRun[]): Record<string, unknown>
   for (const row of rows) Object.keys(row).forEach((key) => keys.add(key));
   const out: Record<string, unknown> = {};
   for (const key of keys) {
+    const booleans = rows.map((row) => row[key]).filter((value): value is boolean => typeof value === "boolean");
+    if (booleans.length) {
+      out[key] = booleans.every(Boolean);
+      continue;
+    }
     const numeric = rows.map((row) => number(row[key])).filter((value): value is number => value !== null);
     if (numeric.length) out[key] = numeric.reduce((sum, value) => sum + value, 0) / numeric.length;
     else {
@@ -249,7 +337,7 @@ function aggregateMetrics(children: V5FormalChildRun[]): Record<string, unknown>
 }
 
 function asRecord(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
-function number(value: unknown): number | null { const parsed = Number(value); return value === null || value === undefined || value === "" || !Number.isFinite(parsed) ? null : parsed; }
+function number(value: unknown): number | null { if (typeof value === "boolean") return null; const parsed = Number(value); return value === null || value === undefined || value === "" || !Number.isFinite(parsed) ? null : parsed; }
 function display(value: unknown): string { return value === null || value === undefined || value === "" ? "—" : typeof value === "boolean" ? (value ? "是" : "否") : String(value); }
 function formatMetric(value: number, unit?: string): string { if (unit === "B") return `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })} B`; if (unit === "ms") return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ms`; if (Math.abs(value) > 0 && Math.abs(value) < 1) return value.toFixed(4); return value.toLocaleString(undefined, { maximumFractionDigits: 3 }); }
 

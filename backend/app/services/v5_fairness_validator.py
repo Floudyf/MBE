@@ -23,6 +23,7 @@ _SEMANTIC_FIXED = (
     "state_home_mapping_policy",
     "remote_fetch_policy",
     "remote_writeback_policy",
+    "version_plan_policy",
     "proof_policy",
     "legacy_cross_shard_protocol",
     "measurement_boundary",
@@ -176,6 +177,18 @@ def write_artifacts(root: Path, rows: list[dict], result: dict) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields); writer.writeheader()
         for row in rows: writer.writerow({key: json.dumps(row.get(key)) if isinstance(row.get(key), (list, dict)) else row.get(key, "") for key in fields})
     with (root / "formal_matrix.csv").open("w", newline="", encoding="utf-8") as handle:
-        fields = list(rows[0].keys()) if rows else ["child_run_id"]
+        # MBE_V34_2_HETEROGENEOUS_FORMAL_MATRIX_SCHEMA: method families may
+        # legitimately add method-specific metadata. Derive the CSV schema from
+        # the stable first-seen union of all row keys instead of rows[0] only.
+        fields: list[str] = []
+        seen_fields: set[str] = set()
+        for row in rows:
+            for key in row:
+                if key not in seen_fields:
+                    seen_fields.add(key)
+                    fields.append(key)
+        if not fields:
+            fields = ["child_run_id"]
         writer = csv.DictWriter(handle, fieldnames=fields); writer.writeheader()
-        for row in rows: writer.writerow({key: json.dumps(value) if isinstance(value, (list, dict)) else value for key, value in row.items()})
+        for row in rows:
+            writer.writerow({key: json.dumps(row.get(key)) if isinstance(row.get(key), (list, dict)) else row.get(key, "") for key in fields})

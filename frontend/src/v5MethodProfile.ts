@@ -46,11 +46,13 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   { method_id: "hash_cg", display_name: "CG / Nezha", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "cg_execution", scheduler: "cg_scheduler", block_executor: "cg_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
   { method_id: "hash_acg", display_name: "Address Conflict Graph (ACG/Nezha)", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "acg_execution", scheduler: "acg_scheduler", block_executor: "acg_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
   { method_id: "hash_bsx", display_name: "Batch-Schedule-Execute (BSX)", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "bsx_execution", scheduler: "bsx_scheduler", block_executor: "bsx_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
+  { method_id: "stateful_calvin", display_name: "Calvin", role: "baseline", plugin_overrides: { transaction_admission: "calvin_declared_access_admission", routing: "calvin_global_routing", execution: "calvin_execution", scheduler: "calvin_deterministic_scheduler", block_executor: "calvin_block_executor", state_access: "calvin_partition_state_access", state_storage: "calvin_partition_state_store", cross_shard: "calvin_no_2pc_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, read_result_timeout_ms: 0, outcome_timeout_ms: 0 } } },
   { method_id: "hash_batch_si", display_name: "Batch-SI", role: "main", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper", execution_mode: "snapshot_parallel" } } },
   { method_id: "hash_batch_si_no_wrbp", display_name: "Batch-SI w/o WRBP", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "sequential", ordering_mode: "ofas", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "sequential", ordering_mode: "ofas", priority_mode: "paper", execution_mode: "snapshot_parallel" } } },
   { method_id: "hash_batch_si_no_ofas", display_name: "Batch-SI w/o OFAS", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "dependency_graph", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "dependency_graph", priority_mode: "paper", execution_mode: "snapshot_parallel" } } },
   { method_id: "hash_batch_si_serial_batch", display_name: "Batch-SI w/o Snapshot Parallelism", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper", execution_mode: "snapshot_serial" } } },
   { method_id: "hash_batch_si_txid_priority", display_name: "Batch-SI w/o OFAS Priority", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "txid" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "txid", execution_mode: "snapshot_parallel" } } },
+  { method_id: "stateless_calvin", display_name: "Stateless Calvin", role: "compatibility", plugin_overrides: { transaction_admission: "calvin_declared_access_admission", routing: "stateless_calvin_global_routing", execution: "calvin_execution", scheduler: "stateless_calvin_deterministic_scheduler", block_executor: "stateless_calvin_block_executor", state_access: "stateless_calvin_state_access", state_storage: "calvin_partition_state_store", cross_shard: "calvin_no_2pc_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, read_result_timeout_ms: 0, outcome_timeout_ms: 0 } } },
   { method_id: "stateless_hash_serial", display_name: "Stateless Hash + Serial", role: "baseline", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
   // MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR
   { method_id: "stateless_porygon", display_name: "Porygon", role: "baseline", plugin_overrides: { routing: "porygon_stateless_routing", block_producer: "porygon_transaction_block_producer", execution: "porygon_execution", scheduler: "porygon_pipeline_scheduler", block_executor: "porygon_block_executor", state_access: "porygon_remote_state_access", cross_shard: "porygon_cross_shard_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { witness_threshold: 1 }, scheduler: { execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true }, block_executor: { worker_count: 4, execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true } } },
@@ -65,6 +67,42 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       routing: "metatrack_coaccess_routing",
       execution: "dual_track_execution",
       scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100 },
+      block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2" },
+    },
+  },
+  // MBE_METATRACK_READY_ROUND_SCHEDULER_V35
+  {
+    method_id: "metatrack_ready_round_control",
+    display_name: "MetaTrack（就绪轮次对照）",
+    role: "ablation",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      execution: "dual_track_execution",
+      scheduler: "ready_round_control_scheduler",
+      block_executor: "metatrack_block_executor",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100 },
+      block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2" },
+    },
+  },
+  // MBE_METATRACK_DEPENDENCY_INFLUENCE_SCHEDULER_V34
+  {
+    method_id: "metatrack_influence",
+    display_name: "MetaTrack（依赖关键交易优先）",
+    role: "ablation",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      execution: "dual_track_execution",
+      scheduler: "dependency_influence_scheduler",
       block_executor: "metatrack_block_executor",
       commit: "commutative_hot_update_aggregation",
     },

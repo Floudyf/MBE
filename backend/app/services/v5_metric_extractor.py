@@ -82,6 +82,37 @@ LITERATURE_GRAPH_REQUIRED_METRICS = [
     "deterministic_materialization_ms",
 ]
 
+CALVIN_REQUIRED_METRICS = [
+    "worker_count",
+    "maximum_parallel_width",
+    "calvin_lock_request_count",
+    "calvin_lock_wait_count",
+    "calvin_waiting_transaction_count",
+    "calvin_blocked_lock_request_count",
+    "calvin_lock_wakeup_count",
+    "calvin_remote_read_count",
+    "calvin_read_result_message_count",
+    "calvin_read_result_physical_message_count",
+    "calvin_remote_read_wait_ms",
+    "calvin_outcome_message_count",
+    "calvin_outcome_physical_message_count",
+    "calvin_outcome_wait_ms",
+    "abort_count",
+    "reexecution_count",
+]
+
+CALVIN_STATELESS_REQUIRED_METRICS = [
+    "calvin_stateless_remote_fetch_count",
+    "calvin_stateless_remote_fetch_physical_count",
+    "calvin_stateless_remote_writeback_count",
+    "calvin_stateless_remote_writeback_physical_count",
+    "calvin_stateless_remote_writeback_wait_ms",
+    "calvin_consensus_version_binding_count",
+    "calvin_stateless_block_start_read_count",
+    "calvin_stateless_exact_predecessor_read_count",
+    "calvin_client_state_version_metadata_count",
+]
+
 GROUNDHOG_REQUIRED_METRICS = [
     "groundhog_metrics_available",
     "groundhog_execution_attempt_count",
@@ -268,9 +299,21 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     _apply_workload_replay_metrics(metrics, run_dir)
     _apply_mempool_admission_metrics(metrics, run_dir)
     _apply_common_block_execution_timing(metrics, run_dir)
+    configured_block_size = _int(metrics.get("configured_block_size"))
+    raw_actual_average_tx_per_block = metrics.get("actual_average_tx_per_block")
+    try:
+        actual_average_tx_per_block = float(raw_actual_average_tx_per_block)
+    except (TypeError, ValueError):
+        actual_average_tx_per_block = None
+    if configured_block_size > 0 and actual_average_tx_per_block is not None and actual_average_tx_per_block >= 0:
+        metrics["actual_block_fill_ratio"] = actual_average_tx_per_block / configured_block_size
+        metrics["block_utilization_truth_scope"] = "actual_average_committed_tx_per_block_over_configured_block_size"
     _apply_porygon_metrics(metrics, run_dir)
+    _apply_calvin_metrics(metrics, run_dir)
 
     _apply_block_stm_metrics(metrics, run_dir)
+    _apply_stateless_version_frontier_metrics(metrics, run_dir)
+    _apply_metatrack_track_observability(metrics, run_dir)
     _apply_batch_si_metrics(metrics, run_dir)
     _apply_literature_graph_metrics(metrics, run_dir)
     _apply_groundhog_metrics(metrics, run_dir)
@@ -634,6 +677,12 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "porygon_maximum_wave_width": maximum("porygon_maximum_wave_width"),
         "porygon_intra_shard_transaction_count": total("porygon_intra_shard_transaction_count"),
         "porygon_cross_shard_transaction_count": total("porygon_cross_shard_transaction_count"),
+        "porygon_logical_state_cross_shard_transaction_count": total("porygon_logical_state_cross_shard_transaction_count") or total("porygon_cross_shard_transaction_count"),
+        "porygon_logical_state_cross_shard_ratio": ((total("porygon_logical_state_cross_shard_transaction_count") or total("porygon_cross_shard_transaction_count")) / total_shard_txs) if total_shard_txs else None,
+        "porygon_cross_shard_metric_truth_scope": next((block.get("porygon_cross_shard_metric_truth_scope") for block in blocks if block.get("porygon_cross_shard_metric_truth_scope")), None),
+        "porygon_witness_threshold_configured": maximum("porygon_witness_threshold_configured") or maximum("porygon_witness_threshold"),
+        "porygon_witness_threshold_enforced": any(bool(block.get("porygon_witness_threshold_enforced")) for block in blocks),
+        "porygon_witness_validation_mode": next((block.get("porygon_witness_validation_mode") for block in blocks if block.get("porygon_witness_validation_mode")), None),
         "porygon_single_shard_execution_count": total("porygon_single_shard_execution_count"),
         "porygon_multi_shard_update_count": total("porygon_multi_shard_update_count"),
         "porygon_state_lock_count": total("porygon_state_lock_count"),
@@ -660,14 +709,52 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     local_count_by_node: dict[str, int] = {}
     business_us_by_node: dict[str, float] = {}
     exchange_wait_us_by_node: dict[str, float] = {}
-    critical_us_by_node: dict[str, float] = {}
+    business_us_by_block: dict[tuple[int, str], list[float]] = {}
+    exchange_wait_us_by_block: dict[tuple[int, str], list[float]] = {}
+    critical_us_by_block: dict[tuple[int, str], list[float]] = {}
+    critical_phase_rows_by_block: dict[tuple[int, str], list[tuple[str, float, float, float]]] = {}
     for node_id, summary in all_porygon_summaries:
         node_blocks = summary.get("blocks") if isinstance(summary.get("blocks"), list) else []
         local_count_by_node[node_id] = sum(_int(block.get("porygon_local_business_execution_count")) for block in node_blocks if isinstance(block, dict))
         business_us_by_node[node_id] = sum(float(block.get("porygon_business_execution_us") or 0) for block in node_blocks if isinstance(block, dict))
         exchange_wait_us_by_node[node_id] = sum(float(block.get("porygon_result_exchange_wait_us") or 0) for block in node_blocks if isinstance(block, dict))
-        critical_us_by_node[node_id] = sum(float(block.get("porygon_execution_critical_path_us") or 0) for block in node_blocks if isinstance(block, dict))
+        for block_index, block in enumerate(node_blocks):
+            if not isinstance(block, dict):
+                continue
+            block_key = (_int(block.get("height")), str(block.get("block_hash") or f"index:{block_index}"))
+            business_us = float(block.get("porygon_business_execution_us") or 0)
+            exchange_wait_us = float(block.get("porygon_result_exchange_wait_us") or 0)
+            critical_us = float(block.get("porygon_execution_critical_path_us") or 0)
+            business_us_by_block.setdefault(block_key, []).append(business_us)
+            exchange_wait_us_by_block.setdefault(block_key, []).append(exchange_wait_us)
+            critical_us_by_block.setdefault(block_key, []).append(critical_us)
+            critical_phase_rows_by_block.setdefault(block_key, []).append((node_id, critical_us, business_us, exchange_wait_us))
     representative_nodes = [sorted(members)[0] for _, members in sorted(execution_members.items()) if members]
+
+    def sum_block_max_ms(rows: dict[tuple[int, str], list[float]]) -> float:
+        return sum(max(values) for values in rows.values() if values) / 1000.0
+
+    business_critical_path_ms = sum_block_max_ms(business_us_by_block)
+    exchange_wait_critical_path_ms = sum_block_max_ms(exchange_wait_us_by_block)
+    execution_critical_path_ms = sum_block_max_ms(critical_us_by_block)
+
+    aligned_business_us = 0.0
+    aligned_exchange_us = 0.0
+    aligned_other_us = 0.0
+    for rows in critical_phase_rows_by_block.values():
+        if not rows:
+            continue
+        # The additive breakdown must use the same replica that defines the
+        # per-block total critical path. Independent per-phase maxima can come
+        # from different replicas and therefore are diagnostic only, not additive.
+        _, critical_us, business_us, exchange_wait_us = min(rows, key=lambda row: (-row[1], row[0]))
+        aligned_business_us += business_us
+        aligned_exchange_us += exchange_wait_us
+        aligned_other_us += max(0.0, critical_us - business_us - exchange_wait_us)
+    aligned_business_ms = aligned_business_us / 1000.0
+    aligned_exchange_ms = aligned_exchange_us / 1000.0
+    aligned_other_ms = aligned_other_us / 1000.0
+    leader_local_transaction_execution_ms = metrics.get("transaction_execution_ms")
     # MBE_PORYGON_ESC_OWNERSHIP_METRIC_KEYFIX_V24_20260921: topology uses s0/s1
     # while historical Porygon execution histograms use esc_0/esc_1. Preserve the
     # published histogram keys, but normalize aliases when deriving expected per-node
@@ -688,11 +775,320 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "porygon_esc_ownership_verified": ownership_verified,
         "porygon_business_execution_replica_cpu_sum_ms": sum(business_us_by_node.values()) / 1000.0,
         "porygon_business_execution_esc_representative_sum_ms": sum(business_us_by_node.get(node_id, 0.0) for node_id in representative_nodes) / 1000.0,
+        "porygon_business_execution_critical_path_ms": business_critical_path_ms,
         "porygon_result_exchange_wait_replica_sum_ms": sum(exchange_wait_us_by_node.values()) / 1000.0,
-        "porygon_execution_critical_path_ms": max(critical_us_by_node.values(), default=0.0) / 1000.0,
-        "porygon_timing_truth_scope": "business_cpu_and_esc_exchange_reported_separately;critical_path_is_max_replica_wave_barrier_wall_time",
-        "porygon_transaction_execution_ms_truth_scope": "leader_local_owned_business_execution_only;use_porygon_execution_critical_path_ms_for_wall_clock",
+        "porygon_result_exchange_wait_critical_path_ms": exchange_wait_critical_path_ms,
+        "porygon_execution_critical_path_ms": execution_critical_path_ms,
+        "porygon_execution_critical_path_business_component_ms": aligned_business_ms,
+        "porygon_execution_critical_path_exchange_component_ms": aligned_exchange_ms,
+        "porygon_execution_critical_path_other_component_ms": aligned_other_ms,
+        "porygon_leader_local_transaction_execution_ms": leader_local_transaction_execution_ms,
+        "porygon_timing_truth_scope": "per_block_max_replica_critical_path_summed_across_committed_blocks;independent_phase_maxima_are_diagnostic;additive_components_follow_the_same_per_block_critical_replica",
+        "porygon_transaction_execution_ms_truth_scope": "normalized_to_porygon_execution_critical_path_ms;raw_global_leader_local_owned_business_time_preserved_as_porygon_leader_local_transaction_execution_ms",
     })
+    if execution_critical_path_ms > 0:
+        metrics["transaction_execution_ms"] = execution_critical_path_ms
+        metrics["transaction_execution_ms_truth_scope"] = metrics["porygon_transaction_execution_ms_truth_scope"]
+
+def _leader_node_ids(run_dir: Path) -> list[str]:
+    plan = _read_json(run_dir / "compiled_run_plan.json")
+    node_configs = plan.get("node_configs") if isinstance(plan.get("node_configs"), list) else []
+    leaders = [
+        str(item.get("node_id"))
+        for item in node_configs
+        if isinstance(item, dict) and item.get("node_id") and (item.get("leader") is True or item.get("role") == "leader")
+    ]
+    return leaders
+
+
+def _apply_stateless_version_frontier_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    leader_ids = _leader_node_ids(run_dir)
+    summaries: list[tuple[str, dict[str, Any]]] = []
+    for node_id in leader_ids:
+        rel = f"nodes/{node_id}/node_summary.json"
+        payload = _read_json(run_dir / rel)
+        if payload:
+            summaries.append((rel, payload))
+    if not summaries:
+        return
+
+    keys = (
+        "stateless_version_admission_candidate_event_count",
+        "stateless_version_admission_nonempty_frontier_event_count",
+        "stateless_version_admission_zero_frontier_event_count",
+        "stateless_version_admission_candidate_tx_count",
+        "stateless_version_admission_admitted_tx_count",
+        "stateless_version_admission_deferred_event_count",
+        "stateless_version_admission_external_exact_dependency_tx_count",
+        "stateless_version_admission_external_exact_dependency_edge_count",
+        "stateless_version_admission_external_exact_dependency_token_count",
+        "stateless_version_admission_external_version_ready_token_count",
+        "stateless_version_admission_external_version_not_ready_token_count",
+        "stateless_version_admission_internal_candidate_dependency_edge_count",
+        "stateless_version_admission_deferred_direct_external_not_ready_count",
+        "stateless_version_admission_deferred_internal_propagation_count",
+    )
+    totals = {key: 0 for key in keys}
+    for rel, summary in summaries:
+        counts = summary.get("runtime_metric_counts") if isinstance(summary.get("runtime_metric_counts"), dict) else {}
+        for key in keys:
+            totals[key] += _int(counts.get(key))
+        if rel not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(rel)
+    if totals["stateless_version_admission_candidate_event_count"] <= 0:
+        return
+    metrics.update(totals)
+    events = totals["stateless_version_admission_candidate_event_count"]
+    candidate = totals["stateless_version_admission_candidate_tx_count"]
+    admitted = totals["stateless_version_admission_admitted_tx_count"]
+    external_tokens = totals["stateless_version_admission_external_exact_dependency_token_count"]
+    nonempty_events = totals["stateless_version_admission_nonempty_frontier_event_count"]
+    zero_events = totals["stateless_version_admission_zero_frontier_event_count"]
+    metrics["stateless_version_admission_candidate_mean_tx_count"] = candidate / events if events else None
+    metrics["stateless_version_admission_mean_frontier_width"] = admitted / events if events else None
+    metrics["stateless_version_admission_mean_nonempty_frontier_width"] = admitted / nonempty_events if nonempty_events else 0.0
+    metrics["stateless_version_admission_zero_frontier_rate"] = zero_events / events if events else 0.0
+    metrics["stateless_version_admission_admission_ratio"] = admitted / candidate if candidate else None
+    metrics["stateless_version_admission_external_not_ready_ratio"] = totals["stateless_version_admission_external_version_not_ready_token_count"] / external_tokens if external_tokens else 0.0
+    metrics["stateless_version_admission_direct_external_blocked_ratio"] = totals["stateless_version_admission_deferred_direct_external_not_ready_count"] / candidate if candidate else None
+    metrics["stateless_version_admission_internal_propagated_blocked_ratio"] = totals["stateless_version_admission_deferred_internal_propagation_count"] / candidate if candidate else None
+    metrics["stateless_version_admission_truth_scope"] = "sum_of_preconsensus_leader_candidate_events_across_execution_shards;no_pbft_replica_multiplication"
+
+
+def _apply_metatrack_track_observability(metrics: dict[str, Any], run_dir: Path) -> None:
+    summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
+    summaries = [item for item in summaries if item.get("block_executor_id") == "metatrack_block_executor"]
+    blocks = [
+        block
+        for summary in summaries
+        for block in (summary.get("blocks") if isinstance(summary.get("blocks"), list) else [])
+        if isinstance(block, dict)
+    ]
+    if not blocks or not any("metatrack_fast_business_execution_attempt_count" in block for block in blocks):
+        return
+
+    count_keys = (
+        "metatrack_fast_initial_tx_count",
+        "metatrack_conservative_initial_tx_count",
+        "metatrack_fast_final_tx_count",
+        "metatrack_conservative_final_tx_count",
+        "metatrack_fast_business_execution_attempt_count",
+        "metatrack_conservative_business_execution_attempt_count",
+        "metatrack_fast_fallback_count",
+        "metatrack_fast_discarded_tentative_count",
+        "metatrack_conservative_reexecution_count",
+    )
+    float_keys = (
+        "metatrack_fast_business_execution_sum_ms",
+        "metatrack_conservative_business_execution_sum_ms",
+        "metatrack_fast_discarded_execution_ms",
+        "metatrack_fast_track_sojourn_sum_ms",
+        "metatrack_conservative_track_sojourn_sum_ms",
+        "metatrack_fast_state_wait_sum_ms",
+        "metatrack_conservative_state_wait_sum_ms",
+        "metatrack_fast_dependency_wait_sum_ms",
+        "metatrack_conservative_dependency_wait_sum_ms",
+        "metatrack_fast_queue_wait_sum_ms",
+        "metatrack_conservative_queue_wait_sum_ms",
+    )
+    totals: dict[str, Any] = {key: sum(_int(block.get(key)) for block in blocks) for key in count_keys}
+    for key in float_keys:
+        totals[key] = sum(float(block.get(key) or 0.0) for block in blocks)
+    metrics.update(totals)
+    fast_initial = totals["metatrack_fast_initial_tx_count"]
+    fast_attempts = totals["metatrack_fast_business_execution_attempt_count"]
+    conservative_attempts = totals["metatrack_conservative_business_execution_attempt_count"]
+    metrics["metatrack_fast_fallback_rate"] = totals["metatrack_fast_fallback_count"] / fast_initial if fast_initial else 0.0
+    metrics["metatrack_conservative_reexecution_share"] = totals["metatrack_conservative_reexecution_count"] / conservative_attempts if conservative_attempts else 0.0
+    metrics["metatrack_fast_business_execution_mean_ms"] = totals["metatrack_fast_business_execution_sum_ms"] / fast_attempts if fast_attempts else 0.0
+    metrics["metatrack_conservative_business_execution_mean_ms"] = totals["metatrack_conservative_business_execution_sum_ms"] / conservative_attempts if conservative_attempts else 0.0
+
+    fast_durations_ms: list[float] = []
+    conservative_durations_ms: list[float] = []
+    fast_sojourn_ms: list[float] = []
+    conservative_sojourn_ms: list[float] = []
+    per_leader_block_intervals: list[dict[str, list[tuple[int, int]]]] = []
+    for path in _batch_si_leader_summary_paths(run_dir):
+        business_path = path.parent / "business_execute_invocation_count_by_node.csv"
+        block_intervals: dict[str, list[tuple[int, int]]] = {}
+        if business_path.is_file():
+            try:
+                with business_path.open("r", encoding="utf-8", newline="") as handle:
+                    for row in csv.DictReader(handle):
+                        try:
+                            raw_ns = row.get("duration_ns")
+                            duration_ms = max(0.0, float(raw_ns) / 1_000_000.0) if raw_ns not in (None, "") else max(0.0, float(row.get("duration_us") or 0.0) / 1000.0)
+                            sojourn_ms = max(0.0, float(row.get("sojourn_ns") or 0.0) / 1_000_000.0)
+                            start_ns = int(row.get("attempt_start_offset_ns") or 0)
+                            end_ns = int(row.get("attempt_end_offset_ns") or 0)
+                        except (TypeError, ValueError):
+                            continue
+                        track = str(row.get("track") or "").strip().lower()
+                        if track == "fast":
+                            fast_durations_ms.append(duration_ms)
+                            fast_sojourn_ms.append(sojourn_ms)
+                        elif track == "conservative":
+                            conservative_durations_ms.append(duration_ms)
+                            conservative_sojourn_ms.append(sojourn_ms)
+                        block_hash = str(row.get("block_hash") or "")
+                        if block_hash and end_ns >= start_ns and end_ns > 0:
+                            block_intervals.setdefault(block_hash, []).append((start_ns, end_ns))
+            except OSError:
+                pass
+            rel_business = str(business_path.relative_to(run_dir)).replace("\\", "/")
+            if rel_business not in metrics["source_artifacts"]:
+                metrics["source_artifacts"].append(rel_business)
+        if block_intervals:
+            per_leader_block_intervals.append(block_intervals)
+        rel = str(path.relative_to(run_dir)).replace("\\", "/")
+        if rel not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(rel)
+
+    def percentile(values: list[float], q: float) -> float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        if len(ordered) == 1:
+            return ordered[0]
+        position = (len(ordered) - 1) * q
+        lower = int(position)
+        upper = min(lower + 1, len(ordered) - 1)
+        weight = position - lower
+        return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+    def union_ns(intervals: list[tuple[int, int]]) -> int:
+        if not intervals:
+            return 0
+        ordered = sorted(intervals)
+        total = 0
+        start, end = ordered[0]
+        for next_start, next_end in ordered[1:]:
+            if next_start <= end:
+                end = max(end, next_end)
+            else:
+                total += max(0, end - start)
+                start, end = next_start, next_end
+        total += max(0, end - start)
+        return total
+
+    metrics["metatrack_fast_business_execution_p95_ms"] = percentile(fast_durations_ms, 0.95)
+    metrics["metatrack_fast_business_execution_p99_ms"] = percentile(fast_durations_ms, 0.99)
+    metrics["metatrack_conservative_business_execution_p95_ms"] = percentile(conservative_durations_ms, 0.95)
+    metrics["metatrack_conservative_business_execution_p99_ms"] = percentile(conservative_durations_ms, 0.99)
+    metrics["metatrack_fast_track_sojourn_mean_ms"] = totals["metatrack_fast_track_sojourn_sum_ms"] / fast_attempts if fast_attempts else 0.0
+    metrics["metatrack_conservative_track_sojourn_mean_ms"] = totals["metatrack_conservative_track_sojourn_sum_ms"] / conservative_attempts if conservative_attempts else 0.0
+    metrics["metatrack_fast_track_sojourn_p95_ms"] = percentile(fast_sojourn_ms, 0.95)
+    metrics["metatrack_fast_track_sojourn_p99_ms"] = percentile(fast_sojourn_ms, 0.99)
+    metrics["metatrack_conservative_track_sojourn_p95_ms"] = percentile(conservative_sojourn_ms, 0.95)
+    metrics["metatrack_conservative_track_sojourn_p99_ms"] = percentile(conservative_sojourn_ms, 0.99)
+    business_cpu_sum_ms = totals["metatrack_fast_business_execution_sum_ms"] + totals["metatrack_conservative_business_execution_sum_ms"]
+    if metrics.get("business_execution_cpu_sum_ms") is not None:
+        metrics["metatrack_legacy_execution_envelope_business_cpu_sum_ms"] = metrics.get("business_execution_cpu_sum_ms")
+    if metrics.get("business_execution_critical_path_ms") is not None:
+        metrics["metatrack_legacy_execution_envelope_business_critical_path_ms"] = metrics.get("business_execution_critical_path_ms")
+    per_leader_business_active_ms = [sum(union_ns(intervals) for intervals in blocks.values()) / 1_000_000.0 for blocks in per_leader_block_intervals]
+    business_critical_path_ms = max(per_leader_business_active_ms, default=0.0)
+    metrics["metatrack_business_execution_cpu_sum_ms"] = business_cpu_sum_ms
+    metrics["metatrack_business_execution_critical_path_ms"] = business_critical_path_ms
+    metrics["business_execution_cpu_sum_ms"] = business_cpu_sum_ms
+    metrics["business_execution_critical_path_ms"] = business_critical_path_ms
+    metrics["business_execution_truth_scope"] = "metatrack_worker_attempt_duration_sum_and_per_block_interval_union_critical_path"
+    metrics["metatrack_attempt_timing_precision"] = "nanosecond_monotonic"
+    metrics["metatrack_track_duration_trace_available"] = bool(fast_durations_ms or conservative_durations_ms)
+    metrics["metatrack_track_timing_truth_scope"] = "nanosecond_monotonic_attempts_and_track_sojourn_from_execution_runtime;state_and_dependency_wait_components_may_overlap;parallel_sums_are_not_wall_clock"
+
+
+def _apply_calvin_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    plan = _read_json(run_dir / "compiled_run_plan.json")
+    node_configs = plan.get("node_configs") if isinstance(plan.get("node_configs"), list) else []
+    execution_shard_by_node = {
+        str(item.get("node_id")): str(item.get("execution_shard_id") or item.get("shard_id") or "")
+        for item in node_configs if isinstance(item, dict) and item.get("node_id")
+    }
+    per_shard: dict[str, dict[str, float]] = {}
+    physical_totals = {"calvin_stateless_remote_fetch_physical_count": 0.0, "calvin_stateless_remote_writeback_physical_count": 0.0}
+    mode = None
+    seen = False
+    max_width = 0
+    worker_count = 0
+    for path in sorted((run_dir / "nodes").glob("*/block_execution_summary.json")):
+        payload = _read_json(path)
+        executor_id = payload.get("block_executor_id")
+        if executor_id not in {"calvin_block_executor", "stateless_calvin_block_executor"}:
+            continue
+        seen = True
+        node_id = path.parent.name
+        shard = execution_shard_by_node.get(node_id) or str(payload.get("shard_id") or node_id)
+        row = per_shard.setdefault(shard, {})
+        blocks = payload.get("blocks") if isinstance(payload.get("blocks"), list) else []
+        totals: dict[str, float] = {}
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            mode = mode or block.get("calvin_mode")
+            worker_count = max(worker_count, _int(block.get("worker_count")))
+            max_width = max(max_width, _int(block.get("maximum_parallel_width")))
+            for key in (
+                "calvin_lock_request_count", "calvin_shared_lock_count", "calvin_exclusive_lock_count",
+                "calvin_lock_wait_count", "calvin_waiting_transaction_count", "calvin_blocked_lock_request_count", "calvin_lock_wakeup_count", "calvin_lock_wait_ms",
+                "calvin_local_read_count", "calvin_remote_read_count", "calvin_read_result_message_count", "calvin_read_result_physical_message_count",
+                "calvin_remote_read_wait_ms", "calvin_outcome_message_count", "calvin_outcome_physical_message_count", "calvin_outcome_wait_ms", "calvin_active_execution_count", "calvin_passive_participant_count",
+                "calvin_multi_partition_tx_count", "calvin_stateless_remote_fetch_count", "calvin_stateless_remote_writeback_count", "calvin_stateless_remote_writeback_wait_ms",
+                "calvin_consensus_version_binding_count", "calvin_stateless_block_start_read_count", "calvin_stateless_exact_predecessor_read_count", "calvin_client_state_version_metadata_count",
+                "abort_count", "reexecution_count",
+            ):
+                totals[key] = totals.get(key, 0.0) + float(block.get(key) or 0)
+            for key in physical_totals:
+                physical_totals[key] += float(block.get(key) or 0)
+        # PBFT replicas execute the same partition. Keep one per-partition maximum
+        # instead of multiplying algorithmic counts by the replica factor.
+        for key, value in totals.items():
+            row[key] = max(row.get(key, 0.0), value)
+        rel = str(path.relative_to(run_dir)).replace("\\", "/")
+        if rel not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(rel)
+    if not seen:
+        return
+    def sum_shards(key: str) -> int:
+        return int(sum(row.get(key, 0.0) for row in per_shard.values()))
+    metrics.update({
+        "calvin_metrics_available": True,
+        "calvin_mode": mode,
+        "worker_count": worker_count,
+        "maximum_parallel_width": max_width,
+        "calvin_lock_request_count": sum_shards("calvin_lock_request_count"),
+        "calvin_shared_lock_count": sum_shards("calvin_shared_lock_count"),
+        "calvin_exclusive_lock_count": sum_shards("calvin_exclusive_lock_count"),
+        "calvin_lock_wait_count": sum_shards("calvin_lock_wait_count"),
+        "calvin_waiting_transaction_count": sum_shards("calvin_waiting_transaction_count"),
+        "calvin_blocked_lock_request_count": sum_shards("calvin_blocked_lock_request_count"),
+        "calvin_lock_wakeup_count": sum_shards("calvin_lock_wakeup_count"),
+        "calvin_lock_wait_ms": sum_shards("calvin_lock_wait_ms"),
+        "calvin_local_read_count": sum_shards("calvin_local_read_count"),
+        "calvin_remote_read_count": sum_shards("calvin_remote_read_count"),
+        "calvin_read_result_message_count": sum_shards("calvin_read_result_message_count"),
+        "calvin_read_result_physical_message_count": sum_shards("calvin_read_result_physical_message_count"),
+        "calvin_remote_read_wait_ms": sum_shards("calvin_remote_read_wait_ms"),
+        "calvin_outcome_message_count": sum_shards("calvin_outcome_message_count"),
+        "calvin_outcome_physical_message_count": sum_shards("calvin_outcome_physical_message_count"),
+        "calvin_outcome_wait_ms": sum_shards("calvin_outcome_wait_ms"),
+        "calvin_active_execution_count": sum_shards("calvin_active_execution_count"),
+        "calvin_passive_participant_count": sum_shards("calvin_passive_participant_count"),
+        "calvin_multi_partition_tx_count": sum_shards("calvin_multi_partition_tx_count"),
+        "calvin_stateless_remote_fetch_count": sum_shards("calvin_stateless_remote_fetch_count"),
+        "calvin_stateless_remote_fetch_physical_count": int(physical_totals["calvin_stateless_remote_fetch_physical_count"]),
+        "calvin_stateless_remote_writeback_count": sum_shards("calvin_stateless_remote_writeback_count"),
+        "calvin_stateless_remote_writeback_physical_count": int(physical_totals["calvin_stateless_remote_writeback_physical_count"]),
+        "calvin_stateless_remote_writeback_wait_ms": sum_shards("calvin_stateless_remote_writeback_wait_ms"),
+        "calvin_consensus_version_binding_count": sum_shards("calvin_consensus_version_binding_count"),
+        "calvin_stateless_block_start_read_count": sum_shards("calvin_stateless_block_start_read_count"),
+        "calvin_stateless_exact_predecessor_read_count": sum_shards("calvin_stateless_exact_predecessor_read_count"),
+        "calvin_client_state_version_metadata_count": sum_shards("calvin_client_state_version_metadata_count"),
+        "abort_count": sum_shards("abort_count"),
+        "reexecution_count": sum_shards("reexecution_count"),
+        "calvin_metric_truth_scope": "sum_of_per_execution_shard_replica_maxima",
+    })
+
 
 def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     aggregate_path = run_dir / "aggregate" / "block_stm_aggregate_summary.json"
@@ -764,6 +1160,29 @@ def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             metrics["block_stm_internal_version_dependency_delegated_truth_scope"] = (
                 "sum_of_per_shard_leader_maxima_from_block_execution_evidence"
             )
+
+        unique_aborted = 0
+        unique_reexecuted = 0
+        unique_evidence = False
+        for summary_path in _batch_si_leader_summary_paths(run_dir):
+            summary = _read_json(summary_path)
+            if summary.get("block_executor_id") != "block_stm_block_executor":
+                continue
+            for block in summary.get("blocks") if isinstance(summary.get("blocks"), list) else []:
+                if not isinstance(block, dict):
+                    continue
+                block_metrics = block.get("block_stm_metrics") if isinstance(block.get("block_stm_metrics"), dict) else {}
+                if "unique_aborted_transaction_count" in block_metrics or "unique_reexecuted_transaction_count" in block_metrics:
+                    unique_evidence = True
+                    unique_aborted += _int(block_metrics.get("unique_aborted_transaction_count"))
+                    unique_reexecuted += _int(block_metrics.get("unique_reexecuted_transaction_count"))
+        if unique_evidence:
+            submitted = _int(metrics.get("submitted_unique_tx_count"))
+            metrics["block_stm_unique_aborted_tx_count"] = unique_aborted
+            metrics["block_stm_unique_reexecuted_tx_count"] = unique_reexecuted
+            metrics["block_stm_unique_aborted_tx_rate"] = unique_aborted / submitted if submitted else 0.0
+            metrics["block_stm_unique_reexecuted_tx_rate"] = unique_reexecuted / submitted if submitted else 0.0
+            metrics["block_stm_unique_tx_truth_scope"] = "sum_of_per_execution_shard_leader_block_unique_transaction_counts"
 
         rel = "aggregate/block_stm_aggregate_summary.json"
         if rel not in metrics["source_artifacts"]:
@@ -1304,6 +1723,7 @@ def _apply_observability_metrics(metrics: dict[str, Any], run_dir: Path) -> None
         metrics.update(values)
         metrics["network_metrics_available"] = network.get("available") is True
         metrics["network_categories"] = network.get("categories") if isinstance(network.get("categories"), dict) else {}
+        metrics["network_scope_categories"] = network.get("scope_categories") if isinstance(network.get("scope_categories"), dict) else {}
         metrics["network_message_types"] = network.get("message_types") if isinstance(network.get("message_types"), dict) else {}
         metrics["source_artifacts"].append("network_metrics_summary.json")
         if (run_dir / "network_message_summary.csv").is_file():
@@ -1431,6 +1851,11 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         or metrics.get("block_executor_id") == "groundhog_block_executor"
         or metrics.get("groundhog_metrics_available") is True
     )
+    uses_calvin = (
+        normalized_method_id in {"stateful_calvin", "stateless_calvin"}
+        or metrics.get("block_executor_id") in {"calvin_block_executor", "stateless_calvin_block_executor"}
+        or metrics.get("calvin_metrics_available") is True
+    )
     literature_graph_required = _literature_graph_required_metrics(method_id)
     required = list(COMMON_REQUIRED_METRICS)
     if uses_block_stm:
@@ -1441,6 +1866,10 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         required.extend(BATCH_SI_REQUIRED_METRICS)
     if uses_groundhog:
         required.extend(GROUNDHOG_REQUIRED_METRICS)
+    if uses_calvin:
+        required.extend(CALVIN_REQUIRED_METRICS)
+    if normalized_method_id == "stateless_calvin" or metrics.get("block_executor_id") == "stateless_calvin_block_executor":
+        required.extend(CALVIN_STATELESS_REQUIRED_METRICS)
     required.extend(literature_graph_required)
 
     # Metric names overlap across methods (for example worker_count and
@@ -1454,6 +1883,8 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         + BATCH_SI_REQUIRED_METRICS
         + LITERATURE_GRAPH_REQUIRED_METRICS
         + GROUNDHOG_REQUIRED_METRICS
+        + CALVIN_REQUIRED_METRICS
+        + CALVIN_STATELESS_REQUIRED_METRICS
         + literature_graph_required
     ))
     statuses: dict[str, str] = {

@@ -21,35 +21,37 @@ const BlockSTMExecutorID = "block_stm_block_executor"
 const BlockSTMExecutorVersion = "0.2.1"
 
 type BlockSTMMetrics struct {
-	WorkerCount                     int         `json:"worker_count"`
-	MaximumParallelWidth            int         `json:"maximum_parallel_width"`
-	ExecutionTaskCount              int         `json:"execution_task_count"`
-	ValidationTaskCount             int         `json:"validation_task_count"`
-	AbortCount                      int         `json:"abort_count"`
-	DependencyAbortCount            int         `json:"dependency_abort_count"`
-	ValidationAbortCount            int         `json:"validation_abort_count"`
-	ReexecutionCount                int         `json:"reexecution_count"`
-	EstimateCount                   int         `json:"estimate_count"`
-	EstimateMarkCount               int         `json:"estimate_mark_count"`
-	EstimateReadCount               int         `json:"estimate_read_count"`
-	DependencyWaitCount             int         `json:"dependency_wait_count"`
-	DependencyResumeCount           int         `json:"dependency_resume_count"`
-	ValidatedSpeculativeResultCount int         `json:"validated_speculative_result_count"`
-	SpeculativeReadCount            int         `json:"speculative_read_count"`
-	ValidationFailureCount          int         `json:"validation_failure_count"`
-	CommittedTransactionCount       int         `json:"committed_transaction_count"`
-	MaximumIncarnation              int         `json:"maximum_incarnation"`
-	MaximumConcurrentExecutions     int         `json:"maximum_concurrent_executions"`
-	SchedulerQueuePeak              int         `json:"scheduler_queue_peak"`
-	StaleTaskCount                  int         `json:"stale_task_count"`
-	SerialOracleMS                  int64       `json:"serial_oracle_ms"`
-	TransactionExecutionMS          int64       `json:"transaction_execution_ms"`
-	MaterializationMS               int64       `json:"materialization_ms"`
-	StateCommitmentMS               int64       `json:"state_commitment_ms"`
-	IncarnationLimitHitCount        int         `json:"incarnation_limit_hit_count"`
-	SerialFallbackCount             int         `json:"serial_fallback_count"`
-	BusinessExecutionCount          int         `json:"business_execution_invocation_count"`
-	IncarnationHistogram            map[int]int `json:"incarnation_histogram"`
+	WorkerCount                      int         `json:"worker_count"`
+	MaximumParallelWidth             int         `json:"maximum_parallel_width"`
+	ExecutionTaskCount               int         `json:"execution_task_count"`
+	ValidationTaskCount              int         `json:"validation_task_count"`
+	AbortCount                       int         `json:"abort_count"`
+	DependencyAbortCount             int         `json:"dependency_abort_count"`
+	ValidationAbortCount             int         `json:"validation_abort_count"`
+	ReexecutionCount                 int         `json:"reexecution_count"`
+	UniqueAbortedTransactionCount    int         `json:"unique_aborted_transaction_count"`
+	UniqueReexecutedTransactionCount int         `json:"unique_reexecuted_transaction_count"`
+	EstimateCount                    int         `json:"estimate_count"`
+	EstimateMarkCount                int         `json:"estimate_mark_count"`
+	EstimateReadCount                int         `json:"estimate_read_count"`
+	DependencyWaitCount              int         `json:"dependency_wait_count"`
+	DependencyResumeCount            int         `json:"dependency_resume_count"`
+	ValidatedSpeculativeResultCount  int         `json:"validated_speculative_result_count"`
+	SpeculativeReadCount             int         `json:"speculative_read_count"`
+	ValidationFailureCount           int         `json:"validation_failure_count"`
+	CommittedTransactionCount        int         `json:"committed_transaction_count"`
+	MaximumIncarnation               int         `json:"maximum_incarnation"`
+	MaximumConcurrentExecutions      int         `json:"maximum_concurrent_executions"`
+	SchedulerQueuePeak               int         `json:"scheduler_queue_peak"`
+	StaleTaskCount                   int         `json:"stale_task_count"`
+	SerialOracleMS                   int64       `json:"serial_oracle_ms"`
+	TransactionExecutionMS           int64       `json:"transaction_execution_ms"`
+	MaterializationMS                int64       `json:"materialization_ms"`
+	StateCommitmentMS                int64       `json:"state_commitment_ms"`
+	IncarnationLimitHitCount         int         `json:"incarnation_limit_hit_count"`
+	SerialFallbackCount              int         `json:"serial_fallback_count"`
+	BusinessExecutionCount           int         `json:"business_execution_invocation_count"`
+	IncarnationHistogram             map[int]int `json:"incarnation_histogram"`
 }
 
 type BlockSTMProgress struct {
@@ -122,6 +124,8 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 	incarnations := make([]int, len(b.TxList))
 	validationGeneration := make([]uint64, len(b.TxList))
 	metrics := BlockSTMMetrics{WorkerCount: workerCount, IncarnationHistogram: map[int]int{}}
+	uniqueAborted := make([]bool, len(b.TxList))
+	uniqueReexecuted := make([]bool, len(b.TxList))
 	executionStarted := time.Now()
 	scheduler := blockstm.NewScheduler(len(b.TxList))
 	dependencies := blockstm.NewDependencyRegistry()
@@ -347,6 +351,10 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 				metrics.SpeculativeReadCount += len(taskResult.Captured.Reads)
 				if taskResult.Version.Incarnation > 0 {
 					metrics.ReexecutionCount++
+					if !uniqueReexecuted[index] {
+						uniqueReexecuted[index] = true
+						metrics.UniqueReexecutedTransactionCount++
+					}
 				}
 				if taskResult.Dependency != nil {
 					dependencyIndex := int(taskResult.Dependency.Txn)
@@ -361,6 +369,10 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 					incarnations[index] = int(next.Incarnation)
 					metrics.AbortCount = scheduler.AbortCount()
 					metrics.DependencyAbortCount++
+					if !uniqueAborted[index] {
+						uniqueAborted[index] = true
+						metrics.UniqueAbortedTransactionCount++
+					}
 					if incarnations[index] > maximumIncarnationObserved {
 						maximumIncarnationObserved = incarnations[index]
 					}
@@ -443,6 +455,10 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 				next := scheduler.Abort(taskResult.Version)
 				metrics.AbortCount = scheduler.AbortCount()
 				metrics.ValidationAbortCount++
+				if !uniqueAborted[index] {
+					uniqueAborted[index] = true
+					metrics.UniqueAbortedTransactionCount++
+				}
 				incarnations[index] = int(next.Incarnation)
 				validationGeneration[index]++
 				if incarnations[index] > maximumIncarnationObserved {

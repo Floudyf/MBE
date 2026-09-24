@@ -149,7 +149,9 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
             entry["migrated_default"] = bool(selection.config.get("migrated_default"))
         profile[selection.category] = entry
     # MBE_PORYGON_UNIFIED_SHARD_V10_20260921: topology.shards is the authoritative Porygon execution-shard count.
-    porygon_selected = profile.get("block_executor", {}).get("plugin_id") == "porygon_block_executor"
+    block_executor_id = profile.get("block_executor", {}).get("plugin_id")
+    porygon_selected = block_executor_id == "porygon_block_executor"
+    calvin_selected = block_executor_id in {"calvin_block_executor", "stateless_calvin_block_executor"}
     if porygon_selected:
         for category in ("scheduler", "block_executor", "cross_shard"):
             if category in profile:
@@ -165,6 +167,13 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
             validators = list(all_node_ids)
             shard_id = "porygon-global"
             consensus_domain_id = "porygon-global"
+            leader = index == 0
+        elif calvin_selected:
+            # Calvin requires one globally agreed serial order while state remains
+            # partitioned by execution_shard_id. Existing method topologies are unchanged.
+            validators = list(all_node_ids)
+            shard_id = "calvin-global"
+            consensus_domain_id = "calvin-global"
             leader = index == 0
         else:
             validators = [f"n{execution_shard_index * spec.topology.validators_per_shard + offset}" for offset in range(spec.topology.validators_per_shard)]
