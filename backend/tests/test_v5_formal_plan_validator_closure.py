@@ -25,34 +25,29 @@ def test_catalog_default_is_canonical_baseline_and_alias_snapshot_is_canonical()
 
 def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     plan = _plan()
-    legacy_builtin_ids = [
+    current_builtin_ids = [
         "hash_serial",
         "hash_block_stm",
         "hash_aria",
         "hash_groundhog",
         "metatrack_serial",
-        "metatrack_block_stm",
+        "metatrack_full_locality",
+        "metatrack_latest",
     ]
-    plan.methods = [BUILTIN_METHODS[method_id] for method_id in legacy_builtin_ids]
+    plan.methods = [BUILTIN_METHODS[method_id] for method_id in current_builtin_ids]
     plan.suites = ["comparison_experiment"]
     checked = validate_request(V5FormalRunRequest(execution_backend="real_cluster", plan=plan))
-    assert [method.method_id for method in checked.plan.methods] == [
-        "hash_serial",
-        "hash_block_stm",
-        "hash_aria",
-        "hash_groundhog",
-        "metatrack_serial",
-        "metatrack_block_stm",
-    ]
+    assert [method.method_id for method in checked.plan.methods] == current_builtin_ids
     assert [method.display_name for method in checked.plan.methods] == [
         "Stateful Hash + Serial Reference",
         "Stateful Hash + Block-STM Reference",
         "Aria",
         "Groundhog",
-        "MetaTrack",
-        "MetaTrack with Block-STM backend",
+        "MetaTrack（初始版）",
+        "MetaTrack（当前版）",
+        "MetaTrack（新版）",
     ]
-    assert checked.plan.methods[-1].role == "compatibility"
+    assert checked.plan.methods[-1].role == "main"
     assert checked.plan.methods[1].plugin_overrides["block_executor"] == "block_stm_block_executor"
     assert checked.plan.methods[1].plugin_config_overrides["block_executor"]["worker_count"] == 4
     assert checked.plan.methods[1].plugin_config_overrides["block_executor"]["maximum_incarnations"] == 0
@@ -60,6 +55,23 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     assert checked.plan.methods[2].plugin_config_overrides["block_executor"]["reordering"] is True
     assert checked.plan.methods[3].plugin_overrides["block_producer"] == "groundhog_block_producer"
     assert checked.plan.methods[3].plugin_overrides["block_executor"] == "groundhog_block_executor"
+    initial = checked.plan.methods[-3]
+    current = checked.plan.methods[-2]
+    latest = checked.plan.methods[-1]
+    assert initial.plugin_overrides == current.plugin_overrides == latest.plugin_overrides
+    assert current.plugin_overrides["block_executor"] == "metatrack_block_executor"
+    assert initial.plugin_config_overrides["routing"] == current.plugin_config_overrides["routing"] == latest.plugin_config_overrides["routing"]
+    assert current.plugin_config_overrides["routing"]["control_policy"] == "declared_access_frontier_v2"
+    assert current.plugin_config_overrides["block_executor"]["control_policy"] == "declared_access_frontier_v2"
+    assert latest.plugin_config_overrides["block_executor"]["control_policy"] == "declared_access_frontier_v2"
+    assert "local_exact_version_handoff" not in initial.plugin_config_overrides["block_executor"]
+    assert current.plugin_config_overrides["block_executor"]["local_exact_version_handoff"] is True
+    assert latest.plugin_config_overrides["block_executor"]["local_exact_version_handoff"] is True
+    assert current.plugin_config_overrides["block_executor"]["version_liveness"] is True
+    assert current.plugin_config_overrides["block_executor"]["final_version_batch_writeback"] is True
+    assert current.plugin_config_overrides["block_executor"].get("dependency_closed_consensus") is None
+    assert latest.plugin_config_overrides["block_executor"]["version_liveness"] is True
+    assert latest.plugin_config_overrides["block_executor"]["dependency_closed_consensus"] is True
 
     forged = BUILTIN_METHODS["hash_block_stm"].model_copy(deep=True)
     forged.plugin_config_overrides["block_executor"]["worker_count"] = 1

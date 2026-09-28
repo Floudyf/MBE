@@ -12,9 +12,19 @@ import (
 // a source dataset has been normalized. It is signed with the transaction and
 // therefore cannot be silently rewritten by a proposer or validator.
 type StateVersionDependency struct {
-	Key             string `json:"key"`
-	RequiredVersion uint64 `json:"required_version"`
-	ProducedVersion uint64 `json:"produced_version,omitempty"`
+	Key                          string `json:"key"`
+	RequiredVersion              uint64 `json:"required_version"`
+	ProducedVersion              uint64 `json:"produced_version,omitempty"`
+	LivenessClass                string `json:"liveness_class,omitempty"`
+	LivenessDigest               string `json:"liveness_digest,omitempty"`
+	RequiredLivenessClass        string `json:"required_liveness_class,omitempty"`
+	RequiredLivenessDigest       string `json:"required_liveness_digest,omitempty"`
+	BatchFinal                   bool   `json:"batch_final,omitempty"`
+	ValueSuccessorCount          int    `json:"value_successor_count,omitempty"`
+	LocalValueSuccessorCount     int    `json:"local_value_successor_count,omitempty"`
+	RemoteValueSuccessorCount    int    `json:"remote_value_successor_count,omitempty"`
+	LocalOrderingSuccessorCount  int    `json:"local_ordering_successor_count,omitempty"`
+	RemoteOrderingSuccessorCount int    `json:"remote_ordering_successor_count,omitempty"`
 }
 
 type ExecutionRoutingMetadata struct {

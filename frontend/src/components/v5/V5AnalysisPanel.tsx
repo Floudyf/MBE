@@ -19,6 +19,8 @@ const methodOrder = [
   "stateless_hash_serial",
   "stateless_hash_block_stm",
   "metatrack_serial",
+  "metatrack_full_locality",
+  "metatrack_latest",
   "metatrack_block_stm",
 ];
 const methodColors: Record<string, string> = {
@@ -33,6 +35,8 @@ const methodColors: Record<string, string> = {
   stateless_hash_serial: "#3E9AA5",
   stateless_hash_block_stm: "#D1784A",
   metatrack_serial: "#FA8095",
+  metatrack_full_locality: "#E06F9E",
+  metatrack_latest: "#C95C8D",
   metatrack_block_stm: "#56B76A",
 };
 const methodLabels: Record<string, string[]> = {
@@ -46,8 +50,10 @@ const methodLabels: Record<string, string[]> = {
   hash_batch_si: ["Batch-SI"],
   stateless_hash_serial: ["无状态 Hash", "Serial"],
   stateless_hash_block_stm: ["无状态 Hash", "Block-STM"],
-  metatrack_serial: ["MetaTrack", "Serial"],
-  metatrack_block_stm: ["MetaTrack", "Block-STM"],
+  metatrack_serial: ["MetaTrack", "初始版"],
+  metatrack_full_locality: ["MetaTrack", "当前版"],
+  metatrack_latest: ["MetaTrack", "新版"],
+  metatrack_block_stm: ["MetaTrack", "Block-STM（历史）"],
 };
 type AnalysisView = "observed" | "paper";
 type SampleStatus = "paper_eligible" | "comparison_excluded" | "completed_invalid" | "blocked_incompatible" | "execution_failed";

@@ -25,6 +25,18 @@ const VERSIONED_STATE_READY: MetricDef[] = [
   { key: "versioned_state_ready_execution_ms", label: "版本前沿 / StateReady 包络", unit: "ms", help: "exact-version StateReady 从开始到完成的真实墙钟包络，包含版本探测、等待、Wave 推进和内层执行。" },
 ];
 
+// MBE_METATRACK_PROJECTION_FRONTIER_V612
+const METATRACK_PROJECTION_FRONTIER_V612: MetricDef[] = [
+  { key: "metatrack_projection_frontier_projection_count", label: "闭包投影数", help: "新版 MetaTrack 单次依赖闭包共识块内实际纳入的完整签名投影总数。" },
+  { key: "metatrack_projection_frontier_layer_count", label: "投影前沿层数", help: "由跨投影 exact-version 生产者→读取者关系直接形成的 DAG 层数，不使用经验阈值。" },
+  { key: "metatrack_projection_frontier_max_layer_projection_width", label: "最大同层投影宽度", help: "同一依赖就绪层可并行释放的完整投影最大数量。" },
+  { key: "metatrack_projection_frontier_cross_projection_edge_count", label: "跨投影精确版本依赖边", help: "共识块内部真实跨完整投影的 exact-version 读取依赖边数。" },
+  { key: "metatrack_projection_frontier_suppressed_remote_dead_intermediate_publish_count", label: "省掉的远端死中间版本发布", help: "直接依据 v6.0.3 已签名并验证的 dead_intermediate 分类，省掉的远端 Home 中间版本发布次数。" },
+  { key: "metatrack_version_dead_intermediate_count", label: "死中间版本数", help: "版本存活分析判定为没有本地/远端值或排序后继的 produced version 数。" },
+  { key: "metatrack_version_home_writeback_elided_count", label: "Home 写回省略数", help: "版本存活机制已经安全省略的 Home exact-version 写回数量。" },
+  { key: "metatrack_closure_boundary_immediate_publish_count", label: "闭包边界立即发布数", help: "依赖闭包模式为了跨投影 StateReady 活性而立即发布的最终持久版本数量。" },
+];
+
 const NATIVE_STATE_READY: MetricDef[] = [
   { key: "state_ready_wait_count", label: "StateReady 等待交易数", help: "MetaTrack 原生 suspend/resume 路径进入 StateReady 等待的逻辑交易计数。" },
   { key: "state_ready_resume_count", label: "StateReady 恢复交易数", help: "状态/版本就绪后恢复执行的逻辑交易计数。" },
@@ -250,7 +262,8 @@ export default function V5MechanismAnalysis({ children }: { children: V5FormalCh
     : nativeMode === "transaction_level_suspend_resume"
       ? NATIVE_STATE_READY
       : [];
-  const definitions = [...COMMON, ...stateReadyDefinitions, ...matchedDefinitions.flatMap((item) => item.metrics)];
+  const projectionFrontierDefinitions = metrics.metatrack_projection_frontier_policy ? METATRACK_PROJECTION_FRONTIER_V612 : [];
+  const definitions = [...COMMON, ...stateReadyDefinitions, ...projectionFrontierDefinitions, ...matchedDefinitions.flatMap((item) => item.metrics)];
   const activeName = methods.find((item) => item.id === active)?.name ?? active;
   return <section className="v5-dashboard-section" data-testid="v5-mechanism-analysis">
     <div className="v5-dashboard-heading"><div><h3>机制分析</h3><p className="muted">只显示该方法已有正式证据的指标；所有比例均在指标提取/结果层派生，不修改执行器。</p></div></div>
@@ -343,9 +356,11 @@ function formatMetric(value: number, unit?: string): string { if (unit === "B") 
 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();
-  if (id === "metatrack_block_stm") return "MetaTrack + Block-STM";
+  if (id === "metatrack_latest") return "MetaTrack（新版）";
+  if (id === "metatrack_full_locality") return "MetaTrack（当前版）";
+  if (id === "metatrack_block_stm") return "MetaTrack + Block-STM（历史）";
   if (id === "stateless_hash_block_stm") return "Stateless Block-STM";
-  if (id === "metatrack_serial") return "MetaTrack";
+  if (id === "metatrack_serial") return "MetaTrack（初始版）";
   if (id === "stateless_hash_serial") return "Stateless Serial";
   if (id === "hash_serial") return "Serial";
   if (id === "hash_block_stm") return "Block-STM";

@@ -209,7 +209,7 @@ def test_batch_si_method_comparison_uses_its_own_semantics_class_without_blockin
         "stateless_hash_serial",
         "stateless_hash_block_stm",
         "metatrack_serial",
-        "metatrack_block_stm",
+        "metatrack_latest",
     ]
     plan = V5FormalExperimentPlan(
         name="batch-si-eight-method-comparison",

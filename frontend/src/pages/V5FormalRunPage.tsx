@@ -171,7 +171,7 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || parsed.schema_version !== "mbe_v5_formal_run_draft_v1") return null;
     const suite = FORMAL_SUITE_DEFINITIONS.some((item) => item.id === parsed.selectedSuite) ? parsed.selectedSuite as V5FormalSuite : "comparison_experiment";
-    const methods = Array.isArray(parsed.selectedMethods) ? parsed.selectedMethods.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+    const methods = Array.isArray(parsed.selectedMethods) ? parsed.selectedMethods.filter((item): item is string => typeof item === "string" && item.length > 0).map((item) => item === "metatrack_block_stm" ? "metatrack_latest" : item) : [];
     const topologyRaw = isRecord(parsed.topology) ? parsed.topology : {};
     const blockRaw = isRecord(parsed.blockProduction) ? parsed.blockProduction : {};
     const workloadRaw = isRecord(parsed.workload) ? parsed.workload : {};
@@ -734,7 +734,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
 
     <article className="final-card wide">
       <div className="section-heading"><div><h3>② 选择实验对象</h3><p className="muted">{FORMAL_SUITE_DEFINITIONS.find((item) => item.id === selectedSuite)?.description}</p></div></div>
-      {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["stateless_hash_serial", "stateless_hash_block_stm", "metatrack_serial", "metatrack_block_stm"]))}>MetaTrack 对照组</button></div>}
+      {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_serial", "metatrack_full_locality", "metatrack_latest"]))}>MetaTrack 对照组</button></div>}
       {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className="experiment-choice-card selected" aria-pressed="true"><span className="choice-check">✓</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className="experiment-choice-card unavailable" disabled><strong>MetaTrack</strong><small>消融定义尚未在当前方法注册表中闭合，暂不生成无效实验。</small></button></div>}
       <div className="formal-method-groups">
         {(["stateful", "batch_si", "stateless", "metatrack"] as const).map((family) => {

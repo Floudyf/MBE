@@ -128,7 +128,7 @@ _MANIFESTS = [
         source={"source_type": "user_manuscript_algorithm_reimplementation", "source_name": "MetaTrack batch-level execution sharding"},
         metrics=[{"key": "metatrack_routed_tx_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Transactions routed through the MetaTrack profile."}],
     ),
-    _manifest("block_producer", "time_or_count_block_producer", "Time or Count Block Producer", "Leader proposes blocks repeatedly by interval or mempool count; under MetaTrack routing it packs multiple complete signed route-batch projections into one pre-consensus proposal without splitting a projection.", config={"block_size": 100, "interval_ms": 75}, schema=_schema({"block_size": {"type": "integer", "minimum": 10, "maximum": 5000, "default": 100}, "interval_ms": {"type": "integer", "minimum": 25, "maximum": 5000, "default": 75}}), capabilities=["time_or_count_cut", "metatrack_complete_projection_preconsensus_aggregation"]),
+    _manifest("block_producer", "time_or_count_block_producer", "Time or Count Block Producer", "Leader proposes blocks repeatedly by interval or mempool count. MetaTrack current mode preserves one complete signed route-batch projection per PBFT block; dependency-closed consensus mode greedily packs the largest safe prefix of complete signed projections without splitting a projection.", config={"block_size": 100, "interval_ms": 75}, schema=_schema({"block_size": {"type": "integer", "minimum": 10, "maximum": 5000, "default": 100}, "interval_ms": {"type": "integer", "minimum": 25, "maximum": 5000, "default": 75}, "dependency_closed_consensus": {"type": "boolean", "default": False}}), capabilities=["time_or_count_cut", "metatrack_complete_projection_preconsensus_aggregation", "metatrack_dependency_closed_projection_prefix"]),
     _manifest(
         "block_producer", "aria_block_producer", "Aria Block Producer",
         "Executes one deterministic Aria batch over the block-start snapshot, selects Rule-2-committable transactions for the current block, and releases deferred transactions back to FIFO mempool order for a later block.",
@@ -157,11 +157,12 @@ _MANIFESTS = [
     _manifest(
         "block_producer", "groundhog_block_producer", "Groundhog Block Producer",
         "Builds a Groundhog candidate by interpreting a wider FIFO candidate window against one block-start snapshot, reserving typed modifications, deferring only aggregate constraint conflicts, and preserving terminal application failures for final receipts.",
-        config={"block_size": 100, "interval_ms": 75, "candidate_scan_multiplier": 4, "ordered_set_limit": 64},
+        # MBE_V37_PLUGIN_CONFIG_TRUTH: scan multiplier is retained only as an accepted legacy field.
+        config={"block_size": 100, "interval_ms": 75, "ordered_set_limit": 64},
         schema=_schema({
             "block_size": {"type": "integer", "minimum": 10, "maximum": 5000, "default": 100},
             "interval_ms": {"type": "integer", "minimum": 25, "maximum": 5000, "default": 75},
-            "candidate_scan_multiplier": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4},
+            "candidate_scan_multiplier": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4, "deprecated": True, "description": "Legacy compatibility only; current Groundhog scans the complete ready pool and ignores this value."},
             "ordered_set_limit": {"type": "integer", "minimum": 1, "maximum": 65535, "default": 64},
         }),
         capabilities=["groundhog_block_assembly", "same_snapshot_candidate_interpretation", "typed_state_reservation", "transaction_atomic_rollback", "constraint_conflict_deferral"],
@@ -211,7 +212,7 @@ _MANIFESTS = [
         "block_executor", "serial_block_executor", "Serial Block Executor",
         "Executes block transactions in original order through the generic block executor contract.",
         config={"worker_count": 1},
-        schema=_schema({"worker_count": {"type": "integer", "minimum": 1, "maximum": 1, "default": 1, "readOnly": True}}),
+        schema=_schema({"worker_count": {"type": "integer", "minimum": 1, "maximum": 1, "default": 1, "readOnly": True}, "versioned_wave_policy": {"type": "string", "enum": ["strict_single_tx_block_order_v1", "maximal_compatible_exact_version_v1"], "default": "maximal_compatible_exact_version_v1"}}),
         capabilities=["serial_order", "deterministic_state_delta", "legacy_equivalence_oracle", "execution_plan_digest"],
         metrics=[
             {"key": "block_executor_id", "type": "string", "unit": "", "aggregation": "last", "visualization": "summary", "description": "Selected block executor plugin."},
@@ -227,12 +228,21 @@ _MANIFESTS = [
     _manifest(
         "block_executor", "metatrack_block_executor", "MetaTrack Block Executor",
         "Executes MetaTrack fast/conservative ready queues with dependency and transaction-level remote StateReady suspend/resume callbacks over MBE transfer semantics.",
-        config={"worker_count": 4},
+        config={"worker_count": 4, "local_exact_version_handoff": False, "batch_entry_state_prefetch": False, "batch_remote_writeback": False, "safe_state_fold": False, "version_liveness": False, "final_version_batch_writeback": False, "dependency_closed_consensus": False, "version_liveness_indexed": False, "single_final_seal": False},
         schema=_schema({
             "worker_count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
             "control_policy": {"type": "string", "enum": ["logical_domain_frontier_v1", "declared_access_frontier_v2"]},
+            "local_exact_version_handoff": {"type": "boolean", "default": False},
+            "batch_entry_state_prefetch": {"type": "boolean", "default": False},
+            "batch_remote_writeback": {"type": "boolean", "default": False},
+            "safe_state_fold": {"type": "boolean", "default": False},
+            "version_liveness": {"type": "boolean", "default": False},
+            "final_version_batch_writeback": {"type": "boolean", "default": False},
+            "dependency_closed_consensus": {"type": "boolean", "default": False},
+            "version_liveness_indexed": {"type": "boolean", "default": False},
+            "single_final_seal": {"type": "boolean", "default": False},
         }),
-        capabilities=["metatrack_ready_queues", "dependency_release", "transaction_level_remote_state_ready", "state_wait_suspend_resume", "deterministic_state_delta", "execution_plan_digest"],
+        capabilities=["metatrack_ready_queues", "dependency_release", "transaction_level_remote_state_ready", "state_wait_suspend_resume", "batch_local_exact_version_handoff", "batch_entry_state_prefetch", "batch_remote_writeback", "safe_state_fold", "version_dependency_liveness", "final_version_batch_writeback", "dependency_closed_consensus", "indexed_version_dependency_liveness", "single_final_seal", "deterministic_state_delta", "execution_plan_digest"],
         requirements=["execution:dual_track_execution"],
         metrics=[
             {"key": "fast_track_execution_instance_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Fast-track execution instances completed by MetaTrack."},
@@ -318,6 +328,9 @@ _MANIFESTS = [
         schema=_schema({
             "worker_count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
             "maximum_incarnations": {"type": "integer", "minimum": 0, "maximum": 1000000, "default": 0, "description": "0 disables the artificial per-transaction incarnation cap for formal experiments."},
+            "scheduler_mode": {"type": "string", "enum": ["legacy_scan_v1", "priority_heap_v1"], "default": "legacy_scan_v1"},
+            "dependency_wait_mode": {"type": "string", "enum": ["abort_new_incarnation_v1", "suspend_same_incarnation_v1"], "default": "abort_new_incarnation_v1"},
+            "versioned_wave_policy": {"type": "string", "enum": ["maximal_compatible_exact_version_v1", "maximal_compatible_exact_version_v2"], "default": "maximal_compatible_exact_version_v1"},
         }),
         capabilities=["block_stm", "mvmemory", "speculative_execution", "captured_reads", "validation", "abort_reexecution", "estimate_dependency", "serial_equivalence"],
         requirements=["state_access:direct_state_access", "state_storage:persistent_local_state_store"],
@@ -458,8 +471,8 @@ _manifest("block_executor", "cg_block_executor", "CG / Nezha MBE Worker Block Ex
     _manifest(
         "block_executor", "porygon_block_executor", "Porygon Logical-ESC Block Executor",
         "Executes conflict-safe logical ESC waves from the consensus-bound plan. Each cross-ESC transaction executes exactly once; signed AccessList visibility is enforced and writes are atomically materialized in the common ordering domain.",
-        config={"worker_count": 4, "execution_shard_count": 4, "execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True},
-        schema=_schema({"worker_count": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4}, "execution_shard_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4}, "execution_committee_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 3}, "pipeline_enabled": {"type": "boolean", "default": True}, "cross_batch_witness": {"type": "boolean", "default": True}}),
+        config={"worker_count": 4, "execution_shard_count": 4, "execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True, "require_distributed_esc": False},
+        schema=_schema({"worker_count": {"type": "integer", "minimum": 1, "maximum": 32, "default": 4}, "execution_shard_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4}, "execution_committee_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 3}, "pipeline_enabled": {"type": "boolean", "default": True}, "cross_batch_witness": {"type": "boolean", "default": True}, "require_distributed_esc": {"type": "boolean", "default": False}}),
         capabilities=["porygon", "logical_execution_subcommittee", "parallel_waves", "single_execution_cross_shard", "signed_access_projection", "deterministic_multi_state_update", "execution_plan_digest", "no_meta_remote_state_control_plane"],
         requirements=["scheduler:porygon_pipeline_scheduler", "execution:porygon_execution", "routing:porygon_stateless_routing", "state_access:porygon_remote_state_access", "consensus:pbft_style_consensus"],
         metrics=[

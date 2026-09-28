@@ -79,7 +79,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "block_stm_block_executor",
             "commit": "normal_commit",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail"}},
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail", "scheduler_mode": "priority_heap_v1", "dependency_wait_mode": "suspend_same_incarnation_v1"}},
     ),
     "hash_aria": V5FormalMethod(
         method_id="hash_aria",
@@ -120,9 +120,9 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "groundhog_block_executor",
             "commit": "normal_commit",
         },
+        # MBE_V37_FORMAL_METHOD_ISOLATION: current Groundhog ignores the historical scan multiplier.
         plugin_config_overrides={
             "block_producer": {
-                "candidate_scan_multiplier": 4,
                 "ordered_set_limit": 64,
             },
             "block_executor": {
@@ -134,7 +134,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     # MBE_META_TRACK_RAPID_FIX_V3
     "metatrack_serial": V5FormalMethod(
         method_id="metatrack_serial",
-        display_name="MetaTrack",
+        display_name="MetaTrack（初始版）",
         role="main",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -185,18 +185,40 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2"},
         },
     ),
-    "metatrack_block_stm": V5FormalMethod(
-        method_id="metatrack_block_stm",
-        display_name="MetaTrack with Block-STM backend",
-        role="compatibility",
+    "metatrack_full_locality": V5FormalMethod(
+        method_id="metatrack_full_locality",
+        display_name="MetaTrack（当前版）",
+        role="main",
         plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
             "routing": "metatrack_coaccess_routing",
             "execution": "dual_track_execution",
             "scheduler": "fast_first_scheduler",
-            "block_executor": "block_stm_block_executor",
+            "block_executor": "metatrack_block_executor",
             "commit": "commutative_hot_update_aggregation",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail"}},
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100},
+            "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2", "local_exact_version_handoff": True, "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True},
+        },
+    ),
+    "metatrack_latest": V5FormalMethod(
+        method_id="metatrack_latest",
+        display_name="MetaTrack（新版）",
+        role="main",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100},
+            "block_producer": {"dependency_closed_consensus": True},
+            "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2", "local_exact_version_handoff": True, "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
     ),
 }
 
@@ -255,7 +277,7 @@ STATELESS_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "serial_block_executor",
             "commit": "normal_commit",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 1}},
+        plugin_config_overrides={"block_executor": {"worker_count": 1, "versioned_wave_policy": "strict_single_tx_block_order_v1"}},
     ),
     "stateless_hash_block_stm": V5FormalMethod(
         method_id="stateless_hash_block_stm",
@@ -268,7 +290,7 @@ STATELESS_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": "block_stm_block_executor",
             "commit": "normal_commit",
         },
-        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail"}},
+        plugin_config_overrides={"block_executor": {"worker_count": 4, "execution_mode": "performance", "oracle_mode": "off", "maximum_incarnations": 0, "incarnation_limit_action": "fail", "scheduler_mode": "priority_heap_v1", "dependency_wait_mode": "suspend_same_incarnation_v1", "versioned_wave_policy": "maximal_compatible_exact_version_v2"}},
     ),
 }
 
@@ -326,7 +348,7 @@ PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         plugin_config_overrides={
             "block_producer": {"witness_threshold": 1},
             "scheduler": {"execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True},
-            "block_executor": {"worker_count": 4, "execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True},
+            "block_executor": {"worker_count": 4, "execution_committee_count": 3, "pipeline_enabled": True, "cross_batch_witness": True, "require_distributed_esc": True},
         },
     ),
 }

@@ -456,6 +456,7 @@ type BlockExecutionInput struct {
 	Progress                         func(execution.BlockSTMProgress)
 	RemoteStateReadiness             map[string]bool
 	RemoteStateFetch                 RemoteStateFetchFunc
+	RemoteStateBatchFetch            RemoteStateBatchFetchFunc
 	StateVersionPublish              StateVersionPublishFunc
 }
 type BlockExecutionResult struct {
@@ -586,10 +587,11 @@ type RoutingInput struct {
 }
 type RoutingDecision struct{ ShardID, Reason string }
 type BatchRoutingInput struct {
-	BatchIndex int
-	Records    []WorkloadRecord
-	ShardIDs   []string
-	Sharding   ShardingPlugin
+	BatchIndex     int
+	Records        []WorkloadRecord
+	ShardIDs       []string
+	Sharding       ShardingPlugin
+	DeferFinalSeal bool
 }
 type BatchRoutingPlan struct {
 	BatchIndex              int
@@ -1217,10 +1219,12 @@ func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 		return plan.TransactionPlacements[i].TxIndex < plan.TransactionPlacements[j].TxIndex
 	})
 	plan.RoutingOverhead = plan.RemoteAccessEstimate + len(plan.CoaccessEdges)
-	if metaTrackDeclaredAccessFrontierPolicyEnabled(p.config) {
-		applyMetaTrackDeclaredAccessFrontierV2(&plan, input.Records)
+	if !input.DeferFinalSeal {
+		if metaTrackDeclaredAccessFrontierPolicyEnabled(p.config) {
+			applyMetaTrackDeclaredAccessFrontierV2(&plan, input.Records)
+		}
+		plan.PlanDigest = routingPlanDigest(plan)
 	}
-	plan.PlanDigest = routingPlanDigest(plan)
 	return plan
 }
 
@@ -1674,11 +1678,16 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 		if len(reserved) == 0 {
 			return realblock.Block{}, fmt.Errorf("empty_mempool")
 		}
-		// One signed micro-batch projection per PBFT block preserves the
-		// exact dependency-classification window. Cross-projection aggregation
-		// can bind future exact-version waits from different shards into one
-		// consensus block and create a StateReady liveness cycle.
-		selected, deferred, err := selectMetaTrackLivenessSafePBFTProjection(reserved, limit, input.Proposer.ShardID)
+		var selected, deferred []tx.SignedTransaction
+		var err error
+		if boolFromAny(p.config["dependency_closed_consensus"]) {
+			selected, deferred, _, err = selectMetaTrackDependencyClosedPBFTProjections(reserved, limit, input.Proposer.ShardID)
+		} else {
+			// Frozen current-version behavior: exactly one signed projection per
+			// PBFT block. Only the newest MetaTrack profile enables dependency-
+			// closed multi-projection aggregation.
+			selected, deferred, err = selectMetaTrackLivenessSafePBFTProjection(reserved, limit, input.Proposer.ShardID)
+		}
 		if err != nil {
 			input.Pool.ReleaseReserved(reserved)
 			return realblock.Block{}, err
@@ -3183,6 +3192,13 @@ func (p blockSTMBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExec
 	if action := strings.TrimSpace(fmt.Sprint(p.config["incarnation_limit_action"])); action == "fail" || action == "serial_fallback" {
 		executor.IncarnationLimitAction = action
 	}
+	// MBE_V37_BLOCKSTM_METHOD_CONFIG: optional per-method fidelity controls.
+	if schedulerMode := strings.TrimSpace(fmt.Sprint(p.config["scheduler_mode"])); schedulerMode == "priority_heap_v1" || schedulerMode == "legacy_scan_v1" {
+		executor.SchedulerMode = schedulerMode
+	}
+	if waitMode := strings.TrimSpace(fmt.Sprint(p.config["dependency_wait_mode"])); waitMode == "suspend_same_incarnation_v1" || waitMode == "abort_new_incarnation_v1" {
+		executor.DependencyWaitMode = waitMode
+	}
 	result, err := executor.ExecuteBlockWithCommitment(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -3226,6 +3242,13 @@ func (p blockSTMBlockExecutor) ExecuteWave(ctx context.Context, input BlockExecu
 	}
 	if action := strings.TrimSpace(fmt.Sprint(p.config["incarnation_limit_action"])); action == "fail" || action == "serial_fallback" {
 		executor.IncarnationLimitAction = action
+	}
+	// MBE_V37_BLOCKSTM_METHOD_CONFIG: optional per-method fidelity controls.
+	if schedulerMode := strings.TrimSpace(fmt.Sprint(p.config["scheduler_mode"])); schedulerMode == "priority_heap_v1" || schedulerMode == "legacy_scan_v1" {
+		executor.SchedulerMode = schedulerMode
+	}
+	if waitMode := strings.TrimSpace(fmt.Sprint(p.config["dependency_wait_mode"])); waitMode == "suspend_same_incarnation_v1" || waitMode == "abort_new_incarnation_v1" {
+		executor.DependencyWaitMode = waitMode
 	}
 
 	deltaOnly := executor.ExecutionMode == "performance" && executor.OracleMode == "off"
@@ -3283,8 +3306,14 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	classification := batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
 	bindMetaTrackInBlockVersionHandoffs(input.Block.TxList, &classification)
 	strictFrontier := metaTrackStrictFrontierPolicyEnabled(p.config)
+	localExactVersionHandoff, _ := p.config["local_exact_version_handoff"].(bool)
+	batchEntryStatePrefetch, _ := p.config["batch_entry_state_prefetch"].(bool)
+	var batchFetch RemoteStateBatchFetchFunc
+	if batchEntryStatePrefetch {
+		batchFetch = input.RemoteStateBatchFetch
+	}
 	executionStarted := time.Now()
-	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithPolicy(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, input.StateVersionPublish, strictFrontier)
+	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff)
 	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -3474,6 +3503,14 @@ func executeMetaTrackSchedule(ctx context.Context, schedule ScheduleResult, clas
 }
 
 func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+	return executeMetaTrackScheduleWithOptions(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, versionPublish, strictFrontier, false)
+}
+
+func executeMetaTrackScheduleWithOptions(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+	return executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, nil, versionPublish, strictFrontier, localExactVersionHandoff)
+}
+
+func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
 	ordered := append([]tx.SignedTransaction(nil), schedule.Ordered...)
 	// MBE_METATRACK_READY_ROUND_SCHEDULER_V35
 	// Preserve the historical helper signature while allowing the Ready-Round
@@ -3571,12 +3608,81 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 	stateValueByToken := map[string]string{}
 	stateWaitStarted := map[string]time.Time{}
 	stateWaitersByToken := map[string][]string{}
+	type localVersionHandoffTarget struct {
+		producerTxID string
+		key          string
+		consumer     tx.SignedTransaction
+		access       tx.AccessItem
+	}
+	localVersionHandoffByToken := map[string]localVersionHandoffTarget{}
+	localVersionTokensByProducer := map[string][]string{}
 	readyRoundByTx := map[string]uint64{}
 	openReadyRound := uint64(1)
 	for _, item := range ordered {
 		txID := txIdentifier(item)
 		for _, token := range classification.StateWaitKeys[txID] {
 			stateWaitersByToken[token] = append(stateWaitersByToken[token], txID)
+		}
+	}
+	// MBE_METATRACK_LATEST_LOCAL_VERSION_HANDOFF_V3
+	// This optimization is deliberately independent of the routing/track policy.
+	// The current and latest methods keep identical declared-access + multi-frontier
+	// semantics; only the latest method enables this flag. A RequiredVersion that is
+	// produced by another transaction in this same execution block is delivered from
+	// the producer's exact WriteSet directly to the existing StateReady token.
+	if localExactVersionHandoff {
+		ownerByKeyVersion := map[string]string{}
+		for _, item := range ordered {
+			if item.ExecutionRouting == nil {
+				continue
+			}
+			producerTxID := txIdentifier(item)
+			for _, dependency := range item.ExecutionRouting.StateVersions {
+				if dependency.Key == "" || dependency.ProducedVersion == 0 {
+					continue
+				}
+				slot := stateVersionWaitKey(dependency.Key, dependency.ProducedVersion)
+				if previous, exists := ownerByKeyVersion[slot]; exists && previous != producerTxID {
+					ownerByKeyVersion[slot] = ""
+					continue
+				}
+				ownerByKeyVersion[slot] = producerTxID
+			}
+		}
+		for _, item := range ordered {
+			txID := txIdentifier(item)
+			for _, token := range classification.StateWaitKeys[txID] {
+				if _, exists := localVersionHandoffByToken[token]; exists {
+					continue
+				}
+				for _, access := range classificationAccessItems(item) {
+					if stateReadinessToken(item, access) != token {
+						continue
+					}
+					if !isVersionedStateAccess(access) || !requiresExactStateValue(access) {
+						break
+					}
+					dependency, ok := stateVersionDependencyForKey(item, access.Key)
+					if !ok || dependency.RequiredVersion == 0 {
+						break
+					}
+					producerTxID := ownerByKeyVersion[stateVersionWaitKey(access.Key, dependency.RequiredVersion)]
+					if producerTxID == "" || producerTxID == txID {
+						break
+					}
+					localVersionHandoffByToken[token] = localVersionHandoffTarget{
+						producerTxID: producerTxID,
+						key:          access.Key,
+						consumer:     item,
+						access:       access,
+					}
+					localVersionTokensByProducer[producerTxID] = append(localVersionTokensByProducer[producerTxID], token)
+					break
+				}
+			}
+		}
+		for producer := range localVersionTokensByProducer {
+			sort.Strings(localVersionTokensByProducer[producer])
 		}
 	}
 	events := []ScheduleEvent{}
@@ -3624,7 +3730,26 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 	}
 	remoteStateCompletions := make(chan remoteStateCompletion, len(ordered)*4+1)
 	remoteFetchCount := 0
+	localVersionRemoteFetchSuppressedCount := 0
+	localVersionHandoffReadyCount := 0
+	localVersionHandoffFallbackFetchCount := 0
+	localVersionFallbackStarted := map[string]bool{}
+	startRemoteFetch := func(item tx.SignedTransaction, access tx.AccessItem) {
+		remoteFetchCount++
+		go func(item tx.SignedTransaction, access tx.AccessItem) {
+			event, err := remoteFetch(ctx, item, access)
+			select {
+			case remoteStateCompletions <- remoteStateCompletion{event: event, err: err}:
+			case <-ctx.Done():
+			}
+		}(item, access)
+	}
 	uniqueRemoteTokens := map[string]bool{}
+	batchEntryRequestCount := 0
+	batchEntryItemCount := 0
+	batchEntryReadyCount := 0
+	batchEntryNotReadyFallbackCount := 0
+	batchCandidates := make([]RemoteStateBatchFetchItem, 0)
 	if len(classification.StateWaitKeys) > 0 {
 		if remoteFetch == nil {
 			return nil, nil, nil, nil, fmt.Errorf("metatrack state-ready classification requires remote state fetcher")
@@ -3641,6 +3766,10 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 					continue
 				}
 				uniqueRemoteTokens[key] = true
+				if _, local := localVersionHandoffByToken[key]; local {
+					localVersionRemoteFetchSuppressedCount++
+					continue
+				}
 				var access tx.AccessItem
 				for _, candidate := range item.AccessList {
 					if stateReadinessToken(item, candidate) == key {
@@ -3648,14 +3777,29 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 						break
 					}
 				}
-				remoteFetchCount++
-				go func(item tx.SignedTransaction, access tx.AccessItem) {
-					event, err := remoteFetch(ctx, item, access)
-					select {
-					case remoteStateCompletions <- remoteStateCompletion{event: event, err: err}:
-					case <-ctx.Done():
-					}
-				}(item, access)
+				if batchFetch != nil {
+					batchCandidates = append(batchCandidates, RemoteStateBatchFetchItem{Token: key, Item: item, Access: access})
+				} else {
+					startRemoteFetch(item, access)
+				}
+			}
+		}
+		if batchFetch != nil && len(batchCandidates) > 0 {
+			outcome, batchErr := batchFetch(ctx, batchCandidates)
+			if batchErr != nil {
+				return nil, nil, nil, nil, batchErr
+			}
+			batchEntryRequestCount = outcome.RequestCount
+			batchEntryItemCount = outcome.ItemCount
+			for _, candidate := range batchCandidates {
+				if event, ready := outcome.Events[candidate.Token]; ready {
+					stateReady[candidate.Token] = true
+					stateValueByToken[candidate.Token] = event.Value
+					batchEntryReadyCount++
+					continue
+				}
+				batchEntryNotReadyFallbackCount++
+				startRemoteFetch(candidate.Item, candidate.Access)
 			}
 		}
 	}
@@ -4022,16 +4166,10 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 	stateReadyWakeupCount := 0
 	stateWaitBlockedCount := len(stateBlocked)
 	remoteFetchLatencyMS := int64(0)
-	handleRemoteStateCompletion := func(completion remoteStateCompletion) error {
-		remoteFetchCompleted++
-		if completion.err != nil {
-			return completion.err
-		}
-		event := completion.event
+	handleStateReadyEvent := func(event RemoteStateReadyEvent, reason string) error {
 		if event.Key == "" || event.ReadinessToken == "" {
-			return fmt.Errorf("metatrack remote state completion missing key/token")
+			return fmt.Errorf("metatrack state-ready completion missing key/token")
 		}
-		remoteFetchLatencyMS += event.LatencyMS
 		stateReady[event.ReadinessToken] = true
 		stateValueByToken[event.ReadinessToken] = event.Value
 		for _, txID := range stateWaitersByToken[event.ReadinessToken] {
@@ -4047,13 +4185,21 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 				delete(stateWaitStarted, txID)
 			}
 			decision := decisionByID[txID]
-			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "state_wait_queue", DecisionReason: "actual_state_ready:" + event.Key, LocalExecution: true, Wakeup: depCount[txID] == 0, DependencyWaitMS: waitMS, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "state_wait_queue", DecisionReason: reason + ":" + event.Key, LocalExecution: true, Wakeup: depCount[txID] == 0, DependencyWaitMS: waitMS, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
 			if depCount[txID] == 0 && !completed[txID] {
 				stateReadyWakeupCount++
-				enqueueReady(txID, "actual_state_ready_dispatchable", true)
+				enqueueReady(txID, reason+"_dispatchable", true)
 			}
 		}
 		return nil
+	}
+	handleRemoteStateCompletion := func(completion remoteStateCompletion) error {
+		remoteFetchCompleted++
+		if completion.err != nil {
+			return completion.err
+		}
+		remoteFetchLatencyMS += completion.event.LatencyMS
+		return handleStateReadyEvent(completion.event, "actual_state_ready")
 	}
 
 	var closeWorkersOnce sync.Once
@@ -4069,13 +4215,16 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 	}
 	inFlight := 0
 	arbitrationRoundCount := 0
+	multiCandidateReadyRoundCount := 0
 	competitionArbitrationCount := 0
 	priorityCandidateSetSum := 0
 	priorityCandidateSetSamples := 0
 	priorityCandidateSetMax := 0
+	influenceArbitrationDecisionCount := 0
 	influenceChangedChoiceCount := 0
 	readyRoundEventDrainSkipCount := 0
 	seenReadyRounds := map[uint64]bool{}
+	seenMultiCandidateReadyRounds := map[uint64]bool{}
 	nextReady := func(useInfluence bool) string {
 		if readyRoundArbitration {
 			return metaTrackPopReadyRoundChoice(&fastReady, &conservativeReady, readyRoundByTx, schedule, useInfluence)
@@ -4102,11 +4251,16 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 		}
 		dispatchedThisPass := 0
 		if readyRoundArbitration {
-			if round, ok := metaTrackOldestReadyRound(fastReady, conservativeReady, readyRoundByTx); ok && !seenReadyRounds[round] {
+			round, hasRound := metaTrackOldestReadyRound(fastReady, conservativeReady, readyRoundByTx)
+			if hasRound && !seenReadyRounds[round] {
 				seenReadyRounds[round] = true
 				arbitrationRoundCount++
 			}
 			candidates := metaTrackReadyRoundCandidateCount(fastReady, conservativeReady, readyRoundByTx)
+			if hasRound && candidates > 1 && !seenMultiCandidateReadyRounds[round] {
+				seenMultiCandidateReadyRounds[round] = true
+				multiCandidateReadyRoundCount++
+			}
 			capacity := workerCount - inFlight
 			if candidates > capacity && capacity > 0 {
 				competitionArbitrationCount++
@@ -4124,6 +4278,7 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 				capacity := workerCount - inFlight
 				influenceApplied = dependencyInfluencePriority && candidates > capacity && capacity > 0
 				if influenceApplied {
+					influenceArbitrationDecisionCount++
 					controlChoice := metaTrackPeekReadyRoundChoice(fastReady, conservativeReady, readyRoundByTx, schedule, false)
 					influenceChoice := metaTrackPeekReadyRoundChoice(fastReady, conservativeReady, readyRoundByTx, schedule, true)
 					if controlChoice != "" && influenceChoice != "" && controlChoice != influenceChoice {
@@ -4325,6 +4480,33 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 			done.outcome.Delta.Success = false
 			done.outcome.Delta.Error = done.outcome.Receipt.Error
 		}
+		for _, token := range localVersionTokensByProducer[doneID] {
+			target, ok := localVersionHandoffByToken[token]
+			if !ok || stateReady[token] {
+				continue
+			}
+			if value, wrote := writeSetLogicalValue(done.outcome.Delta.WriteSet, target.key); done.outcome.Receipt.Success && wrote {
+				localVersionHandoffReadyCount++
+				event := RemoteStateReadyEvent{TxID: target.consumer.TxID, Key: target.key, ReadinessToken: token, Value: value}
+				if dependency, exists := stateVersionDependencyForKey(target.consumer, target.key); exists {
+					event.StateVersion = dependency.RequiredVersion
+				}
+				if err := handleStateReadyEvent(event, "actual_local_version_ready"); err != nil {
+					closeWorkers()
+					wg.Wait()
+					return nil, nil, nil, nil, err
+				}
+				continue
+			}
+			// A failed/no-op producer aliases its ProducedVersion to the precise
+			// predecessor at publication time. Subscribe through the existing exact-
+			// version path instead of guessing from completion-order state.
+			if !localVersionFallbackStarted[token] {
+				localVersionFallbackStarted[token] = true
+				localVersionHandoffFallbackFetchCount++
+				startRemoteFetch(target.consumer, target.access)
+			}
+		}
 		if versionPublish != nil {
 			publishSnapshot := metaTrackTransactionSnapshot(workingSnapshot, block.ShardID, done.outcome.Tx)
 			for _, token := range classification.StateWaitKeys[doneID] {
@@ -4452,69 +4634,89 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 		return values[index]
 	}
 	metrics := map[string]any{
-		"configured_worker_count":                           workerCount,
-		"metatrack_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
-		"metatrack_transaction_snapshot_total_key_count":    transactionSnapshotTotalKeys,
-		"metatrack_version_publish_async_enqueued_count":    versionPublishEnqueued,
-		"metatrack_version_publish_policy":                  "completion_triggered_independent_v1",
-		"max_ready_queue_depth":                             maxReadyQueueDepth,
-		"max_fast_ready_queue_depth":                        maxFastReadyQueueDepth,
-		"max_conservative_ready_queue_depth":                maxConservativeReadyQueueDepth,
-		"max_dependency_frontier_width":                     maxDependencyFrontierWidth,
-		"max_inflight_business_executions":                  int(atomic.LoadInt64(&maxInflightBusiness)),
-		"worker_execution_count":                            workerCounts,
-		"steal_attempt_count":                               int(atomic.LoadInt64(&stealAttemptCount)),
-		"steal_success_count":                               int(atomic.LoadInt64(&stealSuccessCount)),
-		"stolen_task_count":                                 int(atomic.LoadInt64(&stolenTaskCount)),
-		"submitted_logical_tx_count":                        len(ordered),
-		"scheduler_dispatch_event_count":                    dispatchCount,
-		"blocked_event_count":                               blockedCount,
-		"wakeup_event_count":                                wakeupCount,
-		"completion_channel_event_count":                    completionChannelCount,
-		"completion_processing_policy":                      "dependency_ready_completion_order_deterministic_final_merge",
-		"worker_queue_model":                                workerQueueModel,
-		"metatrack_ready_priority_policy":                   readyPriorityPolicy,
-		"metatrack_dependency_influence_scheduler_enabled":  dependencyInfluencePriority,
-		"metatrack_ready_round_scheduler_enabled":           readyRoundArbitration,
-		"metatrack_ready_round_control_enabled":             readyRoundControl,
-		"arbitration_round_count":                           arbitrationRoundCount,
-		"competition_arbitration_count":                     competitionArbitrationCount,
-		"priority_candidate_set_max":                        priorityCandidateSetMax,
-		"priority_candidate_set_mean":                       priorityCandidateSetMean,
-		"influence_changed_choice_count":                    influenceChangedChoiceCount,
-		"ready_round_event_drain_skip_count":                readyRoundEventDrainSkipCount,
-		"cross_round_bypass_count":                          0,
-		"ready_to_dispatch_p50_us":                          readyWaitPercentile(0.50),
-		"ready_to_dispatch_p95_us":                          readyWaitPercentile(0.95),
-		"ready_to_dispatch_p99_us":                          readyWaitPercentile(0.99),
-		"ready_to_dispatch_max_us":                          readyWaitPercentile(1.00),
-		"steal_policy":                                      stealPolicy,
-		"cross_track_steal_count":                           0,
-		"business_execute_invocation_count":                 int(atomic.LoadInt64(&businessExecuteInvocations)),
-		"fast_fallback_count":                               int(atomic.LoadInt64(&fastFallbackCount)),
-		"discarded_tentative_result_count":                  int(atomic.LoadInt64(&discardedTentativeCount)),
-		"conservative_reexecution_count":                    int(atomic.LoadInt64(&conservativeReexecutionCount)),
-		"retry_execution_count":                             int(atomic.LoadInt64(&conservativeReexecutionCount)),
-		"reexecution_count":                                 int(atomic.LoadInt64(&conservativeReexecutionCount)),
-		"metatrack_terminal_access_violation_count":         int(atomic.LoadInt64(&terminalAccessViolationCount)),
-		"metatrack_frontier_seal_count":                     frontierSealCount,
-		"metatrack_bridge_capsule_count":                    bridgeCapsuleCount,
-		"metatrack_frontier_required_version_count":         frontierRequiredVersionCount,
-		"metatrack_frontier_write_slot_count":               frontierWriteSlotCount,
-		"metatrack_version_ticket_issued_count":             versionTicketIssuedCount,
-		"metatrack_version_ticket_released_count":           versionTicketReleasedCount,
-		"metatrack_frontier_seal_build_us":                  frontierSealBuildUS,
-		"metatrack_bridge_wave_count":                       bridgeWaveCount,
-		"metatrack_max_bridge_wave_width":                   maxBridgeWaveWidth,
-		"validator_execution_completion_count":              len(executionOutcomes),
-		"unique_final_logical_completion_count":             len(executionOutcomes),
-		"duplicate_final_completion_count":                  0,
-		"state_wait_blocked_count":                          stateWaitBlockedCount,
-		"state_ready_wakeup_count":                          stateReadyWakeupCount,
-		"remote_state_fetch_count":                          remoteFetchCount,
-		"remote_state_fetch_completed_count":                remoteFetchCompleted,
-		"remote_state_fetch_latency_ms":                     remoteFetchLatencyMS,
-		"state_ready_scheduler_mode":                        "transaction_level_suspend_resume",
+		"configured_worker_count":                               workerCount,
+		"metatrack_commutative_dependency_suppressed_count":     classification.CommutativeDependencySuppressedCount,
+		"metatrack_transaction_snapshot_total_key_count":        transactionSnapshotTotalKeys,
+		"metatrack_version_publish_async_enqueued_count":        versionPublishEnqueued,
+		"metatrack_version_publish_policy":                      "completion_triggered_independent_v1",
+		"max_ready_queue_depth":                                 maxReadyQueueDepth,
+		"max_fast_ready_queue_depth":                            maxFastReadyQueueDepth,
+		"max_conservative_ready_queue_depth":                    maxConservativeReadyQueueDepth,
+		"max_dependency_frontier_width":                         maxDependencyFrontierWidth,
+		"max_inflight_business_executions":                      int(atomic.LoadInt64(&maxInflightBusiness)),
+		"worker_execution_count":                                workerCounts,
+		"steal_attempt_count":                                   int(atomic.LoadInt64(&stealAttemptCount)),
+		"steal_success_count":                                   int(atomic.LoadInt64(&stealSuccessCount)),
+		"stolen_task_count":                                     int(atomic.LoadInt64(&stolenTaskCount)),
+		"submitted_logical_tx_count":                            len(ordered),
+		"scheduler_dispatch_event_count":                        dispatchCount,
+		"blocked_event_count":                                   blockedCount,
+		"wakeup_event_count":                                    wakeupCount,
+		"completion_channel_event_count":                        completionChannelCount,
+		"completion_processing_policy":                          "dependency_ready_completion_order_deterministic_final_merge",
+		"worker_queue_model":                                    workerQueueModel,
+		"metatrack_ready_priority_policy":                       readyPriorityPolicy,
+		"metatrack_dependency_influence_scheduler_enabled":      dependencyInfluencePriority,
+		"metatrack_ready_round_scheduler_enabled":               readyRoundArbitration,
+		"metatrack_ready_round_control_enabled":                 readyRoundControl,
+		"arbitration_round_count":                               arbitrationRoundCount,
+		"multi_candidate_ready_round_count":                     multiCandidateReadyRoundCount,
+		"competition_arbitration_count":                         competitionArbitrationCount,
+		"priority_candidate_set_max":                            priorityCandidateSetMax,
+		"priority_candidate_set_mean":                           priorityCandidateSetMean,
+		"influence_arbitration_decision_count":                  influenceArbitrationDecisionCount,
+		"influence_changed_choice_count":                        influenceChangedChoiceCount,
+		"ready_round_event_drain_skip_count":                    readyRoundEventDrainSkipCount,
+		"cross_round_bypass_count":                              0,
+		"ready_to_dispatch_p50_us":                              readyWaitPercentile(0.50),
+		"ready_to_dispatch_p95_us":                              readyWaitPercentile(0.95),
+		"ready_to_dispatch_p99_us":                              readyWaitPercentile(0.99),
+		"ready_to_dispatch_max_us":                              readyWaitPercentile(1.00),
+		"steal_policy":                                          stealPolicy,
+		"cross_track_steal_count":                               0,
+		"business_execute_invocation_count":                     int(atomic.LoadInt64(&businessExecuteInvocations)),
+		"fast_fallback_count":                                   int(atomic.LoadInt64(&fastFallbackCount)),
+		"discarded_tentative_result_count":                      int(atomic.LoadInt64(&discardedTentativeCount)),
+		"conservative_reexecution_count":                        int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"retry_execution_count":                                 int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"reexecution_count":                                     int(atomic.LoadInt64(&conservativeReexecutionCount)),
+		"metatrack_terminal_access_violation_count":             int(atomic.LoadInt64(&terminalAccessViolationCount)),
+		"metatrack_frontier_seal_count":                         frontierSealCount,
+		"metatrack_bridge_capsule_count":                        bridgeCapsuleCount,
+		"metatrack_frontier_required_version_count":             frontierRequiredVersionCount,
+		"metatrack_frontier_write_slot_count":                   frontierWriteSlotCount,
+		"metatrack_version_ticket_issued_count":                 versionTicketIssuedCount,
+		"metatrack_version_ticket_released_count":               versionTicketReleasedCount,
+		"metatrack_frontier_seal_build_us":                      frontierSealBuildUS,
+		"metatrack_bridge_wave_count":                           bridgeWaveCount,
+		"metatrack_max_bridge_wave_width":                       maxBridgeWaveWidth,
+		"validator_execution_completion_count":                  len(executionOutcomes),
+		"unique_final_logical_completion_count":                 len(executionOutcomes),
+		"duplicate_final_completion_count":                      0,
+		"state_wait_blocked_count":                              stateWaitBlockedCount,
+		"state_ready_wakeup_count":                              stateReadyWakeupCount,
+		"remote_state_fetch_count":                              remoteFetchCount,
+		"remote_state_fetch_completed_count":                    remoteFetchCompleted,
+		"remote_state_fetch_latency_ms":                         remoteFetchLatencyMS,
+		"metatrack_batch_entry_remote_token_count":              remoteFetchCount - localVersionHandoffFallbackFetchCount,
+		"metatrack_local_version_remote_fetch_suppressed_count": localVersionRemoteFetchSuppressedCount,
+		"metatrack_local_version_handoff_ready_count":           localVersionHandoffReadyCount,
+		"metatrack_local_version_handoff_fallback_fetch_count":  localVersionHandoffFallbackFetchCount,
+		"metatrack_local_exact_version_handoff_enabled":         localExactVersionHandoff,
+		"metatrack_batch_entry_batch_request_count":             batchEntryRequestCount,
+		"metatrack_batch_entry_item_count":                      batchEntryItemCount,
+		"metatrack_batch_entry_ready_count":                     batchEntryReadyCount,
+		"metatrack_batch_entry_not_ready_fallback_count":        batchEntryNotReadyFallbackCount,
+		"metatrack_state_locality_policy": func() string {
+			if batchFetch != nil {
+				return "full_batch_state_locality_v4"
+			}
+			if localExactVersionHandoff {
+				return "batch_local_exact_handoff_v3"
+			}
+			return "legacy_remote_state_ready_v1"
+		}(),
+		"state_ready_scheduler_mode": "transaction_level_suspend_resume",
 	}
 	for key, value := range metaTrackTrackMetricsFromAttemptsV31(attempts) {
 		metrics[key] = value

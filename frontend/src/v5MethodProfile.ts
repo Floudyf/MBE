@@ -2,7 +2,7 @@ import type { V3SavedConfig, V5ExperimentSpec, V5FormalMethod, V5PluginManifest,
 
 export const V5_METHOD_PROFILE_SCHEMA_VERSION = "v5_plugin_profile_v1";
 export const V5_METHOD_EXCLUDED_CATEGORIES = new Set(["workload", "fault_injection"]);
-export const V5_DEFAULT_METHOD_IDS = ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"] as const;
+export const V5_DEFAULT_METHOD_IDS = ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_full_locality", "metatrack_latest"] as const;
 
 const V5_CANONICAL_DEFAULT_PLUGIN_IDS: Record<string, string> = {
   workload: "deterministic_signed_synthetic",
@@ -27,9 +27,9 @@ const V5_CANONICAL_DEFAULT_PLUGIN_IDS: Record<string, string> = {
 
 export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   { method_id: "hash_serial", display_name: "Stateful Hash + Serial Reference", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
-  { method_id: "hash_block_stm", display_name: "Stateful Hash + Block-STM Reference", role: "main", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },
+  { method_id: "hash_block_stm", display_name: "Stateful Hash + Block-STM Reference", role: "main", plugin_overrides: { routing: "hash_routing_baseline", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail", scheduler_mode: "priority_heap_v1", dependency_wait_mode: "suspend_same_incarnation_v1" } } }, // MBE_V37_FRONTEND_METHOD_ISOLATION
   { method_id: "hash_aria", display_name: "Aria", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", block_producer: "aria_block_producer", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "aria_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { candidate_scan_multiplier: 1, reordering: true, read_only_optimization: true, retry_nonce_gaps: true }, block_executor: { worker_count: 4, reordering: true, read_only_optimization: true, retry_nonce_gaps: true } } },
-  { method_id: "hash_groundhog", display_name: "Groundhog", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", block_producer: "groundhog_block_producer", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "groundhog_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { candidate_scan_multiplier: 4, ordered_set_limit: 64 }, block_executor: { worker_count: 4, ordered_set_limit: 64 } } },
+  { method_id: "hash_groundhog", display_name: "Groundhog", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", block_producer: "groundhog_block_producer", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "groundhog_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { ordered_set_limit: 64 }, block_executor: { worker_count: 4, ordered_set_limit: 64 } } },
   {
     method_id: "hash_fabricpp_cg",
     display_name: "Fabric++ Traditional CG (SIGMOD 2019)",
@@ -53,14 +53,14 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   { method_id: "hash_batch_si_serial_batch", display_name: "Batch-SI w/o Snapshot Parallelism", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper", execution_mode: "snapshot_serial" } } },
   { method_id: "hash_batch_si_txid_priority", display_name: "Batch-SI w/o OFAS Priority", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "txid" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "txid", execution_mode: "snapshot_parallel" } } },
   { method_id: "stateless_calvin", display_name: "Stateless Calvin", role: "compatibility", plugin_overrides: { transaction_admission: "calvin_declared_access_admission", routing: "stateless_calvin_global_routing", execution: "calvin_execution", scheduler: "stateless_calvin_deterministic_scheduler", block_executor: "stateless_calvin_block_executor", state_access: "stateless_calvin_state_access", state_storage: "calvin_partition_state_store", cross_shard: "calvin_no_2pc_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, read_result_timeout_ms: 0, outcome_timeout_ms: 0 } } },
-  { method_id: "stateless_hash_serial", display_name: "Stateless Hash + Serial", role: "baseline", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1 } } },
+  { method_id: "stateless_hash_serial", display_name: "Stateless Hash + Serial", role: "baseline", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1, versioned_wave_policy: "strict_single_tx_block_order_v1" } } },
   // MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR
-  { method_id: "stateless_porygon", display_name: "Porygon", role: "baseline", plugin_overrides: { routing: "porygon_stateless_routing", block_producer: "porygon_transaction_block_producer", execution: "porygon_execution", scheduler: "porygon_pipeline_scheduler", block_executor: "porygon_block_executor", state_access: "porygon_remote_state_access", cross_shard: "porygon_cross_shard_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { witness_threshold: 1 }, scheduler: { execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true }, block_executor: { worker_count: 4, execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true } } },
-  { method_id: "stateless_hash_block_stm", display_name: "Stateless Hash + Block-STM", role: "compatibility", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },
+  { method_id: "stateless_porygon", display_name: "Porygon", role: "baseline", plugin_overrides: { routing: "porygon_stateless_routing", block_producer: "porygon_transaction_block_producer", execution: "porygon_execution", scheduler: "porygon_pipeline_scheduler", block_executor: "porygon_block_executor", state_access: "porygon_remote_state_access", cross_shard: "porygon_cross_shard_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { witness_threshold: 1 }, scheduler: { execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true }, block_executor: { worker_count: 4, execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true, require_distributed_esc: true } } },
+  { method_id: "stateless_hash_block_stm", display_name: "Stateless Hash + Block-STM", role: "compatibility", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail", scheduler_mode: "priority_heap_v1", dependency_wait_mode: "suspend_same_incarnation_v1", versioned_wave_policy: "maximal_compatible_exact_version_v2" } } },
   // MBE_META_TRACK_RAPID_FIX_V3
   {
     method_id: "metatrack_serial",
-    display_name: "MetaTrack",
+    display_name: "MetaTrack（初始版）",
     role: "main",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -75,43 +75,41 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2" },
     },
   },
-  // MBE_METATRACK_READY_ROUND_SCHEDULER_V35
   {
-    method_id: "metatrack_ready_round_control",
-    display_name: "MetaTrack（就绪轮次对照）",
-    role: "ablation",
+    method_id: "metatrack_full_locality",
+    display_name: "MetaTrack（当前版）",
+    role: "main",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
       routing: "metatrack_coaccess_routing",
       execution: "dual_track_execution",
-      scheduler: "ready_round_control_scheduler",
+      scheduler: "fast_first_scheduler",
       block_executor: "metatrack_block_executor",
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
       routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100 },
-      block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2" },
+      block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2", local_exact_version_handoff: true, batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true },
     },
   },
-  // MBE_METATRACK_DEPENDENCY_INFLUENCE_SCHEDULER_V34
   {
-    method_id: "metatrack_influence",
-    display_name: "MetaTrack（依赖关键交易优先）",
-    role: "ablation",
+    method_id: "metatrack_latest",
+    display_name: "MetaTrack（新版）",
+    role: "main",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
       routing: "metatrack_coaccess_routing",
       execution: "dual_track_execution",
-      scheduler: "dependency_influence_scheduler",
+      scheduler: "fast_first_scheduler",
       block_executor: "metatrack_block_executor",
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
       routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100 },
-      block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2" },
+      block_producer: { dependency_closed_consensus: true },
+      block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2", local_exact_version_handoff: true, batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
-  { method_id: "metatrack_block_stm", display_name: "MetaTrack with Block-STM backend", role: "compatibility", plugin_overrides: { routing: "metatrack_coaccess_routing", execution: "dual_track_execution", scheduler: "fast_first_scheduler", block_executor: "block_stm_block_executor", commit: "commutative_hot_update_aggregation" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail" } } },
 ];
 
 export function defaultV5PluginSelections(catalog: V5PluginManifest[]): V5PluginSelection[] {

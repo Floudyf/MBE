@@ -318,6 +318,10 @@ def _individual_result_reasons(child: dict) -> list[str]:
             reasons.append(f"{name}_not_true")
     if metrics.get("metric_completeness") != "complete":
         reasons.append("metric_completeness_not_complete")
+    if _first_bool(metrics, summary, name="method_correctness_oracle_valid") is False:
+        reasons.append("method_correctness_oracle_not_true")
+    if _first_bool(metrics, summary, name="serial_order_replay_applicable") is True and _first_bool(metrics, summary, name="serial_order_replay_equivalent") is not True:
+        reasons.append("serial_order_replay_not_equivalent")
     if _requires_block_stm(child) and _first_bool(metrics, summary, name="serial_equivalent") is not True:
         reasons.append("serial_equivalent_not_true")
     if _metric_value(child, "end_to_end_tps") is None:

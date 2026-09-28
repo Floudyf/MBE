@@ -842,13 +842,23 @@ def _run_worker(group_id: str) -> None:
                 else:
                     result_dir = _physical_result_dir(result)
                     metrics = extract_metrics(result_dir, method_id=row.get("method_config_id"))
+                    oracle_summary = _serial_oracle_summary(
+                        result.get("summary") if isinstance(result.get("summary"), dict) else {},
+                        row,
+                    )
                     serial_oracle = evaluate_serial_order_oracle(
                         result_dir,
-                        result_summary=result.get("summary") if isinstance(result.get("summary"), dict) else {},
+                        result_summary=oracle_summary,
                     )
                     metrics |= serial_oracle
                     if isinstance(result.get("summary"), dict):
-                        result["summary"] = {**result["summary"], **serial_oracle}
+                        # Persist the exact semantic contract used by the oracle so
+                        # exported child/result evidence is self-describing.
+                        result["summary"] = {**result["summary"], **{
+                            field: oracle_summary.get(field)
+                            for field in _SERIAL_ORACLE_CONTRACT_FIELDS
+                            if oracle_summary.get(field) is not None
+                        }, **serial_oracle}
                 child.update(
                     {
                         "status": result["status"],
@@ -1225,6 +1235,12 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
     dedup_unknown_remote = number("replica_deduplicated_remote_unknown_kind_count")
     if (unknown_remote is not None and unknown_remote > 0) or (dedup_unknown_remote is not None and dedup_unknown_remote > 0):
         reasons.append("remote_operation_unknown_kind_nonzero")
+    # MBE_PAPER_CORRECTNESS_GATE_V36: an explicit method oracle failure must
+    # invalidate the sample before state-equivalence and paper aggregation.
+    if boolean("method_correctness_oracle_valid") is False:
+        reasons.append("method_correctness_oracle_not_true")
+    if boolean("serial_order_replay_applicable") is True and boolean("serial_order_replay_equivalent") is not True:
+        reasons.append("serial_order_replay_not_equivalent")
     reasons.extend(_worker_truth_reasons(item))
     return list(dict.fromkeys(reasons))
 
@@ -1769,6 +1785,27 @@ def _write_state_equivalence_artifacts(root: Path, result: dict) -> None:
             )
 
 
+# MBE_V38_0_4_ORACLE_CONTRACT_PROPAGATION: the formal comparison row carries
+# method semantic-contract fields that are intentionally not execution-runtime
+# metrics. Merge only those truth fields into the post-run oracle input so the
+# stateful-local dispatcher can select its correct contract. This is observer-only.
+_SERIAL_ORACLE_CONTRACT_FIELDS = (
+    "comparison_semantics_class",
+    "state_home_mapping_policy",
+    "remote_fetch_policy",
+    "remote_writeback_policy",
+)
+
+
+def _serial_oracle_summary(result_summary: dict | None, formal_row: dict) -> dict:
+    summary = dict(result_summary) if isinstance(result_summary, dict) else {}
+    for field in _SERIAL_ORACLE_CONTRACT_FIELDS:
+        value = formal_row.get(field)
+        if value is not None:
+            summary[field] = value
+    return summary
+
+
 def _physical_result_dir(result: dict) -> Path:
     """Resolve the real local run directory without exposing it through the API.
 
@@ -1789,10 +1826,15 @@ def _physical_result_dir(result: dict) -> Path:
 
 def _is_paper_candidate_result(result: dict, metrics: dict) -> bool:
     summary = result.get("summary") or {}
+    method_oracle = metrics.get("method_correctness_oracle_valid", summary.get("method_correctness_oracle_valid"))
+    serial_applicable = metrics.get("serial_order_replay_applicable", summary.get("serial_order_replay_applicable"))
+    serial_equivalent = metrics.get("serial_order_replay_equivalent", summary.get("serial_order_replay_equivalent"))
     return (
         result.get("status") == "completed"
         and summary.get("ready_to_commit") is True
         and summary.get("no_fallback") is True
+        and method_oracle is not False
+        and not (serial_applicable is True and serial_equivalent is not True)
         and metrics.get("metric_completeness") == "complete"
         and not metrics.get("missing")
     )

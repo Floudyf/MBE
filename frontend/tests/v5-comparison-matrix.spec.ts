@@ -22,7 +22,7 @@ test("comparison preview expands the formal four methods across seeds", async ({
   const body = await (await preview).json();
 
   expect(body.rows).toHaveLength(8);
-  for (const id of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
+  for (const id of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_latest"]) {
     const rows = body.rows.filter((row: { method_config_id: string }) => row.method_config_id === id);
     expect(rows).toHaveLength(2);
     expect(rows.map((row: { seed: number }) => row.seed).sort()).toEqual([11, 12]);

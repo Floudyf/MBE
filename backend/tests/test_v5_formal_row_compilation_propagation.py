@@ -181,24 +181,19 @@ def test_method_plugin_override_resets_to_target_plugin_default_config() -> None
 
 def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path) -> None:
     plan = method_plan(suites=["comparison_experiment"])
-    legacy_comparison_ids = [
+    current_comparison_ids = [
         "hash_serial",
         "hash_block_stm",
         "hash_aria",
         "metatrack_serial",
-        "metatrack_block_stm",
+        "metatrack_full_locality",
+        "metatrack_latest",
     ]
-    plan.methods = [BUILTIN_METHODS[method_id] for method_id in legacy_comparison_ids]
+    plan.methods = [BUILTIN_METHODS[method_id] for method_id in current_comparison_ids]
     checked = validate_request(type("Request", (), {"execution_backend": "real_cluster", "plan": plan})())
     rows = checked.rows
 
-    assert [row["method_config_id"] for row in rows] == [
-        "hash_serial",
-        "hash_block_stm",
-        "hash_aria",
-        "metatrack_serial",
-        "metatrack_block_stm",
-    ]
+    assert [row["method_config_id"] for row in rows] == current_comparison_ids
     assert len({row["comparison_group_id"] for row in rows}) == 1
     assert len({row["fairness_key"] for row in rows}) == 1
     assert len({row["workload_snapshot_digest"] for row in rows}) == 1
@@ -206,7 +201,13 @@ def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path)
     assert len({row["fault_snapshot_digest"] for row in rows}) == 1
     assert len({row["seed"] for row in rows}) == 1
     assert len({row["estimated_transactions"] for row in rows}) == 1
-    assert len({row["method_snapshot_digest"] for row in rows}) == 5
+    by_method = {row["method_config_id"]: row for row in rows}
+    # All three MetaTrack profiles intentionally share plugin identities.
+    # Initial, frozen-current v5 and new v6 are separated by configuration only,
+    # so plugin-identity snapshots remain shared while config snapshots differ.
+    assert len({row["method_snapshot_digest"] for row in rows}) == 4
+    assert by_method["metatrack_serial"]["method_snapshot_digest"] == by_method["metatrack_full_locality"]["method_snapshot_digest"] == by_method["metatrack_latest"]["method_snapshot_digest"]
+    assert by_method["metatrack_serial"]["method_config_snapshot_digest"] != by_method["metatrack_latest"]["method_config_snapshot_digest"]
 
     compiled_by_method = {
         row["method_config_id"]: compiled(plan, row, tmp_path / row["method_config_id"])
@@ -233,19 +234,32 @@ def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path)
     assert plugin(compiled_by_method["hash_aria"], "block_executor")["config"]["worker_count"] == 4
     assert plugin(compiled_by_method["hash_aria"], "block_executor")["config"]["reordering"] is True
     assert plugin(compiled_by_method["hash_aria"], "block_executor")["config"]["read_only_optimization"] is True
-    assert plugin(compiled_by_method["metatrack_serial"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
-    assert plugin(compiled_by_method["metatrack_serial"], "execution")["plugin_id"] == "dual_track_execution"
-    assert "access_size_threshold" not in plugin(compiled_by_method["metatrack_serial"], "execution")["config"]
-    assert plugin(compiled_by_method["metatrack_serial"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
-    assert plugin(compiled_by_method["metatrack_serial"], "block_executor")["plugin_id"] == "metatrack_block_executor"
-    assert plugin(compiled_by_method["metatrack_block_stm"], "routing")["plugin_id"] == "metatrack_coaccess_routing"
-    assert plugin(compiled_by_method["metatrack_block_stm"], "execution")["plugin_id"] == "dual_track_execution"
-    assert "access_size_threshold" not in plugin(compiled_by_method["metatrack_block_stm"], "execution")["config"]
-    assert plugin(compiled_by_method["metatrack_block_stm"], "commit")["plugin_id"] == "commutative_hot_update_aggregation"
-    assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["plugin_id"] == "block_stm_block_executor"
-    assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["worker_count"] == 4
-    assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["execution_mode"] == "performance"
-    assert plugin(compiled_by_method["metatrack_block_stm"], "block_executor")["config"]["oracle_mode"] == "off"
+
+    initial = compiled_by_method["metatrack_serial"]
+    current = compiled_by_method["metatrack_full_locality"]
+    latest = compiled_by_method["metatrack_latest"]
+    for method in (initial, current, latest):
+        assert plugin(method, "routing")["plugin_id"] == "metatrack_coaccess_routing"
+        assert plugin(method, "routing")["config"]["control_policy"] == "declared_access_frontier_v2"
+        assert plugin(method, "execution")["plugin_id"] == "dual_track_execution"
+        assert "access_size_threshold" not in plugin(method, "execution")["config"]
+        assert plugin(method, "scheduler")["plugin_id"] == "fast_first_scheduler"
+        assert plugin(method, "commit")["plugin_id"] == "commutative_hot_update_aggregation"
+        assert plugin(method, "block_executor")["plugin_id"] == "metatrack_block_executor"
+        assert plugin(method, "block_executor")["config"]["worker_count"] == 4
+        assert plugin(method, "block_executor")["config"]["control_policy"] == "declared_access_frontier_v2"
+    assert plugin(initial, "block_executor")["config"]["local_exact_version_handoff"] is False
+    assert plugin(current, "block_executor")["config"]["local_exact_version_handoff"] is True
+    assert plugin(current, "block_executor")["config"]["version_liveness"] is True
+    assert plugin(current, "block_executor")["config"]["final_version_batch_writeback"] is True
+    assert plugin(current, "block_executor")["config"]["dependency_closed_consensus"] is False
+    assert plugin(latest, "block_executor")["config"]["local_exact_version_handoff"] is True
+    assert plugin(latest, "block_executor")["config"]["version_liveness"] is True
+    assert plugin(latest, "block_executor")["config"]["final_version_batch_writeback"] is True
+    assert plugin(latest, "block_executor")["config"]["dependency_closed_consensus"] is True
+    assert plugin(latest, "block_executor")["config"]["version_liveness_indexed"] is True
+    assert plugin(latest, "block_executor")["config"]["single_final_seal"] is True
+    assert plugin(latest, "block_producer")["config"]["dependency_closed_consensus"] is True
 
 
 def test_formal_scheduler_start_records_in_process_worker_thread(monkeypatch) -> None:

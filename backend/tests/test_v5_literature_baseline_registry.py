@@ -39,7 +39,7 @@ def test_existing_builtin_family_is_not_rewritten_by_literature_baselines():
         "hash_aria",
         "hash_groundhog",
         "metatrack_serial",
-        "metatrack_block_stm",
+        "metatrack_latest",
     ]
     assert all(method_id in BUILTIN_METHODS for method_id in legacy_builtin_ids)
     assert [method_id for method_id in BUILTIN_METHODS if method_id in legacy_builtin_ids] == legacy_builtin_ids

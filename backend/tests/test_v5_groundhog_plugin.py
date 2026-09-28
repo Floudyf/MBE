@@ -103,7 +103,8 @@ def test_groundhog_method_preserves_experiment_block_size_and_interval() -> None
     assert producer.plugin_id == "groundhog_block_producer"
     assert producer.config["block_size"] == 500
     assert producer.config["interval_ms"] == 125
-    assert producer.config["candidate_scan_multiplier"] == 4
+    # MBE_V37_GROUNDHOG_TEST_TRUTH
+    assert "candidate_scan_multiplier" not in producer.config
 
 
 def test_groundhog_compatibility_accepts_core_profile_and_rejects_unsafe_combinations() -> None:

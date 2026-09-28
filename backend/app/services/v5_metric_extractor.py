@@ -55,6 +55,22 @@ METATRACK_REQUIRED_METRICS = [
     "post_aggregation_physical_op_count",
 ]
 
+METATRACK_READY_ROUND_REQUIRED_METRICS = [
+    "metatrack_ready_round_metrics_available",
+    "metatrack_ready_priority_policy",
+    "metatrack_ready_round_scheduler_enabled",
+    "arbitration_round_count",
+    "multi_candidate_ready_round_count",
+    "competition_arbitration_count",
+    "priority_candidate_set_max",
+    "priority_candidate_set_mean",
+    "influence_arbitration_decision_count",
+    "influence_changed_choice_count",
+    "ready_round_event_drain_skip_count",
+    "cross_round_bypass_count",
+    "ready_round_metric_truth_scope",
+]
+
 BATCH_SI_REQUIRED_METRICS = [
     "configured_worker_count",
     "maximum_parallel_width",
@@ -221,6 +237,9 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "logical_update_count_deprecated": cluster.get("logical_update_count_deprecated"),
         "physical_update_count_deprecated": cluster.get("physical_update_count_deprecated"),
         "executed_logical_transaction_count": cluster.get("executed_logical_transaction_count"),
+        "executed_partition_protocol_instance_count": cluster.get("executed_partition_protocol_instance_count"),
+        "executed_logical_transaction_count_global_dedup_available": cluster.get("executed_logical_transaction_count_global_dedup_available"),
+        "executed_logical_transaction_count_truth_scope": cluster.get("executed_logical_transaction_count_truth_scope"),
         "executed_transaction_instance_count": cluster.get("executed_transaction_instance_count"),
         "pre_aggregation_physical_op_count": cluster.get("pre_aggregation_physical_op_count"),
         "post_aggregation_physical_op_count": cluster.get("post_aggregation_physical_op_count"),
@@ -282,6 +301,15 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         "metatrack_version_ticket_released_count": cluster.get("metatrack_version_ticket_released_count"),
         "metatrack_frontier_seal_build_us": cluster.get("metatrack_frontier_seal_build_us"),
         "metatrack_frontier_truth_scope": cluster.get("metatrack_frontier_truth_scope"),
+        "metatrack_version_produced_count": cluster.get("metatrack_version_produced_count"),
+        "metatrack_version_local_transient_count": cluster.get("metatrack_version_local_transient_count"),
+        "metatrack_version_remote_live_count": cluster.get("metatrack_version_remote_live_count"),
+        "metatrack_version_dead_intermediate_count": cluster.get("metatrack_version_dead_intermediate_count"),
+        "metatrack_version_final_persistent_count": cluster.get("metatrack_version_final_persistent_count"),
+        "metatrack_version_home_writeback_elided_count": cluster.get("metatrack_version_home_writeback_elided_count"),
+        "metatrack_version_final_batch_item_count": cluster.get("metatrack_version_final_batch_item_count"),
+        "metatrack_version_final_batch_request_group_count": cluster.get("metatrack_version_final_batch_request_group_count"),
+        "metatrack_closure_boundary_immediate_publish_count": cluster.get("metatrack_closure_boundary_immediate_publish_count"),
         "versioned_state_ready_wave_count": cluster.get("versioned_state_ready_wave_count"),
         "versioned_state_ready_wait_observation_count": cluster.get("versioned_state_ready_wait_observation_count"),
         "versioned_state_ready_resolved_token_count": cluster.get("versioned_state_ready_resolved_token_count"),
@@ -313,6 +341,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
 
     _apply_block_stm_metrics(metrics, run_dir)
     _apply_stateless_version_frontier_metrics(metrics, run_dir)
+    _apply_metatrack_projection_frontier_v612_metrics(metrics, run_dir)
     _apply_metatrack_track_observability(metrics, run_dir)
     _apply_batch_si_metrics(metrics, run_dir)
     _apply_literature_graph_metrics(metrics, run_dir)
@@ -855,6 +884,48 @@ def _apply_stateless_version_frontier_metrics(metrics: dict[str, Any], run_dir: 
     metrics["stateless_version_admission_truth_scope"] = "sum_of_preconsensus_leader_candidate_events_across_execution_shards;no_pbft_replica_multiplication"
 
 
+# MBE_METATRACK_PROJECTION_FRONTIER_V612
+def _apply_metatrack_projection_frontier_v612_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    leader_ids = _leader_node_ids(run_dir)
+    summaries: list[tuple[str, dict[str, Any]]] = []
+    for node_id in leader_ids:
+        rel = f"nodes/{node_id}/node_summary.json"
+        payload = _read_json(run_dir / rel)
+        if payload:
+            summaries.append((rel, payload))
+    if not summaries:
+        return
+
+    totals = {
+        "metatrack_projection_frontier_projection_count": 0,
+        "metatrack_projection_frontier_layer_count": 0,
+        "metatrack_projection_frontier_cross_projection_edge_count": 0,
+    }
+    max_width = 0
+    suppressed_remote = 0
+    seen = False
+    for rel, summary in summaries:
+        blocks = summary.get("blocks") if isinstance(summary.get("blocks"), list) else []
+        for block in blocks:
+            if not isinstance(block, dict) or "metatrack_projection_frontier_policy" not in block:
+                continue
+            seen = True
+            for key in totals:
+                totals[key] += _int(block.get(key))
+            max_width = max(max_width, _int(block.get("metatrack_projection_frontier_max_layer_projection_width")))
+        counts = summary.get("runtime_metric_counts") if isinstance(summary.get("runtime_metric_counts"), dict) else {}
+        suppressed_remote += _int(counts.get("metatrack_projection_frontier_suppressed_remote_dead_intermediate_publish_count"))
+        if rel not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(rel)
+    if not seen and suppressed_remote <= 0:
+        return
+    metrics.update(totals)
+    metrics["metatrack_projection_frontier_max_layer_projection_width"] = max_width
+    metrics["metatrack_projection_frontier_suppressed_remote_dead_intermediate_publish_count"] = suppressed_remote
+    metrics["metatrack_projection_frontier_policy"] = "signed_projection_exact_version_dag_v612"
+    metrics["metatrack_projection_frontier_truth_scope"] = "leader_block_structural_frontier_evidence_plus_leader_runtime_suppression_counts;no_pbft_replica_multiplication"
+
+
 def _apply_metatrack_track_observability(metrics: dict[str, Any], run_dir: Path) -> None:
     summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
     summaries = [item for item in summaries if item.get("block_executor_id") == "metatrack_block_executor"]
@@ -1121,6 +1192,14 @@ def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
                 "reexecution_count": replica_deduplicated_sum("reexecution_count"),
                 "dependency_wait_count": replica_deduplicated_sum("dependency_wait_count"),
                 "dependency_resume_count": replica_deduplicated_sum("dependency_resume_count"),
+                "dependency_suspend_count": replica_deduplicated_sum("dependency_suspend_count"),  # MBE_V37_BLOCKSTM_SUSPEND_METRIC_TRUTH
+                "block_stm_dependency_wait_count": replica_deduplicated_sum("dependency_wait_count"),  # MBE_V38_BLOCKSTM_METRIC_ALIAS_TRUTH
+                "block_stm_dependency_resume_count": replica_deduplicated_sum("dependency_resume_count"),
+                "block_stm_dependency_suspend_count": replica_deduplicated_sum("dependency_suspend_count"),
+                "block_stm_scheduler_mode": aggregate.get("scheduler_mode"),
+                "block_stm_scheduler_mode_replica_consistent": aggregate.get("scheduler_mode_replica_consistent"),
+                "block_stm_dependency_wait_mode": aggregate.get("dependency_wait_mode"),
+                "block_stm_dependency_wait_mode_replica_consistent": aggregate.get("dependency_wait_mode_replica_consistent"),
                 "validation_failure_count": replica_deduplicated_sum("validation_failure_count"),
                 "maximum_incarnation_observed": _int(aggregate.get("maximum_incarnation")),
                 "serial_fallback_count": aggregate.get("serial_fallback_count"),
@@ -1203,6 +1282,12 @@ def _apply_block_stm_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             "reexecution_count": block_stm_metrics.get("reexecution_count"),
             "dependency_wait_count": block_stm_metrics.get("dependency_wait_count"),
             "dependency_resume_count": block_stm_metrics.get("dependency_resume_count"),
+            "dependency_suspend_count": block_stm_metrics.get("dependency_suspend_count"),
+            "block_stm_dependency_wait_count": block_stm_metrics.get("dependency_wait_count"),
+            "block_stm_dependency_resume_count": block_stm_metrics.get("dependency_resume_count"),
+            "block_stm_dependency_suspend_count": block_stm_metrics.get("dependency_suspend_count"),
+            "block_stm_scheduler_mode": block_stm_metrics.get("scheduler_mode"),
+            "block_stm_dependency_wait_mode": block_stm_metrics.get("dependency_wait_mode"),
             "validation_failure_count": block_stm_metrics.get("validation_failure_count"),
             "maximum_incarnation_observed": block_stm_metrics.get("maximum_incarnation"),
             "serial_equivalent": block_stm_summary.get("serial_equivalent"),
@@ -1771,6 +1856,22 @@ def _apply_mechanism_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
                 "post_aggregation_physical_op_count": metatrack.get("post_aggregation_physical_op_count"),
                 "physical_ops_saved_count": metatrack.get("physical_ops_saved_count"),
                 "aggregation_reduction_ratio": metatrack.get("aggregation_reduction_ratio"),
+                "metatrack_ready_round_metrics_available": metatrack.get("metatrack_ready_round_metrics_available"),
+                "metatrack_ready_priority_policy": metatrack.get("metatrack_ready_priority_policy"),
+                "metatrack_dependency_influence_scheduler_enabled": metatrack.get("metatrack_dependency_influence_scheduler_enabled"),
+                "metatrack_ready_round_scheduler_enabled": metatrack.get("metatrack_ready_round_scheduler_enabled"),
+                "metatrack_ready_round_control_enabled": metatrack.get("metatrack_ready_round_control_enabled"),
+                "arbitration_round_count": metatrack.get("arbitration_round_count"),
+                "multi_candidate_ready_round_count": metatrack.get("multi_candidate_ready_round_count"),
+                "competition_arbitration_count": metatrack.get("competition_arbitration_count"),
+                "priority_candidate_set_max": metatrack.get("priority_candidate_set_max"),
+                "priority_candidate_set_mean": metatrack.get("priority_candidate_set_mean"),
+                "influence_arbitration_decision_count": metatrack.get("influence_arbitration_decision_count"),
+                "influence_changed_choice_count": metatrack.get("influence_changed_choice_count"),
+                "ready_round_event_drain_skip_count": metatrack.get("ready_round_event_drain_skip_count"),
+                "cross_round_bypass_count": metatrack.get("cross_round_bypass_count"),
+                "ready_round_metric_truth_scope": metatrack.get("ready_round_metric_truth_scope"),
+                "ready_round_observed_block_count": metatrack.get("ready_round_observed_block_count"),
             }
         )
     block_stm = mechanism.get("block_stm") if isinstance(mechanism.get("block_stm"), dict) else {}
@@ -1862,6 +1963,8 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         required.extend(BLOCK_STM_REQUIRED_METRICS)
     if uses_metatrack:
         required.extend(METATRACK_REQUIRED_METRICS)
+    if normalized_method_id in {"metatrack_ready_round_control", "metatrack_influence"}:
+        required.extend(METATRACK_READY_ROUND_REQUIRED_METRICS)
     if uses_batch_si:
         required.extend(BATCH_SI_REQUIRED_METRICS)
     if uses_groundhog:
@@ -1880,6 +1983,7 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         COMMON_REQUIRED_METRICS
         + BLOCK_STM_REQUIRED_METRICS
         + METATRACK_REQUIRED_METRICS
+        + METATRACK_READY_ROUND_REQUIRED_METRICS
         + BATCH_SI_REQUIRED_METRICS
         + LITERATURE_GRAPH_REQUIRED_METRICS
         + GROUNDHOG_REQUIRED_METRICS
@@ -1961,6 +2065,14 @@ def _derive_research_metrics(metrics: dict[str, Any]) -> None:
     ratio("groundhog_proposal_deferred_event_count", "groundhog_proposal_candidate_count", "groundhog_proposal_deferral_rate")
     ratio("aria_conflict_abort_count", "aria_candidate_transaction_count", "aria_conflict_abort_rate")
     ratio("aria_reexecution_count", "aria_candidate_transaction_count", "aria_reexecution_rate")
+
+    if metrics.get("arbitration_round_count") is not None:
+        metrics["ready_round_count"] = metrics.get("arbitration_round_count")
+        metrics["hd_arbitration_count"] = metrics.get("influence_arbitration_decision_count")
+        metrics["hd_order_changed_count"] = metrics.get("influence_changed_choice_count")
+    ratio("multi_candidate_ready_round_count", "arbitration_round_count", "multi_candidate_ready_round_ratio")
+    ratio("competition_arbitration_count", "arbitration_round_count", "competition_arbitration_rate")
+    ratio("influence_changed_choice_count", "influence_arbitration_decision_count", "hd_order_change_rate")
 
     fast = metrics.get("fast_track_logical_tx_count")
     conservative = metrics.get("conservative_track_logical_tx_count")

@@ -1716,6 +1716,56 @@ func reap(commands []*exec.Cmd) {
 	}
 }
 
+func representativeExecutionLogTruth(plan v5.Plan) (int, int, bool, error) {
+	representatives := map[string]v5.NodePlan{}
+	for _, node := range plan.NodeConfigs {
+		shardID := calvinConsistencyShardID(node)
+		current, exists := representatives[shardID]
+		if !exists || (!current.Leader && node.Leader) {
+			representatives[shardID] = node
+		}
+	}
+	if len(representatives) == 0 {
+		return 0, 0, false, nil
+	}
+	unique := map[string]bool{}
+	partitionInstances := 0
+	for _, node := range representatives {
+		path := filepath.Join(node.DataDir, "execution_log.csv")
+		file, err := os.Open(path)
+		if err != nil {
+			return 0, 0, false, nil
+		}
+		rows, readErr := csv.NewReader(file).ReadAll()
+		_ = file.Close()
+		if readErr != nil || len(rows) == 0 {
+			return 0, 0, false, readErr
+		}
+		txIndex := -1
+		for index, name := range rows[0] {
+			if strings.TrimSpace(name) == "tx_id" {
+				txIndex = index
+				break
+			}
+		}
+		if txIndex < 0 {
+			return 0, 0, false, fmt.Errorf("execution log missing tx_id column: %s", path)
+		}
+		for _, row := range rows[1:] {
+			if txIndex >= len(row) {
+				continue
+			}
+			txID := strings.TrimSpace(row[txIndex])
+			if txID == "" {
+				continue
+			}
+			partitionInstances++
+			unique[txID] = true
+		}
+	}
+	return len(unique), partitionInstances, true, nil
+}
+
 func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[string]any, error) {
 	summaries := []v5NodeSummary{}
 	roots := map[string]map[string]bool{}
@@ -2027,17 +2077,28 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 		schedulerIdleRatio = schedulerIdleRatioWeightedSum / float64(schedulerEventCount)
 	}
 	replicaDeduplicatedExecutedLogicalTxCount := 0
-	executedLogicalTruthScope := "replica_deduplicated_by_shard"
-	if calvinGlobalOrderingNetwork {
-		executedLogicalTruthScope = "global_ordering_tx_deduplicated_across_execution_shards"
+	executedPartitionProtocolInstanceCount := 0
+	executedLogicalGlobalDedupAvailable := false
+	executedLogicalTruthScope := "replica_deduplicated_by_shard_fallback"
+	if globalCount, partitionCount, available, truthErr := representativeExecutionLogTruth(plan); truthErr != nil {
+		return nil, truthErr
+	} else if available {
+		replicaDeduplicatedExecutedLogicalTxCount = globalCount
+		executedPartitionProtocolInstanceCount = partitionCount
+		executedLogicalGlobalDedupAvailable = true
+		executedLogicalTruthScope = "representative_execution_log_global_txid_deduplicated_v1"
+	} else if calvinGlobalOrderingNetwork {
+		executedLogicalTruthScope = "global_ordering_tx_deduplicated_across_execution_shards_fallback"
 		for _, count := range executedLogicalTxByShard {
 			if count > replicaDeduplicatedExecutedLogicalTxCount {
 				replicaDeduplicatedExecutedLogicalTxCount = count
 			}
+			executedPartitionProtocolInstanceCount += count
 		}
 	} else {
 		for _, count := range executedLogicalTxByShard {
 			replicaDeduplicatedExecutedLogicalTxCount += count
+			executedPartitionProtocolInstanceCount += count
 		}
 	}
 	sumInt64 := func(values map[string]int64) int64 {
@@ -2051,133 +2112,135 @@ func summarizeV5(plan v5.Plan, dataDir string, processes []v5NodeProcess) (map[s
 	versionedStateReadyMode := singleMapKey(versionedModes)
 	versionedWaveExecutionPolicy := singleMapKey(versionedWavePolicies)
 	return map[string]any{
-		"runtime_stage":                                          "v5_1_real_plugin_driven_multi_process_multishard_runtime",
-		"runtime_truth":                                          "v5_real_cluster_candidate",
-		"one_node_one_os_process":                                true,
-		"distinct_process_count":                                 len(pids),
-		"expected_process_count":                                 len(plan.NodeConfigs),
-		"independent_tcp_ports":                                  len(ports) == len(plan.NodeConfigs),
-		"real_client_submission":                                 clientInfo != nil,
-		"real_signed_tx":                                         true,
-		"plugin_driven_runtime":                                  true,
-		"block_executor_id":                                      singleMapKey(blockExecutors),
-		"block_executor_consistent":                              len(blockExecutors) == 1,
-		"plan_digest_consistent":                                 planDigestConsistent,
-		"continuous_multi_shard":                                 true,
-		"shard_count":                                            len(roots),
-		"all_shards_active":                                      allActive,
-		"per_shard_multiple_blocks":                              allActive,
-		"real_pbft_style_messages":                               pbftCount == len(plan.NodeConfigs),
-		"persistent_state":                                       true,
-		"state_root_consistent":                                  consistent,
-		"receipt_root_consistent":                                matrixReceiptConsistent,
-		"real_cross_shard_network":                               crossSuccess > 0 || calvinReadResultNetwork || calvinOutcomeNetwork,
-		"calvin_read_result_network":                             calvinReadResultNetwork,
-		"calvin_outcome_network":                                 calvinOutcomeNetwork,
-		"calvin_global_ordering_network":                         calvinGlobalOrderingNetwork,
-		"cross_shard_success_count":                              crossSuccess,
-		"cross_shard_refund_count":                               crossRefund,
-		"configured_block_size":                                  blockProductionAggregate["configured_block_size"],
-		"configured_block_interval_ms":                           blockProductionAggregate["configured_block_interval_ms"],
-		"actual_committed_block_count":                           blockProductionAggregate["actual_committed_block_count"],
-		"actual_average_tx_per_block":                            blockProductionAggregate["actual_average_tx_per_block"],
-		"actual_min_tx_per_block":                                blockProductionAggregate["actual_min_tx_per_block"],
-		"actual_max_tx_per_block":                                blockProductionAggregate["actual_max_tx_per_block"],
-		"actual_block_interval_mean_ms":                          blockProductionAggregate["actual_block_interval_mean_ms"],
-		"actual_block_interval_p95_ms":                           blockProductionAggregate["actual_block_interval_p95_ms"],
-		"block_production_summary":                               blockProductionAggregate,
-		"logical_update_count":                                   logicalUpdateCount,
-		"physical_update_count":                                  physicalUpdateCount,
-		"logical_update_count_deprecated":                        true,
-		"physical_update_count_deprecated":                       true,
-		"executed_logical_transaction_count":                     replicaDeduplicatedExecutedLogicalTxCount,
-		"physical_replica_executed_logical_transaction_count":    physicalReplicaExecutedLogicalTxCount,
-		"executed_logical_transaction_count_truth_scope":         executedLogicalTruthScope,
-		"executed_transaction_instance_count":                    executedTxInstanceCount,
-		"pre_aggregation_physical_op_count":                      preAggregationPhysicalOps,
-		"post_aggregation_physical_op_count":                     postAggregationPhysicalOps,
-		"aggregated_key_count":                                   aggregatedKeyCount,
-		"aggregated_logical_delta_count":                         aggregatedLogicalDeltaCount,
-		"physical_ops_saved_count":                               physicalOpsSavedCount,
-		"aggregation_reduction_ratio":                            ratio(physicalOpsSavedCount, preAggregationPhysicalOps),
-		"scheduler_event_count":                                  schedulerEventCount,
-		"scheduler_blocked_count":                                schedulerBlockedCount,
-		"scheduler_wakeup_count":                                 schedulerWakeupCount,
-		"scheduler_stolen_work_count":                            schedulerStolenWorkCount,
-		"scheduler_local_execution_count":                        schedulerLocalExecutionCount,
-		"scheduler_ready_queue_max_depth":                        schedulerReadyQueueMaxDepth,
-		"scheduler_fast_queue_max_depth":                         schedulerFastQueueMaxDepth,
-		"scheduler_conservative_queue_max_depth":                 schedulerConsQueueMaxDepth,
-		"scheduler_dependency_wait_ms":                           schedulerDependencyWaitMS,
-		"scheduler_idle_ms":                                      schedulerIdleMS,
-		"scheduler_idle_ratio":                                   schedulerIdleRatio,
-		"state_ready_wait_count":                                 sumInt64(stateReadyWaitByShard),
-		"state_ready_resume_count":                               sumInt64(stateReadyResumeByShard),
-		"state_prefetch_wait_ms":                                 sumInt64(stateReadyWaitMSByShard),
-		"remote_state_fetch_count":                               sumInt64(stateReadyFetchByShard),
-		"remote_state_fetch_completed_count":                     sumInt64(stateReadyFetchCompletedByShard),
-		"state_ready_scheduler_mode":                             stateReadyMode,
-		"metatrack_classification_conflict_edge_count":           sumInt64(classificationConflictEdgesByShard),
-		"metatrack_classification_dependency_chain_max":          classificationDependencyChainMax,
-		"metatrack_classification_nontrivial_scc_count":          sumInt64(classificationSCCByShard),
-		"metatrack_classification_ambiguous_conflict_pair_count": sumInt64(classificationAmbiguousByShard),
-		"metatrack_classification_semantic_unsafe_unique_count":  sumInt64(classificationSemanticUnsafeByShard),
-		"metatrack_classification_truth_scope":                   "replica_deduplicated_by_shard",
-		"metatrack_effective_frontier_policy":                    singleMapKey(effectiveFrontierPolicies),
-		"metatrack_effective_frontier_width_zero_count":          sumInt64(effectiveFrontierWidthZeroByShard),
-		"metatrack_effective_frontier_width_one_count":           sumInt64(effectiveFrontierWidthOneByShard),
-		"metatrack_effective_frontier_width_multi_count":         sumInt64(effectiveFrontierWidthMultiByShard),
-		"metatrack_effective_frontier_width_max":                 effectiveFrontierWidthMax,
-		"metatrack_effective_frontier_raw_producer_count":        sumInt64(effectiveFrontierRawProducerByShard),
-		"metatrack_effective_frontier_reduced_producer_count":    sumInt64(effectiveFrontierReducedProducerByShard),
-		"metatrack_effective_frontier_track_demotion_count":      sumInt64(effectiveFrontierTrackDemotionByShard),
-		"metatrack_effective_frontier_truth_scope":               "replica_deduplicated_by_shard",
-		"metatrack_frontier_seal_count":                          sumInt64(frontierSealByShard),
-		"metatrack_terminal_access_violation_count":              sumInt64(terminalAccessViolationByShard),
-		"metatrack_frontier_required_version_count":              sumInt64(frontierRequiredVersionByShard),
-		"metatrack_frontier_write_slot_count":                    sumInt64(frontierWriteSlotByShard),
-		"metatrack_version_ticket_issued_count":                  sumInt64(versionTicketIssuedByShard),
-		"metatrack_version_ticket_released_count":                sumInt64(versionTicketReleasedByShard),
-		"metatrack_frontier_seal_build_us":                       sumInt64(frontierSealBuildUSByShard),
-		"metatrack_frontier_truth_scope":                         "replica_deduplicated_by_shard",
-		"versioned_state_ready_wave_count":                       sumInt64(versionedWaveByShard),
-		"versioned_state_ready_wait_observation_count":           sumInt64(versionedWaitByShard),
-		"versioned_state_ready_resolved_token_count":             sumInt64(versionedResolvedByShard),
-		"versioned_state_probe_count":                            sumInt64(versionedProbeByShard),
-		"versioned_state_probe_latency_ms":                       sumInt64(versionedProbeLatencyByShard),
-		"versioned_state_ready_max_wave_width":                   versionedMaxWaveWidth,
-		"versioned_state_ready_scheduler_mode":                   versionedStateReadyMode,
-		"versioned_wave_execution_policy":                        versionedWaveExecutionPolicy,
-		"versioned_wave_delta_only_count":                        sumInt64(versionedWaveDeltaOnlyByShard),
-		"versioned_wave_full_fallback_count":                     sumInt64(versionedWaveFullFallbackByShard),
-		"remote_state_access_count":                              remoteStateAccessCount,
-		"remote_state_read_count":                                remoteStateReadCount,
-		"remote_state_write_apply_count":                         remoteStateWriteApplyCount,
-		"remote_operation_unknown_kind_count":                    remoteOperationUnknownCount,
-		"physical_remote_operation_count":                        physicalRemoteOperationCount,
-		"physical_remote_fetch_count":                            physicalRemoteFetchCount,
-		"physical_remote_writeback_count":                        physicalRemoteWritebackCount,
-		"physical_remote_failed_count":                           physicalRemoteFailedCount,
-		"replica_deduplicated_remote_operation_count":            remoteStateAggregate["replica_deduplicated_remote_operation_count"],
-		"replica_deduplicated_remote_fetch_count":                remoteStateAggregate["replica_deduplicated_remote_fetch_count"],
-		"replica_deduplicated_remote_writeback_count":            remoteStateAggregate["replica_deduplicated_remote_writeback_count"],
-		"remote_fetches_per_logical_tx":                          remoteStateAggregate["remote_fetches_per_logical_tx"],
-		"remote_writebacks_per_logical_tx":                       remoteStateAggregate["remote_writebacks_per_logical_tx"],
-		"remote_operations_per_logical_tx":                       remoteStateAggregate["remote_operations_per_logical_tx"],
-		"replica_amplification_factor":                           remoteStateAggregate["replica_amplification_factor"],
-		"remote_fetch_replica_amplification_factor":              remoteStateAggregate["remote_fetch_replica_amplification_factor"],
-		"remote_writeback_replica_amplification_factor":          remoteStateAggregate["remote_writeback_replica_amplification_factor"],
-		"mechanism_metrics":                                      mechanismMetrics,
-		"remote_state_access_failed_count":                       remoteStateFailedCount,
-		"remote_state_access_avg_latency_ms":                     remoteStateAvgLatency,
-		"fault_injection_real":                                   faultEvidence,
-		"fault_injection_requested":                              faultRequested,
-		"orphan_process_count":                                   0,
-		"no_fallback":                                            true,
-		"node_summaries":                                         summaries,
-		"processes":                                              redactV5Processes(processes, dataDir),
-		"shard_blocks":                                           shardBlocks,
-		"ready_to_commit":                                        ready,
+		"runtime_stage":                                             "v5_1_real_plugin_driven_multi_process_multishard_runtime",
+		"runtime_truth":                                             "v5_real_cluster_candidate",
+		"one_node_one_os_process":                                   true,
+		"distinct_process_count":                                    len(pids),
+		"expected_process_count":                                    len(plan.NodeConfigs),
+		"independent_tcp_ports":                                     len(ports) == len(plan.NodeConfigs),
+		"real_client_submission":                                    clientInfo != nil,
+		"real_signed_tx":                                            true,
+		"plugin_driven_runtime":                                     true,
+		"block_executor_id":                                         singleMapKey(blockExecutors),
+		"block_executor_consistent":                                 len(blockExecutors) == 1,
+		"plan_digest_consistent":                                    planDigestConsistent,
+		"continuous_multi_shard":                                    true,
+		"shard_count":                                               len(roots),
+		"all_shards_active":                                         allActive,
+		"per_shard_multiple_blocks":                                 allActive,
+		"real_pbft_style_messages":                                  pbftCount == len(plan.NodeConfigs),
+		"persistent_state":                                          true,
+		"state_root_consistent":                                     consistent,
+		"receipt_root_consistent":                                   matrixReceiptConsistent,
+		"real_cross_shard_network":                                  crossSuccess > 0 || calvinReadResultNetwork || calvinOutcomeNetwork,
+		"calvin_read_result_network":                                calvinReadResultNetwork,
+		"calvin_outcome_network":                                    calvinOutcomeNetwork,
+		"calvin_global_ordering_network":                            calvinGlobalOrderingNetwork,
+		"cross_shard_success_count":                                 crossSuccess,
+		"cross_shard_refund_count":                                  crossRefund,
+		"configured_block_size":                                     blockProductionAggregate["configured_block_size"],
+		"configured_block_interval_ms":                              blockProductionAggregate["configured_block_interval_ms"],
+		"actual_committed_block_count":                              blockProductionAggregate["actual_committed_block_count"],
+		"actual_average_tx_per_block":                               blockProductionAggregate["actual_average_tx_per_block"],
+		"actual_min_tx_per_block":                                   blockProductionAggregate["actual_min_tx_per_block"],
+		"actual_max_tx_per_block":                                   blockProductionAggregate["actual_max_tx_per_block"],
+		"actual_block_interval_mean_ms":                             blockProductionAggregate["actual_block_interval_mean_ms"],
+		"actual_block_interval_p95_ms":                              blockProductionAggregate["actual_block_interval_p95_ms"],
+		"block_production_summary":                                  blockProductionAggregate,
+		"logical_update_count":                                      logicalUpdateCount,
+		"physical_update_count":                                     physicalUpdateCount,
+		"logical_update_count_deprecated":                           true,
+		"physical_update_count_deprecated":                          true,
+		"executed_logical_transaction_count":                        replicaDeduplicatedExecutedLogicalTxCount,
+		"physical_replica_executed_logical_transaction_count":       physicalReplicaExecutedLogicalTxCount,
+		"executed_partition_protocol_instance_count":                executedPartitionProtocolInstanceCount,
+		"executed_logical_transaction_count_global_dedup_available": executedLogicalGlobalDedupAvailable,
+		"executed_logical_transaction_count_truth_scope":            executedLogicalTruthScope,
+		"executed_transaction_instance_count":                       executedTxInstanceCount,
+		"pre_aggregation_physical_op_count":                         preAggregationPhysicalOps,
+		"post_aggregation_physical_op_count":                        postAggregationPhysicalOps,
+		"aggregated_key_count":                                      aggregatedKeyCount,
+		"aggregated_logical_delta_count":                            aggregatedLogicalDeltaCount,
+		"physical_ops_saved_count":                                  physicalOpsSavedCount,
+		"aggregation_reduction_ratio":                               ratio(physicalOpsSavedCount, preAggregationPhysicalOps),
+		"scheduler_event_count":                                     schedulerEventCount,
+		"scheduler_blocked_count":                                   schedulerBlockedCount,
+		"scheduler_wakeup_count":                                    schedulerWakeupCount,
+		"scheduler_stolen_work_count":                               schedulerStolenWorkCount,
+		"scheduler_local_execution_count":                           schedulerLocalExecutionCount,
+		"scheduler_ready_queue_max_depth":                           schedulerReadyQueueMaxDepth,
+		"scheduler_fast_queue_max_depth":                            schedulerFastQueueMaxDepth,
+		"scheduler_conservative_queue_max_depth":                    schedulerConsQueueMaxDepth,
+		"scheduler_dependency_wait_ms":                              schedulerDependencyWaitMS,
+		"scheduler_idle_ms":                                         schedulerIdleMS,
+		"scheduler_idle_ratio":                                      schedulerIdleRatio,
+		"state_ready_wait_count":                                    sumInt64(stateReadyWaitByShard),
+		"state_ready_resume_count":                                  sumInt64(stateReadyResumeByShard),
+		"state_prefetch_wait_ms":                                    sumInt64(stateReadyWaitMSByShard),
+		"remote_state_fetch_count":                                  sumInt64(stateReadyFetchByShard),
+		"remote_state_fetch_completed_count":                        sumInt64(stateReadyFetchCompletedByShard),
+		"state_ready_scheduler_mode":                                stateReadyMode,
+		"metatrack_classification_conflict_edge_count":              sumInt64(classificationConflictEdgesByShard),
+		"metatrack_classification_dependency_chain_max":             classificationDependencyChainMax,
+		"metatrack_classification_nontrivial_scc_count":             sumInt64(classificationSCCByShard),
+		"metatrack_classification_ambiguous_conflict_pair_count":    sumInt64(classificationAmbiguousByShard),
+		"metatrack_classification_semantic_unsafe_unique_count":     sumInt64(classificationSemanticUnsafeByShard),
+		"metatrack_classification_truth_scope":                      "replica_deduplicated_by_shard",
+		"metatrack_effective_frontier_policy":                       singleMapKey(effectiveFrontierPolicies),
+		"metatrack_effective_frontier_width_zero_count":             sumInt64(effectiveFrontierWidthZeroByShard),
+		"metatrack_effective_frontier_width_one_count":              sumInt64(effectiveFrontierWidthOneByShard),
+		"metatrack_effective_frontier_width_multi_count":            sumInt64(effectiveFrontierWidthMultiByShard),
+		"metatrack_effective_frontier_width_max":                    effectiveFrontierWidthMax,
+		"metatrack_effective_frontier_raw_producer_count":           sumInt64(effectiveFrontierRawProducerByShard),
+		"metatrack_effective_frontier_reduced_producer_count":       sumInt64(effectiveFrontierReducedProducerByShard),
+		"metatrack_effective_frontier_track_demotion_count":         sumInt64(effectiveFrontierTrackDemotionByShard),
+		"metatrack_effective_frontier_truth_scope":                  "replica_deduplicated_by_shard",
+		"metatrack_frontier_seal_count":                             sumInt64(frontierSealByShard),
+		"metatrack_terminal_access_violation_count":                 sumInt64(terminalAccessViolationByShard),
+		"metatrack_frontier_required_version_count":                 sumInt64(frontierRequiredVersionByShard),
+		"metatrack_frontier_write_slot_count":                       sumInt64(frontierWriteSlotByShard),
+		"metatrack_version_ticket_issued_count":                     sumInt64(versionTicketIssuedByShard),
+		"metatrack_version_ticket_released_count":                   sumInt64(versionTicketReleasedByShard),
+		"metatrack_frontier_seal_build_us":                          sumInt64(frontierSealBuildUSByShard),
+		"metatrack_frontier_truth_scope":                            "replica_deduplicated_by_shard",
+		"versioned_state_ready_wave_count":                          sumInt64(versionedWaveByShard),
+		"versioned_state_ready_wait_observation_count":              sumInt64(versionedWaitByShard),
+		"versioned_state_ready_resolved_token_count":                sumInt64(versionedResolvedByShard),
+		"versioned_state_probe_count":                               sumInt64(versionedProbeByShard),
+		"versioned_state_probe_latency_ms":                          sumInt64(versionedProbeLatencyByShard),
+		"versioned_state_ready_max_wave_width":                      versionedMaxWaveWidth,
+		"versioned_state_ready_scheduler_mode":                      versionedStateReadyMode,
+		"versioned_wave_execution_policy":                           versionedWaveExecutionPolicy,
+		"versioned_wave_delta_only_count":                           sumInt64(versionedWaveDeltaOnlyByShard),
+		"versioned_wave_full_fallback_count":                        sumInt64(versionedWaveFullFallbackByShard),
+		"remote_state_access_count":                                 remoteStateAccessCount,
+		"remote_state_read_count":                                   remoteStateReadCount,
+		"remote_state_write_apply_count":                            remoteStateWriteApplyCount,
+		"remote_operation_unknown_kind_count":                       remoteOperationUnknownCount,
+		"physical_remote_operation_count":                           physicalRemoteOperationCount,
+		"physical_remote_fetch_count":                               physicalRemoteFetchCount,
+		"physical_remote_writeback_count":                           physicalRemoteWritebackCount,
+		"physical_remote_failed_count":                              physicalRemoteFailedCount,
+		"replica_deduplicated_remote_operation_count":               remoteStateAggregate["replica_deduplicated_remote_operation_count"],
+		"replica_deduplicated_remote_fetch_count":                   remoteStateAggregate["replica_deduplicated_remote_fetch_count"],
+		"replica_deduplicated_remote_writeback_count":               remoteStateAggregate["replica_deduplicated_remote_writeback_count"],
+		"remote_fetches_per_logical_tx":                             remoteStateAggregate["remote_fetches_per_logical_tx"],
+		"remote_writebacks_per_logical_tx":                          remoteStateAggregate["remote_writebacks_per_logical_tx"],
+		"remote_operations_per_logical_tx":                          remoteStateAggregate["remote_operations_per_logical_tx"],
+		"replica_amplification_factor":                              remoteStateAggregate["replica_amplification_factor"],
+		"remote_fetch_replica_amplification_factor":                 remoteStateAggregate["remote_fetch_replica_amplification_factor"],
+		"remote_writeback_replica_amplification_factor":             remoteStateAggregate["remote_writeback_replica_amplification_factor"],
+		"mechanism_metrics":                                         mechanismMetrics,
+		"remote_state_access_failed_count":                          remoteStateFailedCount,
+		"remote_state_access_avg_latency_ms":                        remoteStateAvgLatency,
+		"fault_injection_real":                                      faultEvidence,
+		"fault_injection_requested":                                 faultRequested,
+		"orphan_process_count":                                      0,
+		"no_fallback":                                               true,
+		"node_summaries":                                            summaries,
+		"processes":                                                 redactV5Processes(processes, dataDir),
+		"shard_blocks":                                              shardBlocks,
+		"ready_to_commit":                                           ready,
 	}, nil
 }
 
@@ -2481,9 +2544,179 @@ func writeBlockProductionAggregate(dataDir string, nodes []v5.NodePlan) (map[str
 	return summary, v5.SaveJSON(filepath.Join(aggregateDir, "block_production_summary.json"), summary)
 }
 
+// MBE_METATRACK_READY_ROUND_OBSERVABILITY_V35_2
+func readyRoundMetricIntV352(value any) int {
+	switch item := value.(type) {
+	case int:
+		return item
+	case int64:
+		return int(item)
+	case float64:
+		return int(item)
+	case json.Number:
+		parsed, _ := item.Int64()
+		return int(parsed)
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(item))
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func readyRoundMetricFloatV352(value any) float64 {
+	switch item := value.(type) {
+	case float64:
+		return item
+	case int:
+		return float64(item)
+	case int64:
+		return float64(item)
+	case json.Number:
+		parsed, _ := item.Float64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseFloat(strings.TrimSpace(item), 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func readyRoundMetricBoolV352(value any) bool {
+	switch item := value.(type) {
+	case bool:
+		return item
+	case string:
+		parsed, _ := strconv.ParseBool(strings.TrimSpace(item))
+		return parsed
+	default:
+		return false
+	}
+}
+
+func readyRoundMetricStringV352(value any) string {
+	text := strings.TrimSpace(fmt.Sprint(value))
+	if text == "" || text == "<nil>" {
+		return ""
+	}
+	return text
+}
+
+func aggregateMetaTrackReadyRoundEvidenceV352(nodes []v5.NodePlan) (map[string]any, error) {
+	canonical := map[string]v5.NodePlan{}
+	for _, item := range nodes {
+		current, ok := canonical[item.ShardID]
+		if !ok || item.NodeID < current.NodeID {
+			canonical[item.ShardID] = item
+		}
+	}
+	shardIDs := make([]string, 0, len(canonical))
+	for shardID := range canonical {
+		shardIDs = append(shardIDs, shardID)
+	}
+	sort.Strings(shardIDs)
+
+	applicable := false
+	policies := map[string]bool{}
+	canonicalNodeByShard := map[string]string{}
+	dependencyInfluenceEnabled := false
+	readyRoundEnabled := false
+	readyRoundControlEnabled := false
+	observedBlockCount := 0
+	arbitrationRoundCount := 0
+	multiCandidateReadyRoundCount := 0
+	competitionArbitrationCount := 0
+	priorityCandidateSetMax := 0
+	priorityCandidateSetWeightedSum := 0.0
+	priorityCandidateSetWeightedSamples := 0
+	influenceArbitrationDecisionCount := 0
+	influenceChangedChoiceCount := 0
+	readyRoundEventDrainSkipCount := 0
+	crossRoundBypassCount := 0
+
+	for _, shardID := range shardIDs {
+		nodePlan := canonical[shardID]
+		canonicalNodeByShard[shardID] = nodePlan.NodeID
+		raw, err := os.ReadFile(filepath.Join(nodePlan.DataDir, "block_execution_summary.json"))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		var summary struct {
+			Blocks []map[string]any `json:"blocks"`
+		}
+		if err := json.Unmarshal(raw, &summary); err != nil {
+			return nil, fmt.Errorf("decode MetaTrack Ready-Round block summary for %s: %w", nodePlan.NodeID, err)
+		}
+		for _, block := range summary.Blocks {
+			policy := readyRoundMetricStringV352(block["metatrack_ready_priority_policy"])
+			blockReadyRoundEnabled := readyRoundMetricBoolV352(block["metatrack_ready_round_scheduler_enabled"])
+			if policy == "" && !blockReadyRoundEnabled {
+				continue
+			}
+			applicable = true
+			observedBlockCount++
+			if policy != "" {
+				policies[policy] = true
+			}
+			dependencyInfluenceEnabled = dependencyInfluenceEnabled || readyRoundMetricBoolV352(block["metatrack_dependency_influence_scheduler_enabled"])
+			readyRoundEnabled = readyRoundEnabled || blockReadyRoundEnabled
+			readyRoundControlEnabled = readyRoundControlEnabled || readyRoundMetricBoolV352(block["metatrack_ready_round_control_enabled"])
+			arbitrationRoundCount += readyRoundMetricIntV352(block["arbitration_round_count"])
+			multiCandidateReadyRoundCount += readyRoundMetricIntV352(block["multi_candidate_ready_round_count"])
+			competition := readyRoundMetricIntV352(block["competition_arbitration_count"])
+			competitionArbitrationCount += competition
+			candidateMax := readyRoundMetricIntV352(block["priority_candidate_set_max"])
+			if candidateMax > priorityCandidateSetMax {
+				priorityCandidateSetMax = candidateMax
+			}
+			if competition > 0 {
+				priorityCandidateSetWeightedSum += readyRoundMetricFloatV352(block["priority_candidate_set_mean"]) * float64(competition)
+				priorityCandidateSetWeightedSamples += competition
+			}
+			influenceArbitrationDecisionCount += readyRoundMetricIntV352(block["influence_arbitration_decision_count"])
+			influenceChangedChoiceCount += readyRoundMetricIntV352(block["influence_changed_choice_count"])
+			readyRoundEventDrainSkipCount += readyRoundMetricIntV352(block["ready_round_event_drain_skip_count"])
+			crossRoundBypassCount += readyRoundMetricIntV352(block["cross_round_bypass_count"])
+		}
+	}
+	if !applicable {
+		return map[string]any{}, nil
+	}
+	priorityCandidateSetMean := 0.0
+	if priorityCandidateSetWeightedSamples > 0 {
+		priorityCandidateSetMean = priorityCandidateSetWeightedSum / float64(priorityCandidateSetWeightedSamples)
+	}
+	return map[string]any{
+		"metatrack_ready_round_metrics_available":          true,
+		"metatrack_ready_priority_policy":                  singleMapKey(policies),
+		"metatrack_dependency_influence_scheduler_enabled": dependencyInfluenceEnabled,
+		"metatrack_ready_round_scheduler_enabled":          readyRoundEnabled,
+		"metatrack_ready_round_control_enabled":            readyRoundControlEnabled,
+		"arbitration_round_count":                          arbitrationRoundCount,
+		"multi_candidate_ready_round_count":                multiCandidateReadyRoundCount,
+		"competition_arbitration_count":                    competitionArbitrationCount,
+		"priority_candidate_set_max":                       priorityCandidateSetMax,
+		"priority_candidate_set_mean":                      priorityCandidateSetMean,
+		"influence_arbitration_decision_count":             influenceArbitrationDecisionCount,
+		"influence_changed_choice_count":                   influenceChangedChoiceCount,
+		"ready_round_event_drain_skip_count":               readyRoundEventDrainSkipCount,
+		"cross_round_bypass_count":                         crossRoundBypassCount,
+		"ready_round_metric_truth_scope":                   "canonical_node_per_shard_from_block_execution_summary",
+		"ready_round_canonical_node_by_shard":              canonicalNodeByShard,
+		"ready_round_observed_block_count":                 observedBlockCount,
+	}, nil
+}
 func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes []v5.NodePlan, remoteState map[string]any) (map[string]any, error) {
 	aggregateDir := filepath.Join(dataDir, "aggregate")
 	if err := os.MkdirAll(aggregateDir, 0o755); err != nil {
+		return nil, err
+	}
+	readyRoundMetrics, err := aggregateMetaTrackReadyRoundEvidenceV352(nodes)
+	if err != nil {
 		return nil, err
 	}
 	metatrackApplicable := false
@@ -2563,6 +2796,9 @@ func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes [
 			"replica_deduplicated_remote_fetch_count":            remoteState["replica_deduplicated_remote_fetch_count"],
 			"replica_deduplicated_remote_writeback_count":        remoteState["replica_deduplicated_remote_writeback_count"],
 		}
+		for key, value := range readyRoundMetrics {
+			metatrack[key] = value
+		}
 	}
 	blockSTM, err := aggregateBlockSTM(nodes)
 	if err != nil {
@@ -2585,27 +2821,32 @@ func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes [
 
 func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 	type nodeMetrics struct {
-		nodeID                    string
-		shardID                   string
-		workerCount               int
-		maximumParallelWidth      int
-		maximumConcurrentExec     int
-		maximumIncarnation        int
-		abortCount                int
-		dependencyAbortCount      int
-		validationAbortCount      int
-		reexecutionCount          int
-		validationFailure         int
-		validatedSpeculative      int
-		dependencyWaitCount       int
-		dependencyResumeCount     int
-		estimatePublishCount      int
-		estimateMarkCount         int
-		estimateReadCount         int
-		businessExecutionCount    int
-		committedTransactionCount int
-		serialFallbackCount       int
-		serialEquivalent          bool
+		nodeID                       string
+		shardID                      string
+		workerCount                  int
+		maximumParallelWidth         int
+		maximumConcurrentExec        int
+		maximumIncarnation           int
+		abortCount                   int
+		dependencyAbortCount         int
+		validationAbortCount         int
+		reexecutionCount             int
+		validationFailure            int
+		validatedSpeculative         int
+		dependencyWaitCount          int
+		dependencyResumeCount        int
+		dependencySuspendCount       int // MBE_V37_BLOCKSTM_SUSPEND_AGGREGATE
+		schedulerMode                string
+		dependencyWaitMode           string
+		schedulerModeConsistent      bool // MBE_V38_BLOCKSTM_NODE_MODE_CONSISTENCY
+		dependencyWaitModeConsistent bool
+		estimatePublishCount         int
+		estimateMarkCount            int
+		estimateReadCount            int
+		businessExecutionCount       int
+		committedTransactionCount    int
+		serialFallbackCount          int
+		serialEquivalent             bool
 	}
 	values := []nodeMetrics{}
 	for _, node := range nodes {
@@ -2626,27 +2867,36 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 			estimatePublish = intFromAny(metricsMap["estimate_mark_count"])
 		}
 		values = append(values, nodeMetrics{
-			nodeID:                    node.NodeID,
-			shardID:                   node.ShardID,
-			workerCount:               intFromAny(metricsMap["worker_count"]),
-			maximumParallelWidth:      intFromAny(metricsMap["maximum_parallel_width"]),
-			maximumConcurrentExec:     intFromAny(metricsMap["maximum_concurrent_executions"]),
-			maximumIncarnation:        intFromAny(metricsMap["maximum_incarnation"]),
-			abortCount:                intFromAny(metricsMap["abort_count"]),
-			dependencyAbortCount:      intFromAny(metricsMap["dependency_abort_count"]),
-			validationAbortCount:      intFromAny(metricsMap["validation_abort_count"]),
-			reexecutionCount:          intFromAny(metricsMap["reexecution_count"]),
-			validationFailure:         intFromAny(metricsMap["validation_failure_count"]),
-			validatedSpeculative:      intFromAny(metricsMap["validated_speculative_result_count"]),
-			dependencyWaitCount:       intFromAny(metricsMap["dependency_wait_count"]),
-			dependencyResumeCount:     intFromAny(metricsMap["dependency_resume_count"]),
-			estimatePublishCount:      estimatePublish,
-			estimateMarkCount:         intFromAny(metricsMap["estimate_mark_count"]),
-			estimateReadCount:         intFromAny(metricsMap["estimate_read_count"]),
-			businessExecutionCount:    intFromAny(metricsMap["business_execution_invocation_count"]),
-			committedTransactionCount: intFromAny(metricsMap["committed_transaction_count"]),
-			serialFallbackCount:       intFromAny(metricsMap["serial_fallback_count"]),
-			serialEquivalent:          boolFromAny(raw["serial_equivalent"]),
+			nodeID:                 node.NodeID,
+			shardID:                node.ShardID,
+			workerCount:            intFromAny(metricsMap["worker_count"]),
+			maximumParallelWidth:   intFromAny(metricsMap["maximum_parallel_width"]),
+			maximumConcurrentExec:  intFromAny(metricsMap["maximum_concurrent_executions"]),
+			maximumIncarnation:     intFromAny(metricsMap["maximum_incarnation"]),
+			abortCount:             intFromAny(metricsMap["abort_count"]),
+			dependencyAbortCount:   intFromAny(metricsMap["dependency_abort_count"]),
+			validationAbortCount:   intFromAny(metricsMap["validation_abort_count"]),
+			reexecutionCount:       intFromAny(metricsMap["reexecution_count"]),
+			validationFailure:      intFromAny(metricsMap["validation_failure_count"]),
+			validatedSpeculative:   intFromAny(metricsMap["validated_speculative_result_count"]),
+			dependencyWaitCount:    intFromAny(metricsMap["dependency_wait_count"]),
+			dependencyResumeCount:  intFromAny(metricsMap["dependency_resume_count"]),
+			dependencySuspendCount: intFromAny(metricsMap["dependency_suspend_count"]),
+			schedulerMode:          strings.TrimSpace(fmt.Sprint(metricsMap["scheduler_mode"])),
+			dependencyWaitMode:     strings.TrimSpace(fmt.Sprint(metricsMap["dependency_wait_mode"])),
+			// MBE_V38_BLOCKSTM_LEGACY_MODE_COMPAT: v37 node summaries predate the
+			// explicit *_consistent fields. Absence is therefore not evidence of
+			// inconsistency: infer consistency only when the legacy summary carries
+			// a concrete mode. If v38+ explicitly emits false, preserve that false.
+			schedulerModeConsistent:      metricsMap["scheduler_mode"] != nil && strings.TrimSpace(fmt.Sprint(metricsMap["scheduler_mode"])) != "" && (raw["scheduler_mode_consistent"] == nil || boolFromAny(raw["scheduler_mode_consistent"])),
+			dependencyWaitModeConsistent: metricsMap["dependency_wait_mode"] != nil && strings.TrimSpace(fmt.Sprint(metricsMap["dependency_wait_mode"])) != "" && (raw["dependency_wait_mode_consistent"] == nil || boolFromAny(raw["dependency_wait_mode_consistent"])),
+			estimatePublishCount:         estimatePublish,
+			estimateMarkCount:            intFromAny(metricsMap["estimate_mark_count"]),
+			estimateReadCount:            intFromAny(metricsMap["estimate_read_count"]),
+			businessExecutionCount:       intFromAny(metricsMap["business_execution_invocation_count"]),
+			committedTransactionCount:    intFromAny(metricsMap["committed_transaction_count"]),
+			serialFallbackCount:          intFromAny(metricsMap["serial_fallback_count"]),
+			serialEquivalent:             boolFromAny(raw["serial_equivalent"]),
 		})
 	}
 	if len(values) == 0 {
@@ -2654,6 +2904,8 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 	}
 	workerCounts := map[int]bool{}
 	serialEquivalent := true
+	allSchedulerModesConsistent := true
+	allDependencyWaitModesConsistent := true
 	abortSum := 0
 	dependencyAbortSum := 0
 	validationAbortSum := 0
@@ -2662,6 +2914,9 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 	validatedSpeculativeSum := 0
 	dependencyWaitSum := 0
 	dependencyResumeSum := 0
+	dependencySuspendSum := 0
+	schedulerModes := map[string]bool{}
+	dependencyWaitModes := map[string]bool{}
 	estimatePublishSum := 0
 	estimateMarkSum := 0
 	estimateReadSum := 0
@@ -2678,6 +2933,8 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 	for _, item := range values {
 		workerCounts[item.workerCount] = true
 		serialEquivalent = serialEquivalent && item.serialEquivalent
+		allSchedulerModesConsistent = allSchedulerModesConsistent && item.schedulerModeConsistent
+		allDependencyWaitModesConsistent = allDependencyWaitModesConsistent && item.dependencyWaitModeConsistent
 		abortSum += item.abortCount
 		dependencyAbortSum += item.dependencyAbortCount
 		validationAbortSum += item.validationAbortCount
@@ -2686,6 +2943,13 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 		validatedSpeculativeSum += item.validatedSpeculative
 		dependencyWaitSum += item.dependencyWaitCount
 		dependencyResumeSum += item.dependencyResumeCount
+		dependencySuspendSum += item.dependencySuspendCount
+		if item.schedulerMode != "" && item.schedulerMode != "<nil>" {
+			schedulerModes[item.schedulerMode] = true
+		}
+		if item.dependencyWaitMode != "" && item.dependencyWaitMode != "<nil>" {
+			dependencyWaitModes[item.dependencyWaitMode] = true
+		}
 		estimatePublishSum += item.estimatePublishCount
 		estimateMarkSum += item.estimateMarkCount
 		estimateReadSum += item.estimateReadCount
@@ -2710,6 +2974,11 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 			"validation_failure_count":            item.validationFailure,
 			"dependency_wait_count":               item.dependencyWaitCount,
 			"dependency_resume_count":             item.dependencyResumeCount,
+			"dependency_suspend_count":            item.dependencySuspendCount,
+			"scheduler_mode":                      item.schedulerMode,
+			"dependency_wait_mode":                item.dependencyWaitMode,
+			"scheduler_mode_consistent":           item.schedulerModeConsistent,
+			"dependency_wait_mode_consistent":     item.dependencyWaitModeConsistent,
 			"estimate_publish_count":              item.estimatePublishCount,
 			"estimate_mark_count":                 item.estimateMarkCount,
 			"estimate_read_count":                 item.estimateReadCount,
@@ -2743,6 +3012,12 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 		"validated_speculative_result_count":                 validatedSpeculativeSum,
 		"dependency_wait_count":                              dependencyWaitSum,
 		"dependency_resume_count":                            dependencyResumeSum,
+		"dependency_suspend_count":                           dependencySuspendSum,
+		"scheduler_mode":                                     singleStringKey(schedulerModes),
+		"scheduler_mode_replica_consistent":                  allSchedulerModesConsistent && len(schedulerModes) == 1,
+		"dependency_wait_mode":                               singleStringKey(dependencyWaitModes),
+		"dependency_wait_mode_replica_consistent":            allDependencyWaitModesConsistent && len(dependencyWaitModes) == 1,
+		"metric_truth_version":                               "mbe_block_stm_metric_truth_v38_0_3",
 		"estimate_publish_count":                             estimatePublishSum,
 		"estimate_publish_source_field":                      "estimate_count",
 		"estimate_mark_count":                                estimateMarkSum,
@@ -2762,6 +3037,7 @@ func aggregateBlockSTM(nodes []v5.NodePlan) (map[string]any, error) {
 		"validation_failure_count_per_validator_mean":        ratio(validationFailureSum, len(values)),
 		"dependency_wait_count_per_validator_mean":           ratio(dependencyWaitSum, len(values)),
 		"dependency_resume_count_per_validator_mean":         ratio(dependencyResumeSum, len(values)),
+		"dependency_suspend_count_per_validator_mean":        ratio(dependencySuspendSum, len(values)),
 		"estimate_publish_count_per_validator_mean":          ratio(estimatePublishSum, len(values)),
 		"business_execution_count_per_validator_mean":        ratio(businessExecutionSum, len(values)),
 		"per_validator":                                      perValidator,
@@ -2784,6 +3060,16 @@ func singleIntKey(values map[int]bool) int {
 		return key
 	}
 	return 0
+}
+
+func singleStringKey(values map[string]bool) string {
+	if len(values) != 1 {
+		return ""
+	}
+	for key := range values {
+		return key
+	}
+	return ""
 }
 
 func maxInt(a, b int) int {

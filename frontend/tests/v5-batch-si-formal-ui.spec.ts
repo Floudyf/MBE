@@ -98,7 +98,7 @@ test("eight-method comparison previews Batch-SI without semantic fairness blocke
     "stateless_hash_serial",
     "stateless_hash_block_stm",
     "metatrack_serial",
-    "metatrack_block_stm",
+    "metatrack_latest",
   ]);
   for (const methodId of [
     "hash_serial",
@@ -109,7 +109,7 @@ test("eight-method comparison previews Batch-SI without semantic fairness blocke
     "stateless_hash_serial",
     "stateless_hash_block_stm",
     "metatrack_serial",
-    "metatrack_block_stm",
+    "metatrack_latest",
   ]) {
     const button = page.getByTestId(`v5-run-method-${methodId}`);
     const pressed = (await button.getAttribute("aria-pressed")) === "true";

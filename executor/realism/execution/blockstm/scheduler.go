@@ -1,6 +1,24 @@
 package blockstm
 
-import "sync"
+import (
+	"container/heap"
+	"sync"
+)
+
+// MBE_V37_BLOCKSTM_PRIORITY_SCHEDULER: optional heap-backed task selection.
+type schedulerTaskHeap []SchedulerTask
+
+func (h schedulerTaskHeap) Len() int           { return len(h) }
+func (h schedulerTaskHeap) Less(i, j int) bool { return schedulerTaskLess(h[i], h[j]) }
+func (h schedulerTaskHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *schedulerTaskHeap) Push(value any)    { *h = append(*h, value.(SchedulerTask)) }
+func (h *schedulerTaskHeap) Pop() any {
+	old := *h
+	last := len(old) - 1
+	value := old[last]
+	*h = old[:last]
+	return value
+}
 
 type TransactionStatus string
 
@@ -27,20 +45,37 @@ type SchedulerTask struct {
 }
 
 type Scheduler struct {
-	mu          sync.Mutex
-	statuses    map[TxnIndex]TransactionStatus
-	incarnation map[TxnIndex]Incarnation
-	queue       []SchedulerTask
-	queued      map[SchedulerTask]bool
-	aborts      int
+	mu            sync.Mutex
+	statuses      map[TxnIndex]TransactionStatus
+	incarnation   map[TxnIndex]Incarnation
+	queue         []SchedulerTask
+	priorityTasks schedulerTaskHeap
+	priorityQueue bool
+	queued        map[SchedulerTask]bool
+	aborts        int
 }
 
 func NewScheduler(txCount int) *Scheduler {
 	return NewSchedulerWithOrder(txCount, defaultTxnOrder(txCount))
 }
 
+func NewPriorityScheduler(txCount int) *Scheduler {
+	return NewPrioritySchedulerWithOrder(txCount, defaultTxnOrder(txCount))
+}
+
 func NewSchedulerWithOrder(txCount int, order []TxnIndex) *Scheduler {
-	s := &Scheduler{statuses: map[TxnIndex]TransactionStatus{}, incarnation: map[TxnIndex]Incarnation{}, queued: map[SchedulerTask]bool{}}
+	return newSchedulerWithOrder(txCount, order, false)
+}
+
+func NewPrioritySchedulerWithOrder(txCount int, order []TxnIndex) *Scheduler {
+	return newSchedulerWithOrder(txCount, order, true)
+}
+
+func newSchedulerWithOrder(txCount int, order []TxnIndex, priority bool) *Scheduler {
+	s := &Scheduler{statuses: map[TxnIndex]TransactionStatus{}, incarnation: map[TxnIndex]Incarnation{}, queued: map[SchedulerTask]bool{}, priorityQueue: priority}
+	if priority {
+		heap.Init(&s.priorityTasks)
+	}
 	seen := map[TxnIndex]bool{}
 	for _, txn := range order {
 		if int(txn) >= txCount || seen[txn] {
@@ -97,15 +132,26 @@ func defaultTxnOrder(txCount int) []TxnIndex {
 func (s *Scheduler) Next() (SchedulerTask, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for len(s.queue) > 0 {
-		best := 0
-		for index := 1; index < len(s.queue); index++ {
-			if schedulerTaskLess(s.queue[index], s.queue[best]) {
-				best = index
+	for {
+		var task SchedulerTask
+		if s.priorityQueue {
+			if len(s.priorityTasks) == 0 {
+				return SchedulerTask{}, false
 			}
+			task = heap.Pop(&s.priorityTasks).(SchedulerTask)
+		} else {
+			if len(s.queue) == 0 {
+				return SchedulerTask{}, false
+			}
+			best := 0
+			for index := 1; index < len(s.queue); index++ {
+				if schedulerTaskLess(s.queue[index], s.queue[best]) {
+					best = index
+				}
+			}
+			task = s.queue[best]
+			s.queue = append(s.queue[:best], s.queue[best+1:]...)
 		}
-		task := s.queue[best]
-		s.queue = append(s.queue[:best], s.queue[best+1:]...)
 		delete(s.queued, task)
 		if task.Version.Incarnation != s.incarnation[task.Version.Txn] {
 			continue
@@ -120,7 +166,6 @@ func (s *Scheduler) Next() (SchedulerTask, bool) {
 		}
 		return task, true
 	}
-	return SchedulerTask{}, false
 }
 
 func schedulerTaskLess(left, right SchedulerTask) bool {
@@ -141,6 +186,9 @@ func schedulerTaskLess(left, right SchedulerTask) bool {
 func (s *Scheduler) QueueLen() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.priorityQueue {
+		return len(s.priorityTasks)
+	}
 	return len(s.queue)
 }
 
@@ -176,6 +224,10 @@ func (s *Scheduler) enqueueLocked(task SchedulerTask) {
 		return
 	}
 	s.queued[task] = true
+	if s.priorityQueue {
+		heap.Push(&s.priorityTasks, task)
+		return
+	}
 	s.queue = append(s.queue, task)
 }
 

@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 
-BLOCK_STM_METHODS = ("hash_block_stm", "metatrack_block_stm")
-METATRACK_METHODS = ("metatrack_serial", "metatrack_block_stm")
+BLOCK_STM_METHODS = ("hash_block_stm",)
+METATRACK_METHODS = ("metatrack_serial", "metatrack_latest")
 
 
 def read_json(path: Path) -> dict[str, Any]:

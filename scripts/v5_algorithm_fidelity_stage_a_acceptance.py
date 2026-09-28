@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-METHODS = ("hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm")
+METHODS = ("hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_latest")
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -209,7 +209,7 @@ def main() -> int:
             "state_frequency_count": len(expected["state_frequency"]),
             "coaccess_edge_count": len(expected["coaccess_edges"]),
         }
-        for method in ("metatrack_serial", "metatrack_block_stm"):
+        for method in ("metatrack_serial", "metatrack_latest"):
             planner = planner_reconstruction(run_root / method)
             if planner is None:
                 blockers.append(f"{method}: planner X/F/W artifacts missing")

@@ -47,12 +47,9 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   // MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR
   { methodId: "stateless_porygon", title: "Porygon", description: "ICDE 2024：前端分片数直接映射为执行分片/ESC 数；所有节点共享一个全局 Ordering/PBFT 域，跨 ESC 按 Porygon 单片执行与多片更新语义处理。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "stateless_hash_block_stm", title: "Stateless Hash + Block-STM", description: "无状态哈希路由与 Block-STM 后端组合。", family: "stateless", comparisonVisible: true, mainVisible: false },
-  { methodId: "metatrack_serial", title: "MetaTrack", description: "状态共访存路由与双轨执行的完整方案。", family: "metatrack", comparisonVisible: true, mainVisible: true },
-  // MBE_METATRACK_READY_ROUND_FRONTEND_V35
-  { methodId: "metatrack_ready_round_control", title: "MetaTrack（就绪轮次对照）", description: "与候选方案使用相同的非等待就绪轮次和统一 Worker 队列；旧轮次优先，轮次内保持快速轨优先并按规范顺序，用于隔离 H/D 优先本身的贡献。", family: "metatrack", comparisonVisible: true, mainVisible: false },
-  // MBE_METATRACK_DEPENDENCY_INFLUENCE_FRONTEND_V34_3_4
-  { methodId: "metatrack_influence", title: "MetaTrack（依赖关键交易优先）", description: "与 MetaTrack 保持相同分片、依赖、StateReady 与执行语义；仅在已经 Ready 的交易之间按 H↓、D↓、规范顺序优先调度。", family: "metatrack", comparisonVisible: true, mainVisible: false },
-  { methodId: "metatrack_block_stm", title: "MetaTrack + Block-STM", description: "MetaTrack 路由与 Block-STM 执行兼容组合。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_serial", title: "MetaTrack（初始版）", description: "状态共访存路由 + 精确版本多前沿 + 双轨执行的初始稳定版本。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "冻结为已验证的 Full Locality + multi-frontier + Version Liveness 版本，用作新版闭包聚合前的直接对照。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+{ methodId: "metatrack_latest", title: "MetaTrack（新版）", description: "在当前版基础上复用 exact-version 多前沿图，将多个完整签名投影聚合为极大安全依赖闭包；闭包边界版本即时发布，内部版本继续使用 Version Liveness 裁剪，并采用索引化活性分析与单次最终封签降低控制面开销。", family: "metatrack", comparisonVisible: true, mainVisible: true },
 ];
 
 export const BATCH_SI_ABLATION_METHOD_IDS = [

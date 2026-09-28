@@ -305,6 +305,16 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		routePlanDigest := ""
 		routeControlPolicy := ""
 		routeBatchShardCounts := map[string]int{}
+		versionLivenessEnabled := false
+		versionLivenessIndexed := false
+		singleFinalSeal := false
+		if len(plan.NodeConfigs) > 0 {
+			if config, ok := plan.NodeConfigs[0].PluginProfile["block_executor"]; ok {
+				versionLivenessEnabled = boolFromAny(config.Config["version_liveness"])
+				versionLivenessIndexed = boolFromAny(config.Config["version_liveness_indexed"])
+				singleFinalSeal = boolFromAny(config.Config["single_final_seal"])
+			}
+		}
 		if planner, ok := plugins.Routing.(BatchRoutingPlugin); ok {
 			routingRecords := append([]WorkloadRecord(nil), records...)
 			if _, ok := iterator.(*CanonicalTraceIterator); ok {
@@ -318,7 +328,21 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					routingRecords[index].AccessList = append([]tx.AccessItem(nil), record.AccessList...)
 				}
 			}
-			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding})
+			deferFinalSeal := bindExecutionRouting && versionLivenessEnabled && singleFinalSeal && plugins.Routing.ID() == "metatrack_coaccess_routing"
+			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding, DeferFinalSeal: deferFinalSeal})
+			if bindExecutionRouting && versionLivenessEnabled && plugins.Routing.ID() == "metatrack_coaccess_routing" {
+				var finalized BatchRoutingPlan
+				var ok bool
+				if singleFinalSeal {
+					finalized, ok = finalizeMetaTrackSignedBatchPlan(records, routePlan, versionLivenessIndexed)
+				} else {
+					finalized, ok = resealMetaTrackVersionLivenessPlan(records, routePlan)
+				}
+				if !ok {
+					return fmt.Errorf("metatrack version-liveness final seal requires complete deterministic placement")
+				}
+				routePlan = finalized
+			}
 			routePlanDigest = routePlan.PlanDigest
 			routeControlPolicy = routePlan.ControlPolicy
 			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &placementScoreRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)

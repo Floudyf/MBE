@@ -406,6 +406,44 @@ func calvinExecutionItem(item tx.SignedTransaction) tx.SignedTransaction {
 	return copy
 }
 
+func calvinStatelessLocalOwnedWriteRows(item tx.SignedTransaction, dependencies []tx.StateVersionDependency, writes map[string]string) ([]CalvinStatelessInboundWrite, error) {
+	if len(writes) == 0 {
+		return nil, nil
+	}
+	byKey := make(map[string]tx.StateVersionDependency, len(dependencies))
+	for _, dependency := range dependencies {
+		byKey[dependency.Key] = dependency
+	}
+	rows := make([]CalvinStatelessInboundWrite, 0, len(writes))
+	for key, value := range writes {
+		dependency, ok := byKey[key]
+		if !ok || dependency.ProducedVersion == 0 {
+			return nil, fmt.Errorf("calvin_stateless_local_materialization_version_missing: tx=%s key=%s", item.TxID, key)
+		}
+		rows = append(rows, CalvinStatelessInboundWrite{Key: key, Value: value, RoutingOrdinal: dependency.ProducedVersion, TxID: item.TxID})
+	}
+	return rows, nil
+}
+
+func calvinStatelessApplyOwnedWrites(working map[string]string, localShard string, rows []CalvinStatelessInboundWrite) {
+	ordered := append([]CalvinStatelessInboundWrite(nil), rows...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].RoutingOrdinal != ordered[j].RoutingOrdinal {
+			return ordered[i].RoutingOrdinal < ordered[j].RoutingOrdinal
+		}
+		if ordered[i].Key != ordered[j].Key {
+			return ordered[i].Key < ordered[j].Key
+		}
+		return ordered[i].TxID < ordered[j].TxID
+	})
+	for _, row := range ordered {
+		if row.OrderingNoop {
+			continue
+		}
+		working[qualifyStateKey(localShard, row.Key)] = row.Value
+	}
+}
+
 func (p calvinBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
 	if input.CalvinStateHome == nil {
 		return BlockExecutionResult{}, fmt.Errorf("calvin state-home resolver is not configured")
@@ -463,6 +501,10 @@ func (p calvinBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecut
 	receiptByIndex := make([]execution.Receipt, len(block.TxList))
 	setByIndex := make([]bool, len(block.TxList))
 	executedByIndex := make([]bool, len(block.TxList))
+	// MBE_CALVIN_HOME_WRITE_MATERIALIZATION_V36: Stateless Calvin must not
+	// materialize local-home writes as workers finish. Local and inbound writes
+	// are merged later by their consensus-bound ProducedVersion.
+	statelessLocalWritesByIndex := make([]map[string]string, len(block.TxList))
 
 	execCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -539,11 +581,21 @@ func (p calvinBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecut
 			} else {
 				passiveParticipantCount++
 			}
-			workingMu.Lock()
-			for key, value := range out.localWrites {
-				working[qualifyStateKey(localShard, key)] = value
+			if p.mode == calvinStatelessMode {
+				if len(out.localWrites) > 0 {
+					copyWrites := make(map[string]string, len(out.localWrites))
+					for key, value := range out.localWrites {
+						copyWrites[key] = value
+					}
+					statelessLocalWritesByIndex[out.index] = copyWrites
+				}
+			} else {
+				workingMu.Lock()
+				for key, value := range out.localWrites {
+					working[qualifyStateKey(localShard, key)] = value
+				}
+				workingMu.Unlock()
 			}
-			workingMu.Unlock()
 			resultByIndex[out.index] = out.delta
 			receiptByIndex[out.index] = out.receipt
 			setByIndex[out.index] = true
@@ -616,18 +668,28 @@ func (p calvinBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecut
 			setByIndex[index] = true
 		}
 	}
+	statelessLocalMaterializationRows := 0
+	statelessInboundMaterializationRows := 0
 	if p.mode == calvinStatelessMode {
 		inbound, collectErr := input.CalvinStatelessCollectWritebacks(ctx, block, localShard)
 		if collectErr != nil {
 			return BlockExecutionResult{}, collectErr
 		}
-		workingMu.Lock()
-		for _, row := range inbound {
-			if row.OrderingNoop {
+		ownedWrites := append([]CalvinStatelessInboundWrite(nil), inbound...)
+		statelessInboundMaterializationRows = len(inbound)
+		for index, writes := range statelessLocalWritesByIndex {
+			if len(writes) == 0 {
 				continue
 			}
-			working[qualifyStateKey(localShard, row.Key)] = row.Value
+			rows, rowErr := calvinStatelessLocalOwnedWriteRows(block.TxList[index], statelessDependencies[index], writes)
+			if rowErr != nil {
+				return BlockExecutionResult{}, rowErr
+			}
+			statelessLocalMaterializationRows += len(rows)
+			ownedWrites = append(ownedWrites, rows...)
 		}
+		workingMu.Lock()
+		calvinStatelessApplyOwnedWrites(working, localShard, ownedWrites)
 		workingMu.Unlock()
 	}
 	stateDelta := executionStateDelta(executionBase, working)
@@ -735,6 +797,9 @@ func (p calvinBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecut
 		actual["calvin_stateless_remote_writeback_count"] = statelessWriteCount
 		actual["calvin_stateless_remote_writeback_physical_count"] = statelessWritePhysical
 		actual["calvin_stateless_remote_writeback_wait_ms"] = statelessWriteWaitMS
+		actual["calvin_stateless_materialization_policy"] = "home_owned_produced_version_order_v1"
+		actual["calvin_stateless_local_home_materialization_row_count"] = statelessLocalMaterializationRows
+		actual["calvin_stateless_inbound_home_materialization_row_count"] = statelessInboundMaterializationRows
 		actual["calvin_stateless_uses_metatrack_state_ready"] = false
 		actual["calvin_stateless_uses_toposafe_semanticsafe"] = false
 	} else {

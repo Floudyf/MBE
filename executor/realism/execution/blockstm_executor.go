@@ -36,6 +36,9 @@ type BlockSTMMetrics struct {
 	EstimateReadCount                int         `json:"estimate_read_count"`
 	DependencyWaitCount              int         `json:"dependency_wait_count"`
 	DependencyResumeCount            int         `json:"dependency_resume_count"`
+	DependencySuspendCount           int         `json:"dependency_suspend_count"`
+	SchedulerMode                    string      `json:"scheduler_mode"`
+	DependencyWaitMode               string      `json:"dependency_wait_mode"`
 	ValidatedSpeculativeResultCount  int         `json:"validated_speculative_result_count"`
 	SpeculativeReadCount             int         `json:"speculative_read_count"`
 	ValidationFailureCount           int         `json:"validation_failure_count"`
@@ -77,6 +80,8 @@ type BlockSTMExecutor struct {
 	OracleMode             string
 	MaximumIncarnations    int
 	IncarnationLimitAction string
+	SchedulerMode          string
+	DependencyWaitMode     string
 	Metrics                BlockSTMMetrics
 	Progress               func(BlockSTMProgress)
 	serialSemantics        *SerialExecutor
@@ -87,7 +92,7 @@ func NewBlockSTMExecutor(workerCount int) *BlockSTMExecutor {
 	if workerCount < 1 {
 		workerCount = 1
 	}
-	return &BlockSTMExecutor{DefaultInitialBalance: 1_000_000, WorkerCount: workerCount, ExecutionMode: "correctness", OracleMode: "full", MaximumIncarnations: 0, IncarnationLimitAction: "fail", serialSemantics: NewSerialExecutor()}
+	return &BlockSTMExecutor{DefaultInitialBalance: 1_000_000, WorkerCount: workerCount, ExecutionMode: "correctness", OracleMode: "full", MaximumIncarnations: 0, IncarnationLimitAction: "fail", SchedulerMode: "legacy_scan_v1", DependencyWaitMode: "abort_new_incarnation_v1", serialSemantics: NewSerialExecutor()}
 }
 
 func (e *BlockSTMExecutor) ExecuteBlock(ctx context.Context, b block.Block, base map[string]string) (Result, error) {
@@ -123,11 +128,15 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 	receipts := make([]Receipt, len(b.TxList))
 	incarnations := make([]int, len(b.TxList))
 	validationGeneration := make([]uint64, len(b.TxList))
-	metrics := BlockSTMMetrics{WorkerCount: workerCount, IncarnationHistogram: map[int]int{}}
+	metrics := BlockSTMMetrics{WorkerCount: workerCount, SchedulerMode: e.SchedulerMode, DependencyWaitMode: e.DependencyWaitMode, IncarnationHistogram: map[int]int{}}
 	uniqueAborted := make([]bool, len(b.TxList))
 	uniqueReexecuted := make([]bool, len(b.TxList))
 	executionStarted := time.Now()
 	scheduler := blockstm.NewScheduler(len(b.TxList))
+	if e.SchedulerMode == "priority_heap_v1" {
+		// MBE_V37_BLOCKSTM_DEPENDENCY_SUSPEND: this path is opt-in per method.
+		scheduler = blockstm.NewPriorityScheduler(len(b.TxList))
+	}
 	dependencies := blockstm.NewDependencyRegistry()
 	validated := make([]bool, len(b.TxList))
 	executed := make([]bool, len(b.TxList))
@@ -363,6 +372,22 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 						waiting[index] = false
 						scheduler.ScheduleExecution(taskResult.Version)
 						metrics.DependencyResumeCount++
+						break
+					}
+					if e.DependencyWaitMode == "suspend_same_incarnation_v1" {
+						// An ESTIMATE means the lower transaction has not published its next
+						// usable incarnation yet. Suspend this exact incarnation; do not turn
+						// dependency waiting into a validation abort/re-execution.
+						scheduler.Wait(taskResult.Version)
+						waiting[index] = true
+						executed[index] = false
+						validationQueued[index] = false
+						clearReadIndex(index)
+						dependencies.RegisterTask(blockstm.SchedulerTask{Kind: blockstm.TaskExecute, Version: taskResult.Version}, *taskResult.Dependency)
+						metrics.DependencyWaitCount++
+						metrics.DependencySuspendCount++
+						metrics.EstimateReadCount++
+						readSets[index] = append([]ReadObservation(nil), taskResult.ReadSet...)
 						break
 					}
 					next := scheduler.AbortAndWait(taskResult.Version)

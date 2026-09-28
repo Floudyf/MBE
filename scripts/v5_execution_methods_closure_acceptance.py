@@ -25,7 +25,7 @@ from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
 from backend.app.services.v5_workload_data_plane import supported_workload_counts
 
 
-METHOD_ORDER = ["hash_serial", "hash_block_stm", "hash_aria", "metatrack_serial", "metatrack_block_stm"]
+METHOD_ORDER = ["hash_serial", "hash_block_stm", "hash_aria", "metatrack_serial", "metatrack_latest"]
 DATASET_ID = "dcl_sales_polygon_271868"
 DATASET_SOURCE_SHA256 = "f690db630e061a15dfab3f2b8a654006bccb010517a8d67379817fdda522474e"
 
@@ -483,13 +483,13 @@ def validate(results: dict[str, dict], *, tx_count: int, workload_source: str) -
     if synthetic:
         if results["hash_serial"]["routing_assignments"] == results["metatrack_serial"]["routing_assignments"]:
             blockers.append("Hash and MetaTrack serial routing assignments did not differ")
-        if results["hash_block_stm"]["routing_assignments"] == results["metatrack_block_stm"]["routing_assignments"]:
-            blockers.append("Hash and MetaTrack Block-STM routing assignments did not differ")
-        if not (results["metatrack_serial"]["fast_track_count"] > 0 and results["metatrack_block_stm"]["fast_track_count"] > 0):
+        if results["metatrack_serial"]["routing_assignments"] != results["metatrack_latest"]["routing_assignments"]:
+            blockers.append("MetaTrack current/latest routing assignments differ; latest must isolate local exact-version handoff")
+        if not (results["metatrack_serial"]["fast_track_count"] > 0 and results["metatrack_latest"]["fast_track_count"] > 0):
             blockers.append("MetaTrack methods did not produce dual-track fast execution evidence")
         if not all(results[method_id]["fast_track_count"] == 0 for method_id in ("hash_serial", "hash_block_stm", "hash_aria")):
             blockers.append("Hash methods unexpectedly produced dual-track fast execution evidence")
-        for method_id in ("metatrack_serial", "metatrack_block_stm"):
+        for method_id in ("metatrack_serial", "metatrack_latest"):
             item = results[method_id]
             if not (item["aggregation_group_count"] > 0 and item["physical_update_count"] < item["logical_update_count"]):
                 blockers.append(f"{method_id}: MetaTrack aggregation evidence failed")
@@ -585,7 +585,7 @@ def main() -> int:
         },
         "routing_assignment_differs": {
             "serial": results["hash_serial"]["routing_assignments"] != results["metatrack_serial"]["routing_assignments"],
-            "block_stm": results["hash_block_stm"]["routing_assignments"] != results["metatrack_block_stm"]["routing_assignments"],
+            "current_latest_equal": results["metatrack_serial"]["routing_assignments"] == results["metatrack_latest"]["routing_assignments"],
         },
         "blockers": blockers,
     }

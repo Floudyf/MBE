@@ -70,7 +70,7 @@ def test_create_run_group_persists_formal_profile_without_legacy_formal_plan(mon
         BUILTIN_METHODS["hash_serial"].model_dump(),
         BUILTIN_METHODS["hash_block_stm"].model_dump(),
         BUILTIN_METHODS["metatrack_serial"].model_dump(),
-        BUILTIN_METHODS["metatrack_block_stm"].model_dump(),
+        BUILTIN_METHODS["metatrack_latest"].model_dump(),
     ]
     payload["plan"]["name"] = "formal four method comparison"
     payload["plan"]["suites"] = ["comparison_experiment"]
@@ -91,7 +91,7 @@ def test_create_run_group_persists_formal_profile_without_legacy_formal_plan(mon
     profile = captured["payload"]["formal_experiment_profile"]
     assert profile["schema_version"] == "v5_formal_experiment_profile_v2"
     assert profile["profile_id"] == "formal_four_method_comparison"
-    assert profile["method_ids"] == ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]
+    assert profile["method_ids"] == ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_latest"]
     assert profile["block_size"] == 100
     assert profile["block_interval_ms"] == 75
     assert profile["topology"] == {"nodes": 8, "shards": 2, "validators_per_shard": 4}

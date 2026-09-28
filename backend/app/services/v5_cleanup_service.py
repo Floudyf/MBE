@@ -13,7 +13,9 @@ from backend.app.services.v3_saved_config_store import SAVED_CONFIG_ROOT, delete
 
 
 TERMINAL_STATUSES = {"completed", "completed_with_failures", "failed", "blocked", "cancelled"}
-FOUR_METHOD_IDS = {"hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"}
+FOUR_METHOD_IDS = {"hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_latest"}
+LEGACY_FOUR_METHOD_IDS = {"hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"}
+FOUR_METHOD_ID_SETS = (FOUR_METHOD_IDS, LEGACY_FOUR_METHOD_IDS)
 
 
 @dataclass
@@ -357,7 +359,7 @@ def _is_successful_four_method_group(group: dict) -> bool:
         for child in children
         if child.get("status") == "completed"
     }
-    return FOUR_METHOD_IDS.issubset(completed_methods)
+    return any(required.issubset(completed_methods) for required in FOUR_METHOD_ID_SETS)
 
 
 def _referenced_output_dirs(groups: dict[str, dict], real_cluster_root: Path) -> dict[Path, set[str]]:

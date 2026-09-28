@@ -6,7 +6,7 @@ test("previews and runs a V5 real-cluster Formal RunGroup", async ({ page }) => 
   await page.locator(".final-sidebar").getByRole("button", { name: "② 运行实验", exact: true }).click();
   await expect(page.getByTestId("v5-formal-run-page")).toBeVisible();
   await expect(page.getByTestId("v5-run-method-v5_catalog_default")).toHaveCount(0);
-  for (const methodId of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
+  for (const methodId of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_latest"]) {
     await expect(page.getByTestId(`v5-run-method-${methodId}`).getByRole("checkbox")).toBeChecked();
   }
   await expect(page.getByTestId("v5-formal-preview-button")).toBeEnabled();
@@ -15,7 +15,7 @@ test("previews and runs a V5 real-cluster Formal RunGroup", async ({ page }) => 
   await expect(page.getByLabel("validators per shard")).toHaveValue("4");
   await page.getByTestId("v5-run-method-hash_block_stm").getByRole("checkbox").uncheck();
   await page.getByTestId("v5-run-method-metatrack_serial").getByRole("checkbox").uncheck();
-  await page.getByTestId("v5-run-method-metatrack_block_stm").getByRole("checkbox").uncheck();
+  await page.getByTestId("v5-run-method-metatrack_latest").getByRole("checkbox").uncheck();
   await page.getByTestId("v5-suite-comparison_experiment").getByRole("checkbox").uncheck();
   await page.getByTestId("v5-suite-main_experiment").getByRole("checkbox").check();
   await page.getByLabel("nodes").fill("4");
@@ -78,7 +78,7 @@ test("selecting Groundhog preserves the user-selected multi-shard topology and k
   await page.getByLabel("nodes").fill("32");
   await page.getByLabel("shards").fill("8");
 
-  for (const methodId of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_block_stm"]) {
+  for (const methodId of ["hash_serial", "hash_block_stm", "metatrack_serial", "metatrack_latest"]) {
     const checkbox = page.getByTestId(`v5-run-method-${methodId}`).getByRole("checkbox");
     if (await checkbox.isChecked()) await checkbox.uncheck();
   }

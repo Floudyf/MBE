@@ -454,6 +454,8 @@ def _multishard_correctness_blockers(summary: dict) -> list[str]:
     for field in ("initial_state_digest", "state_home_mapping_digest", "global_final_state_digest"):
         if not str(summary.get(field) or "").strip():
             blockers.append(f"multishard_oracle_missing_{field}")
+    if summary.get("executed_logical_transaction_count_global_dedup_available") is False:
+        blockers.append("multishard_oracle_global_logical_dedup_unavailable")
     return list(dict.fromkeys(blockers))
 
 
@@ -648,6 +650,17 @@ def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, 
     groundhog_mode = executor_id == "groundhog_block_executor"
     if executor_id in {"calvin_block_executor", "stateless_calvin_block_executor"}:
         return _evaluate_calvin_partitioned(run_dir, summary)
+    # MBE_V38_STATEFUL_SERIALIZABILITY_DISPATCH: stateful-local legacy multi-shard
+    # methods are checked with their own partition-local serializability contract.
+    # Stateless StateHome requirements remain unchanged for every other method.
+    from backend.app.services.v5_stateful_serializability_oracle import (
+        evaluate_stateful_local_partitioned,
+        matches_stateful_local_legacy,
+    )
+    if matches_stateful_local_legacy(summary):
+        stateful_result = evaluate_stateful_local_partitioned(run_dir, summary)
+        if stateful_result is not None:
+            return stateful_result
     blockers: list[str] = []
     shard_id, initial_root, initial_blockers, initial_sources = _initial_state_evidence(run_dir)
     blockers.extend(initial_blockers)

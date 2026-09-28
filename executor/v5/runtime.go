@@ -1547,6 +1547,18 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 			return err
 		}
 		r.handleStateFetchResponse(response)
+	case stateFetchBatchRequestMessage:
+		request, err := p2p.DecodePayload[StateFetchBatchRequest](msg)
+		if err != nil {
+			return err
+		}
+		return r.handleStateFetchBatchRequest(ctx, msg.FromNode, request)
+	case stateFetchBatchResponseMessage:
+		response, err := p2p.DecodePayload[StateFetchBatchResponse](msg)
+		if err != nil {
+			return err
+		}
+		r.handleStateFetchBatchResponse(response)
 	case stateDeltaApplyMessage:
 		request, err := p2p.DecodePayload[StateDeltaApplyRequest](msg)
 		if err != nil {
@@ -1559,6 +1571,18 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 			return err
 		}
 		r.handleStateDeltaApplyAck(ack)
+	case stateDeltaApplyBatchMessage:
+		request, err := p2p.DecodePayload[StateDeltaApplyBatchRequest](msg)
+		if err != nil {
+			return err
+		}
+		return r.handleStateDeltaApplyBatch(ctx, msg.FromNode, request)
+	case stateDeltaApplyBatchAckMessage:
+		ack, err := p2p.DecodePayload[StateDeltaApplyBatchAck](msg)
+		if err != nil {
+			return err
+		}
+		r.handleStateDeltaApplyBatchAck(ack)
 	}
 	return nil
 }
@@ -2535,6 +2559,12 @@ func (r *NodeRuntime) signedMetaTrackExecutionPlanPayload(block realblock.Block)
 	batchProjections, err := validateMetaTrackAggregatedBatchProjections(block, false)
 	if err != nil {
 		return nil, err
+	}
+	if r.metaTrackBlockExecutorFlag("dependency_closed_consensus") {
+		batchProjections, err = validateMetaTrackDependencyClosedProjectionBlock(block, true)
+		if err != nil {
+			return nil, err
+		}
 	}
 	orderedIDs := make([]string, 0, len(block.TxList))
 	accessDigests := make([]string, 0, len(block.TxList))
@@ -3569,7 +3599,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	if versionedWaveExecution {
 		executed, err = r.executeVersionedRemoteBlockWithCommitment(ctx, block, executionSnapshot, baseStateCommitment)
 	} else {
-		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonWaveExchange: r.porygonWaveExchange, CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, StateVersionPublish: r.stateVersionPublisher(block)})
+		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonWaveExchange: r.porygonWaveExchange, CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, RemoteStateBatchFetch: r.metaTrackBatchStateFetcher(block), StateVersionPublish: r.stateVersionPublisher(block)})
 	}
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
@@ -3578,6 +3608,12 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		}
 		r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionFinished", BlockHash: block.BlockHash, Height: block.Height, Success: false, Error: err.Error()})
 		return CommitResult{Disposition: CommitRejected, Block: block}, err
+	}
+	if r.metaTrackBlockExecutorFlag("version_liveness") {
+		if err := r.flushMetaTrackVersionLiveness(ctx, block, executed.ExecutionResult.TxDeltas); err != nil {
+			r.setCommitPhase("version_liveness_flush_error", block)
+			return CommitResult{Disposition: CommitRejected, Block: block}, err
+		}
 	}
 	result := executed.ExecutionResult
 	receiptSuccessByTxID := make(map[string]bool, len(result.Receipts))
@@ -3889,6 +3925,25 @@ func (r *NodeRuntime) nativeMetaTrackStateReadyEnabled() bool {
 		r.plugins.BlockExecutor.ID() == metaTrackBlockExecutorID && len(r.shardIDs()) > 1
 }
 
+// MBE_V37_VERSIONED_WAVE_POLICY: block-executor scoped; default preserves all legacy methods.
+func (r *NodeRuntime) versionedRemoteWavePolicy() string {
+	const fallback = "maximal_compatible_exact_version_v1"
+	if r == nil {
+		return fallback
+	}
+	item, ok := r.pluginSnapshot["block_executor"]
+	if !ok {
+		return fallback
+	}
+	policy := strings.TrimSpace(fmt.Sprint(item.Config["versioned_wave_policy"]))
+	switch policy {
+	case "strict_single_tx_block_order_v1", "maximal_compatible_exact_version_v2":
+		return policy
+	default:
+		return fallback
+	}
+}
+
 func (r *NodeRuntime) versionedRemoteWaveExecutionEnabled(block realblock.Block) bool {
 	if r.statelessCalvinRemoteStateEnabled() {
 		return false
@@ -4041,7 +4096,20 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 			ordinalOwner[item.ExecutionRouting.RoutingOrdinal] = item.TxID
 		}
 	}
+	wavePolicy := r.versionedRemoteWavePolicy()
 	delegateInternalVersionDependencies := r.plugins.BlockExecutor.ID() == "block_stm_block_executor"
+	// MBE_METATRACK_PROJECTION_FRONTIER_V612: v6 keeps the complete dependency-
+	// closed consensus block, while the execution layer releases only projection
+	// layers whose predecessor projections have completed. This avoids probing
+	// later signed projections before they can make progress.
+	var projectionFrontierV612 *metaTrackProjectionFrontierV612Plan
+	if r.metaTrackBlockExecutorFlag("dependency_closed_consensus") {
+		planned, planErr := buildMetaTrackProjectionFrontierV612Plan(block.TxList)
+		if planErr != nil {
+			return BlockExecutionResult{}, fmt.Errorf("metatrack projection frontier v6.1.2: %w", planErr)
+		}
+		projectionFrontierV612 = &planned
+	}
 	internalDelegatedCount := 0
 	probesByTx := map[string][]versionedStateProbe{}
 	probeByToken := map[string]versionedStateProbe{}
@@ -4082,6 +4150,8 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 	probeCount := 0
 	probeLatencyMS := int64(0)
 	maxWaveWidth := 0
+	maxReadyWidth := 0
+	compatibilityRejectedCount := 0
 	workerCount := 1
 	var mergedSTM execution.BlockSTMMetrics
 	allSerialEquivalent := true
@@ -4092,6 +4162,10 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 	markProgress := func() { lastProgressAt = time.Now() }
 
 	internalReady := func(item tx.SignedTransaction) bool {
+		// MBE_METATRACK_PROJECTION_FRONTIER_V612
+		if projectionFrontierV612 != nil && !projectionFrontierV612.transactionReady(txIdentifier(item), completed) {
+			return false
+		}
 		if item.ExecutionRouting == nil {
 			return true
 		}
@@ -4194,11 +4268,24 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 			return BlockExecutionResult{}, fmt.Errorf("versioned state-ready execution made no progress for %s at block %d with %d/%d transactions remaining (waves=%d probes=%d resolved_tokens=%d waits=%d)", versionedStateReadyNoProgressTimeout, block.Height, remaining, len(block.TxList), waveCount, probeCount, stateReadyCount, stateWaitCount)
 		}
 		frontier := make([]tx.SignedTransaction, 0, remaining)
-		for _, item := range block.TxList {
-			if completed[item.TxID] || !internalReady(item) {
-				continue
+		if wavePolicy == "strict_single_tx_block_order_v1" {
+			for index, item := range block.TxList {
+				if completed[item.TxID] {
+					continue
+				}
+				if !internalReady(item) {
+					return BlockExecutionResult{}, fmt.Errorf("strict stateless serial block order cannot bypass unresolved in-block predecessor: block=%d index=%d tx=%s", block.Height, index, item.TxID)
+				}
+				frontier = append(frontier, item)
+				break
 			}
-			frontier = append(frontier, item)
+		} else {
+			for _, item := range block.TxList {
+				if completed[item.TxID] || !internalReady(item) {
+					continue
+				}
+				frontier = append(frontier, item)
+			}
 		}
 		if len(frontier) == 0 {
 			return BlockExecutionResult{}, fmt.Errorf("versioned state dependency cycle at block %d", block.Height)
@@ -4214,6 +4301,9 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 				stateWaitCount++
 			}
 		}
+		if len(ready) > maxReadyWidth {
+			maxReadyWidth = len(ready)
+		}
 		if len(ready) == 0 {
 			select {
 			case <-ctx.Done():
@@ -4228,26 +4318,31 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 		// ready transactions are handled by the next wave without any block-wide
 		// barrier.
 		wave := make([]tx.SignedTransaction, 0, len(ready))
-		waveVersionByKey := map[string]uint64{}
-		for _, item := range ready {
-			compatible := true
-			for _, probe := range probesByTx[item.TxID] {
-				dep, ok := stateVersionDependencyForKey(item, probe.access.Key)
-				if !ok || !isVersionedStateAccess(probe.access) {
+		if wavePolicy == "strict_single_tx_block_order_v1" {
+			wave = append(wave, ready[0])
+		} else {
+			waveVersionByKey := map[string]uint64{}
+			for _, item := range ready {
+				compatible := true
+				for _, probe := range probesByTx[item.TxID] {
+					dep, ok := stateVersionDependencyForKey(item, probe.access.Key)
+					if !ok || !isVersionedStateAccess(probe.access) {
+						continue
+					}
+					if existing, exists := waveVersionByKey[probe.access.Key]; exists && existing != dep.RequiredVersion {
+						compatible = false
+						break
+					}
+				}
+				if !compatible {
+					compatibilityRejectedCount++
 					continue
 				}
-				if existing, exists := waveVersionByKey[probe.access.Key]; exists && existing != dep.RequiredVersion {
-					compatible = false
-					break
-				}
-			}
-			if !compatible {
-				continue
-			}
-			wave = append(wave, item)
-			for _, probe := range probesByTx[item.TxID] {
-				if dep, ok := stateVersionDependencyForKey(item, probe.access.Key); ok && isVersionedStateAccess(probe.access) {
-					waveVersionByKey[probe.access.Key] = dep.RequiredVersion
+				wave = append(wave, item)
+				for _, probe := range probesByTx[item.TxID] {
+					if dep, ok := stateVersionDependencyForKey(item, probe.access.Key); ok && isVersionedStateAccess(probe.access) {
+						waveVersionByKey[probe.access.Key] = dep.RequiredVersion
+					}
 				}
 			}
 		}
@@ -4413,6 +4508,21 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 	actualMetrics["versioned_state_probe_count"] = probeCount
 	actualMetrics["versioned_state_probe_latency_ms"] = probeLatencyMS
 	actualMetrics["versioned_state_ready_max_wave_width"] = maxWaveWidth
+	if projectionFrontierV612 != nil {
+		actualMetrics["metatrack_projection_frontier_projection_count"] = projectionFrontierV612.ProjectionCount
+		actualMetrics["metatrack_projection_frontier_layer_count"] = projectionFrontierV612.LayerCount
+		actualMetrics["metatrack_projection_frontier_max_layer_projection_width"] = projectionFrontierV612.MaxLayerProjectionWidth
+		actualMetrics["metatrack_projection_frontier_cross_projection_edge_count"] = projectionFrontierV612.CrossProjectionEdgeCount
+		actualMetrics["metatrack_projection_frontier_policy"] = "signed_projection_exact_version_dag_v612"
+	}
+	actualMetrics["versioned_state_ready_max_ready_width"] = maxReadyWidth
+	actualMetrics["versioned_state_ready_compatibility_rejected_count"] = compatibilityRejectedCount
+	actualMetrics["versioned_state_ready_wave_policy"] = wavePolicy
+	if wavePolicy == "strict_single_tx_block_order_v1" {
+		actualMetrics["versioned_state_ready_execution_scope"] = "strict_block_order_single_transaction"
+	} else {
+		actualMetrics["versioned_state_ready_execution_scope"] = "maximal_shared_snapshot_exact_version_compatible_wave"
+	}
 	if delegateInternalVersionDependencies {
 		actualMetrics["block_stm_internal_version_dependency_delegated_count"] = internalDelegatedCount
 	}
@@ -4472,6 +4582,13 @@ func mergeBlockSTMMetrics(dst *execution.BlockSTMMetrics, src execution.BlockSTM
 	dst.EstimateReadCount += src.EstimateReadCount
 	dst.DependencyWaitCount += src.DependencyWaitCount
 	dst.DependencyResumeCount += src.DependencyResumeCount
+	dst.DependencySuspendCount += src.DependencySuspendCount
+	if src.SchedulerMode != "" {
+		dst.SchedulerMode = src.SchedulerMode
+	}
+	if src.DependencyWaitMode != "" {
+		dst.DependencyWaitMode = src.DependencyWaitMode
+	}
 	dst.ValidatedSpeculativeResultCount += src.ValidatedSpeculativeResultCount
 	dst.SpeculativeReadCount += src.SpeculativeReadCount
 	dst.ValidationFailureCount += src.ValidationFailureCount
@@ -4847,6 +4964,9 @@ func (r *NodeRuntime) stateVersionPublisher(block realblock.Block) StateVersionP
 	if len(r.shardIDs()) < 2 || !r.hasBatchRoutingControlPlane() {
 		return nil
 	}
+	if r.metaTrackBlockExecutorFlag("version_liveness") {
+		return r.metaTrackVersionLivenessPublisher(block)
+	}
 	return func(ctx context.Context, item tx.SignedTransaction, delta execution.TxDelta, exactSnapshot map[string]string) error {
 		return r.publishTransactionStateVersions(ctx, block, item, delta, exactSnapshot)
 	}
@@ -4881,6 +5001,14 @@ func (r *NodeRuntime) publishTransactionStateVersions(ctx context.Context, block
 		// bounded failover owner. Home-side stateDeltaApplyKey deduplicates an
 		// identical duplicate publication from those at-most-two validators.
 		if homeShard != r.node.ShardID && r.node.NodeID != block.ProposerID && !r.isCurrentLeader() {
+			continue
+		}
+		// MBE_METATRACK_PROJECTION_FRONTIER_V612: v6.0.3 already binds the
+		// producer liveness class into the signed route metadata. Do not rescan or
+		// infer it here. A signed dead_intermediate has no value or ordering
+		// successor, so a remote Home publication would be pure physical waste.
+		if r.metaTrackBlockExecutorFlag("dependency_closed_consensus") && homeShard != r.node.ShardID && dependency.LivenessClass == metaTrackVersionClassDeadIntermediate {
+			r.addRuntimeMetric("metatrack_projection_frontier_suppressed_remote_dead_intermediate_publish_count", 1)
 			continue
 		}
 		value, wrote := writeSetLogicalValue(delta.WriteSet, dependency.Key)
@@ -5288,6 +5416,9 @@ func (r *NodeRuntime) applyMetaTrackRemoteDeltas(ctx context.Context, block real
 	var txDeltas []execution.TxDelta
 	if len(txDeltaGroups) > 0 {
 		txDeltas = txDeltaGroups[0]
+	}
+	if r.metaTrackBlockExecutorFlag("batch_remote_writeback") {
+		return r.applyMetaTrackRemoteDeltasBatched(ctx, block, physicalDelta, txDeltas)
 	}
 	for _, item := range physicalDelta {
 		unqualified, ok := unqualifiedLocalKey(item.Key, r.node.ShardID)
@@ -7156,6 +7287,8 @@ func (r *NodeRuntime) writeBlockSTMArtifacts(blocks []map[string]any) error {
 	equivalenceRows := []map[string]any{}
 	serialEquivalent := true
 	total := execution.BlockSTMMetrics{IncarnationHistogram: map[int]int{}}
+	schedulerModes := map[string]bool{}
+	dependencyWaitModes := map[string]bool{}
 	for _, blockSummary := range blocks {
 		metricsValue, ok := blockSTMMetricsFromSummary(blockSummary)
 		if !ok {
@@ -7176,6 +7309,13 @@ func (r *NodeRuntime) writeBlockSTMArtifacts(blocks []map[string]any) error {
 		total.EstimateReadCount += metricsValue.EstimateReadCount
 		total.DependencyWaitCount += metricsValue.DependencyWaitCount
 		total.DependencyResumeCount += metricsValue.DependencyResumeCount
+		total.DependencySuspendCount += metricsValue.DependencySuspendCount
+		if metricsValue.SchedulerMode != "" {
+			schedulerModes[metricsValue.SchedulerMode] = true
+		}
+		if metricsValue.DependencyWaitMode != "" {
+			dependencyWaitModes[metricsValue.DependencyWaitMode] = true
+		}
 		total.ValidatedSpeculativeResultCount += metricsValue.ValidatedSpeculativeResultCount
 		total.SpeculativeReadCount += metricsValue.SpeculativeReadCount
 		total.ValidationFailureCount += metricsValue.ValidationFailureCount
@@ -7196,7 +7336,7 @@ func (r *NodeRuntime) writeBlockSTMArtifacts(blocks []map[string]any) error {
 		taskRows = append(taskRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.WorkerCount), fmt.Sprint(metricsValue.ExecutionTaskCount), fmt.Sprint(metricsValue.MaximumParallelWidth), fmt.Sprint(metricsValue.SpeculativeReadCount), fmt.Sprint(metricsValue.BusinessExecutionCount)})
 		validationRows = append(validationRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.ValidationTaskCount), fmt.Sprint(metricsValue.ValidationFailureCount)})
 		abortRows = append(abortRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.AbortCount), fmt.Sprint(metricsValue.ReexecutionCount), fmt.Sprint(metricsValue.MaximumIncarnation), fmt.Sprint(metricsValue.DependencyAbortCount), fmt.Sprint(metricsValue.ValidationAbortCount)})
-		dependencyRows = append(dependencyRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.DependencyWaitCount), fmt.Sprint(metricsValue.DependencyResumeCount), fmt.Sprint(metricsValue.EstimateCount)})
+		dependencyRows = append(dependencyRows, []string{r.node.NodeID, r.node.ShardID, blockHash, height, fmt.Sprint(metricsValue.DependencyWaitCount), fmt.Sprint(metricsValue.DependencyResumeCount), fmt.Sprint(metricsValue.DependencySuspendCount), metricsValue.SchedulerMode, metricsValue.DependencyWaitMode, fmt.Sprint(metricsValue.EstimateCount)})
 		blockEquivalent := boolFromAny(blockSummary["serial_equivalent"])
 		serialEquivalent = serialEquivalent && blockEquivalent
 		equivalenceRows = append(equivalenceRows, map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_hash": blockHash, "height": blockSummary["height"], "block_executor_id": blockSummary["block_executor_id"], "state_root_before": blockSummary["state_root_before"], "state_root_after": blockSummary["state_root_after"], "receipt_root": blockSummary["receipt_root"], "execution_plan_digest": blockSummary["execution_plan_digest"], "serial_equivalent": blockEquivalent})
@@ -7204,7 +7344,19 @@ func (r *NodeRuntime) writeBlockSTMArtifacts(blocks []map[string]any) error {
 	if len(taskRows) == 0 {
 		return nil
 	}
-	if err := SaveJSON(filepath.Join(r.node.DataDir, "block_stm_summary.json"), map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_executor_id": execution.BlockSTMExecutorID, "block_stm_metrics": total, "block_count": len(taskRows), "serial_equivalent": serialEquivalent}); err != nil {
+	// MBE_V38_BLOCKSTM_NODE_MODE_TRUTH: aggregate v37 Block-STM evidence only.
+	// This code runs while artifacts are written and never feeds back into execution.
+	if len(schedulerModes) == 1 {
+		for mode := range schedulerModes {
+			total.SchedulerMode = mode
+		}
+	}
+	if len(dependencyWaitModes) == 1 {
+		for mode := range dependencyWaitModes {
+			total.DependencyWaitMode = mode
+		}
+	}
+	if err := SaveJSON(filepath.Join(r.node.DataDir, "block_stm_summary.json"), map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "block_executor_id": execution.BlockSTMExecutorID, "block_stm_metrics": total, "block_count": len(taskRows), "serial_equivalent": serialEquivalent, "scheduler_mode_consistent": len(schedulerModes) <= 1, "dependency_wait_mode_consistent": len(dependencyWaitModes) <= 1, "metric_truth_version": "mbe_block_stm_metric_truth_v38_0_3"}); err != nil {
 		return err
 	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "block_stm_task_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "worker_count", "execution_task_count", "maximum_parallel_width", "speculative_read_count", "business_execution_invocation_count"}, taskRows); err != nil {
@@ -7216,7 +7368,7 @@ func (r *NodeRuntime) writeBlockSTMArtifacts(blocks []map[string]any) error {
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "block_stm_abort_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "abort_count", "reexecution_count", "maximum_incarnation", "dependency_abort_count", "validation_abort_count"}, abortRows); err != nil {
 		return err
 	}
-	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "block_stm_dependency_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "dependency_wait_count", "dependency_resume_count", "estimate_count"}, dependencyRows); err != nil {
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "block_stm_dependency_trace.csv"), []string{"node_id", "shard_id", "block_hash", "height", "dependency_wait_count", "dependency_resume_count", "dependency_suspend_count", "scheduler_mode", "dependency_wait_mode", "estimate_count"}, dependencyRows); err != nil {
 		return err
 	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "incarnation_summary.csv"), []string{"node_id", "shard_id", "block_hash", "height", "incarnation", "transaction_count"}, incarnationRows); err != nil {
@@ -7254,11 +7406,22 @@ func blockSTMMetricsFromMap(value map[string]any) execution.BlockSTMMetrics {
 	metricsValue.DependencyAbortCount = intFromAny(value["dependency_abort_count"])
 	metricsValue.ValidationAbortCount = intFromAny(value["validation_abort_count"])
 	metricsValue.ReexecutionCount = intFromAny(value["reexecution_count"])
+	metricsValue.UniqueAbortedTransactionCount = intFromAny(value["unique_aborted_transaction_count"])
+	metricsValue.UniqueReexecutedTransactionCount = intFromAny(value["unique_reexecuted_transaction_count"])
 	metricsValue.EstimateCount = intFromAny(value["estimate_count"])
 	metricsValue.EstimateMarkCount = intFromAny(value["estimate_mark_count"])
 	metricsValue.EstimateReadCount = intFromAny(value["estimate_read_count"])
 	metricsValue.DependencyWaitCount = intFromAny(value["dependency_wait_count"])
 	metricsValue.DependencyResumeCount = intFromAny(value["dependency_resume_count"])
+	metricsValue.DependencySuspendCount = intFromAny(value["dependency_suspend_count"])
+	metricsValue.SchedulerMode = strings.TrimSpace(fmt.Sprint(value["scheduler_mode"]))
+	if metricsValue.SchedulerMode == "<nil>" {
+		metricsValue.SchedulerMode = ""
+	}
+	metricsValue.DependencyWaitMode = strings.TrimSpace(fmt.Sprint(value["dependency_wait_mode"]))
+	if metricsValue.DependencyWaitMode == "<nil>" {
+		metricsValue.DependencyWaitMode = ""
+	}
 	metricsValue.ValidatedSpeculativeResultCount = intFromAny(value["validated_speculative_result_count"])
 	metricsValue.SpeculativeReadCount = intFromAny(value["speculative_read_count"])
 	metricsValue.ValidationFailureCount = intFromAny(value["validation_failure_count"])
@@ -7268,7 +7431,9 @@ func blockSTMMetricsFromMap(value map[string]any) execution.BlockSTMMetrics {
 	metricsValue.SchedulerQueuePeak = intFromAny(value["scheduler_queue_peak"])
 	metricsValue.StaleTaskCount = intFromAny(value["stale_task_count"])
 	metricsValue.SerialOracleMS = int64(intFromAny(value["serial_oracle_ms"]))
+	metricsValue.TransactionExecutionMS = int64(intFromAny(value["transaction_execution_ms"]))
 	metricsValue.MaterializationMS = int64(intFromAny(value["materialization_ms"]))
+	metricsValue.StateCommitmentMS = int64(intFromAny(value["state_commitment_ms"]))
 	metricsValue.IncarnationLimitHitCount = intFromAny(value["incarnation_limit_hit_count"])
 	metricsValue.SerialFallbackCount = intFromAny(value["serial_fallback_count"])
 	metricsValue.BusinessExecutionCount = intFromAny(value["business_execution_invocation_count"])

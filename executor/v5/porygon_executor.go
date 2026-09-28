@@ -23,6 +23,10 @@ type porygonWaveResult struct {
 	Delta   execution.TxDelta
 }
 
+func porygonDistributedESCReady(executionShardID string, waveExchange PorygonWaveExchangeFunc) bool {
+	return strings.TrimSpace(executionShardID) != "" && waveExchange != nil
+}
+
 func (p porygonBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
 	if input.Block.ExecutionPlan == nil || input.Block.ExecutionPlan.AlgorithmID != porygonPlanAlgorithmID {
 		return BlockExecutionResult{}, fmt.Errorf("execution plan porygon plan missing")
@@ -56,6 +60,9 @@ func (p porygonBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
 	if workerCount < 1 {
 		workerCount = 1
+	}
+	if porygonBool(p.config, "require_distributed_esc", false) && !porygonDistributedESCReady(input.ExecutionShardID, input.PorygonWaveExchange) {
+		return BlockExecutionResult{}, fmt.Errorf("porygon formal distributed ESC wiring missing: execution_shard_id=%q wave_exchange=%t", input.ExecutionShardID, input.PorygonWaveExchange != nil)
 	}
 	return executePorygonPlan(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, workerCount, parseMS, verifyMS, verifyMode, input.ExecutionShardID, input.PorygonWaveExchange)
 }
