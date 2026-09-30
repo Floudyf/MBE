@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	realblock "metaverse-chainlab/executor/realism/block"
 	"metaverse-chainlab/executor/realism/execution"
@@ -288,9 +289,11 @@ type metaTrackBufferedVersion struct {
 }
 
 type metaTrackVersionPublishBuffer struct {
-	mu                  sync.Mutex
-	finals              map[string]metaTrackBufferedVersion
-	localSuccessorCount map[metaTrackVersionIdentity]int
+	mu                             sync.Mutex
+	finals                         map[string]metaTrackBufferedVersion
+	localSuccessorCount            map[metaTrackVersionIdentity]int
+	blockRemoteValueSuccessorCount map[metaTrackVersionIdentity]int
+	asyncV640                      *metaTrackAsyncVersionPublisherV640
 }
 
 type metaTrackTransientRefState struct {
@@ -308,8 +311,13 @@ func metaTrackVersionBufferKey(r *NodeRuntime, block realblock.Block) string {
 
 func (r *NodeRuntime) newMetaTrackVersionPublishBuffer(block realblock.Block) *metaTrackVersionPublishBuffer {
 	buffer := &metaTrackVersionPublishBuffer{
-		finals:              map[string]metaTrackBufferedVersion{},
-		localSuccessorCount: map[metaTrackVersionIdentity]int{},
+		finals:                         map[string]metaTrackBufferedVersion{},
+		localSuccessorCount:            map[metaTrackVersionIdentity]int{},
+		blockRemoteValueSuccessorCount: metaTrackBlockRemoteValueConsumerIndexV640(block),
+	}
+	if r.metaTrackBlockExecutorFlag("dependency_closed_consensus") && r.metaTrackBlockExecutorFlag("batch_remote_writeback") {
+		buffer.asyncV640 = newMetaTrackAsyncVersionPublisherV640()
+		r.incrementFullLocalityMetric("metatrack_async_version_writeback_v640_block_count", 1)
 	}
 	if r.metaTrackBlockExecutorFlag("version_liveness_indexed") {
 		producerShard := map[metaTrackVersionIdentity]string{}
@@ -381,6 +389,11 @@ func (r *NodeRuntime) newMetaTrackVersionPublishBuffer(block realblock.Block) *m
 	r.incrementFullLocalityMetric("metatrack_version_remote_live_count", int64(remoteLive))
 	r.incrementFullLocalityMetric("metatrack_version_dead_intermediate_count", int64(deadIntermediate))
 	r.incrementFullLocalityMetric("metatrack_version_final_persistent_count", int64(finalPersistent))
+	blockRemoteValueConsumerEdges := 0
+	for _, count := range buffer.blockRemoteValueSuccessorCount {
+		blockRemoteValueConsumerEdges += count
+	}
+	r.incrementFullLocalityMetric("metatrack_block_remote_value_consumer_edge_count", int64(blockRemoteValueConsumerEdges))
 	if len(digests) > 0 {
 		r.emitRuntimeEvent(RuntimeEvent{Type: "MetaTrackVersionLivenessPlan", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"policy": metaTrackVersionLivenessPolicyV5, "digest": stableTextDigest(strings.Join(digests, "|")), "produced_version_count": produced}})
 	}
@@ -388,7 +401,11 @@ func (r *NodeRuntime) newMetaTrackVersionPublishBuffer(block realblock.Block) *m
 }
 
 func (r *NodeRuntime) discardMetaTrackVersionLiveness(block realblock.Block) {
-	metaTrackVersionPublishBuffers.Delete(metaTrackVersionBufferKey(r, block))
+	key := metaTrackVersionBufferKey(r, block)
+	if raw, ok := metaTrackVersionPublishBuffers.Load(key); ok {
+		cancelMetaTrackAsyncVersionsV640(raw.(*metaTrackVersionPublishBuffer))
+	}
+	metaTrackVersionPublishBuffers.Delete(key)
 }
 
 func metaTrackLocalSuccessorCountInBlock(block realblock.Block, producer tx.SignedTransaction, dependency tx.StateVersionDependency) int {
@@ -549,6 +566,10 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 			}
 		}
 		shardIDs := r.shardIDs()
+		closureBackgroundAsync := buffer.asyncV640 != nil
+		immediateByHome := map[string][]state.StateKV{}
+		immediateUnqualified := map[string]string{}
+		immediateClassByKey := map[string]string{}
 		for _, dependency := range item.ExecutionRouting.StateVersions {
 			if dependency.ProducedVersion == 0 {
 				continue
@@ -582,8 +603,9 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 				}
 			}
 
-			// The produced exact value is always visible on the execution shard so
-			// same-shard successors can resume without a Home round-trip.
+			// The exact version is always made visible on its execution shard first.
+			// Same-block consumers therefore continue to use the existing transaction-
+			// level local handoff path and never need to wait for Home durability.
 			r.publishStateVersion(dependency.Key, dependency.ProducedVersion, value)
 			if homeShard == r.node.ShardID {
 				switch dependency.LivenessClass {
@@ -601,7 +623,9 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 				}
 				continue
 			}
-			// Preserve the existing bounded publication owner rule for network side effects.
+
+			// Preserve the existing bounded publication-owner rule for network side
+			// effects. PBFT replicas do not independently duplicate Home publication.
 			if r.node.NodeID != block.ProposerID && !r.isCurrentLeader() {
 				continue
 			}
@@ -625,8 +649,7 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 			}
 			if effectiveClass == metaTrackVersionClassLocalTransient && !sameBlock {
 				// A route-batch-local successor may land in a later PBFT block. Keep the
-				// predecessor globally durable in that case so node restart/catch-up
-				// cannot lose the exact value between blocks.
+				// predecessor globally visible/durable in that case.
 				effectiveClass = metaTrackVersionClassRemoteLive
 				r.incrementFullLocalityMetric("metatrack_version_cross_block_preserved_count", 1)
 			}
@@ -641,26 +664,41 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 				r.incrementFullLocalityMetric("metatrack_version_avoidable_ack_message_count", int64(nodes))
 				continue
 			case metaTrackVersionClassFinalPersistent:
-				// Dependency-closed consensus may place a consumer from a later signed
-				// projection on another execution shard, which is invisible to this
-				// local block. Therefore closure mode must not defer a final version
-				// until the aggregate block ends: publish it immediately and let remote
-				// StateReady subscribers resume. The frozen current profile keeps the
-				// original end-of-block final batch writeback behavior.
-				boundaryRequired := r.metaTrackBlockExecutorFlag("dependency_closed_consensus")
-				if boundaryRequired {
-					r.incrementFullLocalityMetric("metatrack_closure_boundary_immediate_publish_count", 1)
-				} else if dependency.RemoteValueSuccessorCount == 0 && dependency.RemoteOrderingSuccessorCount == 0 && r.metaTrackBlockExecutorFlag("final_version_batch_writeback") {
+				if closureBackgroundAsync {
+					identity := metaTrackVersionIdentity{Key: dependency.Key, Version: dependency.ProducedVersion}
+					if buffer.blockRemoteValueSuccessorCount[identity] > 0 {
+						immediateByHome[homeShard] = append(immediateByHome[homeShard], versionItem)
+						immediateUnqualified[versionItem.Key] = dependency.Key
+						immediateClassByKey[versionItem.Key] = effectiveClass
+						continue
+					}
+					if err := r.enqueueMetaTrackAsyncFinalV640(block, buffer, metaTrackAsyncVersionTaskV640{
+						HomeShard:  homeShard,
+						LogicalKey: dependency.Key,
+						Item:       versionItem,
+						Delta:      delta,
+					}); err != nil {
+						return err
+					}
+					continue
+				}
+				if dependency.RemoteValueSuccessorCount == 0 && dependency.RemoteOrderingSuccessorCount == 0 && r.metaTrackBlockExecutorFlag("final_version_batch_writeback") {
 					buffer.mu.Lock()
 					buffer.finals[homeShard+"\x00"+dependency.Key] = metaTrackBufferedVersion{HomeShard: homeShard, Key: dependency.Key, Item: versionItem}
 					buffer.mu.Unlock()
 					r.incrementFullLocalityMetric("metatrack_version_final_batch_buffered_count", 1)
 					continue
 				}
+			case metaTrackVersionClassRemoteLive:
+				if closureBackgroundAsync {
+					immediateByHome[homeShard] = append(immediateByHome[homeShard], versionItem)
+					immediateUnqualified[versionItem.Key] = dependency.Key
+					immediateClassByKey[versionItem.Key] = effectiveClass
+					continue
+				}
 			}
-			// remote_live versions and boundary-final versions with a remote successor
-			// keep the existing immediate Home publication path. This is the safe
-			// cross-shard live-version transfer and preserves remote no-op fallback.
+
+			// Frozen/current MetaTrack keeps the historical synchronous publication path.
 			acks, latency, err := r.applyRemoteStateDelta(ctx, block, versionItem, dependency.Key, homeShard, []execution.TxDelta{delta})
 			if err != nil {
 				return err
@@ -672,6 +710,38 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 				r.incrementFullLocalityMetric("metatrack_version_remote_live_immediate_publish_count", 1)
 			} else {
 				r.incrementFullLocalityMetric("metatrack_version_final_immediate_publish_count", 1)
+			}
+		}
+		if closureBackgroundAsync && len(immediateByHome) > 0 {
+			homes := make([]string, 0, len(immediateByHome))
+			for home := range immediateByHome {
+				homes = append(homes, home)
+			}
+			sort.Strings(homes)
+			for _, home := range homes {
+				items := immediateByHome[home]
+				sort.SliceStable(items, func(i, j int) bool {
+					if items[i].RoutingOrdinal != items[j].RoutingOrdinal {
+						return items[i].RoutingOrdinal < items[j].RoutingOrdinal
+					}
+					return items[i].Key < items[j].Key
+				})
+				started := time.Now()
+				if err := r.applyRemoteStateDeltaBatch(ctx, block, home, items, immediateUnqualified, []execution.TxDelta{delta}); err != nil {
+					return err
+				}
+				r.incrementFullLocalityMetric("metatrack_critical_version_publish_wait_ms", time.Since(started).Milliseconds())
+				r.incrementFullLocalityMetric("metatrack_closure_boundary_batch_request_group_count", 1)
+				r.incrementFullLocalityMetric("metatrack_closure_boundary_batch_item_count", int64(len(items)))
+				for _, versionItem := range items {
+					if immediateClassByKey[versionItem.Key] == metaTrackVersionClassRemoteLive {
+						r.incrementFullLocalityMetric("metatrack_version_remote_live_immediate_publish_count", 1)
+					} else {
+						r.incrementFullLocalityMetric("metatrack_closure_boundary_immediate_publish_count", 1)
+						r.incrementFullLocalityMetric("metatrack_block_consumer_critical_final_publish_count", 1)
+						r.incrementFullLocalityMetric("metatrack_version_final_immediate_publish_count", 1)
+					}
+				}
 			}
 		}
 		// A predecessor remains live across PBFT block boundaries until this
@@ -690,6 +760,10 @@ func (r *NodeRuntime) flushMetaTrackVersionLiveness(ctx context.Context, block r
 	}
 	defer metaTrackVersionPublishBuffers.Delete(key)
 	buffer := raw.(*metaTrackVersionPublishBuffer)
+	defer cancelMetaTrackAsyncVersionsV640(buffer)
+	if err := r.deferOrJoinMetaTrackAsyncVersionsV656(ctx, block, buffer); err != nil {
+		return err
+	}
 	buffer.mu.Lock()
 	finals := make([]metaTrackBufferedVersion, 0, len(buffer.finals))
 	for _, item := range buffer.finals {

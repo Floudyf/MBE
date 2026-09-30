@@ -14,6 +14,7 @@ import (
 type StateVersionDependency struct {
 	Key                          string `json:"key"`
 	RequiredVersion              uint64 `json:"required_version"`
+	RequiredExecutionRound int `json:"required_execution_round,omitempty"`
 	ProducedVersion              uint64 `json:"produced_version,omitempty"`
 	LivenessClass                string `json:"liveness_class,omitempty"`
 	LivenessDigest               string `json:"liveness_digest,omitempty"`
@@ -38,6 +39,17 @@ type ExecutionRoutingMetadata struct {
 	RouteBatchSequence              uint64                   `json:"route_batch_sequence,omitempty"`
 	RouteBatchTransactionCount      int                      `json:"route_batch_transaction_count,omitempty"`
 	RouteBatchShardTransactionCount int                      `json:"route_batch_shard_transaction_count,omitempty"`
+	ConsensusExecutionPredecessorOrdinals []uint64            `json:"consensus_execution_predecessor_ordinals,omitempty"`
+	ConsensusOrderingPredecessorOrdinals  []uint64            `json:"consensus_ordering_predecessor_ordinals,omitempty"`
+	ConsensusExecutionDepth               int                 `json:"consensus_execution_depth,omitempty"`
+	ConsensusExecutionRound int `json:"consensus_execution_round,omitempty"`
+	ConsensusWindowSequence uint64 `json:"consensus_window_sequence,omitempty"`
+	ConsensusWindowStartBatchSequence uint64 `json:"consensus_window_start_batch_sequence,omitempty"`
+	ConsensusWindowEndBatchSequence uint64 `json:"consensus_window_end_batch_sequence,omitempty"`
+	ConsensusWindowRouteBatchCount int `json:"consensus_window_route_batch_count,omitempty"`
+	ConsensusWindowTransactionCount int `json:"consensus_window_transaction_count,omitempty"`
+	ConsensusWindowShardTransactionCount int `json:"consensus_window_shard_transaction_count,omitempty"`
+	ConsensusWindowCriticalPath int `json:"consensus_window_critical_path,omitempty"`
 	RouteEntryDigest                string                   `json:"route_entry_digest"`
 	PredictedRemoteReads            int                      `json:"predicted_remote_reads"`
 	PredictedRemoteWrites           int                      `json:"predicted_remote_writes"`
@@ -64,6 +76,17 @@ type executionRoutingDigestPayload struct {
 	RouteBatchSequence              uint64                   `json:"route_batch_sequence,omitempty"`
 	RouteBatchTransactionCount      int                      `json:"route_batch_transaction_count,omitempty"`
 	RouteBatchShardTransactionCount int                      `json:"route_batch_shard_transaction_count,omitempty"`
+	ConsensusExecutionPredecessorOrdinals []uint64            `json:"consensus_execution_predecessor_ordinals,omitempty"`
+	ConsensusOrderingPredecessorOrdinals  []uint64            `json:"consensus_ordering_predecessor_ordinals,omitempty"`
+	ConsensusExecutionDepth               int                 `json:"consensus_execution_depth,omitempty"`
+	ConsensusExecutionRound int `json:"consensus_execution_round,omitempty"`
+	ConsensusWindowSequence uint64 `json:"consensus_window_sequence,omitempty"`
+	ConsensusWindowStartBatchSequence uint64 `json:"consensus_window_start_batch_sequence,omitempty"`
+	ConsensusWindowEndBatchSequence uint64 `json:"consensus_window_end_batch_sequence,omitempty"`
+	ConsensusWindowRouteBatchCount int `json:"consensus_window_route_batch_count,omitempty"`
+	ConsensusWindowTransactionCount int `json:"consensus_window_transaction_count,omitempty"`
+	ConsensusWindowShardTransactionCount int `json:"consensus_window_shard_transaction_count,omitempty"`
+	ConsensusWindowCriticalPath int `json:"consensus_window_critical_path,omitempty"`
 	PredictedRemoteReads            int                      `json:"predicted_remote_reads"`
 	PredictedRemoteWrites           int                      `json:"predicted_remote_writes"`
 	StateVersions                   []StateVersionDependency `json:"state_versions,omitempty"`
@@ -94,6 +117,17 @@ func ComputeExecutionRoutingDigest(t SignedTransaction, routing ExecutionRouting
 		RouteBatchSequence:              routing.RouteBatchSequence,
 		RouteBatchTransactionCount:      routing.RouteBatchTransactionCount,
 		RouteBatchShardTransactionCount: routing.RouteBatchShardTransactionCount,
+		ConsensusExecutionPredecessorOrdinals: append([]uint64(nil), routing.ConsensusExecutionPredecessorOrdinals...),
+		ConsensusOrderingPredecessorOrdinals: append([]uint64(nil), routing.ConsensusOrderingPredecessorOrdinals...),
+		ConsensusExecutionDepth: routing.ConsensusExecutionDepth,
+		ConsensusExecutionRound: routing.ConsensusExecutionRound,
+		ConsensusWindowSequence:              routing.ConsensusWindowSequence,
+		ConsensusWindowStartBatchSequence:    routing.ConsensusWindowStartBatchSequence,
+		ConsensusWindowEndBatchSequence:      routing.ConsensusWindowEndBatchSequence,
+		ConsensusWindowRouteBatchCount:       routing.ConsensusWindowRouteBatchCount,
+		ConsensusWindowTransactionCount:      routing.ConsensusWindowTransactionCount,
+		ConsensusWindowShardTransactionCount: routing.ConsensusWindowShardTransactionCount,
+		ConsensusWindowCriticalPath:          routing.ConsensusWindowCriticalPath,
 		PredictedRemoteReads:            routing.PredictedRemoteReads,
 		PredictedRemoteWrites:           routing.PredictedRemoteWrites,
 		StateVersions:                   append([]StateVersionDependency(nil), routing.StateVersions...),
@@ -141,6 +175,32 @@ func ValidateExecutionRouting(t SignedTransaction) error {
 			return fmt.Errorf("invalid execution routing route batch metadata")
 		}
 	}
+	if routing.ConsensusExecutionDepth < 0 {
+		return fmt.Errorf("invalid execution routing consensus execution depth")
+	}
+	if routing.ConsensusExecutionRound < 0 {
+		return fmt.Errorf("invalid execution routing consensus execution round")
+	}
+	windowPresent := routing.ConsensusWindowSequence != 0 || routing.ConsensusWindowStartBatchSequence != 0 || routing.ConsensusWindowEndBatchSequence != 0 || routing.ConsensusWindowRouteBatchCount != 0 || routing.ConsensusWindowTransactionCount != 0 || routing.ConsensusWindowShardTransactionCount != 0 || routing.ConsensusWindowCriticalPath != 0
+	if windowPresent {
+		if routing.ConsensusWindowSequence == 0 || routing.ConsensusWindowStartBatchSequence == 0 || routing.ConsensusWindowEndBatchSequence < routing.ConsensusWindowStartBatchSequence || routing.ConsensusWindowRouteBatchCount != int(routing.ConsensusWindowEndBatchSequence-routing.ConsensusWindowStartBatchSequence+1) || routing.ConsensusWindowTransactionCount <= 0 || routing.ConsensusWindowShardTransactionCount <= 0 || routing.ConsensusWindowShardTransactionCount > routing.ConsensusWindowTransactionCount || routing.ConsensusWindowCriticalPath <= 0 || routing.RouteBatchSequence < routing.ConsensusWindowStartBatchSequence || routing.RouteBatchSequence > routing.ConsensusWindowEndBatchSequence {
+			return fmt.Errorf("invalid execution routing consensus window metadata")
+		}
+	}
+	seenConsensusPred := map[uint64]bool{}
+	for _, values := range [][]uint64{routing.ConsensusExecutionPredecessorOrdinals, routing.ConsensusOrderingPredecessorOrdinals} {
+		last := uint64(0)
+		for _, predecessor := range values {
+			if predecessor == 0 || predecessor >= routing.RoutingOrdinal || (last != 0 && predecessor <= last) || seenConsensusPred[predecessor] {
+				return fmt.Errorf("invalid execution routing consensus predecessor ordinals")
+			}
+			seenConsensusPred[predecessor] = true
+			last = predecessor
+		}
+	}
+	if len(seenConsensusPred) > 0 && routing.ConsensusExecutionDepth <= 0 {
+		return fmt.Errorf("invalid execution routing consensus execution depth")
+	}
 	if routing.PredictedRemoteReads < 0 || routing.PredictedRemoteWrites < 0 {
 		return fmt.Errorf("invalid execution routing remote-access prediction")
 	}
@@ -160,6 +220,12 @@ func ValidateExecutionRouting(t SignedTransaction) error {
 		}
 		if dependency.ProducedVersion != 0 && dependency.RequiredVersion >= dependency.ProducedVersion {
 			return fmt.Errorf("invalid execution routing state version ordering")
+		}
+		if dependency.RequiredExecutionRound < 0 || (dependency.RequiredVersion == 0 && dependency.RequiredExecutionRound != 0) {
+			return fmt.Errorf("invalid execution routing required execution round")
+		}
+		if dependency.RequiredExecutionRound > 0 && routing.ConsensusExecutionRound > 0 && dependency.RequiredExecutionRound >= routing.ConsensusExecutionRound {
+			return fmt.Errorf("invalid execution routing execution round ordering")
 		}
 	}
 	if routing.ControlPolicy != "" {

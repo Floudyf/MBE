@@ -27,14 +27,66 @@ const VERSIONED_STATE_READY: MetricDef[] = [
 
 // MBE_METATRACK_PROJECTION_FRONTIER_V612
 const METATRACK_PROJECTION_FRONTIER_V612: MetricDef[] = [
-  { key: "metatrack_projection_frontier_projection_count", label: "闭包投影数", help: "新版 MetaTrack 单次依赖闭包共识块内实际纳入的完整签名投影总数。" },
-  { key: "metatrack_projection_frontier_layer_count", label: "投影前沿层数", help: "由跨投影 exact-version 生产者→读取者关系直接形成的 DAG 层数，不使用经验阈值。" },
-  { key: "metatrack_projection_frontier_max_layer_projection_width", label: "最大同层投影宽度", help: "同一依赖就绪层可并行释放的完整投影最大数量。" },
+  { key: "metatrack_projection_frontier_projection_count", label: "当前就绪投影前沿数", help: "新版 MetaTrack v6.5.6 保留耐久提交后即时唤醒；RouteBatch 仅作为共现/路由计算窗口，不再作为最新版共识原子边界。每笔交易签名绑定执行前驱、只排序前驱和原 RouteBatch 内自然执行深度，PBFT 前由所有验证者重算闭包后决定是否可进入当前交易前沿。" },
+  { key: "metatrack_projection_frontier_layer_count", label: "投影前沿层数", help: "v6.5.6 直接按签名交易前驱形成共识前沿：RAW / exact-version / nonce 是执行屏障，WAW / WAR 只约束跨块顺序；允许跨 RouteBatch 聚合同一时刻独立的交易，但块内执行深度不得超过各交易签名的原批次自然深度。" },
+  { key: "metatrack_projection_frontier_max_layer_projection_width", label: "最大同层投影宽度", help: "当前签名依赖图中可同时进入一个 PBFT 单元的独立交易前沿宽度；唯一容量限制仍是已有 block_size，不再由 micro_batch_size=100 人为切断共识聚合，也不增加经验宽度/深度阈值。" },
   { key: "metatrack_projection_frontier_cross_projection_edge_count", label: "跨投影精确版本依赖边", help: "共识块内部真实跨完整投影的 exact-version 读取依赖边数。" },
   { key: "metatrack_projection_frontier_suppressed_remote_dead_intermediate_publish_count", label: "省掉的远端死中间版本发布", help: "直接依据 v6.0.3 已签名并验证的 dead_intermediate 分类，省掉的远端 Home 中间版本发布次数。" },
   { key: "metatrack_version_dead_intermediate_count", label: "死中间版本数", help: "版本存活分析判定为没有本地/远端值或排序后继的 produced version 数。" },
   { key: "metatrack_version_home_writeback_elided_count", label: "Home 写回省略数", help: "版本存活机制已经安全省略的 Home exact-version 写回数量。" },
   { key: "metatrack_closure_boundary_immediate_publish_count", label: "闭包边界立即发布数", help: "依赖闭包模式为了跨投影 StateReady 活性而立即发布的最终持久版本数量。" },
+];
+
+// MBE_METATRACK_LIVENESS_SAFE_BOUNDARY_BATCH_V621
+const METATRACK_BOUNDARY_BATCH_V621: MetricDef[] = [
+  { key: "metatrack_closure_boundary_batch_request_group_count", label: "闭包边界批量发布组数", help: "依赖闭包模式中，在生产者完成这一原有可见时点，把同一 Home 的 exact-version 发布合并成批量 APPLY；不延迟版本可见性。" },
+  { key: "metatrack_closure_boundary_batch_item_count", label: "闭包边界批量发布项数", help: "闭包边界批量 APPLY 实际携带的 remote-live / final-persistent exact-version 项数。" },
+];
+
+// MBE_METATRACK_ASYNC_VERSION_WRITEBACK_V640
+const METATRACK_ASYNC_WRITEBACK_V640: MetricDef[] = [
+  { key: "metatrack_implementation_revision", label: "MetaTrack 实现修订", help: "v6.4.0 恢复共享交易级 Full Locality；PBFT 仍使用依赖闭包，不使用投影级执行屏障。" },
+  { key: "metatrack_block_remote_value_consumer_edge_count", label: "块内跨执行片精确版本读取边", help: "在当前 dependency-ready PBFT 单元中，确实需要跨执行片读取 produced-version→RequiredVersion 的边数；该关系决定哪些 final-persistent 仍必须即时发布。" },
+  { key: "metatrack_block_consumer_critical_final_publish_count", label: "块内消费者关键最终版本数", help: "签名为 final-persistent、但当前依赖就绪 PBFT 单元中存在跨执行片精确值读取者，因此保留生产者完成时即时发布的版本数。" },
+  { key: "metatrack_background_final_enqueue_count", label: "后台最终版本写回数", help: "当前聚合块中没有跨执行片精确值读取者的 final-persistent 版本；生产者完成后进入后台耐久写回，不阻塞交易级调度。" },
+  { key: "metatrack_async_version_writeback_batch_count", label: "后台写回批次数", help: "后台最终版本按 Home 自然汇聚后实际发送的批次数；无定时等待、无固定批大小。" },
+  { key: "metatrack_async_version_writeback_item_count", label: "后台写回版本项数", help: "后台批次实际携带的 final-persistent exact-version 项数。" },
+  { key: "metatrack_async_version_writeback_max_queue_depth", label: "后台写回最大排队深度", help: "Leader 观测到的后台最终版本队列最大深度，用于判断耐久写回能否跟上交易执行。" },
+  { key: "metatrack_critical_version_publish_wait_ms", label: "关键版本即时发布等待", unit: "ms", help: "remote-live 和块内跨执行片消费者所需 final-persistent 继续走即时发布路径时，实际等待 Home ACK 的累计墙钟时间。" },
+  { key: "metatrack_background_final_writeback_ms", label: "后台最终写回工作时间", unit: "ms", help: "后台 final-persistent 批量写回累计网络工作时间；它与交易执行重叠，不直接等同于额外墙钟时间。" },
+  { key: "metatrack_final_join_wait_ms", label: "提交前最终等待", unit: "ms", help: "v6.5.6 将后台最终版本 join 后移到真正 durable 屏障前，使本地 commit 规划、状态 Apply/WAL 与远端最终写回重叠；该指标现在表示到 durable 边界仍未被隐藏的残余等待。" },
+];
+
+// MBE_METATRACK_CRITICAL_PATH_BALANCED_ROUTING_V651
+const METATRACK_INCREMENTAL_ROUTING_V650: MetricDef[] = [
+  { key: "metatrack_incremental_routing_policy", label: "持续分流策略", help: "最新版 MetaTrack 跨 RouteBatch 持续维护前驱与共现历史，但不再让 exact-version 连续性绝对优先；候选执行域按预计就绪层级、远程代价、共现局部性和负载做无阈值序位平衡。" },
+  { key: "metatrack_incremental_execution_shard_capacity", label: "执行分片容量", help: "由本次实验声明的总交易数与执行分片数直接推导的确定性容量约束，不是经验阈值。" },
+  { key: "metatrack_incremental_exact_state_edge_count", label: "精确版本状态边数", help: "规划时实际找到当前运行中生产者的 RequiredVersion 状态边总数。" },
+  { key: "metatrack_incremental_exact_cross_shard_state_edge_count", label: "跨执行片精确版本状态边", help: "规划后生产者与后继位于不同执行分片的 exact-version 状态边；这是本轮优化直接压缩的核心量。" },
+  { key: "metatrack_incremental_exact_cross_shard_state_edge_rate", label: "跨执行片精确版本率", help: "跨执行片 exact-version 状态边 ÷ exact-version 状态边总数；v6.5.1 不再以最小化该比例作为绝对第一优先级。" },
+  { key: "metatrack_incremental_exact_predecessor_edge_count", label: "精确版本前驱边数", help: "按前驱交易去重后的真实 exact-version 前驱→后继边数。" },
+  { key: "metatrack_incremental_exact_cross_shard_predecessor_count", label: "跨执行片前驱边", help: "按前驱交易去重后仍跨执行分片的 exact-version 边数。" },
+  { key: "metatrack_incremental_coaccess_pair_update_count", label: "增量共现更新数", help: "逐交易更新状态对共现历史的次数；历史跨 RouteBatch 持续保留。" },
+  { key: "metatrack_incremental_capacity_forced_choice_count", label: "容量约束改选数", help: "无容量约束时的序位平衡最优分片已达到由实验规模推导的容量，因此改选其它可容纳分片的交易数。" },
+  { key: "metatrack_incremental_routing_plan_total_us", label: "持续分流总规划时间", unit: "μs", help: "客户端唯一规划器在所有 RouteBatch 上执行持续分流的累计墙钟时间；不进入签名计划摘要。" },
+  { key: "metatrack_incremental_routing_plan_mean_us", label: "单 RouteBatch 平均规划时间", unit: "μs", help: "持续分流 PlanBatch 调用的平均墙钟时间。" },
+  { key: "metatrack_incremental_routing_plan_max_us", label: "单 RouteBatch 最大规划时间", unit: "μs", help: "持续分流单次 PlanBatch 的最大墙钟时间，用来确认分析成本没有成为新瓶颈。" },
+  { key: "metatrack_incremental_batch_partition_invariant", label: "RouteBatch 边界无关", help: "为真表示该版本合同要求 RouteBatch 只承担签名/存活性打包作用，不重置持续分流状态。" },
+];
+
+const METATRACK_CONSENSUS_WINDOW_V656813: MetricDef[] = [
+  { key: "metatrack_consensus_window_count", label: "共识窗口数", help: "从持久提交区块中的签名窗口元数据重建得到的共识窗口数量。" },
+  { key: "metatrack_consensus_window_average_tx_count", label: "平均交易/窗口", help: "每个全局共识窗口包含的平均逻辑交易数。" },
+  { key: "metatrack_consensus_window_average_route_batch_count", label: "平均 RouteBatch/窗口", help: "每个共识窗口聚合的连续 RouteBatch 平均数量。" },
+  { key: "metatrack_consensus_window_max_route_batch_count", label: "最大 RouteBatch/窗口", help: "单个共识窗口聚合的最大 RouteBatch 数。" },
+  { key: "metatrack_consensus_window_average_critical_path", label: "平均最长依赖链", help: "根据持久化签名前驱元数据重新计算的平均最长执行链 L。" },
+  { key: "metatrack_consensus_window_max_critical_path", label: "最大最长依赖链", help: "所有窗口中重新计算得到的最大最长执行链 L。" },
+  { key: "metatrack_consensus_window_average_structural_width", label: "平均结构并行宽度 N/L", help: "窗口交易数 N 与重建最长执行链 L 的比值，仅做运行后观测。" },
+  { key: "metatrack_consensus_window_critical_width_stop_count", label: "N/L 不再提高切窗次数", help: "运行后加入下一 RouteBatch 重算后，N/L 不再严格提高的窗口边界数量。" },
+  { key: "metatrack_consensus_window_block_size_stop_count", label: "block_size 切窗次数", help: "重建确认候选窗口会超过配置 block_size 硬上限的次数。" },
+  { key: "metatrack_consensus_window_input_end_stop_count", label: "输入结束收窗次数", help: "没有下一个 RouteBatch、由输入结束形成的最后窗口数量。" },
+  { key: "metatrack_consensus_window_pbft_blocks_saved", label: "相对单 RouteBatch 省掉的 PBFT 块", help: "按每个 RouteBatch 实际活跃分片重建的基准块数，减去窗口聚合后的实际分片窗口块数。" },
+  { key: "metatrack_consensus_window_signed_reconstruction_match", label: "签名窗口重建一致", help: "窗口签名元数据、实际分片投影、重算关键路径和 N/L 边界规则是否全部一致。" },
 ];
 
 const NATIVE_STATE_READY: MetricDef[] = [
@@ -192,6 +244,34 @@ const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; met
     ],
   },
   {
+    match: (id) => id.includes("optme"), title: "OptME",
+    metrics: [
+      { key: "optme_simulation_ms", label: "PBFT 后模拟耗时", unit: "ms", help: "OptME 在共识输出后对统一块起始快照做第一次真实模拟的累计时间。" },
+      { key: "optme_graph_scheduling_ms", label: "冲突图与调度耗时", unit: "ms", help: "作者 AddressBasedConflictGraph 构建、层次排序、First-Updater-Wins、重排与分组耗时。" },
+      { key: "optme_early_abort_count", label: "Early Abort 数", help: "OptME 第一阶段因反依赖/First-Updater-Wins 进入 aborted/reschedule 路径的交易数。" },
+      { key: "optme_reordered_transaction_count", label: "成功重排交易数", help: "满足作者源码 write-only + 多写单元条件后被重新插回主 schedule 的交易数。" },
+      { key: "optme_sequence_count", label: "主 Schedule 序列数", help: "OptME 主执行计划的 sequence 数。" },
+      { key: "optme_maximum_sequence_width", label: "最大 Sequence 宽度", help: "同一 OptME sequence 可并行提交的最大交易数。" },
+      { key: "optme_rescheduled_epoch_count", label: "二次执行 Epoch 数", help: "剩余 aborted 交易按作者源码冲突规则形成的 re-execution epoch 数。" },
+      { key: "optme_reexecution_count", label: "二次执行交易数", help: "进入作者源码第二次执行阶段的交易数。" },
+      { key: "optme_reexecution_invalid_count", label: "二次执行仍失效数", help: "第二次执行后 optimistic assumption 仍不成立的交易数；不私自加入作者源码中已注释掉的第三次 fallback。" },
+    ],
+  },
+  {
+    match: (id) => id.includes("txallo"), title: "TxAllo",
+    metrics: [
+      { key: "txallo_history_transaction_count", label: "历史交易数", help: "只来自正式评测窗口之前、用于 G/A-TxAllo 的历史交易数量。" },
+      { key: "txallo_graph_account_count", label: "账户图节点数", help: "TxAllo 历史账户交易图中的账户数量；不是 MetaTrack 状态键数量。" },
+      { key: "txallo_graph_edge_count", label: "账户图边数", help: "历史账户对加权边数量。多账户交易按论文 1/C(m,2) 归一化。" },
+      { key: "txallo_g_txallo_run_count", label: "G-TxAllo 次数", help: "全局分配初始化次数。" },
+      { key: "txallo_a_txallo_run_count", label: "A-TxAllo 次数", help: "只处理历史增量段的自适应更新次数。" },
+      { key: "txallo_modeled_throughput", label: "论文模型吞吐 Λ", help: "TxAllo 目标函数中的模型值，不等同于 MBE 实测 end-to-end TPS。" },
+      { key: "txallo_modeled_cross_shard_ratio", label: "历史模型跨片率 γ", help: "用于冻结映射的历史图上论文定义的跨片边权比例。" },
+      { key: "txallo_evaluation_cross_shard_ratio", label: "正式评测跨片率", help: "冻结映射应用到正式评测交易后实际 sender/receiver 跨片比例。" },
+      { key: "txallo_future_evaluation_transactions_used", label: "未来评测交易用于训练数", help: "必须为 0；用于证明当前评测 batch 没有回灌进 TxAllo 映射。" },
+    ],
+  },
+  {
     match: (id) => id.includes("porygon"), title: "Porygon",
     metrics: [
       { key: "porygon_execution_shard_count", label: "ESC 数", help: "前端 topology.shards 映射得到的 Porygon Execution Sub-Committee 数。" },
@@ -263,7 +343,11 @@ export default function V5MechanismAnalysis({ children }: { children: V5FormalCh
       ? NATIVE_STATE_READY
       : [];
   const projectionFrontierDefinitions = metrics.metatrack_projection_frontier_policy ? METATRACK_PROJECTION_FRONTIER_V612 : [];
-  const definitions = [...COMMON, ...stateReadyDefinitions, ...projectionFrontierDefinitions, ...matchedDefinitions.flatMap((item) => item.metrics)];
+  const consensusWindowDefinitions = metrics.metatrack_consensus_window_observability_available ? METATRACK_CONSENSUS_WINDOW_V656813 : [];
+  const boundaryBatchDefinitions = active === "metatrack_latest" && metrics.metatrack_closure_boundary_batch_policy ? METATRACK_BOUNDARY_BATCH_V621 : [];
+  const asyncWritebackDefinitions = active === "metatrack_latest" && metrics.metatrack_async_version_writeback_policy ? METATRACK_ASYNC_WRITEBACK_V640 : [];
+  const incrementalRoutingDefinitions = active === "metatrack_latest" && metrics.metatrack_incremental_routing_policy ? METATRACK_INCREMENTAL_ROUTING_V650 : [];
+  const definitions = [...COMMON, ...stateReadyDefinitions, ...projectionFrontierDefinitions, ...consensusWindowDefinitions, ...boundaryBatchDefinitions, ...asyncWritebackDefinitions, ...incrementalRoutingDefinitions, ...matchedDefinitions.flatMap((item) => item.metrics)];
   const activeName = methods.find((item) => item.id === active)?.name ?? active;
   return <section className="v5-dashboard-section" data-testid="v5-mechanism-analysis">
     <div className="v5-dashboard-heading"><div><h3>机制分析</h3><p className="muted">只显示该方法已有正式证据的指标；所有比例均在指标提取/结果层派生，不修改执行器。</p></div></div>
@@ -352,7 +436,7 @@ function aggregateMetrics(children: V5FormalChildRun[]): Record<string, unknown>
 function asRecord(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function number(value: unknown): number | null { if (typeof value === "boolean") return null; const parsed = Number(value); return value === null || value === undefined || value === "" || !Number.isFinite(parsed) ? null : parsed; }
 function display(value: unknown): string { return value === null || value === undefined || value === "" ? "—" : typeof value === "boolean" ? (value ? "是" : "否") : String(value); }
-function formatMetric(value: number, unit?: string): string { if (unit === "B") return `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })} B`; if (unit === "ms") return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ms`; if (Math.abs(value) > 0 && Math.abs(value) < 1) return value.toFixed(4); return value.toLocaleString(undefined, { maximumFractionDigits: 3 }); }
+function formatMetric(value: number, unit?: string): string { if (unit === "B") return `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })} B`; if (unit === "ms") return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ms`; if (unit === "μs") return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} μs`; if (Math.abs(value) > 0 && Math.abs(value) < 1) return value.toFixed(4); return value.toLocaleString(undefined, { maximumFractionDigits: 3 }); }
 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();

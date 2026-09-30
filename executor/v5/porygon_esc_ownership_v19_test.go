@@ -128,9 +128,10 @@ func TestPorygonV19DistributedESCOwnershipExecutesOnlyLocalTransactions(t *testi
 	}
 
 	executor := porygonBlockExecutor{makeBasic("block_executor", porygonBlockExecutorID, porygonExecutorConfig())}
+	stateFetch := porygonUnitTestStateFetch(map[string]string{}, planned.Block.ShardID, plan.ExecutionShardCount)
 	distributed, err := executor.ExecuteBlock(context.Background(), BlockExecutionInput{
 		Block: planned.Block, BaseStateSnapshot: map[string]string{}, WorkerCount: 4,
-		ExecutionShardID: localShard, PorygonWaveExchange: exchange,
+		ExecutionShardID: localShard, PorygonWaveExchange: exchange, PorygonStateFetch: stateFetch,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -145,8 +146,18 @@ func TestPorygonV19DistributedESCOwnershipExecutesOnlyLocalTransactions(t *testi
 	if len(distributed.ExecutionResult.Receipts) != len(planned.Block.TxList) {
 		t.Fatalf("global materialization lost certified remote results: receipts=%d want=%d", len(distributed.ExecutionResult.Receipts), len(planned.Block.TxList))
 	}
-	if distributed.ExecutionResult.StateRootAfter != legacy.ExecutionResult.StateRootAfter {
-		t.Fatalf("distributed ESC materialization changed state root: distributed=%s legacy=%s", distributed.ExecutionResult.StateRootAfter, legacy.ExecutionResult.StateRootAfter)
+	if len(distributed.ExecutionResult.TxDeltas) != len(legacy.ExecutionResult.TxDeltas) {
+		t.Fatalf("distributed ESC delta count=%d want=%d", len(distributed.ExecutionResult.TxDeltas), len(legacy.ExecutionResult.TxDeltas))
+	}
+	for index := range distributed.ExecutionResult.TxDeltas {
+		got := distributed.ExecutionResult.TxDeltas[index]
+		want := legacy.ExecutionResult.TxDeltas[index]
+		if got.TxID != want.TxID || got.Success != want.Success || stableJSONDigest(got.WriteSet) != stableJSONDigest(want.WriteSet) {
+			t.Fatalf("distributed ESC changed logical transaction result at %d: got=%+v want=%+v", index, got, want)
+		}
+	}
+	if got := distributed.ActualMetrics["porygon_state_root_scope"]; got != "local_execution_shard_storage_partition" {
+		t.Fatalf("distributed Porygon root scope=%v want local partition", got)
 	}
 	if distributed.ActualMetrics["porygon_esc_execution_ownership_mode"] != "distributed_esc_quorum_result_exchange_v1" {
 		t.Fatalf("ownership truth metric missing: %#v", distributed.ActualMetrics)

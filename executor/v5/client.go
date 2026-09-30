@@ -127,6 +127,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	transactionPlacementRows := [][]string{}
 	dependencyRows := [][]string{}
 	remoteStateRows := [][]string{}
+	txalloPlacementRows := [][]string{}
+	var txalloBootstrapEvidence map[string]any
+	var txalloBootstrapMapping map[string]string
 	resolvedAccessRows := []resolvedAccessEntry{}
 	connections := map[string]net.Conn{}
 	generatedCrossShardCount := 0
@@ -156,6 +159,15 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if shards < 2 && plan.WorkloadPlan.CrossShardRatio > 0 {
 		return fmt.Errorf("cross_shard_ratio requires at least 2 shards")
 	}
+	if bootstrapper, ok := plugins.Sharding.(HistoricalAllocationBootstrapper); ok {
+		if err := bootstrapper.BootstrapHistoricalAllocation(ctx, HistoricalAllocationBootstrapInput{Plan: plan.WorkloadPlan, DataDir: outDir, ShardIDs: shardIDs}); err != nil {
+			return fmt.Errorf("historical allocation bootstrap: %w", err)
+		}
+		txalloBootstrapEvidence = bootstrapper.HistoricalAllocationEvidence()
+		if mapping, ok := plugins.Sharding.(txalloAccountMappingProvider); ok {
+			txalloBootstrapMapping = mapping.TxAlloMappingSnapshot()
+		}
+	}
 	iterator, err := plugins.Workload.NewIterator(plan.WorkloadPlan, shards, outDir, plugins.Sharding)
 	if err != nil {
 		return err
@@ -177,6 +189,15 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	finalityMode := crossShardFinalityMode(plugins.Routing)
 	bindExecutionRouting := routingBindsExecutionMetadata(plugins.Routing)
 	bindBatchProjectionMetadata := routingBindsBatchProjectionMetadata(plugins.Routing)
+	transactionFrontierV656Enabled := false
+	if plugins.Routing.ID() == "metatrack_coaccess_routing" && len(plan.NodeConfigs) > 0 {
+		if cfg, ok := plan.NodeConfigs[0].PluginProfile["block_producer"]; ok {
+			transactionFrontierV656Enabled = boolFromAny(cfg.Config["dependency_closed_consensus"])
+		}
+	}
+	consensusPredecessorsV656 := newMetaTrackConsensusPredecessorTrackerV656()
+	criticalWidthWindowV6568 := newMetaTrackCriticalWidthWindowPlannerV6568()
+
 	submitRecord := func(record WorkloadRecord, route RoutingDecision) error {
 		executionShard := route.ShardID
 		shardID := workloadIngressShard(record, route, statelessDirect)
@@ -241,7 +262,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				item = generated[0]
 				item.Payload = payload
 				if bindExecutionRouting && record.RoutePlanDigest != "" {
-					routing := tx.ExecutionRoutingMetadata{SenderID: item.Sender, ReceiverID: item.Receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: executionShard, RoutingReason: firstNonEmpty(record.RoutingReason, route.Reason), RoutePlanDigest: record.RoutePlanDigest, RouteBatchSequence: record.RouteBatchSequence, RouteBatchTransactionCount: record.RouteBatchTransactionCount, RouteBatchShardTransactionCount: record.RouteBatchShardTransactionCount, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...), ControlPolicy: record.ControlPolicy, LogicalDomains: append([]string(nil), record.LogicalDomains...), Local: record.Local, Bridge: record.Bridge, FrontierDigest: record.FrontierDigest}
+					routing := tx.ExecutionRoutingMetadata{SenderID: item.Sender, ReceiverID: item.Receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: executionShard, RoutingReason: firstNonEmpty(record.RoutingReason, route.Reason), RoutePlanDigest: record.RoutePlanDigest, RouteBatchSequence: record.RouteBatchSequence, RouteBatchTransactionCount: record.RouteBatchTransactionCount, RouteBatchShardTransactionCount: record.RouteBatchShardTransactionCount, ConsensusExecutionPredecessorOrdinals: append([]uint64(nil), record.ConsensusExecutionPredecessorOrdinals...), ConsensusOrderingPredecessorOrdinals: append([]uint64(nil), record.ConsensusOrderingPredecessorOrdinals...), ConsensusExecutionDepth: record.ConsensusExecutionDepth, ConsensusExecutionRound: record.ConsensusExecutionRound, ConsensusWindowSequence: record.ConsensusWindowSequence, ConsensusWindowStartBatchSequence: record.ConsensusWindowStartBatchSequence, ConsensusWindowEndBatchSequence: record.ConsensusWindowEndBatchSequence, ConsensusWindowRouteBatchCount: record.ConsensusWindowRouteBatchCount, ConsensusWindowTransactionCount: record.ConsensusWindowTransactionCount, ConsensusWindowShardTransactionCount: record.ConsensusWindowShardTransactionCount, ConsensusWindowCriticalPath: record.ConsensusWindowCriticalPath, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...), ControlPolicy: record.ControlPolicy, LogicalDomains: append([]string(nil), record.LogicalDomains...), Local: record.Local, Bridge: record.Bridge, FrontierDigest: record.FrontierDigest}
 					digest, digestErr := tx.ComputeExecutionRoutingDigest(item, routing)
 					if digestErr != nil {
 						err = digestErr
@@ -286,6 +307,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if len(records) == 0 {
 			return nil
 		}
+		preparedV6568 := make([]metaTrackPreparedRecordV6568, 0, len(records))
 		if bindExecutionRouting {
 			for index := range records {
 				ordinal := uint64(records[index].Index + 1)
@@ -304,6 +326,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		placements := map[int]TransactionPlacement{}
 		routePlanDigest := ""
 		routeControlPolicy := ""
+		routePlanUS := int64(0)
 		routeBatchShardCounts := map[string]int{}
 		versionLivenessEnabled := false
 		versionLivenessIndexed := false
@@ -329,7 +352,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				}
 			}
 			deferFinalSeal := bindExecutionRouting && versionLivenessEnabled && singleFinalSeal && plugins.Routing.ID() == "metatrack_coaccess_routing"
-			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding, DeferFinalSeal: deferFinalSeal})
+			routePlanStarted := time.Now()
+			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding, DeferFinalSeal: deferFinalSeal, ExpectedTransactionCount: plan.WorkloadPlan.TxCount})
+			routePlanUS = time.Since(routePlanStarted).Microseconds()
 			if bindExecutionRouting && versionLivenessEnabled && plugins.Routing.ID() == "metatrack_coaccess_routing" {
 				var finalized BatchRoutingPlan
 				var ok bool
@@ -345,7 +370,23 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			}
 			routePlanDigest = routePlan.PlanDigest
 			routeControlPolicy = routePlan.ControlPolicy
-			appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &placementScoreRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
+			// Preserve the pre-existing generic BatchRouting artifact behavior for
+			// stateless_hash_routing. New algorithms must explicitly declare their
+			// artifact family so they cannot be mislabeled as MetaTrack evidence.
+			artifactFamily := "metatrack"
+			if capability, ok := plugins.Routing.(BatchRoutingArtifactCapability); ok {
+				artifactFamily = capability.BatchRoutingArtifactFamily()
+			}
+			if artifactFamily == "metatrack" {
+				appendMetaTrackArtifacts(routePlan, &metatrackBatchRows, &accessMatrixRows, &stateFrequencyRows, &coaccessRows, &placementRows, &placementScoreRows, &transactionPlacementRows, &dependencyRows, &remoteStateRows)
+				if routePlan.IncrementalRoutingPolicy != "" && len(metatrackBatchRows) > 0 {
+					metatrackBatchRows[len(metatrackBatchRows)-1]["incremental_routing_plan_us"] = routePlanUS
+				}
+			} else if artifactFamily == "txallo" {
+				for _, placement := range routePlan.TransactionPlacements {
+					txalloPlacementRows = append(txalloPlacementRows, []string{fmt.Sprint(routePlan.BatchIndex), placement.LogicalID, fmt.Sprint(placement.TxIndex), placement.HomeShard, placement.ExecutionShard, placement.TargetShard, fmt.Sprint(placement.RemoteAccessCount), placement.Reason, routePlan.PlanDigest})
+				}
+			}
 			for _, placement := range routePlan.TransactionPlacements {
 				placements[placement.TxIndex] = placement
 				if bindBatchProjectionMetadata {
@@ -380,12 +421,39 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				}
 				record.PredictedRemoteReads = placement.PredictedRemoteReads
 				record.PredictedRemoteWrites = placement.PredictedRemoteWrites
+				if capability, ok := plugins.Routing.(AccountPlacementRoutingCapability); ok {
+					record = capability.ApplyAccountPlacement(record, placement)
+				}
 			}
 			if route.ShardID == "" {
 				route = plugins.Routing.Route(RoutingInput{Index: record.Index, StateKeys: record.StateKeys, AccessList: record.AccessList, SourceShard: record.SourceShard, ShardIDs: shardIDs, CrossShard: record.CrossShard, Sharding: plugins.Sharding})
 			}
+			if transactionFrontierV656Enabled {
+				senderID := strings.TrimSpace(record.SenderID)
+				if senderID == "" {
+					logicalSourceShard := logicalSourceShardForRecord(record, route, plugins.Sharding, shardIDs)
+					senderID = fmt.Sprintf("client_%s_%d", logicalSourceShard, record.Index)
+				}
+				if err := consensusPredecessorsV656.annotate(record.ExecutionShard, senderID, &record); err != nil {
+					return err
+				}
+				if record.ControlPolicy == metaTrackDeclaredAccessFrontierPolicy {
+					record.FrontierDigest = metaTrackDeclaredAccessFrontierDigestV6567(record, record.ExecutionShard)
+				}
+			}
+			if transactionFrontierV656Enabled {
+				preparedV6568 = append(preparedV6568, metaTrackPreparedRecordV6568{Record: record, Route: route})
+				continue
+			}
 			if err := submitRecord(record, route); err != nil {
 				return err
+			}
+		}
+		if transactionFrontierV656Enabled {
+			closed, err := criticalWidthWindowV6568.PushBatch(preparedV6568, plugins.BlockProducer.BlockSize())
+			if err != nil { return err }
+			for _, prepared := range closed {
+				if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
 			}
 		}
 		batchIndex++
@@ -409,6 +477,11 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	if err := submitBatch(batch); err != nil {
 		return err
+	}
+	if transactionFrontierV656Enabled {
+		for _, prepared := range criticalWidthWindowV6568.Flush() {
+			if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
+		}
 	}
 	replaySummary := iterator.Summary()
 	replaySummary.SubmittedCount = len(rows)
@@ -442,6 +515,32 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	if err := writeResolvedAccessArtifacts(outDir, resolvedAccessRows); err != nil {
 		return err
+	}
+	// MBE_OPTME_TXALLO_MULTISHARD_ORACLE_V8: emit the standard state-home
+	// evidence consumed by the multi-shard correctness oracle. Stateful methods
+	// bind logical keys to the transaction execution namespace; stateless methods
+	// bind them to their persistent deterministic state homes.
+	if optmeTxAlloNeedsStateHomeEvidence(plugins) {
+		evidenceRows := optmeTxAlloStateHomeEvidenceRows(resolvedAccessRows, plugins, shardIDs)
+		if len(evidenceRows) == 0 {
+			return fmt.Errorf("OptME/TxAllo state-home evidence is empty")
+		}
+		if err := metrics.WriteCSV(filepath.Join(outDir, "placement_plan.csv"), []string{"batch_index", "state_key", "home_state_unit", "home_shard", "execution_shard", "frequency", "reason"}, evidenceRows); err != nil {
+			return err
+		}
+	}
+	if txalloBootstrapEvidence != nil {
+		if err := SaveJSON(filepath.Join(outDir, "txallo_allocation_summary.json"), txalloBootstrapEvidence); err != nil {
+			return err
+		}
+		if err := metrics.WriteCSV(filepath.Join(outDir, "txallo_account_mapping.csv"), []string{"account", "shard"}, txalloMappingRows(txalloBootstrapMapping)); err != nil {
+			return err
+		}
+	}
+	if len(txalloPlacementRows) > 0 {
+		if err := metrics.WriteCSV(filepath.Join(outDir, "txallo_transaction_placement.csv"), []string{"batch_index", "logical_id", "tx_index", "home_shard", "execution_shard", "target_shard", "cross_shard_edge_count", "reason", "plan_digest"}, txalloPlacementRows); err != nil {
+			return err
+		}
 	}
 	if len(metatrackBatchRows) > 0 {
 		if err := writeJSONL(filepath.Join(outDir, "metatrack_batch_plan.jsonl"), metatrackBatchRows); err != nil {
@@ -491,6 +590,66 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		return err
 	}
 	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "replay_mode": replaySummary.ReplayMode, "target_submission_tps": replaySummary.TargetSubmissionTPS, "observed_submission_tps": replaySummary.ObservedSubmissionTPS, "submission_duration_ms": replaySummary.SubmissionDurationMS, "pacing_schedule": replaySummary.PacingSchedule, "pacing_late_release_count": replaySummary.PacingLateReleaseCount, "pacing_max_schedule_lag_ms": replaySummary.PacingMaxScheduleLagMS, "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows)), "cross_shard_execution_mode": finalityMode})
+}
+
+func optmeTxAlloNeedsStateHomeEvidence(plugins RuntimePlugins) bool {
+	if plugins.BlockExecutor != nil {
+		switch plugins.BlockExecutor.ID() {
+		case optmeStatefulExecutorID, optmeStatelessExecutorID:
+			return true
+		}
+	}
+	return plugins.Sharding != nil && plugins.Sharding.ID() == txalloShardingID
+}
+
+func optmeTxAlloStateHomeEvidenceRows(entries []resolvedAccessEntry, plugins RuntimePlugins, shardIDs []string) [][]string {
+	type evidence struct {
+		key       string
+		home      string
+		execution string
+		reason    string
+		count     int
+	}
+	stateless := false
+	if plugins.Routing != nil {
+		stateless = plugins.Routing.ID() == optmeStatelessRoutingID || plugins.Routing.ID() == txalloStatelessRoutingID
+	}
+	byPair := map[string]*evidence{}
+	for _, entry := range entries {
+		for _, access := range entry.AccessList {
+			key := strings.TrimSpace(access.Key)
+			if key == "" {
+				continue
+			}
+			home := entry.ExecutionShard
+			reason := "execution_shard_local_namespace"
+			if stateless {
+				home = shardFor(plugins.Sharding, []string{key}, shardIDs)
+				reason = "deterministic_persistent_state_home"
+			}
+			if home == "" {
+				continue
+			}
+			pair := key + "\x00" + home + "\x00" + entry.ExecutionShard
+			row := byPair[pair]
+			if row == nil {
+				row = &evidence{key: key, home: home, execution: entry.ExecutionShard, reason: reason}
+				byPair[pair] = row
+			}
+			row.count++
+		}
+	}
+	keys := make([]string, 0, len(byPair))
+	for key := range byPair {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	out := make([][]string, 0, len(keys))
+	for _, key := range keys {
+		row := byPair[key]
+		out = append(out, []string{"0", row.key, row.key, row.home, row.execution, fmt.Sprint(row.count), row.reason})
+	}
+	return out
 }
 
 func stateVersionDependenciesForRecord(record WorkloadRecord, ordinal uint64, lastWriter map[string]uint64) []tx.StateVersionDependency {
@@ -808,27 +967,48 @@ func requestedCrossShardCount(total int, ratio float64) int {
 
 func appendMetaTrackArtifacts(plan BatchRoutingPlan, planRows *[]map[string]any, accessRows, frequencyRows, coaccessRows, placementRows, placementScoreRows, transactionRows, dependencyRows, remoteStateRows *[][]string) {
 	*planRows = append(*planRows, map[string]any{
-		"batch_index":                   plan.BatchIndex,
-		"plan_digest":                   plan.PlanDigest,
-		"sharding_plugin_id":            plan.ShardingPluginID,
-		"state_storage_unit_count":      plan.StateStorageUnitCount,
-		"placement_policy":              plan.PlacementPolicy,
-		"transaction_policy":            plan.TransactionPolicy,
-		"placement_budget":              plan.PlacementBudget,
-		"placement_min_budget":          plan.PlacementMinBudget,
-		"placement_mu":                  plan.PlacementMu,
-		"placement_capacity":            plan.PlacementCapacity,
-		"placement_total_frequency":     plan.PlacementTotalFrequency,
-		"placement_max_frequency":       plan.PlacementMaxFrequency,
-		"transaction_count":             len(plan.TransactionPlacements),
-		"state_key_count":               len(plan.StateFrequency),
-		"coaccess_edge_count":           len(plan.CoaccessEdges),
-		"remote_access_estimate":        plan.RemoteAccessEstimate,
-		"predicted_remote_access_count": plan.RemoteAccessEstimate,
-		"placement_fallback_count":      plan.PlacementFallbackCount,
-		"routing_overhead":              plan.RoutingOverhead,
-		"shard_load_before":             plan.ShardLoadBefore,
-		"shard_load_after":              plan.ShardLoadAfter,
+		"batch_index":                                     plan.BatchIndex,
+		"plan_digest":                                     plan.PlanDigest,
+		"sharding_plugin_id":                              plan.ShardingPluginID,
+		"state_storage_unit_count":                        plan.StateStorageUnitCount,
+		"placement_policy":                                plan.PlacementPolicy,
+		"transaction_policy":                              plan.TransactionPolicy,
+		"placement_budget":                                plan.PlacementBudget,
+		"placement_min_budget":                            plan.PlacementMinBudget,
+		"placement_mu":                                    plan.PlacementMu,
+		"placement_capacity":                              plan.PlacementCapacity,
+		"placement_total_frequency":                       plan.PlacementTotalFrequency,
+		"placement_max_frequency":                         plan.PlacementMaxFrequency,
+		"transaction_count":                               len(plan.TransactionPlacements),
+		"state_key_count":                                 len(plan.StateFrequency),
+		"coaccess_edge_count":                             len(plan.CoaccessEdges),
+		"remote_access_estimate":                          plan.RemoteAccessEstimate,
+		"predicted_remote_access_count":                   plan.RemoteAccessEstimate,
+		"placement_fallback_count":                        plan.PlacementFallbackCount,
+		"routing_overhead":                                plan.RoutingOverhead,
+		"shard_load_before":                               plan.ShardLoadBefore,
+		"shard_load_after":                                plan.ShardLoadAfter,
+		"incremental_routing_policy":                      plan.IncrementalRoutingPolicy,
+		"incremental_expected_transaction_count":          plan.IncrementalExpectedTransactionCount,
+		"incremental_execution_shard_capacity":            plan.IncrementalExecutionShardCapacity,
+		"incremental_history_transaction_count_before":    plan.IncrementalHistoryTransactionCountBefore,
+		"incremental_history_transaction_count_after":     plan.IncrementalHistoryTransactionCountAfter,
+		"incremental_exact_state_edge_count":              plan.IncrementalExactStateEdgeCount,
+		"incremental_exact_local_state_edge_count":        plan.IncrementalExactLocalStateEdgeCount,
+		"incremental_exact_cross_shard_state_edge_count":  plan.IncrementalExactCrossShardStateEdgeCount,
+		"incremental_exact_predecessor_edge_count":        plan.IncrementalExactPredecessorEdgeCount,
+		"incremental_exact_local_predecessor_count":       plan.IncrementalExactLocalPredecessorCount,
+		"incremental_exact_cross_shard_predecessor_count": plan.IncrementalExactCrossShardPredecessorCount,
+		"incremental_coaccess_pair_update_count":          plan.IncrementalCoaccessPairUpdateCount,
+		"incremental_execution_shard_switch_count":        plan.IncrementalExecutionShardSwitchCount,
+		"incremental_capacity_forced_choice_count":        plan.IncrementalCapacityForcedChoiceCount,
+		"incremental_exact_first_choice_count":            plan.IncrementalExactFirstChoiceCount,
+		"incremental_coaccess_tiebreak_count":             plan.IncrementalCoaccessTiebreakCount,
+		"incremental_remote_tiebreak_count":               plan.IncrementalRemoteTiebreakCount,
+		"incremental_load_tiebreak_count":                 plan.IncrementalLoadTiebreakCount,
+		"incremental_history_digest_before":               plan.IncrementalHistoryDigestBefore,
+		"incremental_history_digest_after":                plan.IncrementalHistoryDigestAfter,
+		"incremental_batch_partition_invariant":           plan.IncrementalBatchPartitionInvariant,
 	})
 	for _, row := range plan.AccessMatrix {
 		*accessRows = append(*accessRows, []string{fmt.Sprint(plan.BatchIndex), row.LogicalID, fmt.Sprint(row.TxIndex), row.Key, string(row.Mode)})

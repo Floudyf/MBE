@@ -495,8 +495,8 @@ def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[
             "comparison_semantics_class": "porygon_3d_global_ordering_distributed_esc_v4",
             "state_access_semantics": "global_ordering_distributed_esc_with_logical_state_shards",
             "state_home_mapping_policy": "deterministic_logical_state_key_partition",
-            "remote_fetch_policy": "logical_signed_access_projection_no_physical_fetch",
-            "remote_writeback_policy": "global_deterministic_multi_shard_materialization_no_physical_writeback",
+            "remote_fetch_policy": "signed_access_projection_with_physical_state_fetch",
+            "remote_writeback_policy": "partition_local_materialization_from_certified_esc_result",
             "proof_policy": "consensus_bound_porygon_transaction_execution_plan_and_esc_result_certificates",
             "legacy_cross_shard_protocol": False,
             "measurement_boundary": "client_submit_to_porygon_terminal",
@@ -1938,3 +1938,12 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
     return spec
 
 # MBE_FORMAL_RUNTIME_CLOSURE_20260820_V7
+
+# BEGIN MBE OPTME TXALLO METHOD SPECIFIC CORRECTNESS V18 EQUIVALENCE
+from backend.app.services.v5_optme_txallo_method_specific_v18 import apply_group_fidelity_gate as _mbe_v18_apply_group_fidelity_gate
+_mbe_v18_original_apply_state_equivalence_gate = _apply_state_equivalence_gate
+
+def _apply_state_equivalence_gate(*args, **kwargs):
+    _mbe_v18_items, _mbe_v18_report = _mbe_v18_original_apply_state_equivalence_gate(*args, **kwargs)
+    return _mbe_v18_apply_group_fidelity_gate(_mbe_v18_items, _mbe_v18_report)
+# END MBE OPTME TXALLO METHOD SPECIFIC CORRECTNESS V18 EQUIVALENCE

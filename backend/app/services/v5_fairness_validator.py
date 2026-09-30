@@ -192,3 +192,12 @@ def write_artifacts(root: Path, rows: list[dict], result: dict) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields); writer.writeheader()
         for row in rows:
             writer.writerow({key: json.dumps(row.get(key)) if isinstance(row.get(key), (list, dict)) else row.get(key, "") for key in fields})
+
+# BEGIN MBE OPTME TXALLO METHOD SPECIFIC CORRECTNESS V18 FAIRNESS
+from backend.app.services.v5_optme_txallo_method_specific_v18 import apply_fairness_fidelity_gate as _mbe_v18_apply_fairness_fidelity_gate
+_mbe_v18_original_validate = validate
+
+def validate(*args, **kwargs):
+    _mbe_v18_rows, _mbe_v18_report = _mbe_v18_original_validate(*args, **kwargs)
+    return _mbe_v18_apply_fairness_fidelity_gate(_mbe_v18_rows, _mbe_v18_report)
+# END MBE OPTME TXALLO METHOD SPECIFIC CORRECTNESS V18 FAIRNESS

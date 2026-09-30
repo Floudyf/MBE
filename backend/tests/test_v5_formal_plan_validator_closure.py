@@ -60,7 +60,13 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     latest = checked.plan.methods[-1]
     assert initial.plugin_overrides == current.plugin_overrides == latest.plugin_overrides
     assert current.plugin_overrides["block_executor"] == "metatrack_block_executor"
-    assert initial.plugin_config_overrides["routing"] == current.plugin_config_overrides["routing"] == latest.plugin_config_overrides["routing"]
+    routing_flag = "incremental_exact_continuity_routing_v65"
+    assert initial.plugin_config_overrides["routing"] == current.plugin_config_overrides["routing"]
+    assert routing_flag not in initial.plugin_config_overrides["routing"]
+    assert routing_flag not in current.plugin_config_overrides["routing"]
+    latest_routing = dict(latest.plugin_config_overrides["routing"])
+    assert latest_routing.pop(routing_flag, None) is True
+    assert latest_routing == current.plugin_config_overrides["routing"]
     assert current.plugin_config_overrides["routing"]["control_policy"] == "declared_access_frontier_v2"
     assert current.plugin_config_overrides["block_executor"]["control_policy"] == "declared_access_frontier_v2"
     assert latest.plugin_config_overrides["block_executor"]["control_policy"] == "declared_access_frontier_v2"

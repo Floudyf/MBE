@@ -8,6 +8,8 @@ import (
 	"time"
 
 	realblock "metaverse-chainlab/executor/realism/block"
+	"metaverse-chainlab/executor/realism/state"
+	"metaverse-chainlab/executor/realism/storage"
 	"metaverse-chainlab/executor/realism/tx"
 )
 
@@ -18,6 +20,7 @@ const (
 	porygonSchedulerID     = "porygon_pipeline_scheduler"
 	porygonBlockExecutorID = "porygon_block_executor"
 	porygonStateAccessID   = "porygon_remote_state_access"
+	porygonStateStorageID  = "porygon_partition_state_store"
 	porygonCrossShardID    = "porygon_cross_shard_coordinator"
 
 	porygonProposalEvidenceID = "porygon_transaction_block_v2"
@@ -88,6 +91,14 @@ type porygonBlockProducer struct{ basicPlugin }
 type porygonExecution struct{ basicPlugin }
 type porygonScheduler struct{ basicPlugin }
 type porygonStateAccess struct{ builtinStateAccess }
+type porygonPartitionStateStore struct{ builtinStateStorage }
+
+func (p porygonPartitionStateStore) UseExecutionShardStorageIdentity() bool { return true }
+func (p porygonPartitionStateStore) Durable() bool                          { return p.builtinStateStorage.Durable() }
+func (p porygonPartitionStateStore) Open(input StateStorageInput) (*state.DB, *storage.BlockStore, error) {
+	return p.builtinStateStorage.Open(input)
+}
+
 type porygonCrossShard struct{ basicPlugin }
 
 // ProposalEvidenceVerifier is an opt-in block-producer validation hook used by
@@ -573,6 +584,9 @@ func registerPorygonPlugins(register func(string, string, Factory)) {
 	register("state_access", porygonStateAccessID, func(c map[string]any) (Plugin, error) {
 		return porygonStateAccess{builtinStateAccess{makeBasic("state_access", porygonStateAccessID, c)}}, nil
 	})
+	register("state_storage", porygonStateStorageID, func(c map[string]any) (Plugin, error) {
+		return porygonPartitionStateStore{builtinStateStorage{makeBasic("state_storage", porygonStateStorageID, c)}}, nil
+	})
 	register("cross_shard", porygonCrossShardID, func(c map[string]any) (Plugin, error) {
 		return porygonCrossShard{makeBasic("cross_shard", porygonCrossShardID, c)}, nil
 	})
@@ -603,8 +617,8 @@ func validatePorygonPluginCombination(plugins RuntimePlugins) error {
 	if plugins.Consensus == nil || plugins.Consensus.ID() != "pbft_style_consensus" {
 		return fmt.Errorf("Porygon MBE fairness profile requires consensus:pbft_style_consensus")
 	}
-	if plugins.StateStorage == nil || plugins.StateStorage.ID() != "persistent_local_state_store" {
-		return fmt.Errorf("Porygon requires state_storage:persistent_local_state_store")
+	if plugins.StateStorage == nil || plugins.StateStorage.ID() != porygonStateStorageID {
+		return fmt.Errorf("Porygon requires state_storage:%s", porygonStateStorageID)
 	}
 	if plugins.Commit == nil || plugins.Commit.ID() != "normal_commit" {
 		return fmt.Errorf("Porygon requires commit:normal_commit")
@@ -652,3 +666,6 @@ var _ ExecutionPlugin = porygonExecution{}
 var _ ConsensusExecutionPlanner = porygonScheduler{}
 var _ StateAccessPlugin = porygonStateAccess{}
 var _ CrossShardPlugin = porygonCrossShard{}
+
+var _ StateStoragePlugin = porygonPartitionStateStore{}
+var _ ExecutionShardStorageIdentityCapability = porygonPartitionStateStore{}

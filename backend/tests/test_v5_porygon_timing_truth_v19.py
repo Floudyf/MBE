@@ -100,11 +100,11 @@ def test_porygon_metrics_verify_esc_ownership_and_report_separate_timing(tmp_pat
     assert metrics["porygon_execution_critical_path_ms"] == 20.7
 
 
-def test_porygon_formal_semantics_do_not_claim_physical_remote_state_plane() -> None:
+def test_porygon_formal_semantics_report_physical_state_fetch_truth() -> None:
     semantics = _execution_semantics({"block_executor": "porygon_block_executor"}, "stateless_porygon")
     assert semantics["comparison_semantics_class"] == "porygon_3d_global_ordering_distributed_esc_v4"
     assert semantics["state_access_semantics"] == "global_ordering_distributed_esc_with_logical_state_shards"
-    assert semantics["remote_fetch_policy"] == "logical_signed_access_projection_no_physical_fetch"
-    assert semantics["remote_writeback_policy"] == "global_deterministic_multi_shard_materialization_no_physical_writeback"
+    assert semantics["remote_fetch_policy"] == "signed_access_projection_with_physical_state_fetch"
+    assert semantics["remote_writeback_policy"] == "partition_local_materialization_from_certified_esc_result"
     assert semantics["proof_policy"] == "consensus_bound_porygon_transaction_execution_plan_and_esc_result_certificates"
     assert semantics["legacy_cross_shard_protocol"] is False

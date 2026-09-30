@@ -92,6 +92,16 @@ BLOCK_STM_NODE_ARTIFACTS = [
     "serial_equivalence.json",
 ]
 
+TXALLO_CLIENT_ARTIFACTS = [
+    "txallo_allocation_summary.json",
+    "txallo_account_mapping.csv",
+    "txallo_transaction_placement.csv",
+]
+
+OPTME_TXALLO_STATE_HOME_EVIDENCE_ARTIFACTS = [
+    "placement_plan.csv",
+]
+
 
 def requested_cross_shard_count(tx_count: int, ratio: float) -> int:
     return int(tx_count * ratio + 0.5)
@@ -201,6 +211,21 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
             f"nodes/{node.node_id}/{artifact}"
             for node in nodes
             for artifact in METATRACK_NODE_ARTIFACTS
+        ]
+
+    if profile.get("routing", {}).get("plugin_id") in {"txallo_routing", "stateless_txallo_routing"}:
+        expected_artifacts += [
+            f"client/{artifact}"
+            for artifact in TXALLO_CLIENT_ARTIFACTS
+        ]
+
+    if (
+        profile.get("block_executor", {}).get("plugin_id") in {"optme_block_executor", "stateless_optme_block_executor"}
+        or profile.get("sharding", {}).get("plugin_id") == "txallo_account_sharding"
+    ):
+        expected_artifacts += [
+            f"client/{artifact}"
+            for artifact in OPTME_TXALLO_STATE_HOME_EVIDENCE_ARTIFACTS
         ]
 
     if profile.get("block_executor", {}).get("plugin_id") == "block_stm_block_executor":

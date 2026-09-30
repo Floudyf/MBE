@@ -37,6 +37,8 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "hash_acg", title: "ACG / Nezha", description: "Batch-SI 原论文对照组：地址冲突图与层次调度。", family: "stateful", comparisonVisible: true, mainVisible: false },
   { methodId: "hash_bsx", title: "BSX", description: "Batch-SI 原论文对照组：无向冲突图 + 确定性图着色。", family: "stateful", comparisonVisible: true, mainVisible: false },
   { methodId: "stateful_calvin", title: "Calvin", description: "SIGMOD 2012：全局确定性顺序 + 分区常驻状态 + FIFO S/X 锁队列 + READ_RESULT 参与者执行；排序复制层统一适配为 MBE PBFT。", family: "stateful", comparisonVisible: true, mainVisible: false },
+  { methodId: "stateful_optme", title: "OptME", description: "SC 2024 算法复现（MBE 多分片集成）：每个物理 PBFT 分片在本地持久状态上，对本分片共识输出执行原 OptME 的并行模拟、地址冲突图、层次排序、First-Updater-Wins、重排与二次执行；多分片拓扑不作为原论文贡献。", family: "stateful", comparisonVisible: true, mainVisible: true },
+  { methodId: "stateful_txallo", title: "TxAllo", description: "ICDE 2023 原论文版：只使用评测窗口之前的历史账户交易图运行 G-TxAllo/A-TxAllo，冻结账户→分片映射后执行正式负载。", family: "stateful", comparisonVisible: true, mainVisible: true },
   { methodId: "hash_batch_si", title: "Batch-SI", description: "AWRT + WRBP + OFAS + 批快照并行。", family: "batch_si", comparisonVisible: true, mainVisible: true, ablationTarget: "batch_si", isFullVariant: true },
   { methodId: "hash_batch_si_no_wrbp", title: "w/o WRBP", description: "以顺序分批替代写机会批次回填，验证 WRBP 的批宽贡献。", family: "batch_si", comparisonVisible: false, mainVisible: false, ablationTarget: "batch_si" },
   { methodId: "hash_batch_si_no_ofas", title: "w/o OFAS", description: "使用 Batch-SI 内部完整依赖图排序替代 OFAS。", family: "batch_si", comparisonVisible: false, mainVisible: false, ablationTarget: "batch_si" },
@@ -47,6 +49,8 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   // MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR
   { methodId: "stateless_porygon", title: "Porygon", description: "ICDE 2024：前端分片数直接映射为执行分片/ESC 数；所有节点共享一个全局 Ordering/PBFT 域，跨 ESC 按 Porygon 单片执行与多片更新语义处理。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "stateless_hash_block_stm", title: "Stateless Hash + Block-STM", description: "无状态哈希路由与 Block-STM 后端组合。", family: "stateless", comparisonVisible: true, mainVisible: false },
+  { methodId: "stateless_optme", title: "Stateless-OptME", description: "OptME 无状态多分片适配：每个 PBFT 分片在共识后独立运行同一 OptME 核心；AccessList 只限定远程状态投影，调度仍来自真实模拟 ReadSet/WriteSet。", family: "stateless", comparisonVisible: true, mainVisible: false },
+  { methodId: "stateless_txallo", title: "Stateless-TxAllo", description: "TxAllo 无状态适配：账户图、G/A-TxAllo 与冻结映射和原版一致，仅将执行状态承载替换为通用无状态远程获取/写回。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "metatrack_serial", title: "MetaTrack（初始版）", description: "状态共访存路由 + 精确版本多前沿 + 双轨执行的初始稳定版本。", family: "metatrack", comparisonVisible: true, mainVisible: false },
   { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "冻结为已验证的 Full Locality + multi-frontier + Version Liveness 版本，用作新版闭包聚合前的直接对照。", family: "metatrack", comparisonVisible: true, mainVisible: false },
 { methodId: "metatrack_latest", title: "MetaTrack（新版）", description: "在当前版基础上复用 exact-version 多前沿图，将多个完整签名投影聚合为极大安全依赖闭包；闭包边界版本即时发布，内部版本继续使用 Version Liveness 裁剪，并采用索引化活性分析与单次最终封签降低控制面开销。", family: "metatrack", comparisonVisible: true, mainVisible: true },

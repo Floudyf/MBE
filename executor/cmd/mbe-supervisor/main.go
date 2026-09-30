@@ -3200,7 +3200,7 @@ func v5LogicalPath(dataDir, target string) string {
 
 func calvinConsistencyShardID(node v5.NodePlan) string {
 	if executor, ok := node.PluginProfile["block_executor"]; ok {
-		if executor.PluginID == "calvin_block_executor" || executor.PluginID == "stateless_calvin_block_executor" {
+		if executor.PluginID == "calvin_block_executor" || executor.PluginID == "stateless_calvin_block_executor" || executor.PluginID == "porygon_block_executor" {
 			if strings.TrimSpace(node.ExecutionShardID) != "" {
 				return node.ExecutionShardID
 			}
@@ -3247,10 +3247,16 @@ func writeHeightRootMatrix(dataDir string, nodes []v5.NodePlan) (bool, bool, err
 			shardID := record[1]
 			if consistencyShard != node.ShardID {
 				shardID = consistencyShard
-				if globalCalvinReceiptRoots[record[2]] == nil {
-					globalCalvinReceiptRoots[record[2]] = map[string]bool{}
+				// Calvin keeps its historical global receipt-root requirement.
+				// Porygon Storage Roles are partitioned, so only replicas of the
+				// same execution/storage partition must share a receipt root.
+				if executor, ok := node.PluginProfile["block_executor"]; ok &&
+					(executor.PluginID == "calvin_block_executor" || executor.PluginID == "stateless_calvin_block_executor") {
+					if globalCalvinReceiptRoots[record[2]] == nil {
+						globalCalvinReceiptRoots[record[2]] = map[string]bool{}
+					}
+					globalCalvinReceiptRoots[record[2]][record[10]] = true
 				}
-				globalCalvinReceiptRoots[record[2]][record[10]] = true
 			}
 			key := shardID + ":" + record[2]
 			byHeight[key] = append(byHeight[key], row{shardID, record[2], record[0], record[4], record[5], record[7], record[9], record[10]})

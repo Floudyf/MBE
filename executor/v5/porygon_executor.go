@@ -64,10 +64,10 @@ func (p porygonBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 	if porygonBool(p.config, "require_distributed_esc", false) && !porygonDistributedESCReady(input.ExecutionShardID, input.PorygonWaveExchange) {
 		return BlockExecutionResult{}, fmt.Errorf("porygon formal distributed ESC wiring missing: execution_shard_id=%q wave_exchange=%t", input.ExecutionShardID, input.PorygonWaveExchange != nil)
 	}
-	return executePorygonPlan(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, workerCount, parseMS, verifyMS, verifyMode, input.ExecutionShardID, input.PorygonWaveExchange)
+	return executePorygonPlan(ctx, input.Block, input.BaseStateSnapshot, input.BaseStateCommitment, plan, workerCount, parseMS, verifyMS, verifyMode, input.ExecutionShardID, input.PorygonWaveExchange, input.PorygonStateFetch)
 }
 
-func executePorygonPlan(ctx context.Context, block realblock.Block, base map[string]string, baseCommitment *state.Commitment, plan porygonExecutionPlan, workerCount int, parseMS, verifyMS int64, verifyMode, executionShardID string, waveExchange PorygonWaveExchangeFunc) (BlockExecutionResult, error) {
+func executePorygonPlan(ctx context.Context, block realblock.Block, base map[string]string, baseCommitment *state.Commitment, plan porygonExecutionPlan, workerCount int, parseMS, verifyMS int64, verifyMode, executionShardID string, waveExchange PorygonWaveExchangeFunc, stateFetch PorygonStateFetchFunc) (BlockExecutionResult, error) {
 	working := copyRegistryStringMap(base)
 	commitmentStarted := time.Now()
 	commitment := state.CloneOrBuild(baseCommitment, working)
@@ -148,7 +148,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 			}
 			requiredShards := sortedBoolKeys(requiredSet)
 			localStarted := time.Now()
-			localResults, localObserved, err := executePorygonWaveWithPool(ctx, pool, serial, block, localWave, byID, indexByID, snapshot)
+			localResults, localObserved, err := executePorygonWaveWithPool(ctx, pool, serial, block, localWave, byID, indexByID, snapshot, executionShardID, plan.ExecutionShardCount, stateFetch)
 			localDuration := time.Since(localStarted)
 			executionDuration += localDuration
 			if err != nil {
@@ -200,7 +200,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		} else {
 			started := time.Now()
 			var err error
-			waveResults, observed, err = executePorygonWaveWithPool(ctx, pool, serial, block, wave, byID, indexByID, snapshot)
+			waveResults, observed, err = executePorygonWaveWithPool(ctx, pool, serial, block, wave, byID, indexByID, snapshot, executionShardID, plan.ExecutionShardCount, stateFetch)
 			executionDuration += time.Since(started)
 			if err != nil {
 				return BlockExecutionResult{}, err
@@ -245,13 +245,29 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 
 			applyStarted := time.Now()
 			for _, key := range keys {
-				working[qualifyStateKey(block.ShardID, key)] = txResult.Delta.WriteSet[key]
+				storageKey := qualifyStateKey(block.ShardID, key)
+				if strings.TrimSpace(executionShardID) != "" {
+					homeShard := fmt.Sprintf("s%d", porygonStateShard(key, plan.ExecutionShardCount))
+					if homeShard != executionShardID {
+						continue
+					}
+					storageKey = qualifyStateKey(homeShard, key)
+				}
+				working[storageKey] = txResult.Delta.WriteSet[key]
 			}
 			applyDuration += time.Since(applyStarted)
 
 			commitmentStarted = time.Now()
 			for _, key := range keys {
-				commitment.Set(qualifyStateKey(block.ShardID, key), txResult.Delta.WriteSet[key])
+				storageKey := qualifyStateKey(block.ShardID, key)
+				if strings.TrimSpace(executionShardID) != "" {
+					homeShard := fmt.Sprintf("s%d", porygonStateShard(key, plan.ExecutionShardCount))
+					if homeShard != executionShardID {
+						continue
+					}
+					storageKey = qualifyStateKey(homeShard, key)
+				}
+				commitment.Set(storageKey, txResult.Delta.WriteSet[key])
 			}
 			receipt := txResult.Receipt
 			receipt.StateRootAfterTx = commitment.Root()
@@ -370,8 +386,12 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_plan_verify_mode":                            verifyMode,
 		"porygon_plan_digest_verified":                        true,
 		"porygon_physical_ordering_domain_count":              1,
-		"porygon_storage_visibility_policy":                   "signed_access_projection",
+		"porygon_storage_visibility_policy":                   "signed_access_projection_over_execution_shard_storage_roles",
 		"porygon_meta_remote_state_control_plane_used":        false,
+		"porygon_state_projection_remote_fetch_used":          stateFetch != nil,
+		"porygon_state_storage_identity":                      executionShardID,
+		"porygon_state_root_scope":                            map[bool]string{true: "local_execution_shard_storage_partition", false: "legacy_direct_executor_global_snapshot"}[strings.TrimSpace(executionShardID) != ""],
+		"porygon_global_physical_state_root_claimed":          strings.TrimSpace(executionShardID) == "",
 		"porygon_physical_relay_protocol_used":                false,
 		"maximum_parallel_width":                              maximumObserved,
 		"transaction_execution_ms":                            result.TransactionExecutionMS,
@@ -386,11 +406,11 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"reexecution_count":                                   0,
 		"serializable":                                        true,
 		"porygon_mbe_consensus_adaptation":                    "single_global_pbft_ordering_domain_with_esc_quorum_result_exchange",
-		"porygon_storage_node_adaptation":                     "logical_storage_projection_over_mbe_persistent_state;separate_physical_storage_nodes_not_claimed",
+		"porygon_storage_node_adaptation":                     "paper_storage_role_co_located_on_existing_mbe_nodes;consensus_identity_separated_from_execution_shard_storage_identity",
 		"porygon_witness_adaptation":                          "validator_full_body_recompute_before_pbft_vote",
 		"porygon_pipeline_timing_truth_boundary":              "logical_protocol_slots;wall_clock_overlap_not_claimed",
 		"porygon_wall_clock_pipeline_overlap_claimed":         false,
-		"porygon_cross_shard_atomicity_truth_boundary":        "single_esc_execution_plus_atomic_deterministic_multi_key_materialization",
+		"porygon_cross_shard_atomicity_truth_boundary":        "single_esc_execution_plus_partition_local_multi_shard_materialization_from_certified_result",
 	}
 	return BlockExecutionResult{
 		ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: plan.PlanDigest,
@@ -401,7 +421,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 	}, nil
 }
 
-func executePorygonWaveWithPool(ctx context.Context, pool *fixedBlockWorkerPool, serial *execution.SerialExecutor, block realblock.Block, wave []string, byID map[string]tx.SignedTransaction, indexByID map[string]int, snapshot map[string]string) ([]porygonWaveResult, int, error) {
+func executePorygonWaveWithPool(ctx context.Context, pool *fixedBlockWorkerPool, serial *execution.SerialExecutor, block realblock.Block, wave []string, byID map[string]tx.SignedTransaction, indexByID map[string]int, snapshot map[string]string, executionShardID string, executionShardCount int, stateFetch PorygonStateFetchFunc) ([]porygonWaveResult, int, error) {
 	results := make([]porygonWaveResult, len(wave))
 	if len(wave) == 0 {
 		return results, 0, nil
@@ -430,7 +450,15 @@ func executePorygonWaveWithPool(ctx context.Context, pool *fixedBlockWorkerPool,
 				errMu.Unlock()
 				return
 			}
-			txSnapshot := porygonTransactionSnapshot(snapshot, block.ShardID, item)
+			txSnapshot, err := porygonTransactionSnapshotWithFetch(ctx, snapshot, block.ShardID, executionShardID, executionShardCount, item, stateFetch)
+			if err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				errMu.Unlock()
+				return
+			}
 			receipt, delta := serial.ExecuteTransaction(block, item, txSnapshot, indexByID[txID])
 			if err := porygonValidateActualAccess(item, delta); err != nil {
 				errMu.Lock()
@@ -451,6 +479,47 @@ func executePorygonWaveWithPool(ctx context.Context, pool *fixedBlockWorkerPool,
 		return nil, maximum, firstErr
 	}
 	return results, maximum, nil
+}
+
+func porygonTransactionSnapshotWithFetch(ctx context.Context, base map[string]string, orderingDomain, executionShardID string, executionShardCount int, item tx.SignedTransaction, fetch PorygonStateFetchFunc) (map[string]string, error) {
+	// Direct executor unit tests and legacy pure-function probes do not carry an
+	// execution-shard identity. Preserve that isolated compatibility mode without
+	// weakening the real Porygon runtime: production nodes always provide
+	// ExecutionShardID, and remote projections remain fail-closed there.
+	if strings.TrimSpace(executionShardID) == "" {
+		return porygonTransactionSnapshot(base, orderingDomain, item), nil
+	}
+	out := make(map[string]string, len(item.AccessList))
+	for _, access := range item.AccessList {
+		key := strings.TrimSpace(access.Key)
+		if key == "" {
+			continue
+		}
+		homeShard := fmt.Sprintf("s%d", porygonStateShard(key, executionShardCount))
+		qualifiedForExecution := qualifyStateKey(orderingDomain, key)
+		if executionShardID != "" && homeShard == executionShardID {
+			if value, ok := base[qualifyStateKey(executionShardID, key)]; ok {
+				out[qualifiedForExecution] = value
+				continue
+			}
+			if value, ok := base[key]; ok {
+				out[qualifiedForExecution] = value
+				continue
+			}
+		}
+		if fetch == nil {
+			return nil, fmt.Errorf("porygon state projection fetch unavailable for tx=%s key=%s home=%s execution_shard=%s", item.TxID, key, homeShard, executionShardID)
+		}
+		event, err := fetch(ctx, item, access)
+		if err != nil {
+			return nil, fmt.Errorf("porygon state projection fetch tx=%s key=%s home=%s: %w", item.TxID, key, homeShard, err)
+		}
+		if event.HomeShard != "" && event.HomeShard != homeShard {
+			return nil, fmt.Errorf("porygon state projection home mismatch tx=%s key=%s got=%s want=%s", item.TxID, key, event.HomeShard, homeShard)
+		}
+		out[qualifiedForExecution] = event.Value
+	}
+	return out, nil
 }
 
 func porygonTransactionSnapshot(base map[string]string, shardID string, item tx.SignedTransaction) map[string]string {

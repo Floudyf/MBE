@@ -114,8 +114,13 @@ type StateFetchResponse struct {
 	WitnessDigest  string `json:"witness_digest"`
 	StateVersion   uint64 `json:"state_version,omitempty"`
 	Versioned      bool   `json:"versioned,omitempty"`
-	Success        bool   `json:"success"`
-	Error          string `json:"error,omitempty"`
+	// SourceLocal is true only for the OptME/TxAllo stateless adaptation when
+	// the exact predecessor was produced and durably committed by this same
+	// execution shard.  It is a reconstructible write-behind cache hit, not a
+	// physical remote-state RPC.
+	SourceLocal bool   `json:"source_local,omitempty"`
+	Success     bool   `json:"success"`
+	Error       string `json:"error,omitempty"`
 }
 
 // StateFetchDiagnostic is bounded runtime evidence for one real MetaTrack RPC.
@@ -332,6 +337,7 @@ type NodeRuntime struct {
 	mu                                 sync.Mutex
 	commitMu                           sync.Mutex
 	commitTasks                        chan commitTask
+	proposalWakeup                     chan struct{}
 	commitWorkerCancel                 context.CancelFunc
 	commitWorkerContext                context.Context
 	commitWorkerWG                     sync.WaitGroup
@@ -436,6 +442,7 @@ type NodeRuntime struct {
 	stateVersionInitial                map[string]string
 	stateVersionValues                 map[string]map[uint64]string
 	stateVersionMaterialized           map[string]uint64
+	methodPreservingHomeVisibleVersion map[string]uint64
 	stateVersionSignals                map[string]chan struct{}
 	stateVersionRemoteSubscriptions    map[string]map[string]stateVersionRemoteSubscription
 	stateVersionAdmissionReady         map[string]bool
@@ -489,6 +496,8 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 		select {
 		case <-ctx.Done():
 			return r.WriteArtifacts()
+		case <-r.proposalWakeup:
+			r.handleMetaTrackDurableProposalWakeupV654(ctx)
 		case <-ticker.C:
 			r.retryPendingRelays()
 			r.retryPendingCrossShardMessages(ctx)
@@ -1229,7 +1238,7 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 	policy := mempool.DefaultPolicy()
 	policy.Capacity = plugins.TxPool.Capacity()
 	pool := plugins.TxPool.CreatePool(TxPoolInput{NodeID: node.NodeID, ShardID: node.ShardID, Policy: policy})
-	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, consensus: pbft.NewState(node.NodeID, node.ShardID, initialLeaderID(plan, node.ShardID), node.Validators), proposals: map[string]realblock.Block{}, verifiedExecutionPlans: map[string]verifiedExecutionPlanRecord{}, deferredPrePrepares: map[uint64]deferredPrePrepare{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, queuedCommitTasks: map[string]bool{}, pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, pendingOutboundRelays: map[string]Relay{}, pendingFinalizeMessages: map[string]Finalize{}, outboundRelaySendErrors: map[string]string{}, finalizeSendErrors: map[string]string{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, pendingStateFetches: map[string]StateFetchDiagnostic{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateFetchSnapshotRoots: map[string]string{}, stateVersionInitial: map[string]string{}, stateVersionValues: map[string]map[uint64]string{}, stateVersionMaterialized: map[string]uint64{}, stateVersionSignals: map[string]chan struct{}{}, stateVersionRemoteSubscriptions: map[string]map[string]stateVersionRemoteSubscription{}, stateVersionAdmissionReady: map[string]bool{}, stateVersionAdmissionWatches: map[string]stateVersionAdmissionWatch{}, stateVersionAdmissionRequestTokens: map[string]string{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
+	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, consensus: pbft.NewState(node.NodeID, node.ShardID, initialLeaderID(plan, node.ShardID), node.Validators), proposals: map[string]realblock.Block{}, verifiedExecutionPlans: map[string]verifiedExecutionPlanRecord{}, deferredPrePrepares: map[uint64]deferredPrePrepare{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, queuedCommitTasks: map[string]bool{}, proposalWakeup: newMetaTrackDurableProposalWakeupV654(), pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, pendingOutboundRelays: map[string]Relay{}, pendingFinalizeMessages: map[string]Finalize{}, outboundRelaySendErrors: map[string]string{}, finalizeSendErrors: map[string]string{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, pendingStateFetches: map[string]StateFetchDiagnostic{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateFetchSnapshotRoots: map[string]string{}, stateVersionInitial: map[string]string{}, stateVersionValues: map[string]map[uint64]string{}, stateVersionMaterialized: map[string]uint64{}, stateVersionSignals: map[string]chan struct{}{}, stateVersionRemoteSubscriptions: map[string]map[string]stateVersionRemoteSubscription{}, stateVersionAdmissionReady: map[string]bool{}, stateVersionAdmissionWatches: map[string]stateVersionAdmissionWatch{}, stateVersionAdmissionRequestTokens: map[string]string{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
 	for qualifiedKey, value := range plugins.StateStorage.Snapshot(db) {
 		if key, ok := unqualifiedLocalKey(qualifiedKey, storageShardID); ok {
 			r.stateVersionInitial[key] = value
@@ -1734,15 +1743,17 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		routingPluginID = r.plugins.Routing.ID()
 	}
 	input := BlockProductionInput{
-		Pool:              r.pool,
-		Proposer:          r.proposer,
-		Limit:             r.blockSize(),
-		Now:               time.Now(),
-		SystemDeltaReady:  systemDrainPending,
-		Context:           ctx,
-		BaseStateSnapshot: productionSnapshot,
-		WorkerCount:       blockExecutorWorkerCountFromProfile(r.pluginSnapshot),
-		RoutingPluginID:   routingPluginID,
+		Pool:                            r.pool,
+		Proposer:                        r.proposer,
+		Limit:                           r.blockSize(),
+		Now:                             time.Now(),
+		SystemDeltaReady:                systemDrainPending,
+		Context:                         ctx,
+		BaseStateSnapshot:               productionSnapshot,
+		WorkerCount:                     blockExecutorWorkerCountFromProfile(r.pluginSnapshot),
+		RoutingPluginID:                 routingPluginID,
+		MetaTrackExactVersionReadyV6566: r.metaTrackExactVersionReadyV6566,
+		MetaTrackWorkerCountV6567:       blockExecutorWorkerCountFromProfile(r.pluginSnapshot),
 	}
 	if !r.plugins.BlockProducer.ShouldProduce(input) {
 		return
@@ -2234,6 +2245,20 @@ func (r *NodeRuntime) probeStatelessVersionAdmissionRequirements(ctx context.Con
 }
 
 func (r *NodeRuntime) probeStatelessVersionAdmissionOnce(ctx context.Context, block realblock.Block, requirement statelessVersionAdmissionRequirement) (bool, error) {
+	// MBE_OPTME_TXALLO_METHOD_PRESERVING_WRITE_BEHIND_V10:
+	// If this execution shard itself produced and durably committed the exact
+	// predecessor in an earlier block, waiting for the remote Home shard to
+	// materialize that same value adds an MBE-specific round trip that neither
+	// OptME nor TxAllo requires.  Reuse only the exact local version; consumers
+	// on other execution shards still wait for Home and therefore retain the
+	// original cross-shard safety boundary.
+	if r.methodPreservingExactVersionTransportEnabled() && requirement.version > 0 {
+		if _, ready := r.stateVersionValue(requirement.key, requirement.version); ready {
+			r.addRuntimeMetric("method_preserving_source_local_version_admission_hit_count", 1)
+			return true, nil
+		}
+		r.addRuntimeMetric("method_preserving_home_version_wait_count", 1)
+	}
 	return r.ensureStatelessVersionAdmissionWatch(ctx, block, requirement)
 }
 
@@ -2832,7 +2857,7 @@ func (r *NodeRuntime) recordScheduleEvents(block realblock.Block, events []Sched
 }
 
 func (r *NodeRuntime) executesRemoteHomeState(item tx.SignedTransaction) bool {
-	if !r.hasBatchRoutingControlPlane() {
+	if !r.genericStatelessRemoteStateEnabled() {
 		return false
 	}
 	shards := r.shardIDs()
@@ -3412,7 +3437,13 @@ func (r *NodeRuntime) commitWithDisposition(ctx context.Context, block realblock
 
 func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Block, origin CommitOrigin) (CommitResult, error) {
 	r.commitMu.Lock()
-	defer r.commitMu.Unlock()
+	wakeProposal := false
+	defer func() {
+		r.commitMu.Unlock()
+		if wakeProposal {
+			r.signalMetaTrackDurableProposalWakeupV654()
+		}
+	}()
 	r.mu.Lock()
 	if r.fatalPersistenceError != "" {
 		err := fmt.Errorf("fatal persistence freeze: %s", r.fatalPersistenceError)
@@ -3431,6 +3462,7 @@ func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Bloc
 		return result, err
 	}
 	if result.Disposition == CommitApplied {
+		r.recordMetaTrackCommittedRoutingOrdinalsV656(block)
 		if origin == CommitOriginConsensus || origin == CommitOriginCatchUp || origin == CommitOriginRecoveryReplay {
 			r.pbftState().MarkDurableCommit(block)
 			r.maybeBroadcastPBFTCheckpoint(ctx, block)
@@ -3439,6 +3471,9 @@ func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Bloc
 	}
 	if result.Disposition == CommitApplied && result.Block.BlockHash != "" {
 		r.drainPendingCommits(ctx, result.Block, origin)
+	}
+	if result.Disposition == CommitApplied && origin == CommitOriginConsensus {
+		wakeProposal = true
 	}
 	return result, nil
 }
@@ -3556,7 +3591,11 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	}
 	r.publishSystemStateDeltaVersions(block.SystemStateDeltas)
 	statePartitionID := r.stateAccessPartitionID()
-	remoteDeltas := r.materializableRemoteStateDeltas(block, statePartitionID)
+	remoteDeltas, err := r.materializableRemoteStateDeltasChecked(block, statePartitionID)
+	if err != nil {
+		r.setCommitPhase("remote_state_version_chain_rejected", block)
+		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
+	}
 	executionSnapshot, baseStateCommitment, err := applyStateDeltaToSnapshotWithCommitment(stateBefore, baseStateCommitment, remoteDeltas, statePartitionID, block.Height)
 	if err != nil {
 		r.setCommitPhase("remote_state_cas_rejected", block)
@@ -3564,6 +3603,19 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	}
 	var remoteStateReadiness map[string]bool
 	var remoteStateFetch RemoteStateFetchFunc
+	var porygonStateFetch PorygonStateFetchFunc
+	if r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == porygonBlockExecutorID {
+		count := 1
+		if executor, ok := r.plugins.BlockExecutor.(porygonBlockExecutor); ok {
+			if configured := intValue(executor.config["execution_shard_count"]); configured > 0 {
+				count = configured
+			}
+		}
+		porygonStateFetch = func(fetchCtx context.Context, item tx.SignedTransaction, access tx.AccessItem) (RemoteStateReadyEvent, error) {
+			homeShard := fmt.Sprintf("s%d", porygonStateShard(access.Key, count))
+			return r.porygonStateProjectionFetch(fetchCtx, block, item, access, homeShard)
+		}
+	}
 	versionedWaveExecution := r.versionedRemoteWaveExecutionEnabled(block)
 	if r.nativeMetaTrackStateReadyEnabled() {
 		r.setCommitPhase("remote_state_state_ready_setup", block)
@@ -3599,7 +3651,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	if versionedWaveExecution {
 		executed, err = r.executeVersionedRemoteBlockWithCommitment(ctx, block, executionSnapshot, baseStateCommitment)
 	} else {
-		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonWaveExchange: r.porygonWaveExchange, CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, RemoteStateBatchFetch: r.metaTrackBatchStateFetcher(block), StateVersionPublish: r.stateVersionPublisher(block)})
+		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonWaveExchange: r.porygonWaveExchange, PorygonStateFetch: porygonStateFetch, CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, RemoteStateBatchFetch: r.metaTrackBatchStateFetcher(block), StateVersionPublish: r.stateVersionPublisher(block)})
 	}
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
@@ -3609,12 +3661,26 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionFinished", BlockHash: block.BlockHash, Height: block.Height, Success: false, Error: err.Error()})
 		return CommitResult{Disposition: CommitRejected, Block: block}, err
 	}
+	// MBE_OPTME_TXALLO_METHOD_PRESERVING_VERSION_PUBLICATION_V8:
+	// Stateless-OptME and Stateless-TxAllo intentionally do not use the generic
+	// versioned-wave executor. Publish their signed predecessor/producer versions
+	// after their own block executor has produced deterministic transaction deltas.
+	// This closes the cross-block state-home chain without replacing OptME KDG or
+	// TxAllo FIFO/serial scheduling.
+	if r.methodPreservingExactVersionTransportEnabled() {
+		r.setCommitPhase("method_preserving_exact_version_publish", block)
+		if err := r.publishMethodPreservingStateVersions(ctx, block, executed.ExecutionResult.TxDeltas); err != nil {
+			r.setCommitPhase("method_preserving_exact_version_publish_error", block)
+			return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
+		}
+	}
 	if r.metaTrackBlockExecutorFlag("version_liveness") {
 		if err := r.flushMetaTrackVersionLiveness(ctx, block, executed.ExecutionResult.TxDeltas); err != nil {
 			r.setCommitPhase("version_liveness_flush_error", block)
 			return CommitResult{Disposition: CommitRejected, Block: block}, err
 		}
 	}
+	defer r.cancelDeferredMetaTrackAsyncVersionsV656(block.BlockHash)
 	result := executed.ExecutionResult
 	receiptSuccessByTxID := make(map[string]bool, len(result.Receipts))
 	receiptErrorByTxID := make(map[string]string, len(result.Receipts))
@@ -3710,6 +3776,10 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		r.setCommitPhase("state_wal_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
+	if err := r.joinDeferredMetaTrackAsyncVersionsV656(ctx, block); err != nil {
+		r.setCommitPhase("metatrack_final_join_late_barrier_error", block)
+		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
+	}
 	r.setCommitPhase("durable_commit", block)
 	storeMetrics, err := r.store.DurableCommitWithMetrics(block, result)
 	if err != nil {
@@ -3749,6 +3819,8 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	}
 	r.markRemoteStateDeltasApplied(block.SystemStateDeltas)
 	r.markLocalVersionedMaterialized(block.TxList)
+	r.publishCommittedMethodPreservingSystemStateDeltaVersions(block.SystemStateDeltas)
+	r.cacheCommittedMethodPreservingStateVersions(block, executed.ExecutionResult.TxDeltas)
 	r.setCommitPhase("record_execution_artifacts", block)
 	r.recordProposalEvidence(block)
 	r.recordBlockExecutionResult(block, executed)
@@ -3944,6 +4016,90 @@ func (r *NodeRuntime) versionedRemoteWavePolicy() string {
 	}
 }
 
+const methodPreservingVersionedRemoteHomeOrigin = "optme_txallo_versioned_remote_home_v10"
+
+func (r *NodeRuntime) methodPreservingExactVersionTransportEnabled() bool {
+	if r == nil || r.plugins.Routing == nil {
+		return false
+	}
+	switch r.plugins.Routing.ID() {
+	case optmeStatelessRoutingID, txalloStatelessRoutingID:
+		return true
+	default:
+		return false
+	}
+}
+
+// cacheCommittedMethodPreservingStateVersions publishes only versions whose
+// source block has already completed durable local commit.  The cache is not a
+// persistent Home replica: it is reconstructible and is consulted only on the
+// same execution shard.  Failed/no-op writers are cached only when their exact
+// predecessor is already locally available, so this optimization can never
+// invent a value.
+func (r *NodeRuntime) cacheCommittedMethodPreservingStateVersions(block realblock.Block, deltas []execution.TxDelta) {
+	if !r.methodPreservingExactVersionTransportEnabled() || len(block.TxList) == 0 {
+		return
+	}
+	deltaByTxID := make(map[string]execution.TxDelta, len(deltas))
+	for _, delta := range deltas {
+		if delta.TxID != "" {
+			deltaByTxID[delta.TxID] = delta
+		}
+	}
+	shardIDs := r.shardIDs()
+	for _, item := range block.TxList {
+		if item.ExecutionRouting == nil {
+			continue
+		}
+		delta, ok := deltaByTxID[item.TxID]
+		if !ok {
+			continue
+		}
+		for _, dependency := range item.ExecutionRouting.StateVersions {
+			if dependency.Key == "" || dependency.ProducedVersion == 0 {
+				continue
+			}
+			homeShard := r.stateHomeShardForKey(dependency.Key, shardIDs)
+			if homeShard == "" || homeShard == r.node.ShardID {
+				continue
+			}
+			value, wrote := writeSetLogicalValue(delta.WriteSet, dependency.Key)
+			if !delta.Success || !wrote {
+				var ready bool
+				value, ready = r.stateVersionValue(dependency.Key, dependency.RequiredVersion)
+				if !ready {
+					continue
+				}
+			}
+			r.publishStateVersion(dependency.Key, dependency.ProducedVersion, value)
+			r.addRuntimeMetric("method_preserving_source_local_version_cache_publish_count", 1)
+		}
+	}
+}
+
+func (r *NodeRuntime) publishMethodPreservingStateVersions(ctx context.Context, block realblock.Block, deltas []execution.TxDelta) error {
+	if !r.methodPreservingExactVersionTransportEnabled() {
+		return nil
+	}
+	deltaByTxID := make(map[string]execution.TxDelta, len(deltas))
+	for _, delta := range deltas {
+		if delta.TxID != "" {
+			deltaByTxID[delta.TxID] = delta
+		}
+	}
+	for _, item := range block.TxList {
+		delta, ok := deltaByTxID[item.TxID]
+		if !ok {
+			return fmt.Errorf("method-preserving exact-version transport missing delta for transaction %s", item.TxID)
+		}
+		if err := r.publishTransactionStateVersions(ctx, block, item, delta, nil); err != nil {
+			return fmt.Errorf("publish method-preserving state versions for %s: %w", item.TxID, err)
+		}
+	}
+	r.addRuntimeMetric("method_preserving_exact_version_publish_tx_count", int64(len(block.TxList)))
+	return nil
+}
+
 func (r *NodeRuntime) versionedRemoteWaveExecutionEnabled(block realblock.Block) bool {
 	if r.statelessCalvinRemoteStateEnabled() {
 		return false
@@ -3953,6 +4109,16 @@ func (r *NodeRuntime) versionedRemoteWaveExecutionEnabled(block realblock.Block)
 	}
 	if r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == metaTrackBlockExecutorID {
 		return false
+	}
+	// MBE_OPTME_TXALLO_STATE_VERSION_TRANSPORT_V8: these adaptations bind
+	// exact predecessor/producer versions for remote state transport only.
+	// Their paper/method-specific block executors must remain authoritative;
+	// never divert them into the generic stateless versioned-wave scheduler.
+	if r.plugins.Routing != nil {
+		switch r.plugins.Routing.ID() {
+		case optmeStatelessRoutingID, txalloStatelessRoutingID:
+			return false
+		}
 	}
 	for _, item := range block.TxList {
 		if item.ExecutionRouting != nil && len(item.ExecutionRouting.StateVersions) > 0 {
@@ -4661,7 +4827,7 @@ func (r *NodeRuntime) prepareLegacyRemoteStateSnapshot(ctx context.Context, bloc
 }
 
 func (r *NodeRuntime) prepareRemoteStateSnapshot(ctx context.Context, block realblock.Block, stateBefore map[string]string, skipVersioned bool) (map[string]string, error) {
-	if !r.hasBatchRoutingControlPlane() {
+	if !r.genericStatelessRemoteStateEnabled() {
 		return stateBefore, nil
 	}
 	shardIDs := r.shardIDs()
@@ -5037,11 +5203,15 @@ func (r *NodeRuntime) publishTransactionStateVersions(ctx context.Context, block
 			r.publishStateVersion(dependency.Key, dependency.ProducedVersion, value)
 			continue
 		}
+		applyOrigin := "versioned_remote_home"
+		if r.methodPreservingExactVersionTransportEnabled() {
+			applyOrigin = methodPreservingVersionedRemoteHomeOrigin
+		}
 		versionItem := state.StateKV{
 			Key:             qualifyStateKey(r.node.ShardID, dependency.Key),
 			Value:           value,
 			TxIDs:           []string{item.TxID},
-			ApplyOrigin:     "versioned_remote_home",
+			ApplyOrigin:     applyOrigin,
 			RoutingOrdinal:  dependency.ProducedVersion,
 			PreviousVersion: dependency.RequiredVersion,
 			ProducedVersion: dependency.ProducedVersion,
@@ -5058,16 +5228,77 @@ func (r *NodeRuntime) publishTransactionStateVersions(ctx context.Context, block
 	return nil
 }
 
-func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, homeShard string) (response StateFetchResponse, latency time.Duration, fetchErr error) {
-	targetNode := r.stateAccessLeaderID(homeShard)
-	if targetNode == "" {
-		return StateFetchResponse{}, 0, fmt.Errorf("remote state home leader missing for %s", homeShard)
+// porygonStateProjectionFetch preserves Porygon's logical Storage Role request
+// semantics while adapting co-located roles to the MBE process model. Self is
+// intentionally absent from the TCP peer table, so a local home shard must be
+// served from the same authenticated state snapshot without a network self-send.
+// Cross-node projections continue to use fetchRemoteState unchanged.
+func (r *NodeRuntime) porygonStateProjectionFetch(
+	ctx context.Context,
+	block realblock.Block,
+	item tx.SignedTransaction,
+	access tx.AccessItem,
+	homeShard string,
+) (RemoteStateReadyEvent, error) {
+	localPartition := r.stateAccessPartitionID()
+	if homeShard == localPartition {
+		request := StateFetchRequest{
+			RequestID: stableTextDigest(strings.Join([]string{"porygon-local-storage-role", r.node.NodeID, item.TxID, block.BlockHash, access.Key, homeShard, localPartition}, "|")),
+			TxID:      item.TxID, BlockHash: block.BlockHash, Key: access.Key,
+			HomeShard: homeShard, ExecutionShard: localPartition, AccessKind: string(access.Mode),
+		}
+		snapshot, snapshotRoot := r.stateFetchSnapshot(request)
+		qualifiedKey := qualifyStateKey(homeShard, access.Key)
+		response := StateFetchResponse{
+			RequestID: request.RequestID, TxID: item.TxID, BlockHash: block.BlockHash,
+			Key: access.Key, QualifiedKey: qualifiedKey, Value: snapshot[qualifiedKey],
+			HomeShard: homeShard, ExecutionShard: localPartition, StateRoot: snapshotRoot, Success: true,
+		}
+		response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
+		r.addRuntimeMetric("porygon_storage_role_local_projection_count", 1)
+		return RemoteStateReadyEvent{
+			TxID: item.TxID, Key: access.Key, ReadinessToken: response.WitnessDigest,
+			Value: response.Value, HomeShard: response.HomeShard, StateVersion: response.StateVersion, LatencyMS: 0,
+		}, nil
 	}
+
+	response, latency, fetchErr := r.fetchRemoteState(ctx, block, item, access, homeShard)
+	if fetchErr != nil {
+		return RemoteStateReadyEvent{}, fetchErr
+	}
+	// Porygon uses the shared physical state-fetch transport for remote Storage
+	// Roles, but owns its protocol/control path. Record the successful physical
+	// fetch here so network truth and remote-state mechanism metrics agree.
+	r.recordRemoteStateAccess(block, item, access, response, latency)
+	r.addRuntimeMetric("porygon_storage_role_remote_projection_count", 1)
+	return RemoteStateReadyEvent{
+		TxID: item.TxID, Key: access.Key, ReadinessToken: response.WitnessDigest,
+		Value: response.Value, HomeShard: response.HomeShard, StateVersion: response.StateVersion,
+		LatencyMS: latency.Milliseconds(),
+	}, nil
+}
+
+func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, homeShard string) (response StateFetchResponse, latency time.Duration, fetchErr error) {
 	dependency, hasDependency := stateVersionDependencyForKey(item, access.Key)
 	versioned := hasDependency && (isVersionedStateAccess(access) || r.statelessCalvinRemoteStateEnabled())
 	requiredVersion := uint64(0)
 	if versioned {
 		requiredVersion = dependency.RequiredVersion
+	}
+	if r.methodPreservingExactVersionTransportEnabled() && versioned && requiredVersion > 0 {
+		if value, ready := r.stateVersionValue(access.Key, requiredVersion); ready {
+			r.addRuntimeMetric("method_preserving_source_local_version_fetch_count", 1)
+			return StateFetchResponse{
+				RequestID: stableTextDigest(strings.Join([]string{"source-local", r.node.NodeID, item.TxID, block.BlockHash, access.Key, fmt.Sprint(requiredVersion)}, "|")),
+				TxID:      item.TxID, BlockHash: block.BlockHash, Key: access.Key, Value: value,
+				HomeShard: homeShard, ExecutionShard: r.stateAccessPartitionID(), StateVersion: requiredVersion,
+				Versioned: true, SourceLocal: true, Success: true,
+			}, 0, nil
+		}
+	}
+	targetNode := r.stateAccessLeaderID(homeShard)
+	if targetNode == "" {
+		return StateFetchResponse{}, 0, fmt.Errorf("remote state home leader missing for %s", homeShard)
 	}
 	requestID := stableTextDigest(strings.Join([]string{r.node.NodeID, item.TxID, block.BlockHash, access.Key, homeShard, r.stateAccessPartitionID(), fmt.Sprint(requiredVersion), fmt.Sprint(versioned)}, "|"))
 	start := time.Now()
@@ -5264,6 +5495,10 @@ func copyStringMap(input map[string]string) map[string]string {
 }
 
 func (r *NodeRuntime) handleStateFetchResponse(response StateFetchResponse) {
+	if r.noteMetaTrackRemoteReadyResponseV6566(response) {
+		return
+	}
+
 	if r.handleStateVersionAdmissionWatchResponse(response) {
 		return
 	}
@@ -5405,7 +5640,7 @@ func (r *NodeRuntime) markLocalVersionedMaterialized(transactions []tx.SignedTra
 }
 
 func (r *NodeRuntime) applyMetaTrackRemoteDeltas(ctx context.Context, block realblock.Block, physicalDelta []state.StateKV, txDeltaGroups ...[]execution.TxDelta) ([]state.StateKV, error) {
-	if !r.hasBatchRoutingControlPlane() {
+	if !r.genericStatelessRemoteStateEnabled() {
 		return physicalDelta, nil
 	}
 	shardIDs := r.shardIDs()
@@ -5876,7 +6111,14 @@ func (r *NodeRuntime) handleStateDeltaApplyRequest(request StateDeltaApplyReques
 		return ack
 	}
 	if request.ProducedVersion > 0 && request.UpdateSemantics != "commutative_delta" {
-		r.publishStateVersion(request.Key, request.ProducedVersion, request.Value)
+		// Preserve the established MetaTrack/v6.4 source contract and legacy
+		// publication behavior exactly. Method-preserving OptME/TxAllo uses a
+		// separate contiguous receipt-visibility chain below: exact versions become
+		// readable once Home has received a predecessor-consistent immutable value,
+		// while durable DB materialization still waits for Home PBFT.
+		if request.ApplyOrigin != methodPreservingVersionedRemoteHomeOrigin {
+			r.publishStateVersion(request.Key, request.ProducedVersion, request.Value)
+		}
 	}
 	key := stateDeltaApplyKey(request)
 	r.mu.Lock()
@@ -5891,8 +6133,80 @@ func (r *NodeRuntime) handleStateDeltaApplyRequest(request StateDeltaApplyReques
 		r.pendingStateDeltas = append(r.pendingStateDeltas, request)
 	}
 	r.mu.Unlock()
+	if request.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin && request.ProducedVersion > 0 && request.UpdateSemantics != "commutative_delta" {
+		r.publishReadyMethodPreservingHomeVersions()
+	}
 	ack.WitnessDigest = stateDeltaApplyWitnessDigest(ack)
 	return ack
+}
+
+// publishReadyMethodPreservingHomeVersions separates exact-version visibility
+// from durable Home materialization. A method-preserving version is visible at
+// Home only after its immutable predecessor is already visible; future versions
+// stay queued. This removes the v10-v13 durable-before-visible barrier without
+// weakening the PreviousVersion -> ProducedVersion chain used by Home PBFT.
+func (r *NodeRuntime) publishReadyMethodPreservingHomeVersions() {
+	type publication struct {
+		key           string
+		version       uint64
+		value         string
+		subscriptions []stateVersionRemoteSubscription
+	}
+	r.mu.Lock()
+	if r.methodPreservingHomeVisibleVersion == nil {
+		r.methodPreservingHomeVisibleVersion = map[string]uint64{}
+	}
+	ordered := append([]StateDeltaApplyRequest(nil), r.pendingStateDeltas...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return remoteDeltaConsensusOrder(ordered[i]) < remoteDeltaConsensusOrder(ordered[j])
+	})
+	publications := make([]publication, 0)
+	for _, item := range ordered {
+		if item.ApplyOrigin != methodPreservingVersionedRemoteHomeOrigin || item.ProducedVersion == 0 || item.UpdateSemantics == "commutative_delta" || item.Key == "" {
+			continue
+		}
+		current := r.methodPreservingHomeVisibleVersion[item.Key]
+		if materialized := r.stateVersionMaterialized[item.Key]; materialized > current {
+			current = materialized
+			r.methodPreservingHomeVisibleVersion[item.Key] = current
+		}
+		if item.ProducedVersion <= current {
+			continue
+		}
+		if item.ProducedVersion <= item.PreviousVersion || item.PreviousVersion != current {
+			continue
+		}
+		if existing := r.stateVersionValues[item.Key]; existing != nil {
+			if value, ok := existing[item.ProducedVersion]; ok && value != item.Value {
+				r.incrementRuntimeMetricLocked("method_preserving_home_version_receipt_conflict_count")
+				continue
+			}
+		}
+		// Store the immutable exact value under the same lock before advancing the
+		// visible frontier. Concurrent Home receipts therefore cannot expose a
+		// successor before its predecessor exists in the exact-version history.
+		r.publishStateVersionLocked(item.Key, item.ProducedVersion, item.Value)
+		subscriptions := r.takeStateVersionRemoteSubscriptionsLocked(item.Key, item.ProducedVersion)
+		r.methodPreservingHomeVisibleVersion[item.Key] = item.ProducedVersion
+		r.incrementRuntimeMetricLocked("method_preserving_home_version_receipt_publish_count")
+		publications = append(publications, publication{
+			key: item.Key, version: item.ProducedVersion, value: item.Value,
+			subscriptions: subscriptions,
+		})
+	}
+	workerCtx := r.stateFetchWorkerContext
+	r.mu.Unlock()
+	if workerCtx == nil {
+		workerCtx = context.Background()
+	}
+	for _, item := range publications {
+		if len(item.subscriptions) == 0 {
+			continue
+		}
+		if err := r.notifyStateVersionRemoteSubscriptions(workerCtx, item.key, item.version, item.value, item.subscriptions); err != nil && workerCtx.Err() == nil {
+			r.recordStateFetchWorkerError(err)
+		}
+	}
 }
 
 func (r *NodeRuntime) applyQueuedStateDeltas() {
@@ -5906,35 +6220,64 @@ func (r *NodeRuntime) flushQueuedStateDeltas() {
 	// Pending deltas stay pending until a home-shard block commits them.
 }
 
-func (r *NodeRuntime) remoteStateDeltaDrainState(
-	homeBlockHeight uint64,
-) ([]realblock.SystemStateDelta, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	pending := false
-	ready := make([]StateDeltaApplyRequest, 0, len(r.pendingStateDeltas))
-
-	for _, request := range r.pendingStateDeltas {
+func selectRemoteStateDeltasForHomeBlock(requests []StateDeltaApplyRequest, materialized map[string]uint64, homeBlockHeight uint64) (ready []StateDeltaApplyRequest, shouldDrain bool, blockedMethodVersions int) {
+	ordered := append([]StateDeltaApplyRequest(nil), requests...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return remoteDeltaConsensusOrder(ordered[i]) < remoteDeltaConsensusOrder(ordered[j])
+	})
+	current := make(map[string]uint64, len(materialized))
+	for key, version := range materialized {
+		current[key] = version
+	}
+	for _, request := range ordered {
 		if request.ApplyOrigin == calvinStatelessSameBlockOrigin {
 			continue
 		}
-		pending = true
+		if request.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin && request.ProducedVersion > 0 && request.UpdateSemantics != "commutative_delta" {
+			currentVersion := current[request.Key]
+			if request.ProducedVersion <= currentVersion {
+				// A duplicate already covered by an earlier materialized version may
+				// be drained only to clear its pending queue identity.
+				ready = append(ready, request)
+				shouldDrain = true
+				continue
+			}
+			if request.PreviousVersion != currentVersion {
+				blockedMethodVersions++
+				continue
+			}
+			ready = append(ready, request)
+			current[request.Key] = request.ProducedVersion
+			shouldDrain = true
+			continue
+		}
+		// Preserve every legacy readiness rule exactly. Legacy pending deltas
+		// may need height-advance system blocks, so they retain shouldDrain=true
+		// even when not ready at the current height.
+		shouldDrain = true
 		if remoteStateDeltaReadyForHomeBlock(request, homeBlockHeight) {
 			ready = append(ready, request)
 		}
 	}
+	return ready, shouldDrain, blockedMethodVersions
+}
 
-	sort.SliceStable(ready, func(i, j int) bool {
-		return remoteDeltaConsensusOrder(ready[i]) <
-			remoteDeltaConsensusOrder(ready[j])
-	})
+func (r *NodeRuntime) remoteStateDeltaDrainState(
+	homeBlockHeight uint64,
+) ([]realblock.SystemStateDelta, bool) {
+	r.mu.Lock()
+	requests := append([]StateDeltaApplyRequest(nil), r.pendingStateDeltas...)
+	materialized := make(map[string]uint64, len(r.stateVersionMaterialized))
+	for key, version := range r.stateVersionMaterialized {
+		materialized[key] = version
+	}
+	r.mu.Unlock()
 
+	ready, pending, _ := selectRemoteStateDeltasForHomeBlock(requests, materialized, homeBlockHeight)
 	out := make([]realblock.SystemStateDelta, 0, len(ready))
 	for _, request := range ready {
 		out = append(out, systemStateDeltaFromRequest(request))
 	}
-
 	return out, pending
 }
 
@@ -6019,11 +6362,39 @@ func (r *NodeRuntime) publishSystemStateDeltaVersions(items []realblock.SystemSt
 		if item.ProducedVersion == 0 || item.UpdateSemantics == "commutative_delta" || item.Key == "" {
 			continue
 		}
+		if item.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin {
+			// v14 receipt visibility is already published by the contiguous Home
+			// chain. Durable commit only advances the materialized frontier below.
+			continue
+		}
 		r.publishStateVersion(item.Key, item.ProducedVersion, item.Value)
 	}
 }
 
+func (r *NodeRuntime) publishCommittedMethodPreservingSystemStateDeltaVersions(items []realblock.SystemStateDelta) {
+	for _, item := range items {
+		if item.ApplyOrigin != methodPreservingVersionedRemoteHomeOrigin || item.ProducedVersion == 0 || item.UpdateSemantics == "commutative_delta" || item.Key == "" {
+			continue
+		}
+		r.publishStateVersion(item.Key, item.ProducedVersion, item.Value)
+		r.addRuntimeMetric("method_preserving_home_version_committed_publish_count", 1)
+	}
+}
+
+// materializableRemoteStateDeltas preserves the historical one-result helper
+// contract used by the generic/MetaTrack remote-state path and its regression
+// tests. Method-preserving OptME/TxAllo commit code uses the checked variant
+// below so continuity failures remain fail-closed without changing legacy callers.
 func (r *NodeRuntime) materializableRemoteStateDeltas(block realblock.Block, homeShard string) []state.StateKV {
+	out, _ := r.materializableRemoteStateDeltasInternal(block, homeShard, false)
+	return out
+}
+
+func (r *NodeRuntime) materializableRemoteStateDeltasChecked(block realblock.Block, homeShard string) ([]state.StateKV, error) {
+	return r.materializableRemoteStateDeltasInternal(block, homeShard, true)
+}
+
+func (r *NodeRuntime) materializableRemoteStateDeltasInternal(block realblock.Block, homeShard string, enforceMethodContinuity bool) ([]state.StateKV, error) {
 	r.mu.Lock()
 	materialized := make(map[string]uint64, len(r.stateVersionMaterialized))
 	for key, version := range r.stateVersionMaterialized {
@@ -6039,6 +6410,9 @@ func (r *NodeRuntime) materializableRemoteStateDeltas(block realblock.Block, hom
 		if item.ProducedVersion > 0 && item.UpdateSemantics != "commutative_delta" {
 			if item.ProducedVersion <= materialized[item.Key] {
 				continue
+			}
+			if enforceMethodContinuity && item.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin && item.PreviousVersion != materialized[item.Key] {
+				return nil, fmt.Errorf("method-preserving Home version chain mismatch key=%s previous=%d materialized=%d produced=%d", item.Key, item.PreviousVersion, materialized[item.Key], item.ProducedVersion)
 			}
 			materialized[item.Key] = item.ProducedVersion
 			if item.OrderingNoop {
@@ -6065,7 +6439,7 @@ func (r *NodeRuntime) materializableRemoteStateDeltas(block realblock.Block, hom
 			OrderingNoop:    item.OrderingNoop,
 		})
 	}
-	return out
+	return out, nil
 }
 
 func remoteStateDeltasFromBlock(block realblock.Block, homeShard string) []state.StateKV {
@@ -6257,7 +6631,7 @@ func (r *NodeRuntime) recordRemoteStateApply(block realblock.Block, item state.S
 	if deltaID == "" {
 		deltaID = stateDeltaApplyKey(StateDeltaApplyRequest{TxID: ack.TxID, TxIDs: append([]string(nil), ack.TxIDs...), BlockHash: block.BlockHash, Key: unqualifiedKey, UpdateSemantics: ack.UpdateSemantics, Delta: ack.Delta, BaseValueDigest: ack.BaseValueDigest, ApplyOrigin: ack.ApplyOrigin, DeltaKind: ack.DeltaKind, HasInitialValue: ack.HasInitialValue, InitialValue: ack.InitialValue, HomeShard: ack.HomeShard, ExecutionShard: ack.ExecutionShard, SourceKey: item.Key, SourceHeight: block.Height})
 	}
-	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, ack.TxID, unqualifiedKey, ack.QualifiedKey, ack.HomeShard, ack.ExecutionShard, accessKind, fmt.Sprint(latency.Milliseconds()), ack.WitnessDigest, ack.StateRoot, fmt.Sprint(ack.Success), ack.Error, deltaID, fmt.Sprint(block.Height), block.BlockHash, ack.UpdateSemantics}
+	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, ack.TxID, unqualifiedKey, ack.QualifiedKey, ack.HomeShard, ack.ExecutionShard, accessKind, fmt.Sprint(latency.Milliseconds()), ack.WitnessDigest, ack.StateRoot, fmt.Sprint(ack.Success), ack.Error, deltaID, fmt.Sprint(block.Height), block.BlockHash, ack.UpdateSemantics, strings.Join(ack.TxIDs, "|"), fmt.Sprint(ack.PreviousVersion), fmt.Sprint(ack.ProducedVersion), fmt.Sprint(ack.OrderingNoop), ack.ApplyOrigin, ack.DeltaKind}
 	r.mu.Lock()
 	r.remoteStateRows = append(r.remoteStateRows, row)
 	r.mu.Unlock()
@@ -6265,6 +6639,11 @@ func (r *NodeRuntime) recordRemoteStateApply(block realblock.Block, item state.S
 }
 
 func (r *NodeRuntime) recordRemoteStateAccess(block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, response StateFetchResponse, latency time.Duration) {
+	if response.SourceLocal {
+		// Source-local exact-version forwarding is deliberately excluded from
+		// physical remote-state counts; its dedicated runtime metric records it.
+		return
+	}
 	row := []string{fmt.Sprint(time.Now().UnixMilli()), r.node.NodeID, r.node.ShardID, fmt.Sprint(block.Height), block.BlockHash, item.TxID, access.Key, response.QualifiedKey, response.HomeShard, response.ExecutionShard, string(access.Mode), fmt.Sprint(latency.Milliseconds()), response.WitnessDigest, response.StateRoot, fmt.Sprint(response.Success), response.Error, "", "", "", ""}
 	r.mu.Lock()
 	r.remoteStateRows = append(r.remoteStateRows, row)
@@ -6919,12 +7298,8 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 		len(pendingCrossShardIDs)
 	pendingStateDeltaCount := len(r.pendingStateDeltas)
 	pendingStateDeltaKeyCount := len(r.pendingStateDeltaKeys)
-	readyStateDeltaCount := 0
-	for _, request := range r.pendingStateDeltas {
-		if remoteStateDeltaReadyForHomeBlock(request, committedHeight+1) {
-			readyStateDeltaCount++
-		}
-	}
+	readyStateDeltaRequests, _, blockedMethodVersionCount := selectRemoteStateDeltasForHomeBlock(r.pendingStateDeltas, r.stateVersionMaterialized, committedHeight+1)
+	readyStateDeltaCount := len(readyStateDeltaRequests)
 	stateFetchRequestQueueDepth := len(r.stateFetchTasks)
 	stateFetchResponseQueueDepth := len(r.stateFetchResponseTasks)
 	pendingStateVersionSubscriptionCount := r.stateVersionRemoteSubscriptionCountLocked()
@@ -6945,7 +7320,7 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 
 	mempoolIDs := r.pool.IDs()
 	sort.Strings(mempoolIDs)
-	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "execution_shard_id": effectiveExecutionShardID(r.node), "consensus_domain_id": effectiveConsensusDomainID(r.node), "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_in_flight_hash": proposalInFlightHash, "proposal_work_details_available": proposalWorkDetailsAvailable, "proposal_logical_tx_ids": proposalLogicalTxIDs, "proposal_system_state_delta_count": proposalSystemStateDeltaCount, "proposal_validation_work_units": proposalWorkUnits, "proposal_timeout_ms": proposalTimeoutMS, "proposal_planning_in_flight": proposalPlanningInFlight, "proposal_planning_view": proposalPlanningView, "proposal_planning_height": proposalPlanningHeight, "proposal_planning_algorithm_id": proposalPlanningAlgorithmID, "proposal_planning_phase": proposalPlanningPhase, "proposal_planning_started_at_ms": proposalPlanningStartedAtMS, "proposal_planning_progress_at_ms": proposalPlanningProgressAtMS, "proposal_planning_work_units": proposalPlanningWorkUnits, "proposal_planning_detail_count": proposalPlanningDetailCount, "proposal_planning_cancel_reason": proposalPlanningCancelReason, "proposal_vote_count": proposalVoteCount, "proposal_quorum": proposalQuorum, "proposal_quorum_reached": proposalQuorumReached, "proposal_age_ms": proposalAgeMS, "proposal_committing": proposalCommitting, "proposal_finalize_queued": proposalFinalizeQueued, "pbft_quorum_finalize_retry_count": pbftQuorumFinalizeRetryCount, "pbft_view": pbftSnapshot.View, "pbft_current_leader": pbftSnapshot.LeaderID, "pbft_stage": pbftSnapshot.Stage, "pbft_prepare_vote_count": pbftPrepareVoteCount, "pbft_prepare_quorum": pbftSnapshot.PrepareQuorum, "pbft_commit_vote_count": pbftCommitVoteCount, "pbft_commit_quorum": pbftSnapshot.CommitQuorum, "pbft_commit_certificate_count": pbftSnapshot.CommitCertificateCount, "pbft_last_consensus_progress_at_ms": pbftSnapshot.LastProgressAtMS, "pbft_preprepare_retransmit_count": proposalRetransmitCount, "pbft_view_change_target": viewChangeTarget, "pbft_view_change_vote_count": pbftViewChangeVoteCount, "pbft_low_watermark": pbftSnapshot.LowWatermark, "pbft_high_watermark": pbftSnapshot.HighWatermark, "pbft_stable_checkpoint_height": pbftSnapshot.StableCheckpointHeight, "pbft_catchup_target_height": catchupTargetHeight, "pbft_catchup_metrics": pbftCatchupMetrics, "commit_worker_running": commitWorkerRunning, "commit_task_queue_depth": commitTaskQueueDepth, "commit_task_queue_capacity": commitTaskQueueCapacity, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "last_commit_failure": lastCommitFailure, "last_state_fetch": lastStateFetch, "pending_state_fetch_count": len(pendingStateFetches), "pending_state_version_subscription_count": pendingStateVersionSubscriptionCount, "pending_version_admission_watch_count": pendingVersionAdmissionWatchCount, "pending_state_fetches": pendingStateFetches, "state_fetch_failures": stateFetchFailures, "last_state_fetch_service": lastStateFetchService, "state_fetch_service_errors": stateFetchServiceErrors, "fatal_persistence_error": fatalPersistenceError, "fatal_execution_error": fatalExecutionError, "fatal_planning_error": fatalPlanningError, "block_execution_progress": blockExecutionProgress, "block_execution_height": blockExecutionProgress.BlockHeight, "block_execution_progress_at_ms": blockExecutionProgress.LastProgressAtMS, "block_execution_validated_count": blockExecutionProgress.ValidatedCount, "block_execution_task_count": blockExecutionProgress.ExecutionTaskCount, "block_validation_task_count": blockExecutionProgress.ValidationTaskCount, "block_execution_abort_count": blockExecutionProgress.AbortCount, "block_execution_reexecution_count": blockExecutionProgress.ReexecutionCount, "block_execution_scheduler_queue_length": blockExecutionProgress.SchedulerQueueLen, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": pendingFutureBlockCount, "pending_future_block_heights": pendingFutureBlockHeights, "pending_cross_shard_count": pendingCrossShardCount, "pending_cross_shard_ids": pendingCrossShardIDs, "pending_relay_source_count": pendingRelaySourceCount, "pending_relay_source_ids": pendingRelaySourceIDs, "pending_outbound_relay_count": pendingOutboundRelayCount, "pending_outbound_relay_ids": pendingOutboundRelayIDs, "pending_finalize_message_count": pendingFinalizeMessageCount, "pending_finalize_message_ids": pendingFinalizeMessageIDs, "outbound_relay_send_errors": outboundRelaySendErrors, "finalize_send_errors": finalizeSendErrors, "state_fetch_request_queue_depth": stateFetchRequestQueueDepth, "state_fetch_request_queue_capacity": stateFetchMailboxCapacity, "state_fetch_response_queue_depth": stateFetchResponseQueueDepth, "state_fetch_response_queue_capacity": stateFetchResponseMailboxCapacity, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(lifecycleSets.terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "execution_failed_logical_tx_ids": executionFailedIDs, "admission_rejected_logical_tx_ids": admissionRejectedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
+	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "execution_shard_id": effectiveExecutionShardID(r.node), "consensus_domain_id": effectiveConsensusDomainID(r.node), "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_in_flight_hash": proposalInFlightHash, "proposal_work_details_available": proposalWorkDetailsAvailable, "proposal_logical_tx_ids": proposalLogicalTxIDs, "proposal_system_state_delta_count": proposalSystemStateDeltaCount, "proposal_validation_work_units": proposalWorkUnits, "proposal_timeout_ms": proposalTimeoutMS, "proposal_planning_in_flight": proposalPlanningInFlight, "proposal_planning_view": proposalPlanningView, "proposal_planning_height": proposalPlanningHeight, "proposal_planning_algorithm_id": proposalPlanningAlgorithmID, "proposal_planning_phase": proposalPlanningPhase, "proposal_planning_started_at_ms": proposalPlanningStartedAtMS, "proposal_planning_progress_at_ms": proposalPlanningProgressAtMS, "proposal_planning_work_units": proposalPlanningWorkUnits, "proposal_planning_detail_count": proposalPlanningDetailCount, "proposal_planning_cancel_reason": proposalPlanningCancelReason, "proposal_vote_count": proposalVoteCount, "proposal_quorum": proposalQuorum, "proposal_quorum_reached": proposalQuorumReached, "proposal_age_ms": proposalAgeMS, "proposal_committing": proposalCommitting, "proposal_finalize_queued": proposalFinalizeQueued, "pbft_quorum_finalize_retry_count": pbftQuorumFinalizeRetryCount, "pbft_view": pbftSnapshot.View, "pbft_current_leader": pbftSnapshot.LeaderID, "pbft_stage": pbftSnapshot.Stage, "pbft_prepare_vote_count": pbftPrepareVoteCount, "pbft_prepare_quorum": pbftSnapshot.PrepareQuorum, "pbft_commit_vote_count": pbftCommitVoteCount, "pbft_commit_quorum": pbftSnapshot.CommitQuorum, "pbft_commit_certificate_count": pbftSnapshot.CommitCertificateCount, "pbft_last_consensus_progress_at_ms": pbftSnapshot.LastProgressAtMS, "pbft_preprepare_retransmit_count": proposalRetransmitCount, "pbft_view_change_target": viewChangeTarget, "pbft_view_change_vote_count": pbftViewChangeVoteCount, "pbft_low_watermark": pbftSnapshot.LowWatermark, "pbft_high_watermark": pbftSnapshot.HighWatermark, "pbft_stable_checkpoint_height": pbftSnapshot.StableCheckpointHeight, "pbft_catchup_target_height": catchupTargetHeight, "pbft_catchup_metrics": pbftCatchupMetrics, "commit_worker_running": commitWorkerRunning, "commit_task_queue_depth": commitTaskQueueDepth, "commit_task_queue_capacity": commitTaskQueueCapacity, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "last_commit_failure": lastCommitFailure, "last_state_fetch": lastStateFetch, "pending_state_fetch_count": len(pendingStateFetches), "pending_state_version_subscription_count": pendingStateVersionSubscriptionCount, "pending_version_admission_watch_count": pendingVersionAdmissionWatchCount, "pending_state_fetches": pendingStateFetches, "state_fetch_failures": stateFetchFailures, "last_state_fetch_service": lastStateFetchService, "state_fetch_service_errors": stateFetchServiceErrors, "fatal_persistence_error": fatalPersistenceError, "fatal_execution_error": fatalExecutionError, "fatal_planning_error": fatalPlanningError, "block_execution_progress": blockExecutionProgress, "block_execution_height": blockExecutionProgress.BlockHeight, "block_execution_progress_at_ms": blockExecutionProgress.LastProgressAtMS, "block_execution_validated_count": blockExecutionProgress.ValidatedCount, "block_execution_task_count": blockExecutionProgress.ExecutionTaskCount, "block_validation_task_count": blockExecutionProgress.ValidationTaskCount, "block_execution_abort_count": blockExecutionProgress.AbortCount, "block_execution_reexecution_count": blockExecutionProgress.ReexecutionCount, "block_execution_scheduler_queue_length": blockExecutionProgress.SchedulerQueueLen, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": pendingFutureBlockCount, "pending_future_block_heights": pendingFutureBlockHeights, "pending_cross_shard_count": pendingCrossShardCount, "pending_cross_shard_ids": pendingCrossShardIDs, "pending_relay_source_count": pendingRelaySourceCount, "pending_relay_source_ids": pendingRelaySourceIDs, "pending_outbound_relay_count": pendingOutboundRelayCount, "pending_outbound_relay_ids": pendingOutboundRelayIDs, "pending_finalize_message_count": pendingFinalizeMessageCount, "pending_finalize_message_ids": pendingFinalizeMessageIDs, "outbound_relay_send_errors": outboundRelaySendErrors, "finalize_send_errors": finalizeSendErrors, "state_fetch_request_queue_depth": stateFetchRequestQueueDepth, "state_fetch_request_queue_capacity": stateFetchMailboxCapacity, "state_fetch_response_queue_depth": stateFetchResponseQueueDepth, "state_fetch_response_queue_capacity": stateFetchResponseMailboxCapacity, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "method_preserving_blocked_home_version_count": blockedMethodVersionCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(lifecycleSets.terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "execution_failed_logical_tx_ids": executionFailedIDs, "admission_rejected_logical_tx_ids": admissionRejectedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
 }
 func mapIDs(items map[string]bool) []string {
@@ -7018,7 +7393,7 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "commit_log.csv"), commitLogHeaders(), commitRows); err != nil {
 		return err
 	}
-	if r.hasBatchRoutingControlPlane() {
+	if r.batchRoutingArtifactFamily() == "metatrack" {
 		if err := r.writeMetaTrackNodeArtifacts(executionRows, commitRows, logicalPhysicalRows); err != nil {
 			return err
 		}
@@ -7081,7 +7456,19 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	remoteSummary := summarizeRemoteStateRows(r.remoteStateRows)
 	schedulerSummary := schedulerAggregate
 	blockProduction := summarizeBlockProductionRows(chainRows)
-	businessStateDigest := canonicalBusinessStateDigest(r.plugins.StateStorage.Snapshot(r.db))
+	businessStateSnapshot := r.plugins.StateStorage.Snapshot(r.db)
+	businessStateCommitmentsV17 := canonicalBusinessStateCommitmentsV17(businessStateSnapshot)
+	if err := SaveJSON(filepath.Join(r.node.DataDir, "business_state_commitments_v17.json"), map[string]any{
+		"schema_version": "mbe_business_state_commitments_v17",
+		"truth_boundary": "partition_aware_storage_plus_logical_projection_v17",
+		"node_id": r.node.NodeID,
+		"shard_id": r.node.ShardID,
+		"commitment_count": len(businessStateCommitmentsV17),
+		"commitments": businessStateCommitmentsV17,
+	}); err != nil {
+		return err
+	}
+	businessStateDigest := canonicalBusinessStateDigest(businessStateSnapshot)
 	stateReadySummary := summarizeStateReadyEvidence(blockExecutionSummaries)
 	classificationSummary := summarizeMetaTrackClassificationEvidence(blockExecutionSummaries)
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "metatrack_classification_conflict_edge_count": classificationSummary.conflictEdgeCount, "metatrack_classification_dependency_chain_max": classificationSummary.dependencyChainMax, "metatrack_classification_nontrivial_scc_count": classificationSummary.nontrivialSCCCount, "metatrack_classification_ambiguous_conflict_pair_count": classificationSummary.ambiguousConflictPairCount, "metatrack_classification_semantic_unsafe_unique_count": classificationSummary.semanticUnsafeUniqueCount, "metatrack_effective_frontier_policy": classificationSummary.effectiveFrontierPolicy, "metatrack_effective_frontier_width_zero_count": classificationSummary.effectiveFrontierWidthZeroCount, "metatrack_effective_frontier_width_one_count": classificationSummary.effectiveFrontierWidthOneCount, "metatrack_effective_frontier_width_multi_count": classificationSummary.effectiveFrontierWidthMultiCount, "metatrack_effective_frontier_width_max": classificationSummary.effectiveFrontierWidthMax, "metatrack_effective_frontier_raw_producer_count": classificationSummary.effectiveFrontierRawProducerCount, "metatrack_effective_frontier_reduced_producer_count": classificationSummary.effectiveFrontierReducedProducerCount, "metatrack_effective_frontier_track_demotion_count": classificationSummary.effectiveFrontierTrackDemotionCount, "metatrack_frontier_seal_count": classificationSummary.frontierSealCount, "metatrack_terminal_access_violation_count": classificationSummary.terminalAccessViolationCount, "metatrack_frontier_required_version_count": classificationSummary.frontierRequiredVersionCount, "metatrack_frontier_write_slot_count": classificationSummary.frontierWriteSlotCount, "metatrack_version_ticket_issued_count": classificationSummary.versionTicketIssuedCount, "metatrack_version_ticket_released_count": classificationSummary.versionTicketReleasedCount, "metatrack_frontier_seal_build_us": classificationSummary.frontierSealBuildUS, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "versioned_wave_execution_policy": stateReadySummary.versionedWaveExecutionPolicy, "versioned_wave_delta_only_count": stateReadySummary.versionedWaveDeltaOnlyCount, "versioned_wave_full_fallback_count": stateReadySummary.versionedWaveFullFallbackCount, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
@@ -7220,14 +7607,61 @@ func int64FromAny(value any) int64 {
 	}
 }
 
+type businessStateCommitmentV17 struct {
+	PartitionKeyDigest string `json:"partition_key_digest"`
+	LogicalKeyDigest   string `json:"logical_key_digest"`
+	ValueDigest        string `json:"value_digest"`
+}
+
+func logicalBusinessStateKeyV17(key string) (string, bool) {
+	logical := key
+	if index := strings.Index(logical, "::"); index >= 0 && index+2 < len(logical) {
+		logical = logical[index+2:]
+	}
+	if strings.HasPrefix(logical, "relay_commit:") || strings.HasPrefix(logical, "protocol:") {
+		return "", false
+	}
+	return logical, true
+}
+
+func canonicalBusinessStateCommitmentsV17(snapshot map[string]string) []businessStateCommitmentV17 {
+	unique := map[businessStateCommitmentV17]bool{}
+	for physicalKey, value := range snapshot {
+		logicalKey, include := logicalBusinessStateKeyV17(physicalKey)
+		if !include {
+			continue
+		}
+		unique[businessStateCommitmentV17{
+			PartitionKeyDigest: stableTextDigest(physicalKey),
+			LogicalKeyDigest:   stableTextDigest(logicalKey),
+			ValueDigest:        stableTextDigest(value),
+		}] = true
+	}
+	out := make([]businessStateCommitmentV17, 0, len(unique))
+	for item := range unique {
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PartitionKeyDigest != out[j].PartitionKeyDigest {
+			return out[i].PartitionKeyDigest < out[j].PartitionKeyDigest
+		}
+		if out[i].LogicalKeyDigest != out[j].LogicalKeyDigest {
+			return out[i].LogicalKeyDigest < out[j].LogicalKeyDigest
+		}
+		return out[i].ValueDigest < out[j].ValueDigest
+	})
+	return out
+}
+
 func canonicalBusinessStateDigest(snapshot map[string]string) string {
+	// Stateful-local persistence truth is partition-aware.  Keep the physical
+	// shard-qualified key in this digest so the existing stateful serial oracle
+	// compares like-for-like storage identities.  The placement-independent
+	// logical projection lives separately in business_state_commitments_v17.json.
 	keys := make([]string, 0, len(snapshot))
 	for key := range snapshot {
-		logical := key
-		if index := strings.Index(logical, "::"); index >= 0 && index+2 < len(logical) {
-			logical = logical[index+2:]
-		}
-		if strings.HasPrefix(logical, "relay_commit:") || strings.HasPrefix(logical, "protocol:") {
+		_, include := logicalBusinessStateKeyV17(key)
+		if !include {
 			continue
 		}
 		keys = append(keys, key)
@@ -7268,7 +7702,7 @@ func (r *NodeRuntime) writeMetaTrackNodeArtifacts(executionRows, commitRows, log
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "aggregation_plan.csv"), commitLogHeaders(), commitRows); err != nil {
 		return err
 	}
-	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "remote_state_access.csv"), []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error", "delta_id", "source_height", "source_block_hash", "update_semantics"}, remoteRows); err != nil {
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "remote_state_access.csv"), []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error", "delta_id", "source_height", "source_block_hash", "update_semantics", "logical_tx_ids", "previous_version", "produced_version", "ordering_noop", "apply_origin", "delta_kind"}, remoteRows); err != nil {
 		return err
 	}
 	return metrics.WriteCSV(filepath.Join(r.node.DataDir, "logical_physical_update_mapping.csv"), []string{"timestamp", "node_id", "shard_id", "height", "commit_plugin", "aggregation_group_id", "state_key", "value_digest", "logical_tx_ids", "logical_update_count", "physical_update_count", "reduced_physical_write_count", "aggregation_applied", "pre_aggregation_physical_op_count", "post_aggregation_physical_op_count", "aggregated_key_count", "aggregated_logical_delta_count"}, logicalPhysicalRows)
@@ -7487,6 +7921,28 @@ func (r *NodeRuntime) hasBatchRoutingControlPlane() bool {
 	}
 	_, ok := r.plugins.Routing.(BatchRoutingPlugin)
 	return ok
+}
+
+// genericStatelessRemoteStateEnabled separates the shared stateless state
+// transport substrate from the broader BatchRouting interface. Stateful
+// algorithms such as TxAllo may batch-plan routing but must not silently gain
+// remote projection/writeback semantics merely because they implement
+// BatchRoutingPlugin.
+func (r *NodeRuntime) genericStatelessRemoteStateEnabled() bool {
+	return r != nil && r.hasBatchRoutingControlPlane() && r.plugins.Routing != nil && usesStatelessDirectExecution(r.plugins.Routing)
+}
+
+// batchRoutingArtifactFamily preserves the historical stateless-hash/MetaTrack
+// artifact behavior unless a new batch-routing algorithm explicitly declares a
+// different evidence family.
+func (r *NodeRuntime) batchRoutingArtifactFamily() string {
+	if r == nil || !r.hasBatchRoutingControlPlane() || r.plugins.Routing == nil {
+		return ""
+	}
+	if capability, ok := r.plugins.Routing.(BatchRoutingArtifactCapability); ok {
+		return capability.BatchRoutingArtifactFamily()
+	}
+	return "metatrack"
 }
 
 func (r *NodeRuntime) recordProposalEvidence(block realblock.Block) {

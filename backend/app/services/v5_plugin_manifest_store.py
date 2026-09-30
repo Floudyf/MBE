@@ -111,7 +111,7 @@ _MANIFESTS = [
     _manifest("routing", "stateless_hash_routing", "Stateless Hash Routing Baseline", "Fair stateless hash baseline with deterministic state homes, exact per-key logical-version fetch for non-commutative business state, and home-shard writeback.", aliases=["stateless_hash"], capabilities=["batch_routing", "stateless_direct_execution", "remote_state_fetch", "remote_state_writeback", "exact_state_version_fetch", "per_key_version_writeback_frontier"], truth_boundary="stateless_hash_remote_home_exact_version_v2", metrics=[{"key": "routing_decision_count", "type": "integer", "unit": "decision", "aggregation": "sum", "visualization": "summary", "description": "Stateless hash routing decisions made by the client."}]),
     _manifest(
         "routing", "metatrack_coaccess_routing", "MetaTrack Co-access Routing",
-        "Batch-level execution sharding from state access frequency and co-access weights, with an explicit admissible state-load capacity and MajorityPlace transaction routing.",
+        "Execution sharding from state access/co-access evidence; the latest profile can additionally preserve exact-version execution continuity across signed RouteBatch boundaries with deterministic workload-derived capacity.",
         config={"routing_epoch": 0},
         schema=_schema({
             "routing_epoch": {"type": "integer", "minimum": 0, "maximum": 1000000000, "default": 0},
@@ -119,11 +119,12 @@ _MANIFESTS = [
             "logical_domain_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4},
             "state_storage_unit_count": {"type": "integer", "minimum": 0, "maximum": 65536, "default": 0},
             "micro_batch_size": {"type": "integer", "minimum": 0, "maximum": 5000, "default": 0},
+            "incremental_exact_continuity_routing_v65": {"type": "boolean", "default": False},
             "placement_mu": {"type": "number", "minimum": 0.01, "maximum": 64.0, "default": 1.0},
             "placement_min_budget": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 1},
         }),
         aliases=["co_access", "metatrack"],
-        capabilities=["batch_routing", "batch_frequency_coaccess", "admissible_state_load_capacity", "per_seed_top_cooccur_budget", "majority_place_queue_tie", "routing_epoch_evidence", "predicted_remote_access_accounting", "stateless_direct_execution", "remote_state_fetch", "remote_state_writeback", "exact_state_version_fetch", "logical_state_storage_units", "state_unit_execution_role_separation", "configurable_placement_budget", "configurable_micro_batch_size"],
+        capabilities=["batch_routing", "batch_frequency_coaccess", "admissible_state_load_capacity", "per_seed_top_cooccur_budget", "majority_place_queue_tie", "routing_epoch_evidence", "predicted_remote_access_accounting", "stateless_direct_execution", "remote_state_fetch", "remote_state_writeback", "exact_state_version_fetch", "logical_state_storage_units", "state_unit_execution_role_separation", "configurable_placement_budget", "configurable_micro_batch_size", "incremental_exact_version_continuity", "route_batch_partition_invariant_routing"],
         truth_boundary="metatrack_batch_execution_sharding_admissible_capacity_v2",
         source={"source_type": "user_manuscript_algorithm_reimplementation", "source_name": "MetaTrack batch-level execution sharding"},
         metrics=[{"key": "metatrack_routed_tx_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Transactions routed through the MetaTrack profile."}],
@@ -430,6 +431,71 @@ _manifest("block_executor", "cg_block_executor", "CG / Nezha MBE Worker Block Ex
     _manifest("state_access", "stateless_calvin_state_access", "Stateless Calvin State Access", "Physical deterministic state-home access used only by the Stateless Calvin adaptation; predecessor/producer versions are bound to the PBFT-bound final candidate Calvin block order.", capabilities=["declared_state_projection", "signed_access_projection", "remote_state_fetch", "remote_state_writeback", "exact_state_version_fetch", "consensus_bound_version_plan"], source={"type": "compatibility_adaptation", "dossier": "docs/reproductions/calvin/source_lock.md"}),
     _manifest("state_storage", "calvin_partition_state_store", "Calvin Partition State Store", "Persists state by ExecutionShardID while the PBFT ShardID remains one global ordering domain.", capabilities=["execution_shard_storage_identity", "persistent_partition_state"], source={"type": "mbe_platform_adaptation", "dossier": "docs/reproductions/calvin/source_lock.md"}),
     _manifest("cross_shard", "calvin_no_2pc_coordinator", "Calvin Participant Protocol", "Disables MBE Relay/Finalize and traditional 2PC; distributed reads use Calvin READ_RESULT.", capabilities=["calvin_read_result", "no_2pc", "no_legacy_relay"], source={"type": "paper_reimplementation", "dossier": "docs/reproductions/calvin/source_lock.md"}),
+    # MBE_OPTME_TXALLO_BASELINES_20260928: post-consensus OptME and history-only TxAllo baselines.
+    _manifest(
+        "execution", "optme_execution", "OptME Post-consensus Execution",
+        "Classifies the SC'24 OptME path. OptME consumes PBFT consensus output, simulates transactions, constructs an address/state-key conflict graph, hierarchically schedules, reorders eligible write-only aborts, and re-executes remaining aborted groups.",
+        capabilities=["post_consensus_simulation", "observed_rw_set", "optme_address_conflict_graph"],
+        requirements=["scheduler:optme_scheduler"], supported_backends=["real_cluster"],
+        truth_boundary="optme_author_source_4cac103_post_consensus_simulate_acg_schedule_v1",
+        source={"source_type": "paper_and_official_source_reimplementation", "source_name": "Toward High-Performance Blockchain System by Blurring the Line between Ordering and Execution", "venue": "SC 2024", "repository": "https://github.com/Dong-Hyeon-Yu/optme", "repository_commit": "4cac103bd98440670d71219dfa185b8516ea6512", "reproduction_dossier": "docs/reproductions/optme/source_lock.md"},
+    ),
+    _manifest(
+        "scheduler", "optme_scheduler", "OptME Observed-RW Scheduler",
+        "Implements the author-source AddressBasedConflictGraph ordering: address rank by in-degree/out-degree/address, First-Updater-Wins early abort, write-only reordering, sequence extraction, and aborted-transaction rescheduling epochs.",
+        capabilities=["optme_hierarchical_sort", "first_updater_wins", "optme_reorder", "optme_reschedule_epochs"],
+        requirements=["execution:optme_execution"], supported_backends=["real_cluster"],
+        truth_boundary="optme_author_address_based_conflict_graph_4cac103_v1",
+        source={"source_type": "official_source_reimplementation", "repository": "https://github.com/Dong-Hyeon-Yu/optme", "repository_commit": "4cac103bd98440670d71219dfa185b8516ea6512", "reproduction_dossier": "docs/reproductions/optme/source_lock.md"},
+    ),
+    _manifest(
+        "block_executor", "optme_block_executor", "OptME Block Executor",
+        "Stateful OptME: after PBFT, simulates all transactions against one block-start snapshot, schedules from observed read/write sets, commits the author-source sequence plan, and performs the source second-pass re-execution/validation path.",
+        config={"worker_count": 4}, schema=_schema({"worker_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4}}),
+        capabilities=["parallel_simulation", "optme_schedule_commit", "optme_second_pass_validation"],
+        requirements=["execution:optme_execution", "scheduler:optme_scheduler", "routing:hash_routing_baseline", "consensus:pbft_style_consensus"], supported_backends=["real_cluster"],
+        metrics=[{"key": "optme_simulation_ms", "type": "integer", "unit": "ms", "aggregation": "sum", "visualization": "summary", "description": "Post-consensus OptME simulation time."}, {"key": "optme_early_abort_count", "type": "integer", "unit": "tx", "aggregation": "sum", "visualization": "summary", "description": "Transactions assigned to OptME's aborted/reschedule path."}],
+        truth_boundary="optme_author_source_4cac103_stateful_per_pbft_shard_mbe_multishard_integration_v3",
+        source={"source_type": "paper_and_official_source_reimplementation", "repository": "https://github.com/Dong-Hyeon-Yu/optme", "repository_commit": "4cac103bd98440670d71219dfa185b8516ea6512", "reproduction_dossier": "docs/reproductions/optme/source_lock.md"},
+    ),
+    _manifest(
+        "routing", "stateless_optme_routing", "Stateless-OptME State Projection Routing",
+        "Stateless compatibility routing. Signed AccessList data is used only to materialize the block-start state projection; OptME still derives its scheduling read/write sets from actual post-consensus simulation.",
+        capabilities=["stateless_direct_execution", "signed_access_projection", "batch_routing_control_plane", "exact_state_version_transport", "no_metatrack_frontier"],
+        requirements=["block_executor:stateless_optme_block_executor"], supported_backends=["real_cluster"],
+        truth_boundary="stateless_optme_accesslist_projection_plus_global_exact_version_transport_v2",
+        source={"source_type": "compatibility_adaptation", "reproduction_dossier": "docs/reproductions/optme/mbe_mapping.md"},
+    ),
+    _manifest(
+        "block_executor", "stateless_optme_block_executor", "Stateless-OptME Block Executor",
+        "Runs the same OptME scheduling core as OptME over each MBE PBFT shard consensus output with a signed-AccessList-bounded remote block-start state projection. The AccessList is never substituted for the observed simulation read/write set; multi-shard operation is an explicit MBE adaptation, not an OptME paper contribution.",
+        config={"worker_count": 4}, schema=_schema({"worker_count": {"type": "integer", "minimum": 1, "maximum": 64, "default": 4}}),
+        capabilities=["parallel_simulation", "optme_schedule_commit", "stateless_projection", "physical_remote_state_fetch", "physical_remote_state_writeback", "exact_state_version_transport", "preserve_optme_scheduler"],
+        requirements=["routing:stateless_optme_routing", "execution:optme_execution", "scheduler:optme_scheduler", "consensus:pbft_style_consensus"], supported_backends=["real_cluster"],
+        truth_boundary="stateless_optme_same_core_exact_version_transport_per_pbft_shard_v3",
+        source={"source_type": "compatibility_adaptation", "reproduction_dossier": "docs/reproductions/optme/mbe_mapping.md"},
+    ),
+    _manifest(
+        "sharding", "txallo_account_sharding", "TxAllo Account Allocation",
+        "TxAllo ICDE'23 account allocation. Builds an undirected weighted account transaction graph from pre-evaluation committed-history records only, runs G-TxAllo initialization and A-TxAllo historical updates, then freezes the account-to-shard mapping for the measured window.",
+        config={"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_records": 5000, "adaptive_chunk_records": 500},
+        schema=_schema({"eta": {"type": "number", "minimum": 1.000001, "maximum": 100, "default": 2.0}, "lambda": {"type": "number", "minimum": 0, "default": 0.0}, "epsilon": {"type": "number", "minimum": 0, "default": 0.0}, "history_records": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 5000}, "adaptive_chunk_records": {"type": "integer", "minimum": 1, "maximum": 100000, "default": 500}}),
+        capabilities=["txallo_account_graph", "g_txallo", "a_txallo", "pre_evaluation_history_only", "frozen_evaluation_mapping"], supported_backends=["real_cluster"],
+        truth_boundary="txallo_icde2023_algorithm1_2_account_graph_frozen_pre_evaluation_history_v1",
+        source={"source_type": "paper_reimplementation", "source_name": "TxAllo: Dynamic Transaction Allocation in Sharded Blockchain Systems", "venue": "ICDE 2023", "arxiv": "2212.11584", "repository": "https://github.com/zhangyuanzhe1996/TxAllo", "repository_note": "public repository reviewed but no usable algorithm implementation was present; paper formulas and Algorithms 1/2 are the source of truth", "reproduction_dossier": "docs/reproductions/txallo/source_lock.md"},
+    ),
+    _manifest(
+        "routing", "txallo_routing", "TxAllo Transaction Routing",
+        "Routes each transaction according to the frozen TxAllo sender/receiver account allocation. It consumes the sharding plugin mapping and never updates that mapping from the same pending evaluation batch.",
+        capabilities=["txallo_frozen_mapping_routing", "stateful_local_execution", "no_future_batch_training"], requirements=["sharding:txallo_account_sharding"], supported_backends=["real_cluster"],
+        truth_boundary="txallo_frozen_mapping_stateful_route_v1", source={"source_type": "paper_reimplementation", "reproduction_dossier": "docs/reproductions/txallo/mbe_mapping.md"},
+    ),
+    _manifest(
+        "routing", "stateless_txallo_routing", "Stateless-TxAllo Transaction Routing",
+        "Uses exactly the same frozen TxAllo account allocation as TxAllo while opting into MBE's generic stateless direct execution and remote state projection/writeback infrastructure.",
+        capabilities=["txallo_frozen_mapping_routing", "stateless_direct_execution", "batch_routing_control_plane", "exact_state_version_transport", "preserve_txallo_fifo_scheduler", "no_metatrack_frontier"], requirements=["sharding:txallo_account_sharding"], supported_backends=["real_cluster"],
+        truth_boundary="stateless_txallo_same_mapping_exact_version_state_substrate_v2", source={"source_type": "compatibility_adaptation", "reproduction_dossier": "docs/reproductions/txallo/mbe_mapping.md"},
+    ),
     # MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: Porygon v8 single-ordering-domain / logical-ESC reimplementation.
     _manifest(
         "routing", "porygon_stateless_routing", "Porygon Stateless Ordering-domain Routing",
@@ -488,11 +554,19 @@ _manifest("block_executor", "cg_block_executor", "CG / Nezha MBE Worker Block Ex
         source={"source_type": "paper_reimplementation", "source_name": "Porygon: Scaling Blockchain via 3D Parallelism", "doi": "10.1109/ICDE60146.2024.00153", "reproduction_dossier": "docs/reproductions/porygon/source_lock.md"},
     ),
     _manifest(
+        "state_storage", "porygon_partition_state_store", "Porygon Co-located Storage Role",
+        "Stores only the state partition owned by the node's Porygon execution-shard identity. The storage role is co-located on existing MBE nodes; the global PBFT ordering identity remains separate and no additional physical machines are introduced.",
+        capabilities=["persistent_state", "state_root", "execution_shard_storage_identity", "porygon_storage_consensus_role_separation"],
+        requirements=["routing:porygon_stateless_routing"], supported_backends=["real_cluster"],
+        truth_boundary="porygon_storage_role_colocation_on_existing_mbe_nodes_v1;no_extra_physical_storage_nodes",
+        source={"source_type": "paper_reimplementation", "source_name": "Porygon: Scaling Blockchain via 3D Parallelism", "doi": "10.1109/ICDE60146.2024.00153", "reproduction_dossier": "docs/reproductions/porygon/source_lock.md"},
+    ),
+    _manifest(
         "state_access", "porygon_remote_state_access", "Porygon Signed-access State Projection",
-        "Restricts each business execution to the state keys declared in its signed AccessList. The current MBE adaptation uses one physical PBFT/state domain and does not claim separate physical Storage Nodes.",
+        "Restricts each business execution to the state keys declared in its signed AccessList. The MBE adaptation preserves Porygon storage/consensus role separation by co-locating the storage role on existing execution-shard nodes; execution fetches only the signed AccessList projection.",
         capabilities=["signed_access_projection", "fail_closed_access_closure", "logical_storage_consensus_separation_evidence"],
         requirements=["routing:porygon_stateless_routing"], supported_backends=["real_cluster"],
-        truth_boundary="porygon_signed_access_projection_over_single_mbe_state_domain_v2;separate_physical_storage_nodes_not_claimed",
+        truth_boundary="porygon_signed_access_projection_over_partitioned_storage_roles_v3;storage_roles_colocated_on_existing_nodes",
         source={"source_type": "paper_reimplementation", "source_name": "Porygon: Scaling Blockchain via 3D Parallelism", "doi": "10.1109/ICDE60146.2024.00153", "reproduction_dossier": "docs/reproductions/porygon/source_lock.md"},
     ),
     _manifest(
@@ -504,6 +578,7 @@ _manifest("block_executor", "cg_block_executor", "CG / Nezha MBE Worker Block Ex
         truth_boundary="porygon_logical_cross_shard_coordination_inside_single_ordering_domain_v2",
         source={"source_type": "paper_reimplementation", "source_name": "Porygon: Scaling Blockchain via 3D Parallelism", "doi": "10.1109/ICDE60146.2024.00153", "reproduction_dossier": "docs/reproductions/porygon/source_lock.md"},
     ),
+
 ]
 
 

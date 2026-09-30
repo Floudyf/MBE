@@ -327,6 +327,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     _apply_workload_replay_metrics(metrics, run_dir)
     _apply_mempool_admission_metrics(metrics, run_dir)
     _apply_common_block_execution_timing(metrics, run_dir)
+    _apply_metatrack_consensus_window_observability(metrics, run_dir)
     configured_block_size = _int(metrics.get("configured_block_size"))
     raw_actual_average_tx_per_block = metrics.get("actual_average_tx_per_block")
     try:
@@ -338,10 +339,15 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         metrics["block_utilization_truth_scope"] = "actual_average_committed_tx_per_block_over_configured_block_size"
     _apply_porygon_metrics(metrics, run_dir)
     _apply_calvin_metrics(metrics, run_dir)
+    _apply_optme_metrics(metrics, run_dir)
+    _apply_txallo_metrics(metrics, run_dir)
 
     _apply_block_stm_metrics(metrics, run_dir)
     _apply_stateless_version_frontier_metrics(metrics, run_dir)
     _apply_metatrack_projection_frontier_v612_metrics(metrics, run_dir)
+    _apply_metatrack_liveness_safe_boundary_batch_v621_metrics(metrics, run_dir)
+    _apply_metatrack_async_version_writeback_v640_metrics(metrics, run_dir)
+    _apply_metatrack_incremental_routing_v650_metrics(metrics, run_dir)
     _apply_metatrack_track_observability(metrics, run_dir)
     _apply_batch_si_metrics(metrics, run_dir)
     _apply_literature_graph_metrics(metrics, run_dir)
@@ -355,6 +361,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     remote_state_metrics = _read_remote_state_metrics(_remote_state_operations_path(run_dir), logical_tx_count=logical_tx_count)
     if remote_state_metrics:
         metrics.update(remote_state_metrics)
+    _apply_method_preserving_remote_transport_truth(metrics, method_id)
 
     scheduler_metrics = _read_scheduler_metrics(run_dir / "metatrack_scheduler_trace.csv")
     if scheduler_metrics:
@@ -856,6 +863,13 @@ def _apply_stateless_version_frontier_metrics(metrics: dict[str, Any], run_dir: 
         "stateless_version_admission_internal_candidate_dependency_edge_count",
         "stateless_version_admission_deferred_direct_external_not_ready_count",
         "stateless_version_admission_deferred_internal_propagation_count",
+        "method_preserving_exact_version_publish_tx_count",
+        "method_preserving_source_local_version_admission_hit_count",
+        "method_preserving_home_version_wait_count",
+        "method_preserving_source_local_version_fetch_count",
+        "method_preserving_source_local_version_cache_publish_count",
+        "method_preserving_home_version_receipt_publish_count",
+        "method_preserving_home_version_committed_publish_count",
     )
     totals = {key: 0 for key in keys}
     for rel, summary in summaries:
@@ -882,6 +896,51 @@ def _apply_stateless_version_frontier_metrics(metrics: dict[str, Any], run_dir: 
     metrics["stateless_version_admission_direct_external_blocked_ratio"] = totals["stateless_version_admission_deferred_direct_external_not_ready_count"] / candidate if candidate else None
     metrics["stateless_version_admission_internal_propagated_blocked_ratio"] = totals["stateless_version_admission_deferred_internal_propagation_count"] / candidate if candidate else None
     metrics["stateless_version_admission_truth_scope"] = "sum_of_preconsensus_leader_candidate_events_across_execution_shards;no_pbft_replica_multiplication"
+    metrics["method_preserving_writebehind_truth_scope"] = "leader_per_execution_shard_runtime_counts;source_local_exact_version_hits_are_not_physical_remote_operations;Home_remains_authoritative_persistent_state"
+
+
+def _network_message_count(metrics: dict[str, Any], message_type: str) -> int:
+    message_types = metrics.get("network_message_types") if isinstance(metrics.get("network_message_types"), dict) else {}
+    row = message_types.get(message_type) if isinstance(message_types.get(message_type), dict) else {}
+    return _int(row.get("message_count"))
+
+
+def _apply_method_preserving_remote_transport_truth(metrics: dict[str, Any], method_id: str | None) -> None:
+    if str(method_id or "") not in {"stateless_optme", "stateless_txallo"}:
+        return
+    fetch_requests = _network_message_count(metrics, "V5_STATE_FETCH_REQUEST")
+    fetch_responses = _network_message_count(metrics, "V5_STATE_FETCH_RESPONSE")
+    writeback_requests = _network_message_count(metrics, "V5_STATE_DELTA_APPLY")
+    writeback_acks = _network_message_count(metrics, "V5_STATE_DELTA_APPLY_ACK")
+    if fetch_requests + fetch_responses + writeback_requests + writeback_acks <= 0:
+        return
+
+    # The generic remote-state CSV predates the method-preserving admission/watch
+    # transport and can legitimately omit these physical messages. For the two
+    # Stateless literature adaptations, the network message ledger is the
+    # authoritative physical-message truth. Source-local exact-version hits do
+    # not emit these message types and therefore remain excluded automatically.
+    metrics["method_preserving_physical_remote_fetch_request_count"] = fetch_requests
+    metrics["method_preserving_physical_remote_fetch_response_count"] = fetch_responses
+    metrics["method_preserving_physical_remote_writeback_request_count"] = writeback_requests
+    metrics["method_preserving_physical_remote_writeback_ack_count"] = writeback_acks
+    metrics["method_preserving_remote_transport_truth_scope"] = (
+        "network_message_types_sender_receiver_physical_messages;"
+        "source_local_exact_version_hits_excluded;"
+        "fetch_response_count_includes_ready_and_not_ready_responses"
+    )
+
+    artifact_fetch = metrics.get("physical_remote_fetch_count")
+    artifact_writeback = metrics.get("physical_remote_writeback_count")
+    metrics["method_preserving_artifact_physical_remote_fetch_count"] = artifact_fetch
+    metrics["method_preserving_artifact_physical_remote_writeback_count"] = artifact_writeback
+    metrics["physical_remote_fetch_count"] = fetch_requests
+    metrics["physical_remote_writeback_count"] = writeback_requests
+    metrics["physical_remote_operation_count"] = fetch_requests + writeback_requests
+    metrics["remote_state_fetch_count"] = fetch_requests
+    metrics["remote_state_fetch_completed_count"] = fetch_responses
+    metrics["remote_state_read_count"] = fetch_requests
+    metrics["remote_state_write_apply_count"] = writeback_requests
 
 
 # MBE_METATRACK_PROJECTION_FRONTIER_V612
@@ -925,6 +984,146 @@ def _apply_metatrack_projection_frontier_v612_metrics(metrics: dict[str, Any], r
     metrics["metatrack_projection_frontier_policy"] = "signed_projection_exact_version_dag_v612"
     metrics["metatrack_projection_frontier_truth_scope"] = "leader_block_structural_frontier_evidence_plus_leader_runtime_suppression_counts;no_pbft_replica_multiplication"
 
+
+
+# MBE_METATRACK_LIVENESS_SAFE_BOUNDARY_BATCH_V621
+def _apply_metatrack_liveness_safe_boundary_batch_v621_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    leader_ids = _leader_node_ids(run_dir)
+    summaries: list[tuple[str, dict[str, Any]]] = []
+    for node_id in leader_ids:
+        rel = f"nodes/{node_id}/node_summary.json"
+        payload = _read_json(run_dir / rel)
+        if payload:
+            summaries.append((rel, payload))
+    if not summaries:
+        return
+    keys = (
+        "metatrack_closure_boundary_batch_request_group_count",
+        "metatrack_closure_boundary_batch_item_count",
+        "metatrack_closure_boundary_immediate_publish_count",
+        "metatrack_version_remote_live_immediate_publish_count",
+        "metatrack_version_final_immediate_publish_count",
+    )
+    totals = {key: 0 for key in keys}
+    for rel, summary in summaries:
+        counts = summary.get("runtime_metric_counts") if isinstance(summary.get("runtime_metric_counts"), dict) else {}
+        for key in keys:
+            totals[key] += _int(counts.get(key))
+        if rel not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(rel)
+    if totals["metatrack_closure_boundary_batch_request_group_count"] <= 0 and totals["metatrack_closure_boundary_batch_item_count"] <= 0:
+        return
+    metrics.update(totals)
+    metrics["metatrack_closure_boundary_batch_policy"] = "producer_completion_home_batch_v621"
+    metrics["metatrack_closure_boundary_batch_truth_scope"] = "leader_runtime_counts;closure_final_visibility_remains_producer_completion;no_pbft_replica_multiplication"
+
+# MBE_METATRACK_ASYNC_VERSION_WRITEBACK_V640
+def _apply_metatrack_async_version_writeback_v640_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    leader_ids = _leader_node_ids(run_dir)
+    summaries: list[tuple[str, dict[str, Any]]] = []
+    for node_id in leader_ids:
+        rel = f"nodes/{node_id}/node_summary.json"
+        payload = _read_json(run_dir / rel)
+        if payload:
+            summaries.append((rel, payload))
+    if not summaries:
+        return
+    sum_keys = (
+        "metatrack_async_version_writeback_v640_block_count",
+        "metatrack_block_remote_value_consumer_edge_count",
+        "metatrack_block_consumer_critical_final_publish_count",
+        "metatrack_background_final_enqueue_count",
+        "metatrack_critical_version_publish_wait_ms",
+        "metatrack_background_final_writeback_ms",
+        "metatrack_final_join_wait_ms",
+        "metatrack_async_version_writeback_batch_count",
+        "metatrack_async_version_writeback_item_count",
+    )
+    totals = {key: 0 for key in sum_keys}
+    max_queue_depth = 0
+    for rel, summary in summaries:
+        counts = summary.get("runtime_metric_counts") if isinstance(summary.get("runtime_metric_counts"), dict) else {}
+        for key in sum_keys:
+            totals[key] += _int(counts.get(key))
+        max_queue_depth = max(max_queue_depth, _int(counts.get("metatrack_async_version_writeback_max_queue_depth")))
+        if rel not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(rel)
+    if totals["metatrack_async_version_writeback_v640_block_count"] <= 0:
+        return
+    metrics.update(totals)
+    metrics["metatrack_async_version_writeback_max_queue_depth"] = max_queue_depth
+    metrics["metatrack_async_version_writeback_policy"] = "aggregate_block_remote_consumer_guard_background_final_v640"
+    metrics["metatrack_execution_scope_policy"] = "transaction_level_full_locality_shared_block_v640"
+    metrics["metatrack_implementation_revision"] = "v6.4.0"
+    metrics["metatrack_async_version_writeback_truth_scope"] = "leader_runtime_counts;exact_version_local_handoff_preserved;critical_remote_versions_keep_immediate_publication;only_noncritical_closure_final_background_async;late_join_barrier_before_durable_commit;no_pbft_replica_multiplication"
+
+
+
+def _apply_metatrack_incremental_routing_v650_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    path = run_dir / "metatrack_batch_plan.jsonl"
+    if not path.is_file():
+        path = run_dir / "client" / "metatrack_batch_plan.jsonl"
+    if not path.is_file():
+        return
+
+    rows: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                value = json.loads(line)
+                if isinstance(value, dict) and value.get("incremental_routing_policy"):
+                    rows.append(value)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return
+    if not rows:
+        return
+
+    def total(name: str) -> int:
+        return sum(_int(row.get(name)) for row in rows)
+
+    def numeric(name: str) -> list[int]:
+        return [_int(row.get(name)) for row in rows if row.get(name) is not None]
+
+    exact_total = total("incremental_exact_state_edge_count")
+    exact_cross = total("incremental_exact_cross_shard_state_edge_count")
+    pred_total = total("incremental_exact_predecessor_edge_count")
+    pred_cross = total("incremental_exact_cross_shard_predecessor_count")
+    plan_us = numeric("incremental_routing_plan_us")
+    first = rows[0]
+    last = rows[-1]
+    metrics.update({
+        "metatrack_incremental_routing_policy": str(first.get("incremental_routing_policy") or ""),
+        "metatrack_incremental_routing_batch_count": len(rows),
+        "metatrack_incremental_expected_transaction_count": _int(first.get("incremental_expected_transaction_count")),
+        "metatrack_incremental_execution_shard_capacity": _int(first.get("incremental_execution_shard_capacity")),
+        "metatrack_incremental_history_transaction_count": _int(last.get("incremental_history_transaction_count_after")),
+        "metatrack_incremental_exact_state_edge_count": exact_total,
+        "metatrack_incremental_exact_local_state_edge_count": total("incremental_exact_local_state_edge_count"),
+        "metatrack_incremental_exact_cross_shard_state_edge_count": exact_cross,
+        "metatrack_incremental_exact_cross_shard_state_edge_rate": (float(exact_cross) / float(exact_total)) if exact_total else 0.0,
+        "metatrack_incremental_exact_predecessor_edge_count": pred_total,
+        "metatrack_incremental_exact_local_predecessor_count": total("incremental_exact_local_predecessor_count"),
+        "metatrack_incremental_exact_cross_shard_predecessor_count": pred_cross,
+        "metatrack_incremental_exact_cross_shard_predecessor_rate": (float(pred_cross) / float(pred_total)) if pred_total else 0.0,
+        "metatrack_incremental_coaccess_pair_update_count": total("incremental_coaccess_pair_update_count"),
+        "metatrack_incremental_execution_shard_switch_count": total("incremental_execution_shard_switch_count"),
+        "metatrack_incremental_capacity_forced_choice_count": total("incremental_capacity_forced_choice_count"),
+        "metatrack_incremental_exact_first_choice_count": total("incremental_exact_first_choice_count"),
+        "metatrack_incremental_coaccess_tiebreak_count": total("incremental_coaccess_tiebreak_count"),
+        "metatrack_incremental_remote_tiebreak_count": total("incremental_remote_tiebreak_count"),
+        "metatrack_incremental_load_tiebreak_count": total("incremental_load_tiebreak_count"),
+        "metatrack_incremental_batch_partition_invariant": all(bool(row.get("incremental_batch_partition_invariant")) for row in rows),
+        "metatrack_incremental_history_digest": str(last.get("incremental_history_digest_after") or ""),
+        "metatrack_incremental_routing_plan_total_us": sum(plan_us),
+        "metatrack_incremental_routing_plan_mean_us": (float(sum(plan_us)) / float(len(plan_us))) if plan_us else 0.0,
+        "metatrack_incremental_routing_plan_max_us": max(plan_us) if plan_us else 0,
+    })
+    artifact_name = "client/metatrack_batch_plan.jsonl" if path.parent.name == "client" else "metatrack_batch_plan.jsonl"
+    if artifact_name not in metrics["source_artifacts"]:
+        metrics["source_artifacts"].append(artifact_name)
 
 def _apply_metatrack_track_observability(metrics: dict[str, Any], run_dir: Path) -> None:
     summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
@@ -1067,6 +1266,79 @@ def _apply_metatrack_track_observability(metrics: dict[str, Any], run_dir: Path)
     metrics["metatrack_attempt_timing_precision"] = "nanosecond_monotonic"
     metrics["metatrack_track_duration_trace_available"] = bool(fast_durations_ms or conservative_durations_ms)
     metrics["metatrack_track_timing_truth_scope"] = "nanosecond_monotonic_attempts_and_track_sojourn_from_execution_runtime;state_and_dependency_wait_components_may_overlap;parallel_sums_are_not_wall_clock"
+
+
+def _apply_optme_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    blocks: list[dict[str, Any]] = []
+    mode = None
+    for path in sorted((run_dir / "nodes").glob("*/block_execution_summary.json")):
+        payload = _read_json(path)
+        if payload.get("block_executor_id") not in {"optme_block_executor", "stateless_optme_block_executor"}:
+            continue
+        rel = str(path.relative_to(run_dir)).replace("\\", "/")
+        if rel not in metrics["source_artifacts"]:
+            metrics["source_artifacts"].append(rel)
+        for block in payload.get("blocks") if isinstance(payload.get("blocks"), list) else []:
+            if isinstance(block, dict):
+                blocks.append(block)
+                mode = mode or block.get("optme_mode")
+    if not blocks:
+        return
+    total_keys = (
+        "optme_simulation_ms", "optme_graph_scheduling_ms", "optme_commit_ms", "optme_reexecution_ms", "optme_validation_ms",
+        "optme_observed_read_count", "optme_observed_write_count", "optme_address_count", "optme_unit_count",
+        "optme_early_abort_count", "optme_reordered_transaction_count", "optme_reexecution_count", "optme_reexecution_invalid_count",
+    )
+    metrics["optme_metrics_available"] = True
+    metrics["optme_mode"] = mode
+    for key in total_keys:
+        metrics[key] = sum(_int(block.get(key)) for block in blocks)
+    metrics["optme_sequence_count"] = sum(_int(block.get("optme_sequence_count")) for block in blocks)
+    metrics["optme_rescheduled_epoch_count"] = sum(_int(block.get("optme_rescheduled_epoch_count")) for block in blocks)
+    metrics["optme_maximum_sequence_width"] = max((_int(block.get("optme_maximum_sequence_width")) for block in blocks), default=0)
+    metrics["optme_source_commit"] = next((block.get("optme_source_commit") for block in blocks if block.get("optme_source_commit")), None)
+    metrics["optme_truth_scope"] = "post_consensus_actual_rw_simulation_author_source_schedule;accesslist_only_bounds_stateless_projection"
+
+
+def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    # Client-produced routing/allocation evidence is stored under run_dir/client,
+    # matching the existing client artifact contract. Keep a root fallback only
+    # for backwards-compatible inspection of early development runs.
+    def txallo_artifact(name: str) -> Path:
+        client_path = run_dir / "client" / name
+        return client_path if client_path.is_file() else run_dir / name
+
+    summary_path = txallo_artifact("txallo_allocation_summary.json")
+    placement_path = txallo_artifact("txallo_transaction_placement.csv")
+    mapping_path = txallo_artifact("txallo_account_mapping.csv")
+    summary = _read_json(summary_path)
+    if not summary:
+        return
+    metrics["txallo_metrics_available"] = True
+    for key in (
+        "history_source", "history_cutoff_source_row_index", "history_transaction_count", "history_limit", "adaptive_chunk_records",
+        "g_txallo_run_count", "a_txallo_run_count", "graph_account_count", "graph_edge_count", "eta", "lambda", "epsilon",
+        "mapping_digest", "mapped_account_count", "modeled_throughput", "modeled_cross_shard_ratio", "modeled_workload_stddev",
+        "bootstrap_ms", "future_evaluation_transactions_used", "truth_boundary",
+    ):
+        if key in summary:
+            metrics["txallo_" + key if not key.startswith("txallo_") else key] = summary[key]
+    total = cross = 0
+    if placement_path.is_file():
+        with placement_path.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                total += 1
+                if str(row.get("home_shard") or "") != str(row.get("target_shard") or ""):
+                    cross += 1
+        metrics["txallo_evaluation_transaction_count"] = total
+        metrics["txallo_evaluation_cross_shard_transaction_count"] = cross
+        metrics["txallo_evaluation_cross_shard_ratio"] = (cross / total) if total else None
+    for path in (summary_path, placement_path, mapping_path):
+        if path.is_file():
+            rel = str(path.relative_to(run_dir)).replace("\\", "/")
+            if rel not in metrics["source_artifacts"]:
+                metrics["source_artifacts"].append(rel)
+    metrics["txallo_truth_scope"] = "pre_evaluation_history_only_frozen_mapping;modeled_throughput_is_paper_objective_not_measured_end_to_end_tps"
 
 
 def _apply_calvin_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
@@ -2126,6 +2398,21 @@ def _metric_state(value: object, *, required: bool) -> str:
     return "missing" if value is None or value == "" else "available"
 
 
+
+def _apply_metatrack_consensus_window_observability(metrics: dict, run_dir: Path) -> None:
+    summary = _read_json(Path(run_dir) / "metatrack_consensus_window_summary.json")
+    payload = summary.get("metrics") if isinstance(summary, dict) else None
+    if not isinstance(payload, dict):
+        return
+    for key, value in payload.items():
+        metrics[key] = value
+    metrics["metatrack_consensus_window_observability_available"] = bool(summary.get("available"))
+    metrics["metatrack_consensus_window_truth_scope"] = "durable_signed_consensus_window_metadata_post_run_reconstruction_v2"
+    artifacts = metrics.get("source_artifacts")
+    if isinstance(artifacts, list) and "metatrack_consensus_window_summary.json" not in artifacts:
+        artifacts.append("metatrack_consensus_window_summary.json")
+
+
 def _read_json(path: Path) -> dict:
     if not path.is_file():
         return {}
@@ -2263,3 +2550,14 @@ def _int(value: object) -> int:
         return int(float(str(value or "0")))
     except ValueError:
         return 0
+
+# BEGIN MBE OPTME TXALLO METHOD SPECIFIC CORRECTNESS V18 METRIC
+from backend.app.services.v5_optme_txallo_method_specific_v18 import enrich_metrics as _mbe_v18_enrich_metrics
+_mbe_v18_original_extract = extract
+
+def extract(*args, **kwargs):
+    _mbe_v18_result = _mbe_v18_original_extract(*args, **kwargs)
+    _mbe_v18_run_dir = args[0] if args else kwargs.get("run_dir")
+    _mbe_v18_method_id = args[1] if len(args) > 1 else kwargs.get("method_id")
+    return _mbe_v18_enrich_metrics(_mbe_v18_run_dir, _mbe_v18_method_id, _mbe_v18_result)
+# END MBE OPTME TXALLO METHOD SPECIFIC CORRECTNESS V18 METRIC

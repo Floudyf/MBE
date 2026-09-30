@@ -109,6 +109,78 @@ func applyMetaTrackDeclaredAccessFrontierV2(plan *BatchRoutingPlan, records []Wo
 	}
 }
 
+func metaTrackDeclaredAccessFrontierDigestV6567(record WorkloadRecord, executionShard string) string {
+	versions := append([]tx.StateVersionDependency(nil), record.StateVersions...)
+	sort.Slice(versions, func(i, j int) bool {
+		if versions[i].Key != versions[j].Key {
+			return versions[i].Key < versions[j].Key
+		}
+		if versions[i].RequiredVersion != versions[j].RequiredVersion {
+			return versions[i].RequiredVersion < versions[j].RequiredVersion
+		}
+		if versions[i].ProducedVersion != versions[j].ProducedVersion {
+			return versions[i].ProducedVersion < versions[j].ProducedVersion
+		}
+		return versions[i].RequiredExecutionRound < versions[j].RequiredExecutionRound
+	})
+	executionPreds := append([]uint64(nil), record.ConsensusExecutionPredecessorOrdinals...)
+	orderingPreds := append([]uint64(nil), record.ConsensusOrderingPredecessorOrdinals...)
+	sort.Slice(executionPreds, func(i, j int) bool { return executionPreds[i] < executionPreds[j] })
+	sort.Slice(orderingPreds, func(i, j int) bool { return orderingPreds[i] < orderingPreds[j] })
+	payload := struct {
+		SchemaVersion         string                      `json:"schema_version"`
+		ControlPolicy         string                      `json:"control_policy"`
+		LogicalID             string                      `json:"logical_id"`
+		TxIndex               int                         `json:"tx_index"`
+		RoutingOrdinal        uint64                      `json:"routing_ordinal"`
+		ExecutionShard        string                      `json:"execution_shard"`
+		DeclaredAccess        []tx.AccessItem             `json:"declared_access"`
+		StateVersions         []tx.StateVersionDependency `json:"state_versions"`
+		ExecutionPredecessors []uint64                    `json:"execution_predecessors"`
+		OrderingPredecessors  []uint64                    `json:"ordering_predecessors"`
+		ExecutionDepth        int                         `json:"execution_depth"`
+		ExecutionRound        int                         `json:"execution_round"`
+	}{
+		SchemaVersion:         "metatrack_declared_access_frontier_v6567",
+		ControlPolicy:         metaTrackDeclaredAccessFrontierPolicy,
+		LogicalID:             firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)),
+		TxIndex:               record.Index,
+		RoutingOrdinal:        record.RoutingOrdinal,
+		ExecutionShard:        executionShard,
+		DeclaredAccess:        metaTrackDeclaredAccessItemsForRecord(record),
+		StateVersions:         versions,
+		ExecutionPredecessors: executionPreds,
+		OrderingPredecessors:  orderingPreds,
+		ExecutionDepth:        record.ConsensusExecutionDepth,
+		ExecutionRound:        record.ConsensusExecutionRound,
+	}
+	return stableJSONDigest(payload)
+}
+
+func metaTrackDeclaredAccessFrontierDigestV6568(record WorkloadRecord, executionShard string) string {
+	versions := append([]tx.StateVersionDependency(nil), record.StateVersions...)
+	sort.Slice(versions, func(i, j int) bool {
+		if versions[i].Key != versions[j].Key { return versions[i].Key < versions[j].Key }
+		if versions[i].RequiredVersion != versions[j].RequiredVersion { return versions[i].RequiredVersion < versions[j].RequiredVersion }
+		if versions[i].ProducedVersion != versions[j].ProducedVersion { return versions[i].ProducedVersion < versions[j].ProducedVersion }
+		return versions[i].RequiredExecutionRound < versions[j].RequiredExecutionRound
+	})
+	executionPreds := append([]uint64(nil), record.ConsensusExecutionPredecessorOrdinals...)
+	orderingPreds := append([]uint64(nil), record.ConsensusOrderingPredecessorOrdinals...)
+	sort.Slice(executionPreds, func(i,j int) bool { return executionPreds[i] < executionPreds[j] })
+	sort.Slice(orderingPreds, func(i,j int) bool { return orderingPreds[i] < orderingPreds[j] })
+	payload := struct {
+		SchemaVersion string `json:"schema_version"`; ControlPolicy string `json:"control_policy"`; LogicalID string `json:"logical_id"`; TxIndex int `json:"tx_index"`; RoutingOrdinal uint64 `json:"routing_ordinal"`; ExecutionShard string `json:"execution_shard"`
+		DeclaredAccess []tx.AccessItem `json:"declared_access"`; StateVersions []tx.StateVersionDependency `json:"state_versions"`; ExecutionPredecessors []uint64 `json:"execution_predecessors"`; OrderingPredecessors []uint64 `json:"ordering_predecessors"`; ExecutionDepth int `json:"execution_depth"`; ExecutionRound int `json:"execution_round"`
+		ConsensusWindowSequence uint64 `json:"consensus_window_sequence"`; ConsensusWindowStartBatchSequence uint64 `json:"consensus_window_start_batch_sequence"`; ConsensusWindowEndBatchSequence uint64 `json:"consensus_window_end_batch_sequence"`; ConsensusWindowRouteBatchCount int `json:"consensus_window_route_batch_count"`; ConsensusWindowTransactionCount int `json:"consensus_window_transaction_count"`; ConsensusWindowShardTransactionCount int `json:"consensus_window_shard_transaction_count"`; ConsensusWindowCriticalPath int `json:"consensus_window_critical_path"`
+	}{
+		SchemaVersion:"metatrack_declared_access_frontier_v6568", ControlPolicy:metaTrackDeclaredAccessFrontierPolicy, LogicalID:firstNonEmpty(record.LogicalID,fmt.Sprintf("tx-%d",record.Index)), TxIndex:record.Index, RoutingOrdinal:record.RoutingOrdinal, ExecutionShard:executionShard,
+		DeclaredAccess:metaTrackDeclaredAccessItemsForRecord(record), StateVersions:versions, ExecutionPredecessors:executionPreds, OrderingPredecessors:orderingPreds, ExecutionDepth:record.ConsensusExecutionDepth, ExecutionRound:record.ConsensusExecutionRound,
+		ConsensusWindowSequence:record.ConsensusWindowSequence, ConsensusWindowStartBatchSequence:record.ConsensusWindowStartBatchSequence, ConsensusWindowEndBatchSequence:record.ConsensusWindowEndBatchSequence, ConsensusWindowRouteBatchCount:record.ConsensusWindowRouteBatchCount, ConsensusWindowTransactionCount:record.ConsensusWindowTransactionCount, ConsensusWindowShardTransactionCount:record.ConsensusWindowShardTransactionCount, ConsensusWindowCriticalPath:record.ConsensusWindowCriticalPath,
+	}
+	return stableJSONDigest(payload)
+}
+
 func validateMetaTrackDeclaredAccessFrontierBinding(item tx.SignedTransaction) error {
 	if item.ExecutionRouting == nil {
 		return fmt.Errorf("metatrack declared-access frontier missing execution routing")
@@ -128,10 +200,26 @@ func validateMetaTrackDeclaredAccessFrontierBinding(item tx.SignedTransaction) e
 		LogicalID:            firstNonEmpty(item.LogicalTxID, item.TxID),
 		AccessList:           append([]tx.AccessItem(nil), item.AccessList...),
 		SchedulingAccessList: append([]tx.AccessItem(nil), item.SchedulingAccessList...),
-		RoutingOrdinal:       routing.RoutingOrdinal,
-		StateVersions:        append([]tx.StateVersionDependency(nil), routing.StateVersions...),
+		RoutingOrdinal:                         routing.RoutingOrdinal,
+		StateVersions:                          append([]tx.StateVersionDependency(nil), routing.StateVersions...),
+		ConsensusExecutionPredecessorOrdinals: append([]uint64(nil), routing.ConsensusExecutionPredecessorOrdinals...),
+		ConsensusOrderingPredecessorOrdinals:  append([]uint64(nil), routing.ConsensusOrderingPredecessorOrdinals...),
+		ConsensusExecutionDepth:               routing.ConsensusExecutionDepth,
+		ConsensusExecutionRound:               routing.ConsensusExecutionRound,
+		ConsensusWindowSequence:              routing.ConsensusWindowSequence,
+		ConsensusWindowStartBatchSequence:    routing.ConsensusWindowStartBatchSequence,
+		ConsensusWindowEndBatchSequence:      routing.ConsensusWindowEndBatchSequence,
+		ConsensusWindowRouteBatchCount:       routing.ConsensusWindowRouteBatchCount,
+		ConsensusWindowTransactionCount:      routing.ConsensusWindowTransactionCount,
+		ConsensusWindowShardTransactionCount: routing.ConsensusWindowShardTransactionCount,
+		ConsensusWindowCriticalPath:          routing.ConsensusWindowCriticalPath,
 	}
 	expected := metaTrackDeclaredAccessFrontierDigest(record, routing.ExecutionShard)
+	if routing.ConsensusWindowSequence > 0 {
+		expected = metaTrackDeclaredAccessFrontierDigestV6568(record, routing.ExecutionShard)
+	} else if routing.ConsensusExecutionRound > 0 {
+		expected = metaTrackDeclaredAccessFrontierDigestV6567(record, routing.ExecutionShard)
+	}
 	if expected != routing.FrontierDigest {
 		return fmt.Errorf("metatrack declared-access frontier digest mismatch")
 	}

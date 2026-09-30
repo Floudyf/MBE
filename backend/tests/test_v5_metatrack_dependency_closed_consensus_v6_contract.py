@@ -29,8 +29,13 @@ def test_proposer_and_validator_both_enforce_dependency_closure():
     registry = read("executor/v5/registry.go")
     runtime = read("executor/v5/runtime.go")
     closure = read("executor/v5/metatrack_dependency_closed_consensus_v6.go")
-    assert 'selectMetaTrackDependencyClosedPBFTProjections' in registry
+    pbft_safety = read("executor/v5/pbft_safety.go")
+    frontier = read("executor/v5/metatrack_transaction_frontier_v656.go")
+    assert 'selectMetaTrackTransactionFrontierV656' in registry
     assert 'validateMetaTrackDependencyClosedProjectionBlock' in runtime
+    assert 'validateMetaTrackTransactionFrontierV656(block)' in pbft_safety
+    assert 'ConsensusExecutionPredecessorOrdinals' in frontier
+    assert 'ConsensusExecutionDepth' in frontier
     assert 'dependency.RequiredVersion >= ordinal' in closure
     assert 'dependency.ProducedVersion != ordinal' in closure
     assert 'duplicate producer' in closure
@@ -47,12 +52,24 @@ def test_new_profile_uses_single_final_seal_and_indexed_liveness():
     assert 'metaTrackBuildAccessIndex' in optimized
 
 
-def test_closure_boundary_final_is_not_delayed_until_whole_block_flush():
+def test_closure_boundary_final_uses_aggregate_consumer_guard_and_async_join():
     source = read("executor/v5/metatrack_version_liveness_v5.go")
-    assert 'metatrack_closure_boundary_immediate_publish_count' in source
-    boundary_pos = source.index('boundaryRequired := r.metaTrackBlockExecutorFlag(\"dependency_closed_consensus\")')
-    buffer_pos = source.index('buffer.finals[homeShard+', boundary_pos)
-    assert boundary_pos < buffer_pos
+    helper = read("executor/v5/metatrack_async_version_writeback_v640.go")
+    assert 'boundaryRequired := r.metaTrackBlockExecutorFlag("dependency_closed_consensus")' not in source
+    assert 'closureImmediateBatch := r.metaTrackBlockExecutorFlag("dependency_closed_consensus")' not in source
+    assert 'closureBackgroundAsync := buffer.asyncV640 != nil' in source
+    assert 'buffer.blockRemoteValueSuccessorCount[identity] > 0' in source
+    assert 'enqueueMetaTrackAsyncFinalV640' in source
+    assert 'deferOrJoinMetaTrackAsyncVersionsV656' in source
+    overlap = read("executor/v5/metatrack_final_join_overlap_v656.go")
+    runtime = read("executor/v5/runtime.go")
+    assert 'joinMetaTrackAsyncVersionsV640' in overlap
+    assert 'joinDeferredMetaTrackAsyncVersionsV656(ctx, block)' in runtime
+    assert runtime.index('joinDeferredMetaTrackAsyncVersionsV656(ctx, block)') < runtime.index('r.setCommitPhase("durable_commit", block)')
+    assert 'metaTrackBlockRemoteValueConsumerIndexV640' in helper
+    assert 'metatrack_block_consumer_critical_final_publish_count' in source
+    assert 'metatrack_background_final_writeback_ms' in helper
+    assert 'metatrack_final_join_wait_ms' in helper
 
 
 def test_formal_metrics_export_liveness_and_closure_boundary_truth():
@@ -63,6 +80,11 @@ def test_formal_metrics_export_liveness_and_closure_boundary_truth():
         "metatrack_version_dead_intermediate_count",
         "metatrack_version_final_persistent_count",
         "metatrack_closure_boundary_immediate_publish_count",
+        "metatrack_block_remote_value_consumer_edge_count",
+        "metatrack_block_consumer_critical_final_publish_count",
+        "metatrack_critical_version_publish_wait_ms",
+        "metatrack_background_final_writeback_ms",
+        "metatrack_final_join_wait_ms",
     ]:
         assert key in extractor
 

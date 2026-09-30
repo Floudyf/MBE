@@ -331,16 +331,23 @@ type StateStorageInput struct {
 	ShardID string
 }
 type BlockProductionInput struct {
-	Pool              *mempool.Mempool
-	Proposer          *realblock.Proposer
-	Limit             int
-	Now               time.Time
-	SystemDeltaReady  bool
-	Context           context.Context
-	BaseStateSnapshot map[string]string
-	WorkerCount       int
-	RoutingPluginID   string
+	Pool                            *mempool.Mempool
+	Proposer                        *realblock.Proposer
+	Limit                           int
+	Now                             time.Time
+	SystemDeltaReady                bool
+	Context                         context.Context
+	BaseStateSnapshot               map[string]string
+	WorkerCount                     int
+	RoutingPluginID                 string
+	MetaTrackExactVersionReadyV6566 metaTrackExactVersionReadyV6566
+	MetaTrackWorkerCountV6567       int
 }
+
+var _ = selectMetaTrackTransactionFrontierV656             // v6.5.6.7 compatibility anchor; active selector is critical-width consensus window
+var _ = selectMetaTrackRemoteReadyTransactionFrontierV6566 // v6.5.6.7 compatibility anchor; active selector is critical-width consensus window
+var _ = selectMetaTrackRoundBandedTransactionFrontierV6567 // v6.5.6.8 compatibility anchor; active selector is critical-width consensus window
+
 type RuntimeEvent struct {
 	TimestampMS int64
 	Type        string
@@ -429,6 +436,7 @@ type RemoteStateReadyEvent struct {
 }
 
 type RemoteStateFetchFunc func(context.Context, tx.SignedTransaction, tx.AccessItem) (RemoteStateReadyEvent, error)
+type PorygonStateFetchFunc func(context.Context, tx.SignedTransaction, tx.AccessItem) (RemoteStateReadyEvent, error)
 
 type StateVersionPublishFunc func(context.Context, tx.SignedTransaction, execution.TxDelta, map[string]string) error
 
@@ -442,6 +450,7 @@ type BlockExecutionInput struct {
 	// identity is distinct from the global PBFT ordering-domain ShardID.
 	ExecutionShardID                 string
 	PorygonWaveExchange              PorygonWaveExchangeFunc
+	PorygonStateFetch                PorygonStateFetchFunc
 	CalvinReadExchange               CalvinReadExchangeFunc
 	CalvinOutcomeExchange            CalvinOutcomeExchangeFunc
 	CalvinStateHome                  CalvinStateHomeFunc
@@ -498,45 +507,56 @@ type WorkloadItem struct {
 	AccessList []tx.AccessItem
 }
 type WorkloadRecord struct {
-	Index                           int
-	LogicalID                       string
-	SenderID                        string
-	ReceiverID                      string
-	OperationType                   string
-	RoutingSourceKey                string
-	RoutingTargetKey                string
-	Payload                         string
-	StateKeys                       []string
-	AccessList                      []tx.AccessItem
-	AccessListSchema                string
-	AccessListSource                string
-	AccessListDigest                string
-	SchedulingAccessList            []tx.AccessItem
-	SchedulingAccessSchema          string
-	SchedulingAccessSource          string
-	SchedulingAccessDigest          string
-	CrossShard                      bool
-	SourceShard                     string
-	TargetShard                     string
-	SourceEventID                   string
-	TimestampMS                     int64
-	Value                           int64
-	RoutingEpoch                    uint64
-	RoutingOrdinal                  uint64
-	ExecutionShard                  string
-	RoutingReason                   string
-	RoutePlanDigest                 string
-	RouteBatchSequence              uint64
-	RouteBatchTransactionCount      int
-	RouteBatchShardTransactionCount int
-	PredictedRemoteReads            int
-	PredictedRemoteWrites           int
-	StateVersions                   []tx.StateVersionDependency
-	ControlPolicy                   string
-	LogicalDomains                  []string
-	Local                           bool
-	Bridge                          bool
-	FrontierDigest                  string
+	Index                                 int
+	LogicalID                             string
+	SenderID                              string
+	ReceiverID                            string
+	OperationType                         string
+	RoutingSourceKey                      string
+	RoutingTargetKey                      string
+	Payload                               string
+	StateKeys                             []string
+	AccessList                            []tx.AccessItem
+	AccessListSchema                      string
+	AccessListSource                      string
+	AccessListDigest                      string
+	SchedulingAccessList                  []tx.AccessItem
+	SchedulingAccessSchema                string
+	SchedulingAccessSource                string
+	SchedulingAccessDigest                string
+	CrossShard                            bool
+	SourceShard                           string
+	TargetShard                           string
+	SourceEventID                         string
+	TimestampMS                           int64
+	Value                                 int64
+	RoutingEpoch                          uint64
+	RoutingOrdinal                        uint64
+	ExecutionShard                        string
+	RoutingReason                         string
+	RoutePlanDigest                       string
+	RouteBatchSequence                    uint64
+	RouteBatchTransactionCount            int
+	RouteBatchShardTransactionCount       int
+	ConsensusExecutionPredecessorOrdinals []uint64
+	ConsensusOrderingPredecessorOrdinals  []uint64
+	ConsensusExecutionDepth               int
+	ConsensusExecutionRound               int
+	ConsensusWindowSequence uint64
+	ConsensusWindowStartBatchSequence uint64
+	ConsensusWindowEndBatchSequence uint64
+	ConsensusWindowRouteBatchCount int
+	ConsensusWindowTransactionCount int
+	ConsensusWindowShardTransactionCount int
+	ConsensusWindowCriticalPath int
+	PredictedRemoteReads                  int
+	PredictedRemoteWrites                 int
+	StateVersions                         []tx.StateVersionDependency
+	ControlPolicy                         string
+	LogicalDomains                        []string
+	Local                                 bool
+	Bridge                                bool
+	FrontierDigest                        string
 }
 type WorkloadReplaySummary struct {
 	DatasetID                string         `json:"dataset_id,omitempty"`
@@ -587,38 +607,60 @@ type RoutingInput struct {
 }
 type RoutingDecision struct{ ShardID, Reason string }
 type BatchRoutingInput struct {
-	BatchIndex     int
-	Records        []WorkloadRecord
-	ShardIDs       []string
-	Sharding       ShardingPlugin
-	DeferFinalSeal bool
+	BatchIndex               int
+	Records                  []WorkloadRecord
+	ShardIDs                 []string
+	Sharding                 ShardingPlugin
+	DeferFinalSeal           bool
+	ExpectedTransactionCount int
 }
 type BatchRoutingPlan struct {
-	BatchIndex              int
-	PlanDigest              string
-	ShardingPluginID        string
-	StateStorageUnitCount   int    `json:"state_storage_unit_count,omitempty"`
-	ControlPolicy           string `json:"control_policy,omitempty"`
-	LogicalDomainCount      int    `json:"logical_domain_count,omitempty"`
-	PlacementPolicy         string
-	TransactionPolicy       string
-	PlacementBudget         int
-	PlacementMinBudget      int
-	PlacementMu             string
-	PlacementCapacity       int
-	PlacementTotalFrequency int
-	PlacementMaxFrequency   int
-	AccessMatrix            []AccessMatrixRow
-	StateFrequency          []StateFrequencyRow
-	CoaccessEdges           []CoaccessEdge
-	StatePlacements         []StatePlacement
-	TransactionPlacements   []TransactionPlacement
-	ShardLoadBefore         map[string]int
-	ShardLoadAfter          map[string]int
-	PlacementScores         []PlacementScore
-	PlacementFallbackCount  int
-	RemoteAccessEstimate    int
-	RoutingOverhead         int
+	BatchIndex                                 int
+	PlanDigest                                 string
+	ShardingPluginID                           string
+	StateStorageUnitCount                      int    `json:"state_storage_unit_count,omitempty"`
+	ControlPolicy                              string `json:"control_policy,omitempty"`
+	LogicalDomainCount                         int    `json:"logical_domain_count,omitempty"`
+	PlacementPolicy                            string
+	TransactionPolicy                          string
+	PlacementBudget                            int
+	PlacementMinBudget                         int
+	PlacementMu                                string
+	PlacementCapacity                          int
+	PlacementTotalFrequency                    int
+	PlacementMaxFrequency                      int
+	AccessMatrix                               []AccessMatrixRow
+	StateFrequency                             []StateFrequencyRow
+	CoaccessEdges                              []CoaccessEdge
+	StatePlacements                            []StatePlacement
+	TransactionPlacements                      []TransactionPlacement
+	ShardLoadBefore                            map[string]int
+	ShardLoadAfter                             map[string]int
+	PlacementScores                            []PlacementScore
+	PlacementFallbackCount                     int
+	RemoteAccessEstimate                       int
+	RoutingOverhead                            int
+	IncrementalRoutingPolicy                   string `json:"incremental_routing_policy,omitempty"`
+	IncrementalExpectedTransactionCount        int    `json:"incremental_expected_transaction_count,omitempty"`
+	IncrementalExecutionShardCapacity          int    `json:"incremental_execution_shard_capacity,omitempty"`
+	IncrementalHistoryTransactionCountBefore   int    `json:"incremental_history_transaction_count_before,omitempty"`
+	IncrementalHistoryTransactionCountAfter    int    `json:"incremental_history_transaction_count_after,omitempty"`
+	IncrementalExactStateEdgeCount             int    `json:"incremental_exact_state_edge_count,omitempty"`
+	IncrementalExactLocalStateEdgeCount        int    `json:"incremental_exact_local_state_edge_count,omitempty"`
+	IncrementalExactCrossShardStateEdgeCount   int    `json:"incremental_exact_cross_shard_state_edge_count,omitempty"`
+	IncrementalExactPredecessorEdgeCount       int    `json:"incremental_exact_predecessor_edge_count,omitempty"`
+	IncrementalExactLocalPredecessorCount      int    `json:"incremental_exact_local_predecessor_count,omitempty"`
+	IncrementalExactCrossShardPredecessorCount int    `json:"incremental_exact_cross_shard_predecessor_count,omitempty"`
+	IncrementalCoaccessPairUpdateCount         int    `json:"incremental_coaccess_pair_update_count,omitempty"`
+	IncrementalExecutionShardSwitchCount       int    `json:"incremental_execution_shard_switch_count,omitempty"`
+	IncrementalCapacityForcedChoiceCount       int    `json:"incremental_capacity_forced_choice_count,omitempty"`
+	IncrementalExactFirstChoiceCount           int    `json:"incremental_exact_first_choice_count,omitempty"`
+	IncrementalCoaccessTiebreakCount           int    `json:"incremental_coaccess_tiebreak_count,omitempty"`
+	IncrementalRemoteTiebreakCount             int    `json:"incremental_remote_tiebreak_count,omitempty"`
+	IncrementalLoadTiebreakCount               int    `json:"incremental_load_tiebreak_count,omitempty"`
+	IncrementalHistoryDigestBefore             string `json:"incremental_history_digest_before,omitempty"`
+	IncrementalHistoryDigestAfter              string `json:"incremental_history_digest_after,omitempty"`
+	IncrementalBatchPartitionInvariant         bool   `json:"incremental_batch_partition_invariant,omitempty"`
 }
 type AccessMatrixRow struct {
 	LogicalID string
@@ -1026,6 +1068,8 @@ func (p statelessHashRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPla
 
 type metaTrackRouting struct {
 	basicPlugin
+	incrementalMu   sync.Mutex
+	incrementalV650 *metaTrackIncrementalRoutingStateV650
 }
 
 func (p *metaTrackRouting) StatelessDirectExecution() bool     { return true }
@@ -1052,6 +1096,9 @@ func (p *metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 }
 
 func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
+	if p != nil && boolFromAny(p.config["incremental_exact_continuity_routing_v65"]) && input.ExpectedTransactionCount > 0 {
+		return p.planIncrementalExactContinuityV650(input)
+	}
 	if metaTrackLogicalDomainPolicyEnabled(p.config) {
 		return p.planLogicalDomainFrontierV1(input)
 	}
@@ -1681,7 +1728,7 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 		var selected, deferred []tx.SignedTransaction
 		var err error
 		if boolFromAny(p.config["dependency_closed_consensus"]) {
-			selected, deferred, _, err = selectMetaTrackDependencyClosedPBFTProjections(reserved, limit, input.Proposer.ShardID)
+			selected, deferred, _, err = selectMetaTrackCriticalWidthWindowV6568(reserved, limit, input.Proposer.ShardID, input.Pool)
 		} else {
 			// Frozen current-version behavior: exactly one signed projection per
 			// PBFT block. Only the newest MetaTrack profile enables dependency-
@@ -5511,6 +5558,9 @@ func BuiltinRegistry() *Registry {
 	registerGroundhogPlugins(register)
 	// MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: additive paper-driven Porygon plugins.
 	registerPorygonPlugins(register)
+	// MBE_OPTME_TXALLO_BASELINES_20260928: additive paper-faithful/adaptation plugin families.
+	registerOptMEPlugins(register)
+	registerTxAlloPlugins(register)
 	register("state_access", "direct_state_access", func(c map[string]any) (Plugin, error) {
 		return builtinStateAccess{makeBasic("state_access", "direct_state_access", c)}, nil
 	})
@@ -5653,6 +5703,12 @@ func InstantiatePlugins(profile map[string]PluginConfig) (RuntimePlugins, error)
 		return p, err
 	}
 	if err := validatePorygonPluginCombination(p); err != nil {
+		return p, err
+	}
+	if err := validateOptMEPluginCombination(p); err != nil {
+		return p, err
+	}
+	if err := validateTxAlloPluginCombination(p); err != nil {
 		return p, err
 	}
 	return p, nil

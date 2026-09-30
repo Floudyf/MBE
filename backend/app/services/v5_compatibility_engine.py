@@ -281,7 +281,10 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
             warnings.append("Calvin uses the common MBE PBFT layer as the replicated global ordering service while retaining paper-faithful deterministic FIFO S/X locking and READ_RESULT participant execution")
         warnings.append("Calvin disables MBE Relay/Finalize, traditional 2PC, MetaTrack StateReady/CAS/frontier control and commutative aggregation")
 
-    # MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: Porygon is one physical MBE/PBFT ordering domain plus logical ESCs.
+    # MBE_PORYGON_MBE_ADAPTATION_V5_20260929: Porygon keeps one physical MBE/PBFT
+    # ordering domain while storage identity is separated into co-located Porygon
+    # partition roles keyed by ExecutionShardID. This is Porygon-only and must not
+    # alter the storage contract of any other method.
     porygon_selected = any(
         selected and selected.plugin_id.startswith("porygon_")
         for selected in by_category.values()
@@ -295,7 +298,7 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
             "scheduler": "porygon_pipeline_scheduler",
             "block_executor": "porygon_block_executor",
             "state_access": "porygon_remote_state_access",
-            "state_storage": "persistent_local_state_store",
+            "state_storage": "porygon_partition_state_store",
             "cross_shard": "porygon_cross_shard_coordinator",
             "commit": "normal_commit",
         }
@@ -330,7 +333,80 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
                 blockers.append(f"Porygon scheduler and block executor {key} must match")
         warnings.append("Porygon maps frontend topology.shards to execution shards/ESCs while all nodes share one global PBFT ordering domain; MetaTrack remote StateVersions/CAS and MBE Relay/Finalize remain disabled")
         warnings.append("Porygon pipeline evidence is logical Witness/Ordering/Execution/Commit protocol-slot evidence; current shared PBFT runtime does not claim cross-height wall-clock overlap")
-        warnings.append("Porygon storage-node separation is represented by signed AccessList execution projection over MBE persistent state; separate physical Storage Nodes are not claimed")
+        warnings.append("Porygon storage/consensus role separation is represented by signed AccessList projections over co-located execution-shard storage roles; no additional physical storage machines are introduced")
+
+    # MBE_OPTME_TXALLO_BASELINES_20260928: fail-closed Python-side profile isolation.
+    optme_ids = {
+        "optme_execution", "optme_scheduler", "optme_block_executor",
+        "stateless_optme_block_executor", "stateless_optme_routing",
+    }
+    optme_selected = any(
+        selected and selected.plugin_id in optme_ids
+        for selected in by_category.values()
+    )
+    if optme_selected:
+        stateful_optme = bool(block_executor and block_executor.plugin_id == "optme_block_executor")
+        stateless_optme = bool(block_executor and block_executor.plugin_id == "stateless_optme_block_executor")
+        if stateful_optme == stateless_optme:
+            blockers.append("OptME profile must select exactly one of optme_block_executor or stateless_optme_block_executor")
+        required = {
+            "block_producer": "time_or_count_block_producer",
+            "consensus": "pbft_style_consensus",
+            "network": "localhost_tcp_typed_network",
+            "execution": "optme_execution",
+            "scheduler": "optme_scheduler",
+            "state_access": "direct_state_access",
+            "state_storage": "persistent_local_state_store",
+            "commit": "normal_commit",
+        }
+        if stateless_optme:
+            required.update({
+                "routing": "stateless_optme_routing",
+                "block_executor": "stateless_optme_block_executor",
+            })
+        else:
+            required.update({
+                "routing": "hash_routing_baseline",
+                "block_executor": "optme_block_executor",
+            })
+        for category, plugin_id in required.items():
+            selected = by_category.get(category)
+            if not selected or selected.plugin_id != plugin_id:
+                blockers.append(f"OptME requires {category}:{plugin_id}")
+        if stateless_optme:
+            warnings.append("Stateless-OptME is an explicit MBE multi-shard state-substrate adaptation: each PBFT shard consumes its own consensus output, signed AccessList bounds remote block-start projection/writeback, and OptME still derives scheduling conflicts from post-consensus observed read/write sets; it is not claimed as a sharding mechanism from the original OptME paper")
+        else:
+            warnings.append("OptME preserves the SC 2024 post-consensus simulate -> AddressBasedConflictGraph -> hierarchical schedule -> reorder/reschedule core inside each MBE physical PBFT shard. Multiple shards are an MBE topology integration, not an OptME paper contribution; state remains persistent/local and legacy MBE cross-shard lifecycle is retained.")
+
+    txallo_ids = {"txallo_account_sharding", "txallo_routing", "stateless_txallo_routing"}
+    txallo_selected = any(
+        selected and selected.plugin_id in txallo_ids
+        for selected in by_category.values()
+    )
+    if txallo_selected:
+        txallo_routing_id = routing.plugin_id if routing else ""
+        if txallo_routing_id not in {"txallo_routing", "stateless_txallo_routing"}:
+            blockers.append("TxAllo requires routing:txallo_routing or routing:stateless_txallo_routing")
+        required = {
+            "sharding": "txallo_account_sharding",
+            "block_producer": "time_or_count_block_producer",
+            "consensus": "pbft_style_consensus",
+            "network": "localhost_tcp_typed_network",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "serial_block_executor",
+            "state_access": "direct_state_access",
+            "state_storage": "persistent_local_state_store",
+            "commit": "normal_commit",
+        }
+        for category, plugin_id in required.items():
+            selected = by_category.get(category)
+            if not selected or selected.plugin_id != plugin_id:
+                blockers.append(f"TxAllo requires {category}:{plugin_id}")
+        if txallo_routing_id == "stateless_txallo_routing":
+            warnings.append("Stateless-TxAllo shares the exact frozen TxAllo account mapping with TxAllo and changes only the generic stateless remote-state substrate; the measured evaluation window is not used to train its own mapping")
+        else:
+            warnings.append("TxAllo uses the ICDE 2023 account graph/allocation path with a frozen pre-evaluation-history mapping and the shared stateful MBE execution/relay substrate")
 
     if spec.execution_backend == "real_cluster" and blockers:
         warnings.append("real_cluster is blocked and will not fall back to simulation or V4 smoke")

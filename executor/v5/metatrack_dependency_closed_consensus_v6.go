@@ -81,35 +81,12 @@ func validateMetaTrackDependencyClosedProjectionBlock(block realblock.Block, req
 	return projections, nil
 }
 
-// selectMetaTrackDependencyClosedPBFTProjections reuses the historical complete
-// signed-projection aggregator, but grows only the largest safe prefix. It does
-// not split a projection and does not solve a global maximum-set problem.
+// selectMetaTrackDependencyClosedPBFTProjections keeps the v6.5.2 public helper
+// contract while v6.5.3 moves hot-path dependency construction into the shared
+// per-mempool static dependency index. No projection is split or reordered.
 func selectMetaTrackDependencyClosedPBFTProjections(items []tx.SignedTransaction, limit int, shardID string) ([]tx.SignedTransaction, []tx.SignedTransaction, []metaTrackBatchProjectionIdentity, error) {
-	_, _, all, err := selectMetaTrackAggregatedBatchProjections(items, limit, shardID)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	var bestSelected, bestDeferred []tx.SignedTransaction
-	var bestProjections []metaTrackBatchProjectionIdentity
-	for count := 1; count <= len(all); count++ {
-		selected, deferred, projections, selectErr := selectMetaTrackBatchProjectionGroups(items, limit, shardID, count)
-		if selectErr != nil {
-			if count == 1 {
-				return nil, nil, nil, selectErr
-			}
-			break
-		}
-		block := realblock.Block{ShardID: shardID, TxList: selected}
-		if _, validateErr := validateMetaTrackDependencyClosedProjectionBlock(block, true); validateErr != nil {
-			if count == 1 {
-				return nil, nil, nil, validateErr
-			}
-			break
-		}
-		bestSelected, bestDeferred, bestProjections = selected, deferred, projections
-	}
-	if len(bestSelected) == 0 {
-		return nil, nil, nil, fmt.Errorf("metatrack dependency closure found no safe complete projection")
-	}
-	return bestSelected, bestDeferred, bestProjections, nil
+	// Compatibility wrapper for focused tests and explicit callers without a
+	// node mempool. The real block-producer hot path supplies its mempool so
+	// v6.5.3 can reuse the dependency index across successive proposals.
+	return selectMetaTrackDependencyClosedPBFTProjectionsIndexedV653(items, limit, shardID, nil)
 }

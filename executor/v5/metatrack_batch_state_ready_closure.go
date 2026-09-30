@@ -144,6 +144,7 @@ func validateMetaTrackAggregatedBatchProjections(block realblock.Block, requireM
 	}
 	firstRouting := block.TxList[0].ExecutionRouting
 	metadataPresent := firstRouting != nil && (firstRouting.RouteBatchSequence != 0 || firstRouting.RouteBatchTransactionCount != 0 || firstRouting.RouteBatchShardTransactionCount != 0)
+	transactionFrontierV656 := firstRouting != nil && firstRouting.ConsensusExecutionDepth > 0
 	if !metadataPresent && !requireMetadata {
 		for _, item := range block.TxList[1:] {
 			routing := item.ExecutionRouting
@@ -191,7 +192,7 @@ func validateMetaTrackAggregatedBatchProjections(block realblock.Block, requireM
 	projections := make([]metaTrackBatchProjectionIdentity, 0, len(sequences))
 	for _, sequence := range sequences {
 		identity := identityBySequence[sequence]
-		if countBySequence[sequence] != identity.ShardTransactionCount {
+		if !transactionFrontierV656 && countBySequence[sequence] != identity.ShardTransactionCount {
 			return nil, fmt.Errorf("metatrack batch projection incomplete: sequence=%d shard=%s block_count=%d signed_expected=%d", identity.Sequence, block.ShardID, countBySequence[sequence], identity.ShardTransactionCount)
 		}
 		projections = append(projections, identity)

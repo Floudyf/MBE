@@ -215,7 +215,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
             "block_producer": {"dependency_closed_consensus": True},
             "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2", "local_exact_version_handoff": True, "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
@@ -329,6 +329,62 @@ CALVIN_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
 }
 
 
+OPTME_TXALLO_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+    "stateful_optme": V5FormalMethod(
+        method_id="stateful_optme", display_name="OptME", role="baseline",
+        plugin_overrides={
+            "routing": "hash_routing_baseline",
+            "execution": "optme_execution",
+            "scheduler": "optme_scheduler",
+            "block_executor": "optme_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 4}},
+    ),
+    "stateless_optme": V5FormalMethod(
+        method_id="stateless_optme", display_name="Stateless-OptME", role="baseline",
+        plugin_overrides={
+            "routing": "stateless_optme_routing",
+            "execution": "optme_execution",
+            "scheduler": "optme_scheduler",
+            "block_executor": "stateless_optme_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={"block_executor": {"worker_count": 4}},
+    ),
+    "stateful_txallo": V5FormalMethod(
+        method_id="stateful_txallo", display_name="TxAllo", role="baseline",
+        plugin_overrides={
+            "sharding": "txallo_account_sharding",
+            "routing": "txallo_routing",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "serial_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={
+            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_records": 5000, "adaptive_chunk_records": 500},
+            "block_executor": {"worker_count": 1},
+        },
+    ),
+    "stateless_txallo": V5FormalMethod(
+        method_id="stateless_txallo", display_name="Stateless-TxAllo", role="baseline",
+        plugin_overrides={
+            "sharding": "txallo_account_sharding",
+            "routing": "stateless_txallo_routing",
+            "execution": "serial_execution_baseline",
+            "scheduler": "fifo_serial_scheduler",
+            "block_executor": "serial_block_executor",
+            "commit": "normal_commit",
+        },
+        plugin_config_overrides={
+            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_records": 5000, "adaptive_chunk_records": 500},
+            "block_executor": {"worker_count": 1},
+        },
+    ),
+}
+
+
 # MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: separate family so existing STATELESS_BUILTIN_METHODS tests/semantics remain unchanged.
 PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     "stateless_porygon": V5FormalMethod(
@@ -342,6 +398,7 @@ PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "scheduler": "porygon_pipeline_scheduler",
             "block_executor": "porygon_block_executor",
             "state_access": "porygon_remote_state_access",
+            "state_storage": "porygon_partition_state_store",
             "cross_shard": "porygon_cross_shard_coordinator",
             "commit": "normal_commit",
         },
@@ -354,7 +411,7 @@ PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
 }
 
 
-ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **CALVIN_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS}
+ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **CALVIN_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS, **OPTME_TXALLO_BUILTIN_METHODS}
 
 
 
