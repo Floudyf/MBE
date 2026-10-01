@@ -102,18 +102,19 @@ type StateFetchRequest struct {
 	Versioned       bool   `json:"versioned,omitempty"`
 }
 type StateFetchResponse struct {
-	RequestID      string `json:"request_id"`
-	TxID           string `json:"tx_id"`
-	BlockHash      string `json:"block_hash"`
-	Key            string `json:"key"`
-	QualifiedKey   string `json:"qualified_key"`
-	Value          string `json:"value"`
-	HomeShard      string `json:"home_shard"`
-	ExecutionShard string `json:"execution_shard"`
-	StateRoot      string `json:"state_root"`
-	WitnessDigest  string `json:"witness_digest"`
-	StateVersion   uint64 `json:"state_version,omitempty"`
-	Versioned      bool   `json:"versioned,omitempty"`
+	RequestID      string             `json:"request_id"`
+	TxID           string             `json:"tx_id"`
+	BlockHash      string             `json:"block_hash"`
+	Key            string             `json:"key"`
+	QualifiedKey   string             `json:"qualified_key"`
+	Value          string             `json:"value"`
+	HomeShard      string             `json:"home_shard"`
+	ExecutionShard string             `json:"execution_shard"`
+	StateRoot      string             `json:"state_root"`
+	WitnessDigest  string             `json:"witness_digest"`
+	PorygonProof   *PorygonStateProof `json:"porygon_state_proof,omitempty"`
+	StateVersion   uint64             `json:"state_version,omitempty"`
+	Versioned      bool               `json:"versioned,omitempty"`
 	// SourceLocal is true only for the OptME/TxAllo stateless adaptation when
 	// the exact predecessor was produced and durably committed by this same
 	// execution shard.  It is a reconstructible write-behind cache hit, not a
@@ -1348,6 +1349,24 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		return r.handlePorygonESCWaveCertificate(ctx, msg)
 	case porygonESCWaveCertificateRequestMessage:
 		return r.handlePorygonESCWaveCertificateRequest(ctx, msg)
+	case porygonWitnessRequestMessage:
+		return r.handlePorygonWitnessRequest(ctx, msg)
+	case porygonWitnessVoteMessage:
+		return r.handlePorygonWitnessVote(msg)
+	case porygonESCBatchResultMessage:
+		return r.handlePorygonESCBatchResult(ctx, msg)
+	case porygonESCBatchCertificateMessage:
+		return r.handlePorygonESCBatchCertificate(msg)
+	case porygonESCBatchCertificateRequestMessage:
+		return r.handlePorygonESCBatchCertificateRequest(ctx, msg)
+	case porygonMultiShardUpdateMessage:
+		return r.handlePorygonMultiShardUpdate(ctx, msg)
+	case porygonMultiShardUpdateAckMessage:
+		return r.handlePorygonMultiShardUpdateAck(msg)
+	case porygonMultiShardUpdateCertificateMessage:
+		return r.handlePorygonMultiShardUpdateCertificate(msg)
+	case porygonMultiShardUpdateCertificateRequestMessage:
+		return r.handlePorygonMultiShardUpdateCertificateRequest(ctx, msg)
 	case p2p.MessageXShardRelay:
 		relay, err := p2p.DecodePayload[Relay](msg)
 		if err != nil {
@@ -1801,6 +1820,15 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 			block = admitted
 		}
 	}
+	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID && len(block.TxList) > 0 {
+		var witnessErr error
+		block, witnessErr = r.ensurePorygonWitnessedBlock(ctx, block)
+		if witnessErr != nil {
+			r.pool.ReleaseReserved(block.TxList)
+			r.setLastProposalError(witnessErr)
+			return
+		}
+	}
 	if planner, ok := r.plugins.Scheduler.(contextConsensusExecutionPlanner); ok && len(block.TxList) > 0 {
 		if r.startContextProposalPlanning(ctx, block, planner) {
 			return
@@ -1827,6 +1855,8 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	if err := r.beginPBFTProposal(ctx, block, proposalWorkUnits); err != nil {
 		r.pool.ReleaseReserved(block.TxList)
 		r.setLastProposalError(err)
+	} else if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+		r.startPorygonCrossBatchWitness(ctx, block.Height)
 	}
 }
 
@@ -1907,6 +1937,8 @@ func (r *NodeRuntime) startContextProposalPlanning(ctx context.Context, block re
 		if err := r.beginPBFTProposal(ctx, scheduledBlock, proposalWorkUnits); err != nil {
 			r.pool.ReleaseReserved(scheduledBlock.TxList)
 			r.setLastProposalError(err)
+		} else if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+			r.startPorygonCrossBatchWitness(ctx, scheduledBlock.Height)
 		}
 		r.finishProposalPlanning(generation)
 	}()
@@ -2464,7 +2496,13 @@ func (r *NodeRuntime) verifyProposalEvidenceEnvelope(block realblock.Block) erro
 	envelope := block.ProposalEvidence
 	// MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: opt-in proposal-evidence verifier; only Porygon implements this hook.
 	if verifier, ok := r.plugins.BlockProducer.(ProposalEvidenceVerifier); ok {
-		return verifier.VerifyProposalEvidence(block)
+		if err := verifier.VerifyProposalEvidence(block); err != nil {
+			return err
+		}
+		if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+			return r.verifyPorygonWitnessEvidence(block)
+		}
+		return nil
 	}
 	if envelope == nil {
 		if r.plugins.BlockProducer != nil && (r.plugins.BlockProducer.ID() == ariaBlockProducerID || r.plugins.BlockProducer.ID() == groundhogBlockProducerID) && len(block.TxList) > 0 {
@@ -3651,7 +3689,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	if versionedWaveExecution {
 		executed, err = r.executeVersionedRemoteBlockWithCommitment(ctx, block, executionSnapshot, baseStateCommitment)
 	} else {
-		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonWaveExchange: r.porygonWaveExchange, PorygonStateFetch: porygonStateFetch, CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, RemoteStateBatchFetch: r.metaTrackBatchStateFetcher(block), StateVersionPublish: r.stateVersionPublisher(block)})
+		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonExecutionShardID: r.porygonExecutionRoleShardID(block.Height), PorygonWaveExchange: r.porygonWaveExchange, PorygonBatchExchange: r.porygonBatchExchange, PorygonMultiShardUpdate: r.porygonMultiShardUpdate, PorygonStateFetch: porygonStateFetch, PorygonCrossBatchWitnessOverlap: r.porygonCrossBatchWitnessOverlapObserved(block.Height), CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, RemoteStateBatchFetch: r.metaTrackBatchStateFetcher(block), StateVersionPublish: r.stateVersionPublisher(block)})
 	}
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
@@ -5249,12 +5287,22 @@ func (r *NodeRuntime) porygonStateProjectionFetch(
 		}
 		snapshot, snapshotRoot := r.stateFetchSnapshot(request)
 		qualifiedKey := qualifyStateKey(homeShard, access.Key)
+		proof, ok := porygonGenerateStateProof(snapshot, qualifiedKey)
+		if !ok {
+			return RemoteStateReadyEvent{}, fmt.Errorf("porygon local state proof unavailable for %s", access.Key)
+		}
 		response := StateFetchResponse{
 			RequestID: request.RequestID, TxID: item.TxID, BlockHash: block.BlockHash,
 			Key: access.Key, QualifiedKey: qualifiedKey, Value: snapshot[qualifiedKey],
 			HomeShard: homeShard, ExecutionShard: localPartition, StateRoot: snapshotRoot, Success: true,
+			PorygonProof: &proof,
 		}
-		response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
+		accessKind := porygonStateProjectionAccessKind(access)
+		response.WitnessDigest = porygonStateProjectionWitnessDigest(response, accessKind)
+		if !porygonVerifyStateProof(proof, qualifiedKey, response.Value, snapshotRoot) {
+			return RemoteStateReadyEvent{}, fmt.Errorf("porygon local state proof verification failed for %s", access.Key)
+		}
+		r.addRuntimeMetric("porygon_state_proof_verified_count", 1)
 		r.addRuntimeMetric("porygon_storage_role_local_projection_count", 1)
 		return RemoteStateReadyEvent{
 			TxID: item.TxID, Key: access.Key, ReadinessToken: response.WitnessDigest,
@@ -5262,7 +5310,7 @@ func (r *NodeRuntime) porygonStateProjectionFetch(
 		}, nil
 	}
 
-	response, latency, fetchErr := r.fetchRemoteState(ctx, block, item, access, homeShard)
+	response, latency, fetchErr := r.porygonFetchRemoteState(ctx, block, item, access, homeShard)
 	if fetchErr != nil {
 		return RemoteStateReadyEvent{}, fetchErr
 	}
@@ -5271,6 +5319,8 @@ func (r *NodeRuntime) porygonStateProjectionFetch(
 	// fetch here so network truth and remote-state mechanism metrics agree.
 	r.recordRemoteStateAccess(block, item, access, response, latency)
 	r.addRuntimeMetric("porygon_storage_role_remote_projection_count", 1)
+	r.addRuntimeMetric("porygon_remote_fetch_latency_sample_count", 1)
+	r.addRuntimeMetric("porygon_remote_fetch_latency_us_total", latency.Microseconds())
 	return RemoteStateReadyEvent{
 		TxID: item.TxID, Key: access.Key, ReadinessToken: response.WitnessDigest,
 		Value: response.Value, HomeShard: response.HomeShard, StateVersion: response.StateVersion,
@@ -5402,6 +5452,15 @@ func (r *NodeRuntime) handleStateFetchRequest(ctx context.Context, requester str
 	if !ok {
 		snapshot, snapshotRoot := r.stateFetchSnapshot(request)
 		response = StateFetchResponse{TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, Value: snapshot[qualifiedKey], HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: snapshotRoot, Success: true}
+		if isPorygonStateProjectionAccessKind(request.AccessKind) {
+			proof, proofOK := porygonGenerateStateProof(snapshot, qualifiedKey)
+			if !proofOK {
+				response.Success = false
+				response.Error = "porygon_state_proof_unavailable"
+			} else {
+				response.PorygonProof = &proof
+			}
+		}
 		r.mu.Lock()
 		if r.stateFetchWitnesses == nil {
 			r.stateFetchWitnesses = map[string]StateFetchResponse{}
@@ -5411,7 +5470,11 @@ func (r *NodeRuntime) handleStateFetchRequest(ctx context.Context, requester str
 	}
 	response.RequestID = request.RequestID
 	response.TxID = request.TxID
-	response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
+	if isPorygonStateProjectionAccessKind(request.AccessKind) {
+		response.WitnessDigest = porygonStateProjectionWitnessDigest(response, request.AccessKind)
+	} else {
+		response.WitnessDigest = stateFetchWitnessDigest(response, request.AccessKind)
+	}
 	return r.enqueueStateFetchResponse(ctx, requester, response)
 }
 
@@ -7393,6 +7456,11 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "commit_log.csv"), commitLogHeaders(), commitRows); err != nil {
 		return err
 	}
+	if r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == porygonBlockExecutorID {
+		if err := r.writePorygonRemoteStateArtifacts(); err != nil {
+			return err
+		}
+	}
 	if r.batchRoutingArtifactFamily() == "metatrack" {
 		if err := r.writeMetaTrackNodeArtifacts(executionRows, commitRows, logicalPhysicalRows); err != nil {
 			return err
@@ -7469,9 +7537,16 @@ func (r *NodeRuntime) WriteArtifacts() error {
 		return err
 	}
 	businessStateDigest := canonicalBusinessStateDigest(businessStateSnapshot)
+	logicalBusinessStateDigest := businessStateDigest
+	porygonStorageEntryCount := 0
+	porygonStorageLogicalBytes := int64(0)
+	if r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == porygonBlockExecutorID {
+		logicalBusinessStateDigest = porygonLogicalBusinessStateDigest(businessStateSnapshot)
+		porygonStorageEntryCount, porygonStorageLogicalBytes = porygonStoragePartitionFootprint(businessStateSnapshot)
+	}
 	stateReadySummary := summarizeStateReadyEvidence(blockExecutionSummaries)
 	classificationSummary := summarizeMetaTrackClassificationEvidence(blockExecutionSummaries)
-	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "metatrack_classification_conflict_edge_count": classificationSummary.conflictEdgeCount, "metatrack_classification_dependency_chain_max": classificationSummary.dependencyChainMax, "metatrack_classification_nontrivial_scc_count": classificationSummary.nontrivialSCCCount, "metatrack_classification_ambiguous_conflict_pair_count": classificationSummary.ambiguousConflictPairCount, "metatrack_classification_semantic_unsafe_unique_count": classificationSummary.semanticUnsafeUniqueCount, "metatrack_effective_frontier_policy": classificationSummary.effectiveFrontierPolicy, "metatrack_effective_frontier_width_zero_count": classificationSummary.effectiveFrontierWidthZeroCount, "metatrack_effective_frontier_width_one_count": classificationSummary.effectiveFrontierWidthOneCount, "metatrack_effective_frontier_width_multi_count": classificationSummary.effectiveFrontierWidthMultiCount, "metatrack_effective_frontier_width_max": classificationSummary.effectiveFrontierWidthMax, "metatrack_effective_frontier_raw_producer_count": classificationSummary.effectiveFrontierRawProducerCount, "metatrack_effective_frontier_reduced_producer_count": classificationSummary.effectiveFrontierReducedProducerCount, "metatrack_effective_frontier_track_demotion_count": classificationSummary.effectiveFrontierTrackDemotionCount, "metatrack_frontier_seal_count": classificationSummary.frontierSealCount, "metatrack_terminal_access_violation_count": classificationSummary.terminalAccessViolationCount, "metatrack_frontier_required_version_count": classificationSummary.frontierRequiredVersionCount, "metatrack_frontier_write_slot_count": classificationSummary.frontierWriteSlotCount, "metatrack_version_ticket_issued_count": classificationSummary.versionTicketIssuedCount, "metatrack_version_ticket_released_count": classificationSummary.versionTicketReleasedCount, "metatrack_frontier_seal_build_us": classificationSummary.frontierSealBuildUS, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "versioned_wave_execution_policy": stateReadySummary.versionedWaveExecutionPolicy, "versioned_wave_delta_only_count": stateReadySummary.versionedWaveDeltaOnlyCount, "versioned_wave_full_fallback_count": stateReadySummary.versionedWaveFullFallbackCount, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
+	return SaveJSON(filepath.Join(r.node.DataDir, "node_summary.json"), map[string]any{"runtime_stage": "v5_1_real_plugin_driven_multi_process_multishard_runtime", "runtime_truth": "v5_real_cluster_candidate", "node_id": r.node.NodeID, "shard_id": r.node.ShardID, "porygon_storage_partition_id": map[bool]string{true: r.stateAccessPartitionID(), false: ""}[r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == porygonBlockExecutorID], "porygon_execution_role_shard_id": map[bool]string{true: r.porygonExecutionRoleShardID(r.committedHeight), false: ""}[r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == porygonBlockExecutorID], "pid": os.Getpid(), "listen_addr": r.transport.ListenAddr, "committed_block_count": count, "state_root": r.plugins.StateStorage.Root(r.db), "business_state_digest": businessStateDigest, "physical_partition_business_state_digest": businessStateDigest, "logical_business_state_digest": logicalBusinessStateDigest, "porygon_storage_partition_entry_count": porygonStorageEntryCount, "porygon_storage_partition_logical_bytes": porygonStorageLogicalBytes, "porygon_storage_role_colocated": r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == porygonBlockExecutorID, "porygon_separate_physical_storage_node_claimed": false, "state_ready_wait_count": stateReadySummary.waitCount, "state_ready_resume_count": stateReadySummary.resumeCount, "state_prefetch_wait_ms": stateReadySummary.waitMS, "remote_state_fetch_count": stateReadySummary.fetchCount, "remote_state_fetch_completed_count": stateReadySummary.fetchCompletedCount, "state_ready_scheduler_mode": stateReadySummary.mode, "metatrack_classification_conflict_edge_count": classificationSummary.conflictEdgeCount, "metatrack_classification_dependency_chain_max": classificationSummary.dependencyChainMax, "metatrack_classification_nontrivial_scc_count": classificationSummary.nontrivialSCCCount, "metatrack_classification_ambiguous_conflict_pair_count": classificationSummary.ambiguousConflictPairCount, "metatrack_classification_semantic_unsafe_unique_count": classificationSummary.semanticUnsafeUniqueCount, "metatrack_effective_frontier_policy": classificationSummary.effectiveFrontierPolicy, "metatrack_effective_frontier_width_zero_count": classificationSummary.effectiveFrontierWidthZeroCount, "metatrack_effective_frontier_width_one_count": classificationSummary.effectiveFrontierWidthOneCount, "metatrack_effective_frontier_width_multi_count": classificationSummary.effectiveFrontierWidthMultiCount, "metatrack_effective_frontier_width_max": classificationSummary.effectiveFrontierWidthMax, "metatrack_effective_frontier_raw_producer_count": classificationSummary.effectiveFrontierRawProducerCount, "metatrack_effective_frontier_reduced_producer_count": classificationSummary.effectiveFrontierReducedProducerCount, "metatrack_effective_frontier_track_demotion_count": classificationSummary.effectiveFrontierTrackDemotionCount, "metatrack_frontier_seal_count": classificationSummary.frontierSealCount, "metatrack_terminal_access_violation_count": classificationSummary.terminalAccessViolationCount, "metatrack_frontier_required_version_count": classificationSummary.frontierRequiredVersionCount, "metatrack_frontier_write_slot_count": classificationSummary.frontierWriteSlotCount, "metatrack_version_ticket_issued_count": classificationSummary.versionTicketIssuedCount, "metatrack_version_ticket_released_count": classificationSummary.versionTicketReleasedCount, "metatrack_frontier_seal_build_us": classificationSummary.frontierSealBuildUS, "versioned_state_ready_wave_count": stateReadySummary.versionedWaveCount, "versioned_state_ready_wait_observation_count": stateReadySummary.versionedWaitCount, "versioned_state_ready_resolved_token_count": stateReadySummary.versionedResolvedCount, "versioned_state_probe_count": stateReadySummary.versionedProbeCount, "versioned_state_probe_latency_ms": stateReadySummary.versionedProbeLatencyMS, "versioned_state_ready_max_wave_width": stateReadySummary.versionedMaxWaveWidth, "versioned_state_ready_scheduler_mode": stateReadySummary.versionedMode, "versioned_wave_execution_policy": stateReadySummary.versionedWaveExecutionPolicy, "versioned_wave_delta_only_count": stateReadySummary.versionedWaveDeltaOnlyCount, "versioned_wave_full_fallback_count": stateReadySummary.versionedWaveFullFallbackCount, "plugin_snapshot": r.pluginSnapshot, "block_executor_id": r.plugins.BlockExecutor.ID(), "block_executor_version": blockExecutorVersionFromSummaries(blockExecutionSummaries), "worker_count": artifactWorkerCount, "configured_block_size": r.blockSize(), "configured_block_interval_ms": int(r.blockInterval().Milliseconds()), "actual_committed_block_count": blockProduction.count, "actual_average_tx_per_block": blockProduction.averageTxPerBlock, "actual_min_tx_per_block": blockProduction.minTxPerBlock, "actual_max_tx_per_block": blockProduction.maxTxPerBlock, "actual_block_interval_mean_ms": blockProduction.intervalMeanMS, "actual_block_interval_p95_ms": blockProduction.intervalP95MS, "plan_digest_consistent": planDigestsConsistent(planDigestRows), "fast_track_count": methodSummary.fastTrackCount, "conservative_track_count": methodSummary.conservativeTrackCount, "aggregation_group_count": methodSummary.aggregationGroupCount, "logical_update_count": methodSummary.logicalUpdateCount, "physical_update_count": methodSummary.physicalUpdateCount, "logical_update_count_deprecated": true, "physical_update_count_deprecated": true, "executed_logical_transaction_count": methodSummary.executedLogicalTransactionCount, "executed_transaction_instance_count": methodSummary.executedTransactionInstanceCount, "pre_aggregation_physical_op_count": methodSummary.preAggregationPhysicalOps, "post_aggregation_physical_op_count": methodSummary.postAggregationPhysicalOps, "aggregated_key_count": methodSummary.aggregatedKeyCount, "aggregated_logical_delta_count": methodSummary.aggregatedLogicalDeltaCount, "physical_ops_saved_count": methodSummary.physicalOpsSavedCount(), "aggregation_reduction_ratio": methodSummary.aggregationReductionRatio(), "scheduler_event_count": schedulerSummary.total, "scheduler_blocked_count": schedulerSummary.blocked, "scheduler_wakeup_count": schedulerSummary.wakeup, "scheduler_stolen_work_count": schedulerSummary.stolen, "scheduler_local_execution_count": schedulerSummary.local, "scheduler_ready_queue_max_depth": schedulerSummary.readyMax, "scheduler_fast_queue_max_depth": schedulerSummary.fastMax, "scheduler_conservative_queue_max_depth": schedulerSummary.conservativeMax, "scheduler_dependency_wait_ms": schedulerSummary.dependencyWaitMS, "scheduler_idle_ms": schedulerSummary.idleMS, "scheduler_idle_ratio": schedulerSummary.idleRatio(), "scheduler_trace_retained_count": schedulerRowsRetained, "scheduler_trace_dropped_count": schedulerRowsDropped, "scheduler_trace_truncated": schedulerRowsDropped > 0, "remote_state_access_count": remoteSummary.total, "remote_state_read_count": remoteSummary.reads, "remote_state_write_apply_count": remoteSummary.writes, "remote_operation_unknown_kind_count": remoteSummary.unknown, "physical_remote_operation_count": remoteSummary.total, "physical_remote_fetch_count": remoteSummary.reads, "physical_remote_writeback_count": remoteSummary.writes, "physical_remote_failed_count": remoteSummary.failed, "remote_state_access_failed_count": remoteSummary.failed, "remote_state_access_avg_latency_ms": remoteSummary.avgLatency, "runtime_event_count": runtimeEventTotal, "runtime_event_trace_retained_count": len(runtimeEventRows), "runtime_event_trace_dropped_count": runtimeEventRowsDropped, "runtime_event_trace_truncated": runtimeEventRowsDropped > 0, "runtime_metric_counts": runtimeMetricCounts, "real_signed_tx": true, "real_tcp": true, "real_pbft_style_messages": len(rows) > 0})
 }
 
 // MBE_METATRACK_EFFECTIVE_FRONTIER_OBSERVABILITY_V12

@@ -213,6 +213,9 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
             for artifact in METATRACK_NODE_ARTIFACTS
         ]
 
+    if bool(profile.get("routing", {}).get("config", {}).get("stream_partition_invariant_v658")):
+        expected_artifacts.append("client/metatrack_partition_invariant_summary.json")
+
     if profile.get("routing", {}).get("plugin_id") in {"txallo_routing", "stateless_txallo_routing"}:
         expected_artifacts += [
             f"client/{artifact}"

@@ -348,6 +348,8 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     _apply_metatrack_liveness_safe_boundary_batch_v621_metrics(metrics, run_dir)
     _apply_metatrack_async_version_writeback_v640_metrics(metrics, run_dir)
     _apply_metatrack_incremental_routing_v650_metrics(metrics, run_dir)
+    _apply_metatrack_natural_window_v657_metrics(metrics, run_dir)
+    _apply_metatrack_partition_invariant_v658_metrics(metrics, run_dir)
     _apply_metatrack_track_observability(metrics, run_dir)
     _apply_batch_si_metrics(metrics, run_dir)
     _apply_literature_graph_metrics(metrics, run_dir)
@@ -699,6 +701,7 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "porygon_topology_shard_count": len(execution_members),
         "porygon_ordering_domain_count": len(consensus_domains),
         "porygon_execution_shard_members": execution_members,
+        "porygon_storage_partition_members": execution_members,
         "porygon_consensus_domains": consensus_domains,
         "porygon_execution_shard_transaction_counts": shard_tx_counts,
         "porygon_max_execution_shard_share": max_shard_share,
@@ -714,7 +717,17 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "porygon_intra_shard_transaction_count": total("porygon_intra_shard_transaction_count"),
         "porygon_cross_shard_transaction_count": total("porygon_cross_shard_transaction_count"),
         "porygon_logical_state_cross_shard_transaction_count": total("porygon_logical_state_cross_shard_transaction_count") or total("porygon_cross_shard_transaction_count"),
-        "porygon_logical_state_cross_shard_ratio": ((total("porygon_logical_state_cross_shard_transaction_count") or total("porygon_cross_shard_transaction_count")) / total_shard_txs) if total_shard_txs else None,
+        "porygon_logical_state_cross_shard_ratio": ((total("porygon_logical_state_cross_shard_transaction_count") or total("porygon_cross_shard_transaction_count")) / max(1, total("porygon_intra_shard_transaction_count") + total("porygon_cross_shard_transaction_count"))),
+        "porygon_planned_logical_cross_shard_ratio": ((total("porygon_logical_state_cross_shard_transaction_count") or total("porygon_cross_shard_transaction_count")) / max(1, total("porygon_intra_shard_transaction_count") + total("porygon_cross_shard_transaction_count"))),
+        "porygon_executed_cross_shard_ratio": (total("porygon_single_shard_execution_count") / max(1, total("porygon_single_shard_execution_count") + total("porygon_intra_shard_transaction_count"))),
+        "porygon_cross_esc_abandon_ratio": (total("porygon_cross_shard_conflict_abandoned_count") / max(1, total("porygon_intra_shard_transaction_count") + total("porygon_cross_shard_transaction_count"))),
+        "porygon_protocol_abandoned_unique_tx_count": total("porygon_protocol_abandoned_transaction_count"),
+        "porygon_post_execution_candidate_quarantine_count": total("porygon_post_execution_candidate_quarantine_count"),
+        "porygon_abandoned_ctx_itx_conflict_count": total("porygon_abandoned_ctx_itx_conflict_count"),
+        "porygon_abandoned_ctx_ctx_conflict_count": total("porygon_abandoned_ctx_ctx_conflict_count"),
+        "porygon_nonabandoned_cross_esc_conflict_pair_count": total("porygon_nonabandoned_cross_esc_conflict_pair_count"),
+        "porygon_cross_esc_conflict_closure_verified": all(bool(block.get("porygon_cross_esc_conflict_closure_verified")) for block in blocks),
+        "porygon_partition_materialization_update_count": total("porygon_partition_materialization_update_count"),
         "porygon_cross_shard_metric_truth_scope": next((block.get("porygon_cross_shard_metric_truth_scope") for block in blocks if block.get("porygon_cross_shard_metric_truth_scope")), None),
         "porygon_witness_threshold_configured": maximum("porygon_witness_threshold_configured") or maximum("porygon_witness_threshold"),
         "porygon_witness_threshold_enforced": any(bool(block.get("porygon_witness_threshold_enforced")) for block in blocks),
@@ -765,7 +778,6 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             exchange_wait_us_by_block.setdefault(block_key, []).append(exchange_wait_us)
             critical_us_by_block.setdefault(block_key, []).append(critical_us)
             critical_phase_rows_by_block.setdefault(block_key, []).append((node_id, critical_us, business_us, exchange_wait_us))
-    representative_nodes = [sorted(members)[0] for _, members in sorted(execution_members.items()) if members]
 
     def sum_block_max_ms(rows: dict[tuple[int, str], list[float]]) -> float:
         return sum(max(values) for values in rows.values() if values) / 1000.0
@@ -791,26 +803,47 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     aligned_exchange_ms = aligned_exchange_us / 1000.0
     aligned_other_ms = aligned_other_us / 1000.0
     leader_local_transaction_execution_ms = metrics.get("transaction_execution_ms")
-    # MBE_PORYGON_ESC_OWNERSHIP_METRIC_KEYFIX_V24_20260921: topology uses s0/s1
-    # while historical Porygon execution histograms use esc_0/esc_1. Preserve the
-    # published histogram keys, but normalize aliases when deriving expected per-node
-    # business execution ownership.
-    def ownership_expected_count(execution_shard_id: str) -> int:
-        if execution_shard_id in shard_tx_counts:
-            return shard_tx_counts[execution_shard_id]
-        if execution_shard_id.startswith("s") and execution_shard_id[1:].isdigit():
-            return shard_tx_counts.get(f"esc_{execution_shard_id[1:]}", 0)
-        if execution_shard_id.startswith("esc_") and execution_shard_id[4:].isdigit():
-            return shard_tx_counts.get(f"s{execution_shard_id[4:]}", 0)
-        return 0
-    expected_by_node = {node_id: ownership_expected_count(shard_id) for shard_id, members in execution_members.items() for node_id in members}
-    ownership_verified = bool(local_count_by_node) and bool(expected_by_node) and all(local_count_by_node.get(node_id) == expected for node_id, expected in expected_by_node.items())
+    dynamic_expected_by_node: dict[str, int] = {node_id: 0 for node_id, _ in all_porygon_summaries}
+    attempt_count_by_node: dict[str, int] = {node_id: 0 for node_id, _ in all_porygon_summaries}
+    dynamic_role_members_by_height: dict[str, dict[str, list[str]]] = {}
+    dynamic_representative_business_us = 0.0
+    role_rows: dict[tuple[int, str, str], list[tuple[str, float]]] = {}
+    for node_id, summary in all_porygon_summaries:
+        node_blocks = summary.get("blocks") if isinstance(summary.get("blocks"), list) else []
+        for block_index, block in enumerate(node_blocks):
+            if not isinstance(block, dict):
+                continue
+            attempt_count_by_node[node_id] = attempt_count_by_node.get(node_id, 0) + _int(block.get("porygon_local_business_execution_attempt_count"))
+            height = _int(block.get("height"))
+            block_hash = str(block.get("block_hash") or f"index:{block_index}")
+            role = str(block.get("porygon_local_execution_shard_id") or "")
+            histogram = block.get("porygon_execution_shard_histogram") if isinstance(block.get("porygon_execution_shard_histogram"), dict) else {}
+            if role:
+                alias = f"esc_{role[1:]}" if role.startswith("s") and role[1:].isdigit() else role
+                expected = _int(histogram.get(alias) if alias in histogram else histogram.get(role))
+                dynamic_expected_by_node[node_id] = dynamic_expected_by_node.get(node_id, 0) + expected
+                hkey = str(height)
+                dynamic_role_members_by_height.setdefault(hkey, {}).setdefault(role, []).append(node_id)
+                role_rows.setdefault((height, block_hash, role), []).append((node_id, float(block.get("porygon_business_execution_us") or 0)))
+    for roles in dynamic_role_members_by_height.values():
+        for role, members in roles.items():
+            roles[role] = sorted(set(members))
+    for rows in role_rows.values():
+        if rows:
+            _node_id, business_us = min(rows, key=lambda row: row[0])
+            dynamic_representative_business_us += business_us
+    expected_by_node = dynamic_expected_by_node
+    ownership_verified = bool(local_count_by_node) and bool(expected_by_node) and all(local_count_by_node.get(node_id, 0) == expected for node_id, expected in expected_by_node.items())
     metrics.update({
         "porygon_local_business_execution_count_by_node": local_count_by_node,
+        "porygon_local_committed_execution_count_by_node": local_count_by_node,
+        "porygon_local_business_execution_attempt_count_by_node": attempt_count_by_node,
         "porygon_expected_business_execution_count_by_node": expected_by_node,
         "porygon_esc_ownership_verified": ownership_verified,
+        "porygon_execution_role_members_by_height": dynamic_role_members_by_height,
+        "porygon_ownership_truth_scope": "per_block_dynamic_execution_role_vs_execution_histogram",
         "porygon_business_execution_replica_cpu_sum_ms": sum(business_us_by_node.values()) / 1000.0,
-        "porygon_business_execution_esc_representative_sum_ms": sum(business_us_by_node.get(node_id, 0.0) for node_id in representative_nodes) / 1000.0,
+        "porygon_business_execution_esc_representative_sum_ms": dynamic_representative_business_us / 1000.0,
         "porygon_business_execution_critical_path_ms": business_critical_path_ms,
         "porygon_result_exchange_wait_replica_sum_ms": sum(exchange_wait_us_by_node.values()) / 1000.0,
         "porygon_result_exchange_wait_critical_path_ms": exchange_wait_critical_path_ms,
@@ -1057,6 +1090,40 @@ def _apply_metatrack_async_version_writeback_v640_metrics(metrics: dict[str, Any
     metrics["metatrack_implementation_revision"] = "v6.4.0"
     metrics["metatrack_async_version_writeback_truth_scope"] = "leader_runtime_counts;exact_version_local_handoff_preserved;critical_remote_versions_keep_immediate_publication;only_noncritical_closure_final_background_async;late_join_barrier_before_durable_commit;no_pbft_replica_multiplication"
 
+
+
+def _apply_metatrack_natural_window_v657_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    path = run_dir / "metatrack_natural_window_summary.json"
+    rel = "metatrack_natural_window_summary.json"
+    if not path.is_file():
+        path = run_dir / "client" / "metatrack_natural_window_summary.json"
+        rel = "client/metatrack_natural_window_summary.json"
+    summary = _read_json(path)
+    if summary.get("schema_version") != "mbe_metatrack_natural_window_v657":
+        return
+    metrics["metatrack_natural_window_available"] = True
+    for key, value in summary.items():
+        metrics[f"metatrack_natural_window_{key}"] = value
+    artifacts = metrics.get("source_artifacts")
+    if isinstance(artifacts, list) and rel not in artifacts:
+        artifacts.append(rel)
+
+
+def _apply_metatrack_partition_invariant_v658_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    path = run_dir / "metatrack_partition_invariant_summary.json"
+    rel = "metatrack_partition_invariant_summary.json"
+    if not path.is_file():
+        path = run_dir / "client" / "metatrack_partition_invariant_summary.json"
+        rel = "client/metatrack_partition_invariant_summary.json"
+    summary = _read_json(path)
+    if summary.get("schema_version") != "mbe_metatrack_partition_invariant_v658":
+        return
+    metrics["metatrack_partition_invariant_available"] = True
+    for key, value in summary.items():
+        metrics[f"metatrack_partition_invariant_{key}"] = value
+    artifacts = metrics.get("source_artifacts")
+    if isinstance(artifacts, list) and rel not in artifacts:
+        artifacts.append(rel)
 
 
 def _apply_metatrack_incremental_routing_v650_metrics(metrics: dict[str, Any], run_dir: Path) -> None:

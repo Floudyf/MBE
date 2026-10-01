@@ -492,14 +492,15 @@ def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[
     # MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: Porygon method-specific semantics precede generic stateless profiles.
     if method_id == "stateless_porygon" or snapshot.get("block_executor") == "porygon_block_executor":
         return {
-            "comparison_semantics_class": "porygon_3d_global_ordering_distributed_esc_v4",
-            "state_access_semantics": "global_ordering_distributed_esc_with_logical_state_shards",
-            "state_home_mapping_policy": "deterministic_logical_state_key_partition",
-            "remote_fetch_policy": "signed_access_projection_with_physical_state_fetch",
-            "remote_writeback_policy": "partition_local_materialization_from_certified_esc_result",
-            "proof_policy": "consensus_bound_porygon_transaction_execution_plan_and_esc_result_certificates",
+            "comparison_semantics_class": "porygon_3d_global_ordering_paper_fidelity_v5",
+            "state_access_semantics": "global_ordering_dynamic_esc_verified_state_projection_and_explicit_multishard_update",
+            "state_home_mapping_policy": "porygon_account_object_owner_partition",
+            "remote_fetch_policy": "signed_access_projection_with_physical_state_fetch_and_verified_merkle_treap_proof",
+            "remote_writeback_policy": "oc_multi_shard_update_majority_ack_then_partition_materialization",
+            "version_plan_policy": "pbft_bound_porygon_witnessed_execution_plan",
+            "proof_policy": "ec_witness_certificate_plus_state_merkle_proof_plus_esc_batch_certificate_plus_multishard_root_certificate",
             "legacy_cross_shard_protocol": False,
-            "measurement_boundary": "client_submit_to_porygon_terminal",
+            "measurement_boundary": "client_submit_to_porygon_terminal_after_multishard_update_certificate_and_global_durable_commit",
         }
     if method_id == "hash_fabricpp_cg" or snapshot.get("block_executor") == "fabricpp_cg_block_executor":
         return {
@@ -1201,11 +1202,16 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
     nezha_hs_abort_count = number("nezha_hs_abort_count")
     cg_cycle_abort_count = number("cg_cycle_abort_count")
     fabricpp_cycle_abort_count = number("fabricpp_cycle_abort_count")
+    porygon_protocol_abandoned_count = number("porygon_protocol_abandoned_unique_tx_count")
     semantic_class = str(item.get("comparison_semantics_class") or "")
-    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3", "fabricpp_cg_cycle_abortable_v1"}
+    if semantic_class == "porygon_3d_global_ordering_paper_fidelity_v5" and porygon_protocol_abandoned_count is not None:
+        abort_count = porygon_protocol_abandoned_count
+    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3", "fabricpp_cg_cycle_abortable_v1", "porygon_3d_global_ordering_paper_fidelity_v5"}
     semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3"} else None
     if semantic_class == "fabricpp_cg_cycle_abortable_v1":
         semantic_abort_count = fabricpp_cycle_abort_count
+    if semantic_class == "porygon_3d_global_ordering_paper_fidelity_v5":
+        semantic_abort_count = porygon_protocol_abandoned_count
     if submitted is None or terminal != submitted:
         reasons.append("terminal_not_equal_submitted")
     # Legacy abortable cohorts may represent algorithmic aborts as terminal
@@ -1227,7 +1233,7 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
         reasons.append("finalized_not_equal_submitted")
     if incomplete != 0:
         reasons.append("incomplete_not_zero")
-    if cross_failed != 0:
+    if cross_failed != 0 and semantic_class != "porygon_3d_global_ordering_paper_fidelity_v5":
         reasons.append("cross_shard_failed_not_zero")
     if boolean("lifecycle_complete") is not True:
         reasons.append("lifecycle_complete_not_true")

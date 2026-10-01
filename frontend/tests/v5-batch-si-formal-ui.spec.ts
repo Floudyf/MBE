@@ -17,8 +17,24 @@ test("formal experiment cards expose Batch-SI ablations and keep workers separat
 
   await page.getByTestId("v5-suite-ablation_experiment").click();
   await expect(page.getByTestId("v5-suite-ablation_experiment")).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByTestId("v5-ablation-targets").getByRole("button", { name: /MetaTrack/ })).toBeDisabled();
+  const metaTrackTarget = page.getByTestId("v5-ablation-targets").getByRole("button", { name: /MetaTrack/ });
+  await expect(metaTrackTarget).toBeEnabled();
+  await metaTrackTarget.click();
+  for (const methodId of [
+    "metatrack_latest",
+    "metatrack_ab_route",
+    "metatrack_ab_track",
+    "metatrack_ab_cons",
+    "metatrack_ab_state",
+  ]) {
+    await expect(page.getByTestId(`v5-run-method-${methodId}`)).toHaveAttribute("aria-pressed", "true");
+  }
+  await expect(page.getByTestId("v5-run-method-metatrack_latest")).toBeDisabled();
+  await expect(page.getByTestId("v5-run-method-metatrack_exp50")).toHaveCount(0);
+  await expect(page.getByTestId("v5-run-method-metatrack_exp200")).toHaveCount(0);
 
+  const batchSITarget = page.getByTestId("v5-ablation-targets").getByRole("button", { name: /Batch-SI/ });
+  await batchSITarget.click();
   for (const methodId of [
     "hash_batch_si",
     "hash_batch_si_no_wrbp",

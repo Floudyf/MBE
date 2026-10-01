@@ -17,11 +17,12 @@ test("protects unsaved V5 method changes before entering Run", async ({ page }) 
   await expect(page.getByTestId("v5-run-preferred-method")).toContainText("Serial");
   await expect(page.getByTestId("v5-run-preferred-method")).toContainText("Block-STM");
   await expect(page.getByTestId("v5-run-preferred-method")).toContainText("MetaTrack");
-  await expect(page.getByTestId("v5-run-preferred-method")).toContainText("MetaTrack（新版）");
+  await expect(page.getByTestId("v5-run-preferred-method")).toContainText("Metatrack");
   await expect(page.getByTestId("v5-run-method-hash_serial").getByRole("checkbox")).toBeChecked();
   await expect(page.getByTestId("v5-run-method-hash_block_stm").getByRole("checkbox")).toBeChecked();
-  await expect(page.getByTestId("v5-run-method-metatrack_serial").getByRole("checkbox")).toBeChecked();
   await expect(page.getByTestId("v5-run-method-metatrack_latest").getByRole("checkbox")).toBeChecked();
+  await expect(page.getByTestId("v5-run-method-metatrack_serial")).toHaveCount(0);
+  await expect(page.getByTestId("v5-run-method-metatrack_full_locality")).toHaveCount(0);
 });
 
 test("consumes a save-and-run navigation command only once", async ({ page, request }) => {

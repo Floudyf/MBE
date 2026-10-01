@@ -8,19 +8,11 @@ const baseWidth = 520;
 const height = 286;
 const chartPadding = { top: 30, right: 24, bottom: 88, left: 58 };
 const methodOrder = [
-  "hash_serial",
-  "hash_cg",
-  "hash_acg",
-  "hash_bsx",
-  "hash_block_stm",
-  "hash_aria",
-  "hash_groundhog",
-  "hash_batch_si",
-  "stateless_hash_serial",
-  "stateless_hash_block_stm",
-  "metatrack_serial",
-  "metatrack_full_locality",
   "metatrack_latest",
+  "metatrack_ab_route",
+  "metatrack_ab_track",
+  "metatrack_ab_cons",
+  "metatrack_ab_state",
   "metatrack_block_stm",
 ];
 const methodColors: Record<string, string> = {
@@ -37,6 +29,8 @@ const methodColors: Record<string, string> = {
   metatrack_serial: "#FA8095",
   metatrack_full_locality: "#E06F9E",
   metatrack_latest: "#C95C8D",
+  metatrack_exp50: "#A84D7D",
+  metatrack_exp200: "#8E5CA8",
   metatrack_block_stm: "#56B76A",
 };
 const methodLabels: Record<string, string[]> = {
@@ -52,7 +46,12 @@ const methodLabels: Record<string, string[]> = {
   stateless_hash_block_stm: ["无状态 Hash", "Block-STM"],
   metatrack_serial: ["MetaTrack", "初始版"],
   metatrack_full_locality: ["MetaTrack", "当前版"],
-  metatrack_latest: ["MetaTrack", "新版"],
+  metatrack_latest: ["Metatrack"],
+  metatrack_ab_route: ["消融", "无共现矩阵分片"],
+  metatrack_ab_track: ["消融", "无双轨执行"],
+  metatrack_ab_cons: ["消融", "无共识批次聚合"],
+  metatrack_ab_state: ["消融", "无状态预取"],
+  metatrack_ab_handoff: ["子消融", "无本地版本交接"],
   metatrack_block_stm: ["MetaTrack", "Block-STM（历史）"],
 };
 type AnalysisView = "observed" | "paper";

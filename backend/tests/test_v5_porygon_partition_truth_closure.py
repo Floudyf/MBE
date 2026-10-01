@@ -17,6 +17,6 @@ def test_porygon_partition_roots_aggregate_to_global_digest() -> None:
 
 def test_porygon_formal_truth_reports_physical_fetch_but_partition_local_materialization() -> None:
     semantics = _execution_semantics({"block_executor": "porygon_block_executor"}, "stateless_porygon")
-    assert semantics["remote_fetch_policy"] == "signed_access_projection_with_physical_state_fetch"
-    assert semantics["remote_writeback_policy"] == "partition_local_materialization_from_certified_esc_result"
+    assert semantics["remote_fetch_policy"] == "signed_access_projection_with_physical_state_fetch_and_verified_merkle_treap_proof"
+    assert semantics["remote_writeback_policy"] == "oc_multi_shard_update_majority_ack_then_partition_materialization"
     assert semantics["legacy_cross_shard_protocol"] is False

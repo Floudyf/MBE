@@ -332,8 +332,8 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
             if bool(scheduler_cfg.get(key, True)) != bool(executor_cfg.get(key, True)):
                 blockers.append(f"Porygon scheduler and block executor {key} must match")
         warnings.append("Porygon maps frontend topology.shards to execution shards/ESCs while all nodes share one global PBFT ordering domain; MetaTrack remote StateVersions/CAS and MBE Relay/Finalize remain disabled")
-        warnings.append("Porygon pipeline evidence is logical Witness/Ordering/Execution/Commit protocol-slot evidence; current shared PBFT runtime does not claim cross-height wall-clock overlap")
-        warnings.append("Porygon storage/consensus role separation is represented by signed AccessList projections over co-located execution-shard storage roles; no additional physical storage machines are introduced")
+        warnings.append("Porygon performs real Cross-Batch Witness overlap while shared PBFT ordering heights remain sequential; full W/O/E/C cross-height wall-clock overlap is not claimed")
+        warnings.append("Porygon storage/consensus role separation uses co-located Storage Roles, verified Merkle state projections and explicit Multi-Shard Update; no additional physical storage machines are introduced")
 
     # MBE_OPTME_TXALLO_BASELINES_20260928: fail-closed Python-side profile isolation.
     optme_ids = {

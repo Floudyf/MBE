@@ -63,3 +63,16 @@ func TestMetaTrackV6568WindowSelectorRequiresWholeSignedWindow(t *testing.T) {
 		t.Fatalf("bad selection")
 	}
 }
+
+
+func TestMetaTrackV661CriticalPathPreservingJoin(t *testing.T) {
+	if !metaTrackCriticalPathPreservingJoinV661(30, 20, 30) {
+		t.Fatal("independent/non-extending route batch should aggregate")
+	}
+	if metaTrackCriticalPathPreservingJoinV661(30, 20, 31) {
+		t.Fatal("aggregation must reject a route batch that extends the execution critical path")
+	}
+	if metaTrackCriticalPathPreservingJoinV661(0, 20, 20) || metaTrackCriticalPathPreservingJoinV661(30, 0, 30) {
+		t.Fatal("invalid critical-path evidence must fail closed")
+	}
+}

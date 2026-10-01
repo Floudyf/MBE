@@ -98,10 +98,12 @@ func TestPorygonPlanBindsSignedAccessNotSchedulingOverlay(t *testing.T) {
 	}
 }
 
-func TestPorygonExecutionShardAssignmentUsesSenderAndSpreadsAcrossESCs(t *testing.T) {
+func TestPorygonExecutionShardAssignmentUsesSignedInitiatingRouteAndSpreadsAcrossESCs(t *testing.T) {
 	items := make([]tx.SignedTransaction, 0, 64)
 	for i := 0; i < 64; i++ {
-		items = append(items, porygonFixtureTx(fmt.Sprintf("t%02d", i), fmt.Sprintf("sender-%02d", i), tx.AccessItem{Key: fmt.Sprintf("key-%02d", i), Mode: tx.AccessReadWrite, UpdateSemantics: "set"}))
+		item := porygonFixtureTx(fmt.Sprintf("t%02d", i), fmt.Sprintf("sender-%02d", i), tx.AccessItem{Key: fmt.Sprintf("key-%02d", i), Mode: tx.AccessReadWrite, UpdateSemantics: "set"})
+		item.ExecutionRouting = &tx.ExecutionRoutingMetadata{ExecutionShard: fmt.Sprintf("s%d", i%4), RoutingReason: "porygon_initiating_account_route"}
+		items = append(items, item)
 	}
 	block := porygonFixtureBlock(t, items...)
 	plan, err := buildPorygonPlan(block, porygonPlanConfig())
@@ -112,11 +114,10 @@ func TestPorygonExecutionShardAssignmentUsesSenderAndSpreadsAcrossESCs(t *testin
 	for _, assignment := range plan.Assignments {
 		seen[assignment.ExecutionShard] = true
 	}
-	if len(seen) < 2 {
-		t.Fatalf("Porygon ESC assignment collapsed to one shard: %#v", seen)
+	if len(seen) != 4 {
+		t.Fatalf("Porygon signed initiating-account routes did not span all ESCs: %#v", seen)
 	}
 }
-
 func porygonFixtureSenderOnShard(t *testing.T, prefix string, targetShard, shardCount int) string {
 	t.Helper()
 	for i := 0; i < 1024; i++ {
@@ -148,18 +149,17 @@ func porygonCrossESCFixture(t *testing.T, id string, executionShard, stateShard 
 	if executionShard == stateShard {
 		t.Fatalf("cross-ESC fixture requires distinct execution/state shards: exec=%d state=%d", executionShard, stateShard)
 	}
-	sender := porygonFixtureSenderOnShard(t, id, executionShard, shardCount)
 	key := porygonFixtureKeyOnShard(t, id, stateShard, shardCount)
-	item := porygonFixtureTx(id, sender, tx.AccessItem{Key: key, Mode: tx.AccessReadWrite, UpdateSemantics: "set"})
+	item := porygonFixtureTx(id, id+"-sender", tx.AccessItem{Key: key, Mode: tx.AccessReadWrite, UpdateSemantics: "set"})
+	item.ExecutionRouting = &tx.ExecutionRoutingMetadata{ExecutionShard: fmt.Sprintf("s%d", executionShard), RoutingReason: "porygon_initiating_account_route"}
 	if got := porygonAccountShard(item, shardCount); got != executionShard {
-		t.Fatalf("fixture sender mapped to ESC %d, want %d", got, executionShard)
+		t.Fatalf("fixture signed initiating-account route mapped to ESC %d, want %d", got, executionShard)
 	}
 	if got := porygonStateShard(key, shardCount); got != stateShard {
 		t.Fatalf("fixture key mapped to state shard %d, want %d", got, stateShard)
 	}
 	return item
 }
-
 func findDisjointCrossESCPair(t *testing.T) (tx.SignedTransaction, tx.SignedTransaction) {
 	t.Helper()
 	// Construct, rather than search for, two cross-ESC transactions with
@@ -189,32 +189,28 @@ func TestPorygonDisjointCrossESCTransactionsCanShareWave(t *testing.T) {
 	}
 }
 
-func TestPorygonSharedStatePreservesGlobalConflictOrder(t *testing.T) {
-	shared := "shared-hot-state"
-	var left, right tx.SignedTransaction
-	for i := 0; i < 5000 && right.TxID == ""; i++ {
-		candidate := porygonFixtureTx(fmt.Sprintf("t%d", i), fmt.Sprintf("sender-%d", i), tx.AccessItem{Key: shared, Mode: tx.AccessReadWrite, UpdateSemantics: "set"})
-		if left.TxID == "" {
-			left = candidate
-			continue
-		}
-		if porygonAccountShard(left, 4) != porygonAccountShard(candidate, 4) {
-			right = candidate
-		}
-	}
-	if right.TxID == "" {
-		t.Fatal("unable to find sender pair on distinct ESCs")
-	}
+func TestPorygonSharedStateCrossESCConflictIsAbandoned(t *testing.T) {
+	const shardCount = 4
+	shared := porygonFixtureKeyOnShard(t, "shared-hot-state", 3, shardCount)
+	left := porygonFixtureTx("shared-left", "alice", tx.AccessItem{Key: shared, Mode: tx.AccessReadWrite, UpdateSemantics: "set"})
+	right := porygonFixtureTx("shared-right", "bob", tx.AccessItem{Key: shared, Mode: tx.AccessReadWrite, UpdateSemantics: "set"})
+	left.ExecutionRouting = &tx.ExecutionRoutingMetadata{ExecutionShard: "s0", RoutingReason: "porygon_initiating_account_route"}
+	right.ExecutionRouting = &tx.ExecutionRoutingMetadata{ExecutionShard: "s2", RoutingReason: "porygon_initiating_account_route"}
 	block := porygonFixtureBlock(t, left, right)
 	plan, err := buildPorygonPlan(block, porygonPlanConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.Assignments[1].Wave <= plan.Assignments[0].Wave {
-		t.Fatalf("shared-state global order not enforced: %#v", plan.Assignments)
+	if len(plan.Assignments) != 2 || !plan.Assignments[0].CrossShard || !plan.Assignments[1].CrossShard {
+		t.Fatalf("shared-state fixtures must both be cross-ESC: %#v", plan.Assignments)
+	}
+	if plan.Assignments[0].Abandoned {
+		t.Fatalf("first cross-ESC transaction was unexpectedly abandoned: %#v", plan.Assignments[0])
+	}
+	if !plan.Assignments[1].Abandoned || plan.Assignments[1].ConflictReason != porygonCrossESCConflictPolicy {
+		t.Fatalf("later conflicting cross-ESC transaction was not abandoned by OC policy: %#v", plan.Assignments[1])
 	}
 }
-
 func TestPorygonCrossESCExecutesOnceAndMatchesSerialStateRoot(t *testing.T) {
 	left, right := findDisjointCrossESCPair(t)
 	items := []tx.SignedTransaction{left, right}

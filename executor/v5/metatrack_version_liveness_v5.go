@@ -549,6 +549,7 @@ func (r *NodeRuntime) deleteMetaTrackTransientVersion(key string, version uint64
 
 func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) StateVersionPublishFunc {
 	buffer := r.newMetaTrackVersionPublishBuffer(block)
+	forceHomeExactV660 := r.metaTrackBlockExecutorFlag(metaTrackAblationForceHomeExactV660)
 	return func(ctx context.Context, item tx.SignedTransaction, delta execution.TxDelta, exactSnapshot map[string]string) error {
 		if item.ExecutionRouting == nil || len(item.ExecutionRouting.StateVersions) == 0 {
 			return nil
@@ -652,6 +653,11 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 				// predecessor globally visible/durable in that case.
 				effectiveClass = metaTrackVersionClassRemoteLive
 				r.incrementFullLocalityMetric("metatrack_version_cross_block_preserved_count", 1)
+			}
+			ablationClass := metaTrackAblationHomePublicationClassV660(forceHomeExactV660, dependency.LocalValueSuccessorCount, effectiveClass)
+			if ablationClass != effectiveClass {
+				r.incrementFullLocalityMetric("metatrack_ablation_force_home_exact_publish_count_v660", 1)
+				effectiveClass = ablationClass
 			}
 			switch effectiveClass {
 			case metaTrackVersionClassLocalTransient, metaTrackVersionClassDeadIntermediate:

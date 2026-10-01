@@ -280,6 +280,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		p.incrementalV650 = newMetaTrackIncrementalRoutingStateV650(input)
 	}
 	state := p.incrementalV650
+	ignoreCoaccessV661 := boolFromAny(p.config[metaTrackAblationIgnoreCoaccessRoutingV661])
 	plan := BatchRoutingPlan{
 		BatchIndex:                               input.BatchIndex,
 		ShardingPluginID:                         shardingPluginID(input.Sharding),
@@ -351,7 +352,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 				Admissible:       admissible,
 				ReadyRank:        metaTrackIncrementalReadyRankV651(record, shard, state),
 				ExactCross:       metaTrackIncrementalExactCrossV650(record, shard, state),
-				CoaccessLocality: metaTrackIncrementalPairLocalityV650(keys, shard, state),
+				CoaccessLocality: metaTrackAblationCoaccessLocalityV661(ignoreCoaccessV661, keys, shard, state),
 				RemoteCost:       reads + writes,
 				Load:             state.ShardLoad[shard],
 			})

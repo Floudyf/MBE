@@ -9,13 +9,19 @@ func TestPorygonV36DistributedESCReadinessFailsClosed(t *testing.T) {
 	exchange := func(context.Context, PorygonESCWaveResult, []string) (PorygonESCWaveCertificate, error) {
 		return PorygonESCWaveCertificate{}, nil
 	}
-	if porygonDistributedESCReady("", exchange) {
+	if porygonDistributedESCReady("", exchange, nil) {
 		t.Fatal("empty execution shard unexpectedly considered distributed-ESC ready")
 	}
-	if porygonDistributedESCReady("esc-0", nil) {
-		t.Fatal("nil wave exchange unexpectedly considered distributed-ESC ready")
+	if porygonDistributedESCReady("esc-0", nil, nil) {
+		t.Fatal("nil ESC exchange unexpectedly considered distributed-ESC ready")
 	}
-	if !porygonDistributedESCReady("esc-0", exchange) {
-		t.Fatal("complete distributed ESC wiring was rejected")
+	if !porygonDistributedESCReady("esc-0", exchange, nil) {
+		t.Fatal("complete wave-exchange distributed ESC wiring was rejected")
+	}
+	batchExchange := func(context.Context, PorygonESCBatchResult, []string) (PorygonESCBatchCertificate, error) {
+		return PorygonESCBatchCertificate{}, nil
+	}
+	if !porygonDistributedESCReady("esc-0", nil, batchExchange) {
+		t.Fatal("complete batch-exchange distributed ESC wiring was rejected")
 	}
 }

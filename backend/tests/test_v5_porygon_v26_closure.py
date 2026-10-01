@@ -23,6 +23,11 @@ def _block(height: int, block_hash: str, critical_us: int, business_us: int, exc
         "porygon_execution_critical_path_us": critical_us,
         "transaction_execution_us": business_us,
         "porygon_logical_state_cross_shard_transaction_count": 2,
+        "porygon_cross_shard_transaction_count": 2,
+        "porygon_intra_shard_transaction_count": 0,
+        "porygon_single_shard_execution_count": 2,
+        "porygon_cross_shard_conflict_abandoned_count": 0,
+        "porygon_cross_esc_conflict_closure_verified": True,
         "porygon_witness_threshold_configured": 1,
         "porygon_witness_threshold_enforced": False,
         "porygon_witness_validation_mode": "full_validator_recompute_before_pbft_vote",
@@ -79,8 +84,12 @@ def test_v28_frontend_uses_aligned_porygon_breakdown_and_boolean_truth() -> None
     assert "booleans.every(Boolean)" in frontend
 
 
-def test_v26_witness_truth_boundary_does_not_claim_independent_quorum() -> None:
+def test_v26_witness_truth_boundary_reports_real_ec_certificate() -> None:
     root = Path(__file__).resolve().parents[2]
     manifest = (root / "backend/app/services/v5_plugin_manifest_store.py").read_text(encoding="utf-8")
-    assert "witness_threshold_is_metadata_not_independent_quorum" in manifest
-    assert "full validator recomputation" in manifest
+    section = manifest[manifest.index('"block_producer", "porygon_transaction_block_producer"'):]
+    assert "witness_threshold_is_metadata_not_independent_quorum" not in section
+    assert "full validator recomputation" not in section
+    assert "porygon_real_ec_witness_certificate_v4" in section
+    assert "ec_witness_certificate" in section
+    assert "witness_threshold_enforced" in section

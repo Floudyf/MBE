@@ -50,6 +50,13 @@ def _performance_contract_class(row: dict) -> str:
         shards = 0
     semantic_class = str(row.get("comparison_semantics_class") or "custom_unknown")
     if (
+        shards > 1
+        and semantic_class in {"porygon_3d_global_ordering_paper_fidelity_v5", "stateless_remote_home_v1"}
+        and row.get("legacy_cross_shard_protocol") is False
+        and str(row.get("measurement_boundary") or "").startswith("client_submit_to_")
+    ):
+        return "multi_shard_stateless_eventual_completion_v1"
+    if (
         shards == 1
         and semantic_class in _SINGLE_SHARD_STATEFUL_PERFORMANCE_CLASSES
         and row.get("state_home_mapping_policy") == "execution_shard_local_namespace"
@@ -80,7 +87,10 @@ def validate(rows: list[dict]) -> tuple[list[dict], dict]:
         same_internal_semantics = len(semantic_classes) == 1 and semantic_classes[0] != "custom_unknown"
         common_external_contract = (
             len(contract_classes) == 1
-            and contract_classes[0] == "single_shard_stateful_eventual_completion_v1"
+            and contract_classes[0] in {
+                "single_shard_stateful_eventual_completion_v1",
+                "multi_shard_stateless_eventual_completion_v1",
+            }
         )
         performance_valid = same_internal_semantics or common_external_contract
         if not performance_valid:
@@ -102,7 +112,7 @@ def validate(rows: list[dict]) -> tuple[list[dict], dict]:
             performance_contract_class = _performance_contract_class(row)
             internal_semantics_differ = len(semantic_classes) > 1
             warning = (
-                "internal execution semantics differ; end-to-end performance comparison is allowed under the common single-shard eventual-completion contract"
+                f"internal execution semantics differ; end-to-end performance comparison is allowed under the common external contract {contract_classes[0]}"
                 if performance_valid and internal_semantics_differ
                 else "" if performance_valid
                 else "execution semantics differ; direct performance uplift is invalid"

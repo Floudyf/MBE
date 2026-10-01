@@ -14,6 +14,8 @@ import (
 )
 
 const (
+	porygonCrossESCConflictPolicy = "oc_cross_esc_conflict_abandoned"
+
 	porygonRoutingID       = "porygon_stateless_routing"
 	porygonBlockProducerID = "porygon_transaction_block_producer"
 	porygonExecutionID     = "porygon_execution"
@@ -28,17 +30,20 @@ const (
 )
 
 type porygonTransactionBlockEvidence struct {
-	Version             string   `json:"version"`
-	OrderingDomain      string   `json:"ordering_domain"`
-	Height              uint64   `json:"height"`
-	TransactionCount    int      `json:"transaction_count"`
-	TransactionIDs      []string `json:"transaction_ids"`
-	TransactionRoot     string   `json:"transaction_root"`
-	AccessRoot          string   `json:"access_root"`
-	FullBodyDigest      string   `json:"full_body_digest"`
-	WitnessPolicy       string   `json:"witness_policy"`
-	WitnessThreshold    int      `json:"witness_threshold"`
-	DataAvailabilityRef string   `json:"data_availability_reference"`
+	Version                             string                     `json:"version"`
+	OrderingDomain                      string                     `json:"ordering_domain"`
+	Height                              uint64                     `json:"height"`
+	TransactionCount                    int                        `json:"transaction_count"`
+	TransactionIDs                      []string                   `json:"transaction_ids"`
+	TransactionRoot                     string                     `json:"transaction_root"`
+	AccessRoot                          string                     `json:"access_root"`
+	FullBodyDigest                      string                     `json:"full_body_digest"`
+	WitnessPolicy                       string                     `json:"witness_policy"`
+	WitnessThreshold                    int                        `json:"witness_threshold"`
+	DataAvailabilityRef                 string                     `json:"data_availability_reference"`
+	WitnessCertificate                  *PorygonWitnessCertificate `json:"witness_certificate,omitempty"`
+	PreviousGlobalStateRoot             string                     `json:"previous_global_state_root,omitempty"`
+	PreviousMultiShardCertificateDigest string                     `json:"previous_multi_shard_certificate_digest,omitempty"`
 }
 
 type porygonTxAssignment struct {
@@ -51,6 +56,9 @@ type porygonTxAssignment struct {
 	CrossShard     bool     `json:"cross_shard"`
 	Wave           int      `json:"wave"`
 	LockedKeys     []string `json:"locked_keys,omitempty"`
+	Abandoned      bool     `json:"abandoned,omitempty"`
+	ConflictWith   []string `json:"conflict_with,omitempty"`
+	ConflictReason string   `json:"conflict_reason,omitempty"`
 }
 
 type porygonPipelineStage struct {
@@ -61,30 +69,35 @@ type porygonPipelineStage struct {
 }
 
 type porygonExecutionPlan struct {
-	Version                  string                 `json:"version"`
-	AlgorithmID              string                 `json:"algorithm_id"`
-	BlockHeight              uint64                 `json:"block_height"`
-	OrderingDomain           string                 `json:"ordering_domain"`
-	PhysicalShardCount       int                    `json:"physical_shard_count"`
-	TransactionBlockDigest   string                 `json:"transaction_block_digest"`
-	TransactionRoot          string                 `json:"transaction_root"`
-	AccessRoot               string                 `json:"access_root"`
-	WitnessPolicy            string                 `json:"witness_policy"`
-	WitnessThreshold         int                    `json:"witness_threshold"`
-	ExecutionShardCount      int                    `json:"execution_shard_count"`
-	ExecutionCommitteeCount  int                    `json:"execution_committee_count"`
-	CrossBatchWitness        bool                   `json:"cross_batch_witness"`
-	PipelineEnabled          bool                   `json:"pipeline_enabled"`
-	Assignments              []porygonTxAssignment  `json:"assignments"`
-	Waves                    [][]string             `json:"waves"`
-	SerializationOrder       []string               `json:"serialization_order"`
-	Pipeline                 []porygonPipelineStage `json:"pipeline"`
-	IntraShardTransactionCnt int                    `json:"intra_shard_transaction_count"`
-	CrossShardTransactionCnt int                    `json:"cross_shard_transaction_count"`
-	SingleShardExecutionCnt  int                    `json:"single_shard_execution_count"`
-	MultiShardUpdateCnt      int                    `json:"multi_shard_update_count"`
-	StateLockCount           int                    `json:"state_lock_count"`
-	PlanDigest               string                 `json:"plan_digest"`
+	Version                           string                 `json:"version"`
+	AlgorithmID                       string                 `json:"algorithm_id"`
+	BlockHeight                       uint64                 `json:"block_height"`
+	OrderingDomain                    string                 `json:"ordering_domain"`
+	PhysicalShardCount                int                    `json:"physical_shard_count"`
+	TransactionBlockDigest            string                 `json:"transaction_block_digest"`
+	TransactionRoot                   string                 `json:"transaction_root"`
+	AccessRoot                        string                 `json:"access_root"`
+	WitnessPolicy                     string                 `json:"witness_policy"`
+	WitnessThreshold                  int                    `json:"witness_threshold"`
+	ExecutionShardCount               int                    `json:"execution_shard_count"`
+	ExecutionCommitteeCount           int                    `json:"execution_committee_count"`
+	CrossBatchWitness                 bool                   `json:"cross_batch_witness"`
+	PipelineEnabled                   bool                   `json:"pipeline_enabled"`
+	Assignments                       []porygonTxAssignment  `json:"assignments"`
+	Waves                             [][]string             `json:"waves"`
+	SerializationOrder                []string               `json:"serialization_order"`
+	Pipeline                          []porygonPipelineStage `json:"pipeline"`
+	IntraShardTransactionCnt          int                    `json:"intra_shard_transaction_count"`
+	CrossShardTransactionCnt          int                    `json:"cross_shard_transaction_count"`
+	SingleShardExecutionCnt           int                    `json:"single_shard_execution_count"`
+	MultiShardUpdateCnt               int                    `json:"multi_shard_update_count"`
+	StateLockCount                    int                    `json:"state_lock_count"`
+	AbandonedCrossShardTransactionCnt int                    `json:"abandoned_cross_shard_transaction_count"`
+	AbandonedCTxITxConflictCnt        int                    `json:"abandoned_ctx_itx_conflict_count"`
+	AbandonedCTxCTxConflictCnt        int                    `json:"abandoned_ctx_ctx_conflict_count"`
+	NonAbandonedCrossESCConflictPairs int                    `json:"nonabandoned_cross_esc_conflict_pair_count"`
+	ConflictClosureVerified           bool                   `json:"conflict_closure_verified"`
+	PlanDigest                        string                 `json:"plan_digest"`
 }
 
 type porygonBlockProducer struct{ basicPlugin }
@@ -147,7 +160,10 @@ func (p porygonBlockProducer) Interval() time.Duration {
 	return 75 * time.Millisecond
 }
 func (p porygonBlockProducer) ShouldProduce(input BlockProductionInput) bool {
-	return input.Pool != nil && input.Pool.Len() > 0
+	if input.Pool == nil || input.Pool.Len() == 0 {
+		return false
+	}
+	return !porygonPrewitnessRunning(input.Pool)
 }
 func (p porygonBlockProducer) BuildCandidate(input BlockProductionInput) (realblock.Block, error) {
 	if input.Proposer == nil || input.Pool == nil {
@@ -157,7 +173,15 @@ func (p porygonBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 	if limit <= 0 {
 		limit = p.BlockSize()
 	}
-	reserved := input.Pool.ReserveReady(limit)
+	var reserved []tx.SignedTransaction
+	var prewitness *PorygonWitnessCertificate
+	if cached, ok := porygonTakePrewitnessedBatch(input.Pool); ok {
+		reserved = append([]tx.SignedTransaction(nil), cached.Items...)
+		cert := cached.Certificate
+		prewitness = &cert
+	} else {
+		reserved = input.Pool.ReserveReady(limit)
+	}
 	if len(reserved) == 0 {
 		return realblock.Block{}, fmt.Errorf("empty_mempool")
 	}
@@ -171,6 +195,12 @@ func (p porygonBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 		return realblock.Block{}, err
 	}
 	evidence := buildPorygonTransactionBlockEvidence(candidate, porygonWitnessThreshold(p.config))
+	if prewitness != nil && prewitness.Height == candidate.Height && prewitness.OrderingDomain == candidate.ShardID && prewitness.FullBodyDigest == evidence.FullBodyDigest {
+		evidence.WitnessPolicy = "ec_witness_certificate_v1"
+		evidence.WitnessThreshold = prewitness.Threshold
+		evidence.DataAvailabilityRef = prewitness.CertificateDigest
+		evidence.WitnessCertificate = prewitness
+	}
 	if err := attachProposalEvidence(&candidate, porygonProposalEvidenceID, evidence); err != nil {
 		input.Pool.ReleaseReserved(reserved)
 		return realblock.Block{}, err
@@ -207,9 +237,9 @@ func buildPorygonTransactionBlockEvidence(block realblock.Block, threshold int) 
 		TransactionRoot:     stableJSONDigest(txIDs),
 		AccessRoot:          porygonAccessRoot(block.TxList),
 		FullBodyDigest:      stableJSONDigest(block.TxList),
-		WitnessPolicy:       "full_body_validator_recompute_before_pbft_vote",
+		WitnessPolicy:       "ec_witness_certificate_pending",
 		WitnessThreshold:    threshold,
-		DataAvailabilityRef: "proposal_body_present_and_recomputed_by_each_voting_validator",
+		DataAvailabilityRef: "pending_ec_witness_certificate",
 	}
 }
 
@@ -229,6 +259,11 @@ func decodePorygonTransactionBlockEvidence(block realblock.Block) (porygonTransa
 	}
 	if evidence.WitnessThreshold < 1 {
 		return evidence, fmt.Errorf("porygon witness threshold must be positive")
+	}
+	if evidence.WitnessPolicy == "ec_witness_certificate_v1" {
+		if evidence.WitnessCertificate == nil || evidence.DataAvailabilityRef == "" || evidence.DataAvailabilityRef != evidence.WitnessCertificate.CertificateDigest {
+			return evidence, fmt.Errorf("porygon witness certificate evidence missing")
+		}
 	}
 	return evidence, nil
 }
@@ -300,7 +335,7 @@ func buildPorygonPlan(block realblock.Block, config map[string]any) (porygonExec
 	crossBatchWitness := porygonBool(config, "cross_batch_witness", true)
 
 	plan := porygonExecutionPlan{
-		Version:                 "3.0.0",
+		Version:                 "3.1.0",
 		AlgorithmID:             porygonPlanAlgorithmID,
 		BlockHeight:             block.Height,
 		OrderingDomain:          block.ShardID,
@@ -316,9 +351,10 @@ func buildPorygonPlan(block realblock.Block, config map[string]any) (porygonExec
 		PipelineEnabled:         pipelineEnabled,
 	}
 
+	// Phase 1: bind every transaction to its signed initiating-account ESC and
+	// declared state owners. No conflict decision is made while assignments are
+	// still incomplete; OC conflict closure requires the whole ordered block.
 	assignments := make([]porygonTxAssignment, 0, len(block.TxList))
-	waves := map[int][]string{}
-	maxWave := -1
 	for index, item := range block.TxList {
 		accesses := porygonCanonicalAccesses(item)
 		if len(accesses) == 0 {
@@ -346,45 +382,132 @@ func buildPorygonPlan(block realblock.Block, config map[string]any) (porygonExec
 			involvedSet[shard] = true
 		}
 		involved := sortedIntSet(involvedSet)
-		current := porygonTxAssignment{
-			TxID:           item.TxID,
-			OriginalIndex:  index,
-			ExecutionShard: executionShard,
-			StateShards:    stateShards,
-			WriteShards:    writeShards,
-			InvolvedShards: involved,
-			CrossShard:     len(involved) > 1,
-			LockedKeys:     uniqueStrings(lockKeys),
+		assignments = append(assignments, porygonTxAssignment{
+			TxID: item.TxID, OriginalIndex: index, ExecutionShard: executionShard,
+			StateShards: stateShards, WriteShards: writeShards, InvolvedShards: involved,
+			CrossShard: len(involved) > 1, LockedKeys: uniqueStrings(lockKeys), Wave: -1,
+		})
+	}
+
+	// Phase 2: paper-faithful Ordering-Committee conflict control. Porygon
+	// abandons conflicting cross-shard transactions assigned to different ESCs
+	// before Single-Shard Execution. ITx<->CTx conflicts are intentionally not
+	// resolved here: ITx first produces the new subtree (T3), while CTx returns
+	// candidate states (S3); their conflict is resolved by the post-execution OC
+	// concurrency-control step before Multi-Shard Update.
+	for i := range assignments {
+		if assignments[i].CrossShard {
+			continue
 		}
-		wave := 0
-		for previousIndex, previous := range assignments {
-			if porygonAssignmentsConflict(previous, current, block.TxList[previousIndex], item) && wave <= previous.Wave {
-				wave = previous.Wave + 1
+		for j := i + 1; j < len(assignments); j++ {
+			if assignments[j].CrossShard || assignments[i].ExecutionShard == assignments[j].ExecutionShard {
+				continue
+			}
+			if porygonAssignmentsConflict(assignments[i], assignments[j], block.TxList[i], block.TxList[j]) {
+				return porygonExecutionPlan{}, fmt.Errorf("porygon invariant violation: conflicting intra-shard transactions mapped to different ESCs: %s/%s", assignments[i].TxID, assignments[j].TxID)
 			}
 		}
-		current.Wave = wave
-		assignments = append(assignments, current)
-		plan.Assignments = append(plan.Assignments, current)
-		waves[wave] = append(waves[wave], item.TxID)
-		plan.SerializationOrder = append(plan.SerializationOrder, item.TxID)
-		if wave > maxWave {
-			maxWave = wave
+	}
+	for i := range assignments {
+		if !assignments[i].CrossShard || assignments[i].Abandoned {
+			continue
 		}
+		for j := 0; j < i; j++ {
+			if !assignments[j].CrossShard || assignments[j].Abandoned || assignments[i].ExecutionShard == assignments[j].ExecutionShard {
+				continue
+			}
+			if porygonAssignmentsConflict(assignments[j], assignments[i], block.TxList[j], block.TxList[i]) {
+				assignments[i].Abandoned = true
+				assignments[i].ConflictWith = append(assignments[i].ConflictWith, assignments[j].TxID)
+			}
+		}
+		if assignments[i].Abandoned {
+			assignments[i].ConflictWith = uniqueStrings(assignments[i].ConflictWith)
+			assignments[i].ConflictReason = porygonCrossESCConflictPolicy
+			plan.AbandonedCTxCTxConflictCnt++
+		}
+	}
+
+	orderingPairs := porygonNonAbandonedCrossESCCTxConflictPairs(assignments, block.TxList)
+	plan.NonAbandonedCrossESCConflictPairs = orderingPairs
+	plan.ConflictClosureVerified = orderingPairs == 0
+	if !plan.ConflictClosureVerified {
+		return porygonExecutionPlan{}, fmt.Errorf("porygon OC ordering conflict closure incomplete: retained CTx cross-ESC conflict pairs=%d", orderingPairs)
+	}
+
+	// Phase 3: form one deterministic sequential lane per ESC only after the OC
+	// has fixed the final retained set.
+	waves := map[int][]string{}
+	nextWaveByESC := map[int]int{}
+	maxWave := -1
+	for i := range assignments {
+		current := assignments[i]
+		plan.SerializationOrder = append(plan.SerializationOrder, current.TxID)
 		if current.CrossShard {
 			plan.CrossShardTransactionCnt++
-			plan.SingleShardExecutionCnt++
-			plan.MultiShardUpdateCnt += len(current.WriteShards)
-			plan.StateLockCount += len(current.LockedKeys)
+			if current.Abandoned {
+				plan.AbandonedCrossShardTransactionCnt++
+			} else {
+				plan.SingleShardExecutionCnt++
+				plan.MultiShardUpdateCnt += len(current.WriteShards)
+				plan.StateLockCount += len(current.LockedKeys)
+			}
 		} else {
 			plan.IntraShardTransactionCnt++
 		}
+		if !current.Abandoned {
+			current.Wave = nextWaveByESC[current.ExecutionShard]
+			nextWaveByESC[current.ExecutionShard]++
+			waves[current.Wave] = append(waves[current.Wave], current.TxID)
+			if current.Wave > maxWave {
+				maxWave = current.Wave
+			}
+		}
+		assignments[i] = current
 	}
+	plan.Assignments = append([]porygonTxAssignment(nil), assignments...)
 	for wave := 0; wave <= maxWave; wave++ {
 		plan.Waves = append(plan.Waves, append([]string(nil), waves[wave]...))
 	}
 	plan.Pipeline = porygonPipelineForHeight(block.Height, committeeCount, pipelineEnabled, crossBatchWitness)
 	plan.PlanDigest = stableJSONDigest(porygonPlanDigestProjection(plan))
 	return plan, nil
+}
+
+func porygonNonAbandonedCrossESCCTxConflictPairs(assignments []porygonTxAssignment, items []tx.SignedTransaction) int {
+	pairs := 0
+	for i := 0; i < len(assignments); i++ {
+		if assignments[i].Abandoned || !assignments[i].CrossShard {
+			continue
+		}
+		for j := i + 1; j < len(assignments); j++ {
+			if assignments[j].Abandoned || !assignments[j].CrossShard || assignments[i].ExecutionShard == assignments[j].ExecutionShard {
+				continue
+			}
+			if porygonAssignmentsConflict(assignments[i], assignments[j], items[i], items[j]) {
+				pairs++
+			}
+		}
+	}
+	return pairs
+}
+
+func porygonNonAbandonedCrossESCConflictPairs(assignments []porygonTxAssignment, items []tx.SignedTransaction) int {
+	pairs := 0
+	for i := 0; i < len(assignments); i++ {
+		if assignments[i].Abandoned {
+			continue
+		}
+		for j := i + 1; j < len(assignments); j++ {
+			if assignments[j].Abandoned || assignments[i].ExecutionShard == assignments[j].ExecutionShard {
+				continue
+			}
+			if porygonAssignmentsConflict(assignments[i], assignments[j], items[i], items[j]) {
+				pairs++
+			}
+		}
+	}
+	return pairs
 }
 
 func porygonPlanDigestProjection(plan porygonExecutionPlan) any {
@@ -466,27 +589,6 @@ func porygonAccessRoot(items []tx.SignedTransaction) string {
 		rows = append(rows, map[string]any{"tx_id": item.TxID, "accesses": porygonCanonicalAccesses(item)})
 	}
 	return stableJSONDigest(rows)
-}
-
-func porygonAccountShard(item tx.SignedTransaction, count int) int {
-	if count < 1 {
-		return 0
-	}
-	identity := strings.TrimSpace(item.Sender)
-	if identity == "" {
-		identity = strings.TrimSpace(item.LogicalTxID)
-	}
-	if identity == "" {
-		identity = strings.TrimSpace(item.TxID)
-	}
-	return stableKey([]string{strings.ToLower(identity)}) % count
-}
-
-func porygonStateShard(key string, count int) int {
-	if count < 1 {
-		return 0
-	}
-	return stableKey([]string{strings.ToLower(strings.TrimSpace(key))}) % count
 }
 
 func sortedIntSet(values map[int]bool) []int {

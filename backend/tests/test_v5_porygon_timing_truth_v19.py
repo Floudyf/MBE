@@ -80,8 +80,9 @@ def test_porygon_metrics_verify_esc_ownership_and_report_separate_timing(tmp_pat
             "shard_id": "porygon-global",
             "block_executor_id": "porygon_block_executor",
             "blocks": [_block(
-                porygon_execution_shard_histogram={"esc_0": 500, "esc_1": 500} if index == 0 else {},
+                porygon_execution_shard_histogram={"esc_0": 500, "esc_1": 500},
                 porygon_local_business_execution_count=local_count,
+                porygon_local_execution_shard_id=f"s{index // 4}",
                 porygon_business_execution_us=business_us,
                 porygon_result_exchange_wait_us=2_000,
                 porygon_execution_critical_path_us=20_000 + index * 100,
@@ -93,6 +94,7 @@ def test_porygon_metrics_verify_esc_ownership_and_report_separate_timing(tmp_pat
     assert metrics["porygon_execution_shard_transaction_counts"] == {"esc_0": 500, "esc_1": 500}
     assert metrics["porygon_expected_business_execution_count_by_node"] == {f"n{i}": 500 for i in range(8)}
     assert metrics["porygon_esc_ownership_verified"] is True
+    assert metrics["porygon_ownership_truth_scope"] == "per_block_dynamic_execution_role_vs_execution_histogram"
     assert metrics["porygon_local_business_execution_count_by_node"] == {f"n{i}": 500 for i in range(8)}
     assert metrics["porygon_business_execution_replica_cpu_sum_ms"] > 80
     # One deterministic representative per ESC: n0 + n4.
@@ -100,11 +102,12 @@ def test_porygon_metrics_verify_esc_ownership_and_report_separate_timing(tmp_pat
     assert metrics["porygon_execution_critical_path_ms"] == 20.7
 
 
-def test_porygon_formal_semantics_report_physical_state_fetch_truth() -> None:
+def test_porygon_formal_semantics_report_paper_fidelity_v5_truth() -> None:
     semantics = _execution_semantics({"block_executor": "porygon_block_executor"}, "stateless_porygon")
-    assert semantics["comparison_semantics_class"] == "porygon_3d_global_ordering_distributed_esc_v4"
-    assert semantics["state_access_semantics"] == "global_ordering_distributed_esc_with_logical_state_shards"
-    assert semantics["remote_fetch_policy"] == "signed_access_projection_with_physical_state_fetch"
-    assert semantics["remote_writeback_policy"] == "partition_local_materialization_from_certified_esc_result"
-    assert semantics["proof_policy"] == "consensus_bound_porygon_transaction_execution_plan_and_esc_result_certificates"
+    assert semantics["comparison_semantics_class"] == "porygon_3d_global_ordering_paper_fidelity_v5"
+    assert semantics["state_access_semantics"] == "global_ordering_dynamic_esc_verified_state_projection_and_explicit_multishard_update"
+    assert semantics["remote_fetch_policy"] == "signed_access_projection_with_physical_state_fetch_and_verified_merkle_treap_proof"
+    assert semantics["remote_writeback_policy"] == "oc_multi_shard_update_majority_ack_then_partition_materialization"
+    assert semantics["proof_policy"] == "ec_witness_certificate_plus_state_merkle_proof_plus_esc_batch_certificate_plus_multishard_root_certificate"
     assert semantics["legacy_cross_shard_protocol"] is False
+    assert semantics["state_home_mapping_policy"] == "porygon_account_object_owner_partition"

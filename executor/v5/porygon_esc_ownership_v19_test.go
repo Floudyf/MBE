@@ -159,7 +159,7 @@ func TestPorygonV19DistributedESCOwnershipExecutesOnlyLocalTransactions(t *testi
 	if got := distributed.ActualMetrics["porygon_state_root_scope"]; got != "local_execution_shard_storage_partition" {
 		t.Fatalf("distributed Porygon root scope=%v want local partition", got)
 	}
-	if distributed.ActualMetrics["porygon_esc_execution_ownership_mode"] != "distributed_esc_quorum_result_exchange_v1" {
+	if distributed.ActualMetrics["porygon_esc_execution_ownership_mode"] != "distributed_esc_batch_quorum_result_exchange_v2" {
 		t.Fatalf("ownership truth metric missing: %#v", distributed.ActualMetrics)
 	}
 	if got := intMetric(t, distributed.ActualMetrics, "porygon_local_business_execution_count"); got != localExpected {

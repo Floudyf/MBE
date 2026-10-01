@@ -173,8 +173,18 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		return err
 	}
 	defer iterator.Close()
+	streamPartitionInvariantV658 := false
+	if metatrack, ok := plugins.Routing.(*metaTrackRouting); ok && metatrack != nil {
+		streamPartitionInvariantV658 = boolFromAny(metatrack.config["stream_partition_invariant_v658"])
+	}
 	batchSize := plugins.BlockProducer.BlockSize()
-	if provider, ok := plugins.Routing.(routingBatchSizeProvider); ok {
+	if streamPartitionInvariantV658 {
+		// Experimental mode is a true stream: one record is routed and signed at
+		// a time, while the v6.5.1 routing state continues across calls.  The
+		// RouteBatch fields remain evidence envelopes only, never an algorithmic
+		// partition boundary.
+		batchSize = 1
+	} else if provider, ok := plugins.Routing.(routingBatchSizeProvider); ok {
 		batchSize = provider.RoutingBatchSize(batchSize)
 	}
 	if batchSize < 1 {
@@ -190,9 +200,11 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	bindExecutionRouting := routingBindsExecutionMetadata(plugins.Routing)
 	bindBatchProjectionMetadata := routingBindsBatchProjectionMetadata(plugins.Routing)
 	transactionFrontierV656Enabled := false
+	singleRouteBatchAblationV660 := false
 	if plugins.Routing.ID() == "metatrack_coaccess_routing" && len(plan.NodeConfigs) > 0 {
 		if cfg, ok := plan.NodeConfigs[0].PluginProfile["block_producer"]; ok {
 			transactionFrontierV656Enabled = boolFromAny(cfg.Config["dependency_closed_consensus"])
+			singleRouteBatchAblationV660 = boolFromAny(cfg.Config["ablation_single_route_batch_consensus_v660"])
 		}
 	}
 	consensusPredecessorsV656 := newMetaTrackConsensusPredecessorTrackerV656()
@@ -200,6 +212,12 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 
 	submitRecord := func(record WorkloadRecord, route RoutingDecision) error {
 		executionShard := route.ShardID
+		if plugins.Routing.ID() == porygonRoutingID && strings.TrimSpace(record.RoutingSourceKey) != "" && len(shardIDs) > 0 {
+			// Porygon Single-Shard Execution follows the initiating account/object
+			// Storage Role, not the generic full-key workload SourceShard hash.
+			index := porygonStateShard(record.RoutingSourceKey, len(shardIDs))
+			executionShard = shardIDs[index] // porygon_initiating_account_state_home
+		}
 		shardID := workloadIngressShard(record, route, statelessDirect)
 		if plugins.Routing.ID() == porygonRoutingID || plugins.Routing.ID() == calvinStatefulRoutingID || plugins.Routing.ID() == calvinStatelessRoutingID {
 			// Porygon and Calvin both separate logical execution/state partitions
@@ -246,6 +264,16 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		stateKeys := append([]string{"shard:" + logicalSourceShard + ":account"}, record.StateKeys...)
 		var item tx.SignedTransaction
 		var err error
+		if plugins.Routing.ID() == porygonRoutingID {
+			// Sign only the already-resolved Porygon initiating-account Storage Role.
+			record.RoutingEpoch = 1
+			if record.RoutingOrdinal == 0 {
+				record.RoutingOrdinal = uint64(record.Index + 1)
+			}
+			record.ExecutionShard = executionShard
+			record.RoutingReason = "porygon_initiating_account_route"
+			record.RoutePlanDigest = stableTextDigest(fmt.Sprintf("porygon_route_v1|%d|%s|%s", record.Index, record.RoutingSourceKey, executionShard))
+		}
 		if datasetIterator, ok := iterator.(*CanonicalTraceIterator); ok {
 			record.StateKeys = stateKeys
 			record.Payload = payload
@@ -261,7 +289,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			if err == nil {
 				item = generated[0]
 				item.Payload = payload
-				if bindExecutionRouting && record.RoutePlanDigest != "" {
+				if (bindExecutionRouting || plugins.Routing.ID() == porygonRoutingID) && record.RoutePlanDigest != "" {
 					routing := tx.ExecutionRoutingMetadata{SenderID: item.Sender, ReceiverID: item.Receiver, RoutingEpoch: record.RoutingEpoch, RoutingOrdinal: record.RoutingOrdinal, ExecutionShard: executionShard, RoutingReason: firstNonEmpty(record.RoutingReason, route.Reason), RoutePlanDigest: record.RoutePlanDigest, RouteBatchSequence: record.RouteBatchSequence, RouteBatchTransactionCount: record.RouteBatchTransactionCount, RouteBatchShardTransactionCount: record.RouteBatchShardTransactionCount, ConsensusExecutionPredecessorOrdinals: append([]uint64(nil), record.ConsensusExecutionPredecessorOrdinals...), ConsensusOrderingPredecessorOrdinals: append([]uint64(nil), record.ConsensusOrderingPredecessorOrdinals...), ConsensusExecutionDepth: record.ConsensusExecutionDepth, ConsensusExecutionRound: record.ConsensusExecutionRound, ConsensusWindowSequence: record.ConsensusWindowSequence, ConsensusWindowStartBatchSequence: record.ConsensusWindowStartBatchSequence, ConsensusWindowEndBatchSequence: record.ConsensusWindowEndBatchSequence, ConsensusWindowRouteBatchCount: record.ConsensusWindowRouteBatchCount, ConsensusWindowTransactionCount: record.ConsensusWindowTransactionCount, ConsensusWindowShardTransactionCount: record.ConsensusWindowShardTransactionCount, ConsensusWindowCriticalPath: record.ConsensusWindowCriticalPath, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...), ControlPolicy: record.ControlPolicy, LogicalDomains: append([]string(nil), record.LogicalDomains...), Local: record.Local, Bridge: record.Bridge, FrontierDigest: record.FrontierDigest}
 					digest, digestErr := tx.ComputeExecutionRoutingDigest(item, routing)
 					if digestErr != nil {
@@ -450,10 +478,22 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			}
 		}
 		if transactionFrontierV656Enabled {
-			closed, err := criticalWidthWindowV6568.PushBatch(preparedV6568, plugins.BlockProducer.BlockSize())
-			if err != nil { return err }
-			for _, prepared := range closed {
-				if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
+			if streamPartitionInvariantV658 {
+				for _, prepared := range preparedV6568 {
+					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
+				}
+			} else if singleRouteBatchAblationV660 {
+				closed, err := criticalWidthWindowV6568.PushBatchSingleRouteBatchV660(preparedV6568, plugins.BlockProducer.BlockSize())
+				if err != nil { return err }
+				for _, prepared := range closed {
+					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
+				}
+			} else {
+				closed, err := criticalWidthWindowV6568.PushBatch(preparedV6568, plugins.BlockProducer.BlockSize())
+				if err != nil { return err }
+				for _, prepared := range closed {
+					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
+				}
 			}
 		}
 		batchIndex++
@@ -478,10 +518,24 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if err := submitBatch(batch); err != nil {
 		return err
 	}
-	if transactionFrontierV656Enabled {
+	if transactionFrontierV656Enabled && !streamPartitionInvariantV658 {
 		for _, prepared := range criticalWidthWindowV6568.Flush() {
 			if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
 		}
+	}
+	if streamPartitionInvariantV658 {
+		if err := SaveJSON(filepath.Join(outDir, "metatrack_partition_invariant_summary.json"), map[string]any{
+			"schema_version": "mbe_metatrack_partition_invariant_v658",
+			"policy": metaTrackPartitionInvariantPolicyV658,
+			"routing_mode": "single_record_stream_with_persistent_history",
+			"route_batch_semantic_role": "evidence_envelope_only",
+			"consensus_selection": "capacity_bounded_max_dependency_closed_frontier",
+			"version_liveness_mode": "conservative_unpruned_publish",
+			"routing_unit_size": 1,
+			"block_size": plugins.BlockProducer.BlockSize(),
+			"block_interval_ms": plugins.BlockProducer.Interval().Milliseconds(),
+			"route_batch_count": batchIndex,
+		}); err != nil { return err }
 	}
 	replaySummary := iterator.Summary()
 	replaySummary.SubmittedCount = len(rows)

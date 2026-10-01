@@ -1,0 +1,119 @@
+package v5
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	realblock "metaverse-chainlab/executor/realism/block"
+	"metaverse-chainlab/executor/realism/p2p"
+	"metaverse-chainlab/executor/realism/tx"
+)
+
+const porygonStateProjectionAccessKindPrefix = "porygon_state_projection:"
+
+func porygonStateProjectionAccessKind(access tx.AccessItem) string {
+	return porygonStateProjectionAccessKindPrefix + string(access.Mode)
+}
+
+func isPorygonStateProjectionAccessKind(kind string) bool {
+	return strings.HasPrefix(kind, porygonStateProjectionAccessKindPrefix)
+}
+
+func porygonStateProjectionWitnessDigest(response StateFetchResponse, accessKind string) string {
+	proofDigest := ""
+	if response.PorygonProof != nil {
+		proofDigest = response.PorygonProof.ProofDigest
+	}
+	return stableTextDigest(strings.Join([]string{
+		response.BlockHash, response.QualifiedKey, response.Value, response.StateRoot,
+		response.HomeShard, response.ExecutionShard, accessKind, proofDigest,
+	}, "|"))
+}
+
+func (r *NodeRuntime) porygonFetchRemoteState(
+	ctx context.Context,
+	block realblock.Block,
+	item tx.SignedTransaction,
+	access tx.AccessItem,
+	homeShard string,
+) (response StateFetchResponse, latency time.Duration, fetchErr error) {
+	targetNode := r.stateAccessLeaderID(homeShard)
+	if targetNode == "" {
+		return StateFetchResponse{}, 0, fmt.Errorf("porygon remote Storage Role leader missing for %s", homeShard)
+	}
+	requestID := stableTextDigest(strings.Join([]string{
+		"porygon-state-proof", r.node.NodeID, item.TxID, block.BlockHash,
+		access.Key, homeShard, r.stateAccessPartitionID(),
+	}, "|"))
+	started := time.Now()
+	accessKind := porygonStateProjectionAccessKind(access)
+	r.beginStateFetch(block, item, access, homeShard, requestID)
+	outcome := "response_received"
+	defer func() { r.finishStateFetch(requestID, outcome, started, fetchErr) }()
+
+	waiter := make(chan StateFetchResponse, 1)
+	r.mu.Lock()
+	if r.stateFetchWaiters == nil {
+		r.stateFetchWaiters = map[string]chan StateFetchResponse{}
+	}
+	r.stateFetchWaiters[requestID] = waiter
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.stateFetchWaiters, requestID)
+		r.mu.Unlock()
+	}()
+
+	request := StateFetchRequest{
+		RequestID: requestID, TxID: item.TxID, BlockHash: block.BlockHash,
+		Key: access.Key, HomeShard: homeShard, ExecutionShard: r.stateAccessPartitionID(),
+		AccessKind: accessKind,
+	}
+	envelope, err := p2p.NewEnvelope(
+		stateFetchRequestMessage, r.node.NodeID, targetNode, r.node.ShardID,
+		block.Height, r.currentPBFTView(), block.Height, request,
+	)
+	if err != nil {
+		outcome = "envelope_error"
+		fetchErr = err
+		return StateFetchResponse{}, time.Since(started), err
+	}
+	if err := r.sendStateAccessToNode(ctx, targetNode, envelope); err != nil {
+		outcome = "send_error"
+		fetchErr = err
+		return StateFetchResponse{}, time.Since(started), err
+	}
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case response = <-waiter:
+		latency = time.Since(started)
+		if !response.Success {
+			outcome = "remote_error"
+			fetchErr = fmt.Errorf("porygon remote state projection failed: %s", response.Error)
+			return response, latency, fetchErr
+		}
+		if response.PorygonProof == nil || !porygonVerifyStateProof(*response.PorygonProof, response.QualifiedKey, response.Value, response.StateRoot) {
+			outcome = "proof_verification_error"
+			fetchErr = fmt.Errorf("porygon state proof verification failed for %s", access.Key)
+			return response, latency, fetchErr
+		}
+		if response.WitnessDigest != porygonStateProjectionWitnessDigest(response, accessKind) {
+			outcome = "witness_digest_error"
+			fetchErr = fmt.Errorf("porygon state projection witness digest mismatch for %s", access.Key)
+			return response, latency, fetchErr
+		}
+		r.addRuntimeMetric("porygon_state_proof_verified_count", 1)
+		return response, latency, nil
+	case <-timer.C:
+		outcome = "timeout"
+		fetchErr = fmt.Errorf("porygon remote state projection timeout for %s", access.Key)
+		return StateFetchResponse{}, time.Since(started), fetchErr
+	case <-ctx.Done():
+		outcome = "context_done"
+		fetchErr = ctx.Err()
+		return StateFetchResponse{}, time.Since(started), fetchErr
+	}
+}

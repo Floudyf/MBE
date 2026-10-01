@@ -648,6 +648,9 @@ def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, 
     summary = result_summary if isinstance(result_summary, dict) else {}
     executor_id = str(summary.get("block_executor_id") or "")
     groundhog_mode = executor_id == "groundhog_block_executor"
+    if executor_id == "porygon_block_executor":
+        from backend.app.services.v5_porygon_correctness_oracle import evaluate_porygon_partitioned
+        return evaluate_porygon_partitioned(run_dir, summary)
     if executor_id in {"calvin_block_executor", "stateless_calvin_block_executor"}:
         return _evaluate_calvin_partitioned(run_dir, summary)
     # MBE_V38_STATEFUL_SERIALIZABILITY_DISPATCH: stateful-local legacy multi-shard

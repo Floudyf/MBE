@@ -45,7 +45,7 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
         "Groundhog",
         "MetaTrack（初始版）",
         "MetaTrack（当前版）",
-        "MetaTrack（新版）",
+        "Metatrack",
     ]
     assert checked.plan.methods[-1].role == "main"
     assert checked.plan.methods[1].plugin_overrides["block_executor"] == "block_stm_block_executor"

@@ -4,17 +4,14 @@ from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS
 from backend.app.services.v5_plugin_manifest_store import STORE
 
 
-def test_metatrack_frontend_exposes_exactly_three_version_cards():
+def test_metatrack_frontend_keeps_stable_method_and_removes_batch_sensitivity_variants():
     profile = Path("frontend/src/v5MethodProfile.ts").read_text(encoding="utf-8")
     catalog = Path("frontend/src/v5FormalExperimentCatalog.ts").read_text(encoding="utf-8")
-    expected = {"metatrack_serial", "metatrack_full_locality", "metatrack_latest"}
-    for method_id in expected:
-        assert f'method_id: "{method_id}"' in profile
-        assert f'methodId: "{method_id}"' in catalog
-    for removed in ("metatrack_ready_round_control", "metatrack_influence", "metatrack_block_stm"):
+    assert 'method_id: "metatrack_latest"' in profile
+    assert 'methodId: "metatrack_latest"' in catalog
+    for removed in ("metatrack_exp50", "metatrack_exp200", "metatrack_ready_round_control", "metatrack_influence", "metatrack_block_stm"):
         assert f'method_id: "{removed}"' not in profile
         assert f'methodId: "{removed}"' not in catalog
-
 
 def test_metatrack_current_freezes_v5_liveness_and_new_v6_adds_closure_without_pbft_algorithm_change():
     initial = BUILTIN_METHODS["metatrack_serial"]

@@ -277,15 +277,20 @@ def _individual_result_reasons(child: dict) -> list[str]:
     incomplete = _first_number(metrics, finality, name="incomplete_unique_tx_count")
     cross_failed = _first_number(metrics, finality, name="cross_shard_failed_unique_count")
     lifecycle_complete = _first_bool(metrics, summary, finality, name="lifecycle_complete")
+    porygon_protocol_abandoned_count = _first_number(metrics, summary, name="porygon_protocol_abandoned_unique_tx_count")
     semantic_class = str(child.get("comparison_semantics_class") or "")
-    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3", "fabricpp_cg_cycle_abortable_v1"}
+    terminal_abort_semantics = semantic_class in {"nezha_acg_hs_abortable_v1", "cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3", "fabricpp_cg_cycle_abortable_v1", "porygon_3d_global_ordering_paper_fidelity_v5"}
     abort_count = _first_number(metrics, summary, name="abort_count")
+    if semantic_class == "porygon_3d_global_ordering_paper_fidelity_v5" and porygon_protocol_abandoned_count is not None:
+        abort_count = porygon_protocol_abandoned_count
     nezha_hs_abort_count = _first_number(metrics, summary, name="nezha_hs_abort_count")
     cg_cycle_abort_count = _first_number(metrics, summary, name="cg_cycle_abort_count")
     fabricpp_cycle_abort_count = _first_number(metrics, summary, name="fabricpp_cycle_abort_count")
     semantic_abort_count = nezha_hs_abort_count if semantic_class == "nezha_acg_hs_abortable_v1" else cg_cycle_abort_count if semantic_class in {"cg_cycle_abortable_v2", "cg_cycle_abortable_v3", "cg_cycle_abortable_v4", "nezha_cg_johnson_abortable_v1", "nezha_cg_johnson_abortable_v2", "nezha_cg_johnson_abortable_v3"} else None
     if semantic_class == "fabricpp_cg_cycle_abortable_v1":
         semantic_abort_count = fabricpp_cycle_abort_count
+    if semantic_class == "porygon_3d_global_ordering_paper_fidelity_v5":
+        semantic_abort_count = porygon_protocol_abandoned_count
 
     if submitted is None or terminal is None or submitted != terminal:
         reasons.append("terminal_not_equal_submitted")
@@ -305,7 +310,7 @@ def _individual_result_reasons(child: dict) -> list[str]:
         reasons.append("finalized_not_equal_submitted")
     if incomplete is None or incomplete != 0:
         reasons.append("incomplete_not_zero")
-    if cross_failed is None or cross_failed != 0:
+    if semantic_class != "porygon_3d_global_ordering_paper_fidelity_v5" and (cross_failed is None or cross_failed != 0):
         reasons.append("cross_shard_failed_not_zero")
     if lifecycle_complete is not True:
         reasons.append("lifecycle_complete_not_true")

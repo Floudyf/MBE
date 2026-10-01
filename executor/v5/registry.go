@@ -449,8 +449,12 @@ type BlockExecutionInput struct {
 	// MBE_PORYGON_ESC_OWNERSHIP_TIMING_TRUTH_V19_20260921: execution-shard
 	// identity is distinct from the global PBFT ordering-domain ShardID.
 	ExecutionShardID                 string
+	PorygonExecutionShardID          string
 	PorygonWaveExchange              PorygonWaveExchangeFunc
+	PorygonBatchExchange             PorygonBatchExchangeFunc
+	PorygonMultiShardUpdate          PorygonMultiShardUpdateFunc
 	PorygonStateFetch                PorygonStateFetchFunc
+	PorygonCrossBatchWitnessOverlap  bool
 	CalvinReadExchange               CalvinReadExchangeFunc
 	CalvinOutcomeExchange            CalvinOutcomeExchangeFunc
 	CalvinStateHome                  CalvinStateHomeFunc
@@ -1721,13 +1725,23 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 		now = time.Now()
 	}
 	if input.RoutingPluginID == "metatrack_coaccess_routing" {
-		reserved := input.Pool.ReserveReady(limit)
+		partitionInvariantV658 := boolFromAny(p.config["partition_invariant_consensus_v658"])
+		reserveLimit := limit
+		if partitionInvariantV658 {
+			// Inspect the complete currently-ready pool without changing the physical
+			// block limit.  Deferred rows are released after selection.
+			reserveLimit = input.Pool.Len()
+			if reserveLimit < limit { reserveLimit = limit }
+		}
+		reserved := input.Pool.ReserveReady(reserveLimit)
 		if len(reserved) == 0 {
 			return realblock.Block{}, fmt.Errorf("empty_mempool")
 		}
 		var selected, deferred []tx.SignedTransaction
 		var err error
-		if boolFromAny(p.config["dependency_closed_consensus"]) {
+		if partitionInvariantV658 {
+			selected, deferred, _, err = selectMetaTrackPartitionInvariantFrontierV658(reserved, limit, input.Proposer.ShardID, input.Pool)
+		} else if boolFromAny(p.config["dependency_closed_consensus"]) {
 			selected, deferred, _, err = selectMetaTrackCriticalWidthWindowV6568(reserved, limit, input.Proposer.ShardID, input.Pool)
 		} else {
 			// Frozen current-version behavior: exactly one signed projection per
@@ -2594,6 +2608,7 @@ func batchClassificationWithReadiness(items []tx.SignedTransaction, execution Ex
 			result.ClassificationWindowCount = 1
 		}
 		applyMetaTrackEffectiveFrontierTracks(items, execution, &result)
+		applyMetaTrackForceAllConservativeV659(execution, &result)
 		return result
 	}
 
@@ -2613,6 +2628,7 @@ func batchClassificationWithReadiness(items []tx.SignedTransaction, execution Ex
 	// projection in isolation. StateVersions are pre-execution metadata, and
 	// only producers still present in this scheduling window participate.
 	applyMetaTrackEffectiveFrontierTracks(items, execution, &merged)
+	applyMetaTrackForceAllConservativeV659(execution, &merged)
 	return merged
 }
 
@@ -3355,12 +3371,14 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	strictFrontier := metaTrackStrictFrontierPolicyEnabled(p.config)
 	localExactVersionHandoff, _ := p.config["local_exact_version_handoff"].(bool)
 	batchEntryStatePrefetch, _ := p.config["batch_entry_state_prefetch"].(bool)
+	singleReadyQueueV661 := boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661])
+	onDemandStateFetchV661 := boolFromAny(p.config[metaTrackAblationOnDemandStateFetchV661])
 	var batchFetch RemoteStateBatchFetchFunc
-	if batchEntryStatePrefetch {
+	if batchEntryStatePrefetch && !onDemandStateFetchV661 {
 		batchFetch = input.RemoteStateBatchFetch
 	}
 	executionStarted := time.Now()
-	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff)
+	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, onDemandStateFetchV661)
 	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -3554,11 +3572,14 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 }
 
 func executeMetaTrackScheduleWithOptions(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
-	return executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, nil, versionPublish, strictFrontier, localExactVersionHandoff)
+	return executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, nil, versionPublish, strictFrontier, localExactVersionHandoff, false, false)
 }
 
-func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, onDemandStateFetchV661 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
 	ordered := append([]tx.SignedTransaction(nil), schedule.Ordered...)
+	if singleReadyQueueV661 {
+		ordered = append([]tx.SignedTransaction(nil), block.TxList...)
+	}
 	// MBE_METATRACK_READY_ROUND_SCHEDULER_V35
 	// Preserve the historical helper signature while allowing the Ready-Round
 	// control and H/D candidate to share one runtime/worker model.
@@ -3762,13 +3783,17 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			readyRoundByTx[txID] = openReadyRound
 		}
 		decision := decisionByID[txID]
-		if decision.Track == "fast" {
+		queueName := queueNameForTrack(decision.Track)
+		if singleReadyQueueV661 {
+			conservativeReady = append(conservativeReady, txID)
+			queueName = "unified_ready_queue_v661"
+		} else if decision.Track == "fast" {
 			fastReady = append(fastReady, txID)
 		} else {
 			conservativeReady = append(conservativeReady, txID)
 		}
 		recordDepths()
-		events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: queueNameForTrack(decision.Track), DecisionReason: reason, LocalExecution: true, Wakeup: wakeup, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+		events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: queueName, DecisionReason: reason, LocalExecution: true, Wakeup: wakeup, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
 	}
 
 	type remoteStateCompletion struct {
@@ -3797,6 +3822,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	batchEntryReadyCount := 0
 	batchEntryNotReadyFallbackCount := 0
 	batchCandidates := make([]RemoteStateBatchFetchItem, 0)
+	onDemandCandidatesV661 := map[string]RemoteStateBatchFetchItem{}
+	onDemandStartedV661 := map[string]bool{}
+	onDemandStartedAtV661 := map[string]time.Time{}
+	onDemandFetchStartedCountV661 := 0
+	onDemandFetchWaitMSV661 := int64(0)
 	if len(classification.StateWaitKeys) > 0 {
 		if remoteFetch == nil {
 			return nil, nil, nil, nil, fmt.Errorf("metatrack state-ready classification requires remote state fetcher")
@@ -3824,8 +3854,13 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 						break
 					}
 				}
+				candidate := RemoteStateBatchFetchItem{Token: key, Item: item, Access: access}
+				if onDemandStateFetchV661 {
+					onDemandCandidatesV661[key] = candidate
+					continue
+				}
 				if batchFetch != nil {
-					batchCandidates = append(batchCandidates, RemoteStateBatchFetchItem{Token: key, Item: item, Access: access})
+					batchCandidates = append(batchCandidates, candidate)
 				} else {
 					startRemoteFetch(item, access)
 				}
@@ -3850,6 +3885,21 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			}
 		}
 	}
+	startOnDemandStateForTxV661 := func(txID string) {
+		if !onDemandStateFetchV661 { return }
+		for _, token := range classification.StateWaitKeys[txID] {
+			if stateReady[token] || onDemandStartedV661[token] { continue }
+			if _, local := localVersionHandoffByToken[token]; local { continue }
+			candidate, ok := onDemandCandidatesV661[token]
+			if !ok { continue }
+			onDemandStartedV661[token] = true
+			onDemandStartedAtV661[token] = time.Now()
+			onDemandFetchStartedCountV661++
+			startRemoteFetch(candidate.Item, candidate.Access)
+		}
+	}
+	criticalStateWaitStartedV661 := map[string]time.Time{}
+	criticalStateWaitMSV661 := int64(0)
 
 	for _, item := range ordered {
 		txID := txIdentifier(item)
@@ -3865,14 +3915,16 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		if depCount[txID] > 0 {
 			blocked[txID] = true
 			dependencyWaitStarted[txID] = time.Now()
-			if !stateReadyForTx(txID) {
+			if !onDemandStateFetchV661 && !stateReadyForTx(txID) {
 				stateBlocked[txID] = true
 				stateWaitStarted[txID] = time.Now()
 			}
 			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "blocked_queue", DecisionReason: "actual_wait_for_dependencies", LocalExecution: true, Blocked: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady), DependencyWaitMS: int64(depCount[txID])})
 			continue
 		}
+		startOnDemandStateForTxV661(txID)
 		if !stateReadyForTx(txID) {
+			criticalStateWaitStartedV661[txID] = time.Now()
 			stateBlocked[txID] = true
 			stateWaitStarted[txID] = time.Now()
 			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "state_wait_queue", DecisionReason: "actual_wait_for_state", LocalExecution: true, Blocked: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
@@ -4037,6 +4089,18 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			}
 			// Each worker owns one fast and one conservative lane. Local fast work
 			// has priority; stealing is always performed from the same lane type.
+			// MBE_ABLATION_V661_SINGLE_READY_WORKER_LOOP
+			if singleReadyQueueV661 {
+				if item, ok := tryLocal("conservative"); ok { return item, true }
+				if item, ok := trySteal("conservative"); ok { return item, true }
+				select {
+				case <-ctx.Done(): return job{}, false
+				case <-workerDone: return job{}, false
+				case item, ok := <-workerQueues[workerID].conservative: return item, ok
+				case <-time.After(time.Millisecond):
+				}
+				continue
+			}
 			if item, ok := tryLocal("fast"); ok {
 				return item, true
 			}
@@ -4169,7 +4233,9 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		}
 		assignedWorker := 0
 		if workerCount > 0 {
-			if readyRoundArbitration {
+			if singleReadyQueueV661 {
+				assignedWorker = dispatchSeq % workerCount
+			} else if readyRoundArbitration {
 				assignedWorker = dispatchSeq % workerCount
 			} else if track == "fast" {
 				assignedWorker = fastDispatchSeq % workerCount
@@ -4185,6 +4251,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+		if singleReadyQueueV661 {
+			select {
+			case <-ctx.Done(): return ctx.Err()
+			case workerQueues[assignedWorker].conservative <- nextJob: return nil
+			}
 		}
 		if readyRoundArbitration {
 			select {
@@ -4224,6 +4296,10 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				continue
 			}
 			delete(stateBlocked, txID)
+			if started, ok := criticalStateWaitStartedV661[txID]; ok {
+				criticalStateWaitMSV661 += time.Since(started).Milliseconds()
+				delete(criticalStateWaitStartedV661, txID)
+			}
 			waitMS := int64(0)
 			if started, ok := stateWaitStarted[txID]; ok {
 				waited := time.Since(started)
@@ -4246,6 +4322,10 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			return completion.err
 		}
 		remoteFetchLatencyMS += completion.event.LatencyMS
+		if started, ok := onDemandStartedAtV661[completion.event.ReadinessToken]; ok {
+			onDemandFetchWaitMSV661 += time.Since(started).Milliseconds()
+			delete(onDemandStartedAtV661, completion.event.ReadinessToken)
+		}
 		return handleStateReadyEvent(completion.event, "actual_state_ready")
 	}
 
@@ -4273,6 +4353,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	seenReadyRounds := map[uint64]bool{}
 	seenMultiCandidateReadyRounds := map[uint64]bool{}
 	nextReady := func(useInfluence bool) string {
+		if singleReadyQueueV661 {
+			if len(conservativeReady) == 0 { return "" }
+			txID := conservativeReady[0]
+			conservativeReady = conservativeReady[1:]
+			return txID
+		}
 		if readyRoundArbitration {
 			return metaTrackPopReadyRoundChoice(&fastReady, &conservativeReady, readyRoundByTx, schedule, useInfluence)
 		}
@@ -4605,7 +4691,9 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			}
 			delete(blocked, dependent)
 			dependentDecision := decisionByID[dependent]
+			startOnDemandStateForTxV661(dependent)
 			if !stateReadyForTx(dependent) {
+				criticalStateWaitStartedV661[dependent] = time.Now()
 				stateBlocked[dependent] = true
 				if _, ok := stateWaitStarted[dependent]; !ok {
 					stateWaitStarted[dependent] = time.Now()
@@ -4651,6 +4739,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	readyPriorityPolicy := "fast_track_first_v1"
 	workerQueueModel := "per_worker_dual_lane"
 	stealPolicy := "same_shard_same_track_only"
+	if singleReadyQueueV661 {
+		readyPriorityPolicy = "single_ready_queue_fifo_v661"
+		workerQueueModel = "per_worker_single_ready_lane_v661"
+		stealPolicy = "same_shard_single_ready_lane_v661"
+	}
 	if readyRoundControl {
 		readyPriorityPolicy = metaTrackReadyRoundControlPriorityPolicy
 		workerQueueModel = "per_worker_unified_ready_round_lane"
@@ -4750,6 +4843,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		"metatrack_local_version_handoff_ready_count":           localVersionHandoffReadyCount,
 		"metatrack_local_version_handoff_fallback_fetch_count":  localVersionHandoffFallbackFetchCount,
 		"metatrack_local_exact_version_handoff_enabled":         localExactVersionHandoff,
+		"metatrack_single_ready_queue_ablation_v661": singleReadyQueueV661,
+		"metatrack_on_demand_state_fetch_ablation_v661": onDemandStateFetchV661,
+		"metatrack_on_demand_state_fetch_started_count_v661": onDemandFetchStartedCountV661,
+		"metatrack_on_demand_state_fetch_wait_ms_v661": onDemandFetchWaitMSV661,
+		"metatrack_critical_path_state_wait_ms_v661": criticalStateWaitMSV661,
 		"metatrack_batch_entry_batch_request_count":             batchEntryRequestCount,
 		"metatrack_batch_entry_item_count":                      batchEntryItemCount,
 		"metatrack_batch_entry_ready_count":                     batchEntryReadyCount,

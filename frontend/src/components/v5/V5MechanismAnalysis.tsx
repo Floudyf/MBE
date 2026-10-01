@@ -74,11 +74,32 @@ const METATRACK_INCREMENTAL_ROUTING_V650: MetricDef[] = [
   { key: "metatrack_incremental_batch_partition_invariant", label: "RouteBatch 边界无关", help: "为真表示该版本合同要求 RouteBatch 只承担签名/存活性打包作用，不重置持续分流状态。" },
 ];
 
+const METATRACK_NATURAL_WINDOW_V657: MetricDef[] = [
+  { key: "metatrack_natural_window_fixed_micro_batch_enabled", label: "固定100笔路由批次", help: "实验版应为否：不再使用 MetaTrack 独立 micro_batch_size=100 作为路由/封签边界。" },
+  { key: "metatrack_natural_window_block_size", label: "复用块容量", help: "直接复用本次实验已有 block_size，不引入新的 MetaTrack 容量阈值。" },
+  { key: "metatrack_natural_window_block_interval_ms", label: "复用出块间隔", unit: "ms", help: "直接复用本次实验已有 block_interval_ms；固定速率回放按确定性的逻辑释放时间形成自然时间边界。" },
+  { key: "metatrack_natural_window_window_count", label: "自然路由窗口数", help: "本次实验最终形成的自然 RouteBatch/封签窗口数量。" },
+  { key: "metatrack_natural_window_time_boundary_count", label: "出块周期切窗次数", help: "固定速率回放中因跨越既有出块周期而封闭窗口的次数。" },
+  { key: "metatrack_natural_window_capacity_boundary_count", label: "块容量切窗次数", help: "因达到既有 block_size 而封闭窗口的次数。" },
+  { key: "metatrack_natural_window_min_window_size", label: "最小自然窗口交易数", help: "自然路由窗口的最小交易数。" },
+  { key: "metatrack_natural_window_average_window_size", label: "平均自然窗口交易数", help: "自然路由窗口的平均交易数。" },
+  { key: "metatrack_natural_window_max_window_size", label: "最大自然窗口交易数", help: "自然路由窗口的最大交易数。" },
+];
+
+const METATRACK_PARTITION_INVARIANT_V658: MetricDef[] = [
+  { key: "metatrack_partition_invariant_routing_mode", label: "分流模式", help: "实验版逐交易增量分流，但持续复用跨交易共现、exact-version 前驱和负载历史；不存在固定分析批大小。" },
+  { key: "metatrack_partition_invariant_route_batch_semantic_role", label: "RouteBatch 角色", help: "实验版 RouteBatch 仅保留为签名/证据包装，不再决定共识选择边界。" },
+  { key: "metatrack_partition_invariant_consensus_selection", label: "共识候选规则", help: "节点从当前已到达交易中，在现有 block_size 容量内选择最大依赖闭合前沿；不使用 N/L、固定笔数或 worker 带宽阈值。" },
+  { key: "metatrack_partition_invariant_version_liveness_mode", label: "版本存活模式", help: "实验版暂时关闭批内 Version Liveness 裁剪，采用保守版本发布，避免把当前工程批内没人读误判为未来永远没人读。" },
+  { key: "metatrack_partition_invariant_routing_unit_size", label: "流式分流单位", help: "实验版为 1：每笔交易到达后立即完成增量分流与签名，算法历史跨调用持续保存。" },
+  { key: "metatrack_partition_invariant_block_size", label: "物理块容量上限", help: "实际 PBFT 块仍受原有 block_size 硬上限约束，不会因取消分析批而形成无限大块。" },
+];
+
 const METATRACK_CONSENSUS_WINDOW_V656813: MetricDef[] = [
-  { key: "metatrack_consensus_window_count", label: "共识窗口数", help: "从持久提交区块中的签名窗口元数据重建得到的共识窗口数量。" },
-  { key: "metatrack_consensus_window_average_tx_count", label: "平均交易/窗口", help: "每个全局共识窗口包含的平均逻辑交易数。" },
-  { key: "metatrack_consensus_window_average_route_batch_count", label: "平均 RouteBatch/窗口", help: "每个共识窗口聚合的连续 RouteBatch 平均数量。" },
-  { key: "metatrack_consensus_window_max_route_batch_count", label: "最大 RouteBatch/窗口", help: "单个共识窗口聚合的最大 RouteBatch 数。" },
+  { key: "metatrack_consensus_window_count", label: "共识批次聚合数", help: "从持久提交区块中的签名窗口元数据重建得到的共识批次聚合数量。" },
+  { key: "metatrack_consensus_window_average_tx_count", label: "平均交易/窗口", help: "每个全局共识批次聚合包含的平均逻辑交易数。" },
+  { key: "metatrack_consensus_window_average_route_batch_count", label: "平均 RouteBatch/窗口", help: "每个共识批次聚合聚合的连续 RouteBatch 平均数量。" },
+  { key: "metatrack_consensus_window_max_route_batch_count", label: "最大 RouteBatch/窗口", help: "单个共识批次聚合聚合的最大 RouteBatch 数。" },
   { key: "metatrack_consensus_window_average_critical_path", label: "平均最长依赖链", help: "根据持久化签名前驱元数据重新计算的平均最长执行链 L。" },
   { key: "metatrack_consensus_window_max_critical_path", label: "最大最长依赖链", help: "所有窗口中重新计算得到的最大最长执行链 L。" },
   { key: "metatrack_consensus_window_average_structural_width", label: "平均结构并行宽度 N/L", help: "窗口交易数 N 与重建最长执行链 L 的比值，仅做运行后观测。" },
@@ -275,15 +296,18 @@ const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; met
     match: (id) => id.includes("porygon"), title: "Porygon",
     metrics: [
       { key: "porygon_execution_shard_count", label: "ESC 数", help: "前端 topology.shards 映射得到的 Porygon Execution Sub-Committee 数。" },
-      { key: "porygon_execution_wave_count", label: "执行 Wave 数", help: "Porygon 共识绑定计划实际执行的 Wave 总数。" },
-      { key: "porygon_logical_state_cross_shard_ratio", label: "Porygon 逻辑跨片比例", help: "execution ESC 与签名 AccessList 状态归属共同定义的逻辑跨片比例；不是 workload source/target 跨片比例。" },
-      { key: "porygon_esc_ownership_verified", label: "ESC 归属核验", help: "各 ESC replica 的本地业务执行数量是否与共识绑定 ownership 一致。" },
+      { key: "porygon_execution_wave_count", label: "执行 Wave 数", help: "Porygon 在 OC 跨 ESC 冲突闭包后实际执行的 Wave 总数。" },
+      { key: "porygon_logical_state_cross_shard_ratio", label: "Porygon 逻辑跨片比例", help: "规划阶段 CTx 数量占全部 Porygon 计划交易的比例；不是 workload source/target 跨片比例，也不以成功执行数作分母。" },
+      { key: "porygon_executed_cross_shard_ratio", label: "实际执行跨片比例", help: "成功且未被 OC 冲突闭包放弃的 CTx 在实际执行交易中的比例。" },
+      { key: "porygon_cross_esc_abandon_ratio", label: "跨 ESC 放弃比例", help: "按 Porygon 论文 OC 冲突规则被标记 Abandoned 的 CTx 占全部计划交易比例。" },
+      { key: "porygon_cross_esc_conflict_closure_verified", label: "跨 ESC 冲突闭包", help: "所有未放弃交易在不同 ESC 之间均无剩余读写/写写冲突时为真。" },
+      { key: "porygon_esc_ownership_verified", label: "ESC 归属核验", help: "逐区块按动态 ESC role 与该区块执行直方图核对各 replica 的本地业务执行数量。" },
       { key: "porygon_business_execution_critical_path_ms", label: "业务执行关键路径", unit: "ms", help: "逐区块取 replica 业务执行最大值后跨区块求和。" },
       { key: "porygon_result_exchange_wait_critical_path_ms", label: "ESC 结果交换等待关键路径", unit: "ms", help: "逐区块取 replica ESC 结果交换等待最大值后跨区块求和。" },
       { key: "porygon_execution_critical_path_ms", label: "Porygon 执行总关键路径", unit: "ms", help: "逐区块 replica 执行关键路径最大值之和，是 Porygon 横向执行时间比较的正式字段。" },
       { key: "porygon_leader_local_transaction_execution_ms", label: "Global Leader 本地业务执行时间", unit: "ms", help: "仅保留诊断用途；不是 Porygon 全局执行墙钟时间。" },
-      { key: "porygon_witness_threshold_configured", label: "Witness 配置阈值", help: "保留的 Porygon witness_threshold 配置值；当前 MBE 适配不把它解释为独立 Witness Committee quorum。" },
-      { key: "porygon_witness_validation_mode", label: "Witness 验证模式", help: "当前采用所有 PBFT validator 对完整 Transaction Block / Access root 重算后再投票。" },
+      { key: "porygon_witness_threshold_configured", label: "Witness 配置阈值", help: "真实 EC Witness Certificate 的配置/故障界限阈值。" },
+      { key: "porygon_witness_validation_mode", label: "Witness 验证模式", help: "PBFT 排序前由确定性 EC Witness Committee 收集认证 witness vote 并验证阈值证书。" },
     ],
   },
   {
@@ -344,10 +368,13 @@ export default function V5MechanismAnalysis({ children }: { children: V5FormalCh
       : [];
   const projectionFrontierDefinitions = metrics.metatrack_projection_frontier_policy ? METATRACK_PROJECTION_FRONTIER_V612 : [];
   const consensusWindowDefinitions = metrics.metatrack_consensus_window_observability_available ? METATRACK_CONSENSUS_WINDOW_V656813 : [];
-  const boundaryBatchDefinitions = active === "metatrack_latest" && metrics.metatrack_closure_boundary_batch_policy ? METATRACK_BOUNDARY_BATCH_V621 : [];
-  const asyncWritebackDefinitions = active === "metatrack_latest" && metrics.metatrack_async_version_writeback_policy ? METATRACK_ASYNC_WRITEBACK_V640 : [];
-  const incrementalRoutingDefinitions = active === "metatrack_latest" && metrics.metatrack_incremental_routing_policy ? METATRACK_INCREMENTAL_ROUTING_V650 : [];
-  const definitions = [...COMMON, ...stateReadyDefinitions, ...projectionFrontierDefinitions, ...consensusWindowDefinitions, ...boundaryBatchDefinitions, ...asyncWritebackDefinitions, ...incrementalRoutingDefinitions, ...matchedDefinitions.flatMap((item) => item.metrics)];
+  const currentMetaTrack = ["metatrack_latest", "metatrack_ab_route", "metatrack_ab_track", "metatrack_ab_cons", "metatrack_ab_state"].includes(active);
+  const boundaryBatchDefinitions = currentMetaTrack && metrics.metatrack_closure_boundary_batch_policy ? METATRACK_BOUNDARY_BATCH_V621 : [];
+  const asyncWritebackDefinitions = currentMetaTrack && metrics.metatrack_async_version_writeback_policy ? METATRACK_ASYNC_WRITEBACK_V640 : [];
+  const incrementalRoutingDefinitions = currentMetaTrack && metrics.metatrack_incremental_routing_policy ? METATRACK_INCREMENTAL_ROUTING_V650 : [];
+  const naturalWindowDefinitions = active === "metatrack_exp" && metrics.metatrack_natural_window_available ? METATRACK_NATURAL_WINDOW_V657 : [];
+  const partitionInvariantDefinitions = active === "metatrack_exp" && metrics.metatrack_partition_invariant_available ? METATRACK_PARTITION_INVARIANT_V658 : [];
+  const definitions = [...COMMON, ...stateReadyDefinitions, ...projectionFrontierDefinitions, ...consensusWindowDefinitions, ...boundaryBatchDefinitions, ...asyncWritebackDefinitions, ...incrementalRoutingDefinitions, ...naturalWindowDefinitions, ...partitionInvariantDefinitions, ...matchedDefinitions.flatMap((item) => item.metrics)];
   const activeName = methods.find((item) => item.id === active)?.name ?? active;
   return <section className="v5-dashboard-section" data-testid="v5-mechanism-analysis">
     <div className="v5-dashboard-heading"><div><h3>机制分析</h3><p className="muted">只显示该方法已有正式证据的指标；所有比例均在指标提取/结果层派生，不修改执行器。</p></div></div>
@@ -440,7 +467,13 @@ function formatMetric(value: number, unit?: string): string { if (unit === "B") 
 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();
-  if (id === "metatrack_latest") return "MetaTrack（新版）";
+  if (id === "metatrack_latest") return "Metatrack";
+  if (id === "metatrack_ab_route") return "消融-无共现矩阵分片";
+  if (id === "metatrack_ab_track") return "消融-无双轨执行";
+  if (id === "metatrack_ab_cons") return "消融-无共识批次聚合";
+  if (id === "metatrack_ab_state") return "消融-无状态预取";
+  if (id === "metatrack_ab_handoff") return "子消融-无本地版本交接";
+  if (id === "metatrack_exp") return "实验版（旧）";
   if (id === "metatrack_full_locality") return "MetaTrack（当前版）";
   if (id === "metatrack_block_stm") return "MetaTrack + Block-STM（历史）";
   if (id === "stateless_hash_block_stm") return "Stateless Block-STM";

@@ -29,7 +29,7 @@ import {
 import WorkloadPreviewPanel from "../components/v5/WorkloadPreviewPanel";
 import WorkloadSourceEditor, { type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
 import { backendLabel, blockerLabel, faultModeLabel, statusLabel, suiteLabel } from "../v5Labels";
-import { BATCH_SI_ABLATION_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
+import { BATCH_SI_ABLATION_METHOD_IDS, METATRACK_ABLATION_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
 import { V5_BUILTIN_METHODS, V5_DEFAULT_METHOD_IDS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
 import { buildThetaSweepPoints, compactCount, thetaOptionsForDataset, type SkewExperimentPreset } from "../v5SkewExperiment"; // V5_SKEW_MAIN_PRESET_V1
 import "../v5UiPolish.css";
@@ -171,7 +171,7 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
     const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed) || parsed.schema_version !== "mbe_v5_formal_run_draft_v1") return null;
     const suite = FORMAL_SUITE_DEFINITIONS.some((item) => item.id === parsed.selectedSuite) ? parsed.selectedSuite as V5FormalSuite : "comparison_experiment";
-    const methods = Array.isArray(parsed.selectedMethods) ? parsed.selectedMethods.filter((item): item is string => typeof item === "string" && item.length > 0).map((item) => item === "metatrack_block_stm" ? "metatrack_latest" : item) : [];
+    const methods = Array.isArray(parsed.selectedMethods) ? Array.from(new Set(parsed.selectedMethods.filter((item): item is string => typeof item === "string" && item.length > 0).map((item) => ["metatrack_exp", "metatrack_exp50", "metatrack_exp200", "metatrack_block_stm", "metatrack_serial", "metatrack_full_locality"].includes(item) ? "metatrack_latest" : item))) : [];
     const topologyRaw = isRecord(parsed.topology) ? parsed.topology : {};
     const blockRaw = isRecord(parsed.blockProduction) ? parsed.blockProduction : {};
     const workloadRaw = isRecord(parsed.workload) ? parsed.workload : {};
@@ -437,10 +437,11 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     if (mode === "single") {
       setSelectedMethods([methodId]);
     } else if (mode === "ablation") {
-      if (methodId === "hash_batch_si") return;
+      const fullMethodId = selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack_latest" : "hash_batch_si";
+      if (methodId === fullMethodId) return;
       setSelectedMethods((current) => {
         const next = toggle(methodId, current);
-        return next.includes("hash_batch_si") ? next : ["hash_batch_si", ...next];
+        return next.includes(fullMethodId) ? next : [fullMethodId, ...next];
       });
     } else {
       setSelectedMethods((current) => toggle(methodId, current));
@@ -734,13 +735,13 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
 
     <article className="final-card wide">
       <div className="section-heading"><div><h3>② 选择实验对象</h3><p className="muted">{FORMAL_SUITE_DEFINITIONS.find((item) => item.id === selectedSuite)?.description}</p></div></div>
-      {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_serial", "metatrack_full_locality", "metatrack_latest"]))}>MetaTrack 对照组</button></div>}
-      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className="experiment-choice-card selected" aria-pressed="true"><span className="choice-check">✓</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className="experiment-choice-card unavailable" disabled><strong>MetaTrack</strong><small>消融定义尚未在当前方法注册表中闭合，暂不生成无效实验。</small></button></div>}
+      {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_latest"]))}>MetaTrack 对照组</button></div>}
+      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 四个主消融 + 一个状态子消融。</small></button></div>}
       <div className="formal-method-groups">
         {(["stateful", "batch_si", "stateless", "metatrack"] as const).map((family) => {
-          const definitions = FORMAL_METHOD_DEFINITIONS.filter((definition) => definition.family === family && (selectedSuite === "ablation_experiment" ? definition.ablationTarget === "batch_si" : selectedSuite === "main_experiment" ? definition.mainVisible : definition.comparisonVisible));
+          const definitions = FORMAL_METHOD_DEFINITIONS.filter((definition) => definition.family === family && (selectedSuite === "ablation_experiment" ? definition.ablationTarget === (selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack" : "batch_si") : selectedSuite === "main_experiment" ? definition.mainVisible : definition.comparisonVisible));
           if (!definitions.length) return null;
-          const familyTitle = family === "stateful" ? "有状态执行方法" : family === "batch_si" ? (selectedSuite === "ablation_experiment" ? "Batch-SI 消融变体" : "Batch-SI") : family === "stateless" ? "无状态执行方法" : "MetaTrack 方法";
+          const familyTitle = family === "stateful" ? "有状态执行方法" : family === "batch_si" ? (selectedSuite === "ablation_experiment" ? "Batch-SI 消融变体" : "Batch-SI") : family === "stateless" ? "无状态执行方法" : (selectedSuite === "ablation_experiment" ? "MetaTrack 消融变体" : "MetaTrack 方法");
           return <section key={family} className="method-family"><h4>{familyTitle}</h4><div className="selectable-card-grid">{definitions.map((definition) => {
             const method = methods.find((item) => item.method_id === definition.methodId);
             if (!method) return null;
@@ -754,7 +755,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         })}
       </div>
       {!selected.length && <p className="file-error">尚未选择执行方法。</p>}
-      {selectedSuite === "ablation_experiment" && <p className="notice">完整 Batch-SI 始终作为主方法；消融变体只复用 Batch-SI 自己的实现，不调用其他方案算法代码。</p>}
+      {selectedSuite === "ablation_experiment" && <p className="notice">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "完整 MetaTrack 始终作为主方法；四个主消融分别验证共现矩阵分片、双轨执行、状态预取和共识批次聚合，另保留一个本地版本交接子消融；PBFT 协议保持冻结。" : "完整 Batch-SI 始终作为主方法；消融变体只复用 Batch-SI 自己的实现，不调用其他方案算法代码。"}</p>}
       {groundhogSelected && <p className="notice" data-testid="v5-groundhog-topology-notice">Groundhog 使用当前选择的节点数、分片数和每片验证节点数。核心复现要求跨片交易比例为 0；多分片时，各分片独立运行 Groundhog。</p>}
     </article>
 
@@ -1182,7 +1183,11 @@ function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; s
   if (!globalThis.Number.isInteger(input.blockProduction.block_size) || input.blockProduction.block_size < 10 || input.blockProduction.block_size > 5000) return "block_size 必须是 10 到 5000 的整数。";
   if (!globalThis.Number.isInteger(input.blockProduction.block_interval_ms) || input.blockProduction.block_interval_ms < 25 || input.blockProduction.block_interval_ms > 5000) return "block_interval_ms 必须是 25 到 5000 的整数。";
   if (input.selectedSuite === "comparison_experiment" && input.selected.length < 2) return "方法对比实验至少需要两个方法。";
-  if (input.selectedSuite === "ablation_experiment" && (input.selected.length < 2 || !input.selected.some((method) => method.method_id === "hash_batch_si"))) return "Batch-SI 消融至少需要完整版本和一个消融变体。";
+  if (input.selectedSuite === "ablation_experiment") {
+    const mains = input.selected.filter((method) => method.role === "main");
+    const variants = input.selected.filter((method) => method.role === "ablation" || method.role === "baseline");
+    if (mains.length !== 1 || variants.length < 1) return "消融实验至少需要一个完整版本和一个消融变体。";
+  }
   if (input.selectedSuite === "main_experiment" && input.selected.length !== 1) return "主实验只能选择一个研究方案。";
   if (input.selectedSuite === "fault_recovery_experiment" && input.selected.length !== 1) return "故障与恢复实验只能选择一个方法。";
   if (input.selectedSuite === "workload_sensitivity" && input.workloadPoints.length < 2) return "负载敏感性实验至少需要两个负载扫描点。";

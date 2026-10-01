@@ -14,7 +14,7 @@ export type FormalMethodDefinition = {
   family: "stateful" | "stateless" | "metatrack" | "batch_si";
   comparisonVisible: boolean;
   mainVisible: boolean;
-  ablationTarget?: "batch_si";
+  ablationTarget?: "batch_si" | "metatrack";
   isFullVariant?: boolean;
 };
 
@@ -51,9 +51,15 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "stateless_hash_block_stm", title: "Stateless Hash + Block-STM", description: "无状态哈希路由与 Block-STM 后端组合。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "stateless_optme", title: "Stateless-OptME", description: "OptME 无状态多分片适配：每个 PBFT 分片在共识后独立运行同一 OptME 核心；AccessList 只限定远程状态投影，调度仍来自真实模拟 ReadSet/WriteSet。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "stateless_txallo", title: "Stateless-TxAllo", description: "TxAllo 无状态适配：账户图、G/A-TxAllo 与冻结映射和原版一致，仅将执行状态承载替换为通用无状态远程获取/写回。", family: "stateless", comparisonVisible: true, mainVisible: false },
-  { methodId: "metatrack_serial", title: "MetaTrack（初始版）", description: "状态共访存路由 + 精确版本多前沿 + 双轨执行的初始稳定版本。", family: "metatrack", comparisonVisible: true, mainVisible: false },
-  { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "冻结为已验证的 Full Locality + multi-frontier + Version Liveness 版本，用作新版闭包聚合前的直接对照。", family: "metatrack", comparisonVisible: true, mainVisible: false },
-{ methodId: "metatrack_latest", title: "MetaTrack（新版）", description: "在当前版基础上复用 exact-version 多前沿图，将多个完整签名投影聚合为极大安全依赖闭包；闭包边界版本即时发布，内部版本继续使用 Version Liveness 裁剪，并采用索引化活性分析与单次最终封签降低控制面开销。", family: "metatrack", comparisonVisible: true, mainVisible: true },
+  { methodId: "metatrack_serial", title: "MetaTrack（初始版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+{ methodId: "metatrack_latest", title: "Metatrack", description: "稳定完整版本：共现矩阵增量分片 + 有效独立前沿双轨 + 状态预取/本地版本交接 + 关键路径保持的依赖感知共识批次聚合。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
+  { methodId: "metatrack_ab_route", title: "消融-无共现矩阵分片", description: "保持同一个增量路由器、exact-version 前驱信息、远程代价、负载与容量约束，只让共现局部性不参与执行分片选择。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_track", title: "消融-无双轨执行", description: "保留 Fast/Conservative 分类证据、依赖 DAG、StateReady 与相同 Worker，只把运行时 Ready 队列合并为统一 FIFO 队列。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_cons", title: "消融-无共识批次聚合", description: "保持签名、依赖闭合、Version Liveness、PBFT 与节点验证不变，只让每个完整 RouteBatch 单独进行一次 PBFT。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_state", title: "消融-无状态预取", description: "保持本地版本交接与其它状态机制，禁止块入口提前获取远程状态；只有交易前驱满足、真正需要状态时才按需请求。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_handoff", title: "子消融-无本地版本交接", description: "状态模块子消融：保持状态预取、批量写回、折叠和 Version Liveness，只取消执行域内 exact-version 直接交接，所需版本强制经 Home 发布/获取。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_exp", title: "实验版（旧）", description: "历史流式实验结果兼容项，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 ];
 
 export const BATCH_SI_ABLATION_METHOD_IDS = [
@@ -62,6 +68,15 @@ export const BATCH_SI_ABLATION_METHOD_IDS = [
   "hash_batch_si_no_ofas",
   "hash_batch_si_serial_batch",
   "hash_batch_si_txid_priority",
+] as const;
+
+export const METATRACK_ABLATION_METHOD_IDS = [
+  "metatrack_latest",
+  "metatrack_ab_route",
+  "metatrack_ab_track",
+  "metatrack_ab_state",
+  "metatrack_ab_cons",
+  "metatrack_ab_handoff",
 ] as const;
 
 export const PARALLEL_WORKER_OPTIONS = [1, 2, 4, 8] as const;

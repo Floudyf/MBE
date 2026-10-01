@@ -78,6 +78,16 @@ func metaTrackExtendCriticalPathV6568(base map[uint64]int, batch []metaTrackPrep
 	return depths, maxDepth
 }
 
+// metaTrackCriticalPathPreservingJoinV661 admits a RouteBatch merge only when
+// the combined dependency DAG does not create a longer execution critical path
+// than either batch already has alone. This is structural and threshold-free.
+func metaTrackCriticalPathPreservingJoinV661(currentL, batchL, candidateL int) bool {
+	if currentL <= 0 || batchL <= 0 || candidateL <= 0 {
+		return false
+	}
+	return candidateL <= maxInt(currentL, batchL)
+}
+
 func metaTrackCriticalWidthImprovesV6568(currentN, currentL, candidateN, candidateL int) bool {
 	if currentN <= 0 || currentL <= 0 {
 		return true
@@ -180,9 +190,10 @@ func (p *metaTrackCriticalWidthWindowPlannerV6568) PushBatch(batch []metaTrackPr
 		return nil, fmt.Errorf("metatrack v6.5.6.8 route batches are not contiguous")
 	}
 	candidateDepth, candidateL := metaTrackExtendCriticalPathV6568(p.depthByOrdinal, batch)
+	_, batchL := metaTrackExtendCriticalPathV6568(nil, batch)
 	candidateCounts := metaTrackShardCountsAfterV6568(p.shardCounts, batch)
 	candidateN := p.transactionCount + len(batch)
-	join := metaTrackCountsFitBlockV6568(candidateCounts, blockLimit) && metaTrackCriticalWidthImprovesV6568(p.transactionCount, p.criticalPath, candidateN, candidateL)
+	join := metaTrackCountsFitBlockV6568(candidateCounts, blockLimit) && metaTrackCriticalPathPreservingJoinV661(p.criticalPath, batchL, candidateL)
 	if join {
 		p.records = append(p.records, batch...)
 		p.depthByOrdinal = candidateDepth
