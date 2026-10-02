@@ -5,7 +5,9 @@ def test_metatrack_middle_profile_is_frozen_verified_v5_0_1_3_current_version():
     initial = BUILTIN_METHODS["metatrack_serial"]
     current = BUILTIN_METHODS["metatrack_full_locality"]
     latest = BUILTIN_METHODS["metatrack_latest"]
-    assert initial.plugin_overrides == current.plugin_overrides == latest.plugin_overrides
+    assert initial.plugin_overrides == current.plugin_overrides
+    assert latest.plugin_overrides["block_producer"] == "metatrack_dependency_window_producer"
+    assert latest.plugin_overrides["state_access"] == "metatrack_local_exact_access"
     assert current.display_name == "MetaTrack（当前版）"
     assert latest.display_name == "Metatrack"
     cfg = current.plugin_config_overrides["block_executor"]

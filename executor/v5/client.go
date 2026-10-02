@@ -174,8 +174,8 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	defer iterator.Close()
 	streamPartitionInvariantV658 := false
-	if metatrack, ok := plugins.Routing.(*metaTrackRouting); ok && metatrack != nil {
-		streamPartitionInvariantV658 = boolFromAny(metatrack.config["stream_partition_invariant_v658"])
+	if cfg := metaTrackRoutingConfig(plugins.Routing); cfg != nil {
+		streamPartitionInvariantV658 = boolFromAny(cfg["stream_partition_invariant_v658"])
 	}
 	batchSize := plugins.BlockProducer.BlockSize()
 	if streamPartitionInvariantV658 {
@@ -200,11 +200,13 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	bindExecutionRouting := routingBindsExecutionMetadata(plugins.Routing)
 	bindBatchProjectionMetadata := routingBindsBatchProjectionMetadata(plugins.Routing)
 	transactionFrontierV656Enabled := false
-	singleRouteBatchAblationV660 := false
-	if plugins.Routing.ID() == "metatrack_coaccess_routing" && len(plan.NodeConfigs) > 0 {
+	windowProducerV663, modularWindowV663 := plugins.BlockProducer.(metaTrackConsensusWindowProducer)
+	if isMetaTrackRoutingPlugin(plugins.Routing) && modularWindowV663 {
+		transactionFrontierV656Enabled = true
+	} else if isMetaTrackRoutingPlugin(plugins.Routing) && len(plan.NodeConfigs) > 0 {
+		// Historical hidden MetaTrack profiles keep their legacy config contract.
 		if cfg, ok := plan.NodeConfigs[0].PluginProfile["block_producer"]; ok {
 			transactionFrontierV656Enabled = boolFromAny(cfg.Config["dependency_closed_consensus"])
-			singleRouteBatchAblationV660 = boolFromAny(cfg.Config["ablation_single_route_batch_consensus_v660"])
 		}
 	}
 	consensusPredecessorsV656 := newMetaTrackConsensusPredecessorTrackerV656()
@@ -379,11 +381,11 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					routingRecords[index].AccessList = append([]tx.AccessItem(nil), record.AccessList...)
 				}
 			}
-			deferFinalSeal := bindExecutionRouting && versionLivenessEnabled && singleFinalSeal && plugins.Routing.ID() == "metatrack_coaccess_routing"
+			deferFinalSeal := bindExecutionRouting && versionLivenessEnabled && singleFinalSeal && isMetaTrackRoutingPlugin(plugins.Routing)
 			routePlanStarted := time.Now()
 			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding, DeferFinalSeal: deferFinalSeal, ExpectedTransactionCount: plan.WorkloadPlan.TxCount})
 			routePlanUS = time.Since(routePlanStarted).Microseconds()
-			if bindExecutionRouting && versionLivenessEnabled && plugins.Routing.ID() == "metatrack_coaccess_routing" {
+			if bindExecutionRouting && versionLivenessEnabled && isMetaTrackRoutingPlugin(plugins.Routing) {
 				var finalized BatchRoutingPlan
 				var ok bool
 				if singleFinalSeal {
@@ -482,14 +484,14 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				for _, prepared := range preparedV6568 {
 					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
 				}
-			} else if singleRouteBatchAblationV660 {
-				closed, err := criticalWidthWindowV6568.PushBatchSingleRouteBatchV660(preparedV6568, plugins.BlockProducer.BlockSize())
-				if err != nil { return err }
-				for _, prepared := range closed {
-					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
-				}
 			} else {
-				closed, err := criticalWidthWindowV6568.PushBatch(preparedV6568, plugins.BlockProducer.BlockSize())
+				var closed []metaTrackPreparedRecordV6568
+				var err error
+				if modularWindowV663 {
+					closed, err = windowProducerV663.PushMetaTrackRouteBatch(criticalWidthWindowV6568, preparedV6568, plugins.BlockProducer.BlockSize())
+				} else {
+					closed, err = criticalWidthWindowV6568.PushBatch(preparedV6568, plugins.BlockProducer.BlockSize())
+				}
 				if err != nil { return err }
 				for _, prepared := range closed {
 					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
@@ -519,7 +521,13 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		return err
 	}
 	if transactionFrontierV656Enabled && !streamPartitionInvariantV658 {
-		for _, prepared := range criticalWidthWindowV6568.Flush() {
+		var closed []metaTrackPreparedRecordV6568
+		if modularWindowV663 {
+			closed = windowProducerV663.FlushMetaTrackWindow(criticalWidthWindowV6568)
+		} else {
+			closed = criticalWidthWindowV6568.Flush()
+		}
+		for _, prepared := range closed {
 			if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
 		}
 	}

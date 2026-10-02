@@ -121,7 +121,7 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
     scheduler = by_category.get("scheduler")
     execution = by_category.get("execution")
     routing = by_category.get("routing")
-    if routing and routing.plugin_id == "metatrack_coaccess_routing" and routing.config.get("control_policy") == "logical_domain_frontier_v1":
+    if routing and routing.plugin_id in {"metatrack_coaccess_routing", "metatrack_hash_routing"} and routing.config.get("control_policy") == "logical_domain_frontier_v1":
         required = {
             "transaction_admission": "metatrack_strict_admission_v1",
             "execution": "dual_track_execution",
@@ -137,16 +137,17 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         selected_executor = by_category.get("block_executor")
         if selected_executor and selected_executor.plugin_id == "metatrack_block_executor" and selected_executor.config.get("control_policy") != "logical_domain_frontier_v1":
             blockers.append("MetaTrack routing and block executor control_policy must match logical_domain_frontier_v1")
-    if routing and routing.plugin_id == "metatrack_coaccess_routing" and routing.config.get("control_policy") == "declared_access_frontier_v2":
+    if routing and routing.plugin_id in {"metatrack_coaccess_routing", "metatrack_hash_routing"} and routing.config.get("control_policy") == "declared_access_frontier_v2":
         required = {
             "transaction_admission": "metatrack_strict_admission_v1",
-            "execution": "dual_track_execution",
             "block_executor": "metatrack_block_executor",
         }
         for category, plugin_id in required.items():
             selected = by_category.get(category)
             if not selected or selected.plugin_id != plugin_id:
                 blockers.append(f"MetaTrack declared_access_frontier_v2 requires {category}:{plugin_id}")
+        if not execution or execution.plugin_id not in {"dual_track_execution", "metatrack_single_conservative_execution", "metatrack_single_execution"}:
+            blockers.append("MetaTrack declared_access_frontier_v2 requires a MetaTrack execution-track plugin")
         allowed_schedulers = {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler"}
         selected_scheduler = by_category.get("scheduler")
         if not selected_scheduler or selected_scheduler.plugin_id not in allowed_schedulers:
@@ -154,8 +155,8 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         selected_executor = by_category.get("block_executor")
         if selected_executor and selected_executor.plugin_id == "metatrack_block_executor" and selected_executor.config.get("control_policy") != "declared_access_frontier_v2":
             blockers.append("MetaTrack routing and block executor control_policy must match declared_access_frontier_v2")
-    if scheduler and scheduler.plugin_id in {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler"} and (not execution or execution.plugin_id != "dual_track_execution"):
-        blockers.append(f"{scheduler.plugin_id} requires dual_track_execution")
+    if scheduler and scheduler.plugin_id in {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler"} and (not execution or execution.plugin_id not in {"dual_track_execution", "metatrack_single_conservative_execution", "metatrack_single_execution"}):
+        blockers.append(f"{scheduler.plugin_id} requires a MetaTrack execution-track plugin")
     block_producer = by_category.get("block_producer")
     block_executor = by_category.get("block_executor")
     aria_producer = bool(block_producer and block_producer.plugin_id == "aria_block_producer")
@@ -332,7 +333,7 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
             if bool(scheduler_cfg.get(key, True)) != bool(executor_cfg.get(key, True)):
                 blockers.append(f"Porygon scheduler and block executor {key} must match")
         warnings.append("Porygon maps frontend topology.shards to execution shards/ESCs while all nodes share one global PBFT ordering domain; MetaTrack remote StateVersions/CAS and MBE Relay/Finalize remain disabled")
-        warnings.append("Porygon performs real Cross-Batch Witness overlap while shared PBFT ordering heights remain sequential; full W/O/E/C cross-height wall-clock overlap is not claimed")
+        warnings.append("Porygon uses a real cross-height W/O/E/M lifecycle over the unchanged single global PBFT ordering domain; full pipeline overlap is reported only when runtime timestamps prove Ordering/Execution and Execution/Commit interval overlap")
         warnings.append("Porygon storage/consensus role separation uses co-located Storage Roles, verified Merkle state projections and explicit Multi-Shard Update; no additional physical storage machines are introduced")
 
     # MBE_OPTME_TXALLO_BASELINES_20260928: fail-closed Python-side profile isolation.

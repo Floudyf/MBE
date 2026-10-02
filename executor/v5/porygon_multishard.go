@@ -29,49 +29,67 @@ type PorygonStateUpdate struct {
 }
 
 type PorygonPartitionUpdateRequest struct {
-	BlockHash    string               `json:"block_hash"`
-	Height       uint64               `json:"height"`
-	PartitionID  string               `json:"partition_id"`
-	Updates      []PorygonStateUpdate `json:"updates"`
-	UpdateDigest string               `json:"update_digest"`
-	Attempt      int                  `json:"attempt"`
+	BlockHash          string                          `json:"block_hash"`
+	Height             uint64                          `json:"height"`
+	PartitionID        string                          `json:"partition_id"`
+	Updates            []PorygonStateUpdate            `json:"updates"`
+	UpdateDigest       string                          `json:"update_digest"`
+	Attempt            int                             `json:"attempt"`
+	ProtocolRound      uint64                          `json:"protocol_round"`
+	HandoffCertificate PorygonUpdateHandoffCertificate `json:"handoff_certificate"`
 }
 
 type PorygonPartitionUpdateAck struct {
-	BlockHash       string `json:"block_hash"`
-	Height          uint64 `json:"height"`
-	PartitionID     string `json:"partition_id"`
-	UpdateDigest    string `json:"update_digest"`
-	ProspectiveRoot string `json:"prospective_root"`
-	NodeID          string `json:"node_id"`
-	Attempt         int    `json:"attempt"`
-	Signature       string `json:"signature"`
+	BlockHash                string `json:"block_hash"`
+	Height                   uint64 `json:"height"`
+	PartitionID              string `json:"partition_id"`
+	UpdateDigest             string `json:"update_digest"`
+	ProspectiveRoot          string `json:"prospective_root"`
+	NodeID                   string `json:"node_id"`
+	Attempt                  int    `json:"attempt"`
+	ProtocolRound            uint64 `json:"protocol_round"`
+	HandoffCertificateDigest string `json:"handoff_certificate_digest"`
+	Signature                string `json:"signature"`
 }
 
 type PorygonPartitionRootCertificate struct {
-	PartitionID     string                      `json:"partition_id"`
-	UpdateDigest    string                      `json:"update_digest"`
-	ProspectiveRoot string                      `json:"prospective_root"`
-	Voters          []string                    `json:"voters"`
-	Acks            []PorygonPartitionUpdateAck `json:"acks"`
+	PartitionID              string                          `json:"partition_id"`
+	UpdateDigest             string                          `json:"update_digest"`
+	ProspectiveRoot          string                          `json:"prospective_root"`
+	ProtocolRound            uint64                          `json:"protocol_round"`
+	HandoffCertificateDigest string                          `json:"handoff_certificate_digest"`
+	HandoffCertificate       PorygonUpdateHandoffCertificate `json:"handoff_certificate"`
+	Voters                   []string                        `json:"voters"`
+	Acks                     []PorygonPartitionUpdateAck     `json:"acks"`
 }
 
 type PorygonMultiShardUpdateCertificate struct {
-	BlockHash         string                            `json:"block_hash"`
-	Height            uint64                            `json:"height"`
-	Attempt           int                               `json:"attempt"`
-	Partitions        []PorygonPartitionRootCertificate `json:"partitions"`
-	GlobalStateRoot   string                            `json:"global_state_root"`
-	CertificateDigest string                            `json:"certificate_digest"`
-	RolledBack        bool                              `json:"rolled_back"`
+	BlockHash           string                            `json:"block_hash"`
+	Height              uint64                            `json:"height"`
+	Attempt             int                               `json:"attempt"`
+	HandoffEnforced     bool                              `json:"handoff_enforced,omitempty"`
+	Partitions          []PorygonPartitionRootCertificate `json:"partitions"`
+	GlobalStateRoot     string                            `json:"global_state_root"`
+	CertificateDigest   string                            `json:"certificate_digest"`
+	RolledBack          bool                              `json:"rolled_back"`
+	RollbackCertificate *PorygonRollbackCertificate       `json:"rollback_certificate,omitempty"`
 }
 
 type PorygonMultiShardUpdateFunc func(context.Context, string, uint64, map[string][]PorygonStateUpdate) (PorygonMultiShardUpdateCertificate, error)
 
+type porygonPreparedPartitionState struct {
+	BlockHash   string
+	Height      uint64
+	PartitionID string
+	Snapshot    map[string]string
+	Root        string
+}
+
 type porygonMultiShardState struct {
-	mu    sync.Mutex
-	acks  map[string]map[string]map[string]PorygonPartitionUpdateAck
-	certs map[string]PorygonMultiShardUpdateCertificate
+	mu       sync.Mutex
+	acks     map[string]map[string]map[string]PorygonPartitionUpdateAck
+	certs    map[string]PorygonMultiShardUpdateCertificate
+	prepared map[uint64]map[string]porygonPreparedPartitionState
 }
 
 var porygonMultiShardStates sync.Map
@@ -81,7 +99,11 @@ func (r *NodeRuntime) porygonMultiShardState() *porygonMultiShardState {
 	if v, ok := porygonMultiShardStates.Load(r); ok {
 		return v.(*porygonMultiShardState)
 	}
-	created := &porygonMultiShardState{acks: map[string]map[string]map[string]PorygonPartitionUpdateAck{}, certs: map[string]PorygonMultiShardUpdateCertificate{}}
+	created := &porygonMultiShardState{
+		acks:     map[string]map[string]map[string]PorygonPartitionUpdateAck{},
+		certs:    map[string]PorygonMultiShardUpdateCertificate{},
+		prepared: map[uint64]map[string]porygonPreparedPartitionState{},
+	}
 	actual, _ := porygonMultiShardStates.LoadOrStore(r, created)
 	return actual.(*porygonMultiShardState)
 }
@@ -158,6 +180,84 @@ func porygonProspectivePartitionRoot(snapshot map[string]string, partitionID str
 	return state.RootOfSnapshot(next)
 }
 
+func porygonApplyPartitionUpdates(snapshot map[string]string, partitionID string, updates []PorygonStateUpdate) map[string]string {
+	next := copyRegistryStringMap(snapshot)
+	for _, u := range porygonCanonicalStateUpdates(updates) {
+		next[qualifyStateKey(partitionID, u.Key)] = u.Value
+	}
+	return next
+}
+
+func (r *NodeRuntime) porygonPreparedPartitionBase(height uint64, partitionID string) map[string]string {
+	if r.porygonPipelineEnabledRuntime() && height > 1 {
+		state := r.porygonMultiShardState()
+		state.mu.Lock()
+		if byPartition := state.prepared[height-1]; byPartition != nil {
+			if previous, ok := byPartition[partitionID]; ok && previous.Snapshot != nil {
+				snapshot := copyRegistryStringMap(previous.Snapshot)
+				state.mu.Unlock()
+				return snapshot
+			}
+		}
+		state.mu.Unlock()
+		// Every validator already holds its local partition projection from the
+		// E-stage result. If this replica missed the previous M request but later
+		// received the certificate, that execution snapshot is the exact same
+		// predecessor epoch and avoids falling back to stale durable state.
+		if snapshot, _, ok := r.porygonPipelinePreparedSnapshot(height - 1); ok {
+			return snapshot
+		}
+	}
+	return r.plugins.StateStorage.Snapshot(r.db)
+}
+
+func (r *NodeRuntime) porygonPreparePartitionState(blockHash string, height uint64, partitionID string, updates []PorygonStateUpdate) (map[string]string, string) {
+	base := r.porygonPreparedPartitionBase(height, partitionID)
+	next := porygonApplyPartitionUpdates(base, partitionID, updates)
+	root := state.RootOfSnapshot(next)
+	if r.porygonPipelineEnabledRuntime() {
+		ms := r.porygonMultiShardState()
+		ms.mu.Lock()
+		if ms.prepared == nil {
+			ms.prepared = map[uint64]map[string]porygonPreparedPartitionState{}
+		}
+		if ms.prepared[height] == nil {
+			ms.prepared[height] = map[string]porygonPreparedPartitionState{}
+		}
+		ms.prepared[height][partitionID] = porygonPreparedPartitionState{BlockHash: blockHash, Height: height, PartitionID: partitionID, Snapshot: copyRegistryStringMap(next), Root: root}
+		ms.mu.Unlock()
+	}
+	return next, root
+}
+
+func (r *NodeRuntime) porygonDropPreparedPartitionsFrom(height uint64) {
+	if !r.porygonPipelineEnabledRuntime() {
+		return
+	}
+	ms := r.porygonMultiShardState()
+	ms.mu.Lock()
+	for candidate := range ms.prepared {
+		if candidate >= height {
+			delete(ms.prepared, candidate)
+		}
+	}
+	ms.mu.Unlock()
+}
+
+func (r *NodeRuntime) porygonGCPreparedPartitions(durableHeight uint64) {
+	if !r.porygonPipelineEnabledRuntime() {
+		return
+	}
+	ms := r.porygonMultiShardState()
+	ms.mu.Lock()
+	for candidate := range ms.prepared {
+		if candidate+1 < durableHeight {
+			delete(ms.prepared, candidate)
+		}
+	}
+	ms.mu.Unlock()
+}
+
 func (r *NodeRuntime) handlePorygonMultiShardUpdate(ctx context.Context, msg p2p.MessageEnvelope) error {
 	request, err := p2p.DecodePayload[PorygonPartitionUpdateRequest](msg)
 	if err != nil {
@@ -169,9 +269,19 @@ func (r *NodeRuntime) handlePorygonMultiShardUpdate(ctx context.Context, msg p2p
 	if request.UpdateDigest != porygonUpdateDigest(request.Updates) {
 		return fmt.Errorf("Porygon multi-shard update digest mismatch")
 	}
-	snapshot := r.plugins.StateStorage.Snapshot(r.db)
-	root := porygonProspectivePartitionRoot(snapshot, request.PartitionID, request.Updates)
-	ack, err := r.signPorygonUpdateAck(PorygonPartitionUpdateAck{BlockHash: request.BlockHash, Height: request.Height, PartitionID: request.PartitionID, UpdateDigest: request.UpdateDigest, ProspectiveRoot: root, Attempt: request.Attempt})
+	if request.ProtocolRound != porygonUpdateProtocolRound(request.Height, request.Attempt) {
+		return fmt.Errorf("Porygon multi-shard update protocol-round mismatch")
+	}
+	if err := r.validatePorygonUpdateHandoffCertificate(request.HandoffCertificate); err != nil {
+		return fmt.Errorf("Porygon multi-shard update handoff: %w", err)
+	}
+	if request.HandoffCertificate.BlockHash != request.BlockHash || request.HandoffCertificate.Height != request.Height ||
+		request.HandoffCertificate.Attempt != request.Attempt || request.HandoffCertificate.ProtocolRound != request.ProtocolRound ||
+		request.HandoffCertificate.PartitionID != request.PartitionID || request.HandoffCertificate.UpdateDigest != request.UpdateDigest {
+		return fmt.Errorf("Porygon multi-shard update handoff binding mismatch")
+	}
+	_, root := r.porygonPreparePartitionState(request.BlockHash, request.Height, request.PartitionID, request.Updates)
+	ack, err := r.signPorygonUpdateAck(PorygonPartitionUpdateAck{BlockHash: request.BlockHash, Height: request.Height, PartitionID: request.PartitionID, UpdateDigest: request.UpdateDigest, ProspectiveRoot: root, Attempt: request.Attempt, ProtocolRound: request.ProtocolRound, HandoffCertificateDigest: request.HandoffCertificate.CertificateDigest})
 	if err != nil {
 		return err
 	}
@@ -239,11 +349,11 @@ func porygonMultiShardCertDigest(cert PorygonMultiShardUpdateCertificate) string
 	return stableTextDigest(string(raw))
 }
 
-func (r *NodeRuntime) porygonTryBuildUpdateCertificate(blockHash string, height uint64, attempt int, updates map[string][]PorygonStateUpdate) (PorygonMultiShardUpdateCertificate, bool, error) {
+func (r *NodeRuntime) porygonTryBuildUpdateCertificate(blockHash string, height uint64, attempt int, updates map[string][]PorygonStateUpdate, handoffs map[string]PorygonUpdateHandoffCertificate) (PorygonMultiShardUpdateCertificate, bool, error) {
 	state := r.porygonMultiShardState()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	cert := PorygonMultiShardUpdateCertificate{BlockHash: blockHash, Height: height, Attempt: attempt}
+	cert := PorygonMultiShardUpdateCertificate{BlockHash: blockHash, Height: height, Attempt: attempt, HandoffEnforced: true}
 	shards := make([]string, 0, len(updates))
 	for sid := range updates {
 		shards = append(shards, sid)
@@ -253,9 +363,16 @@ func (r *NodeRuntime) porygonTryBuildUpdateCertificate(blockHash string, height 
 		members := r.porygonStoragePartitionMembers(sid)
 		threshold := porygonMultiShardUpdateThreshold(len(members))
 		expectedDigest := porygonUpdateDigest(updates[sid])
+		handoff, ok := handoffs[sid]
+		if !ok || handoff.CertificateDigest == "" {
+			return PorygonMultiShardUpdateCertificate{}, false, fmt.Errorf("missing Porygon update handoff certificate for %s", sid)
+		}
+		if err := r.validatePorygonUpdateHandoffCertificate(handoff); err != nil {
+			return PorygonMultiShardUpdateCertificate{}, false, err
+		}
 		byRoot := map[string][]PorygonPartitionUpdateAck{}
 		for _, ack := range state.acks[blockHash][sid] {
-			if ack.Attempt == attempt && ack.UpdateDigest == expectedDigest {
+			if ack.Attempt == attempt && ack.UpdateDigest == expectedDigest && ack.ProtocolRound == handoff.ProtocolRound && ack.HandoffCertificateDigest == handoff.CertificateDigest {
 				byRoot[ack.ProspectiveRoot] = append(byRoot[ack.ProspectiveRoot], ack)
 			}
 		}
@@ -278,7 +395,7 @@ func (r *NodeRuntime) porygonTryBuildUpdateCertificate(blockHash string, height 
 			voters = append(voters, ack.NodeID)
 		}
 		sort.Strings(voters)
-		cert.Partitions = append(cert.Partitions, PorygonPartitionRootCertificate{PartitionID: sid, UpdateDigest: expectedDigest, ProspectiveRoot: root, Voters: voters, Acks: selected})
+		cert.Partitions = append(cert.Partitions, PorygonPartitionRootCertificate{PartitionID: sid, UpdateDigest: expectedDigest, ProspectiveRoot: root, ProtocolRound: handoff.ProtocolRound, HandoffCertificateDigest: handoff.CertificateDigest, HandoffCertificate: handoff, Voters: voters, Acks: selected})
 	}
 	cert.GlobalStateRoot = porygonGlobalRootFromPartitions(cert.Partitions)
 	cert.CertificateDigest = porygonMultiShardCertDigest(cert)
@@ -310,6 +427,18 @@ func (r *NodeRuntime) validatePorygonMultiShardCertificate(cert PorygonMultiShar
 			return fmt.Errorf("Porygon multi-shard certificate duplicate partition %s", part.PartitionID)
 		}
 		seenPartitions[part.PartitionID] = true
+		if cert.HandoffEnforced {
+			if err := r.validatePorygonUpdateHandoffCertificate(part.HandoffCertificate); err != nil {
+				return err
+			}
+			if part.HandoffCertificateDigest != part.HandoffCertificate.CertificateDigest || part.ProtocolRound != part.HandoffCertificate.ProtocolRound ||
+				part.HandoffCertificate.BlockHash != cert.BlockHash || part.HandoffCertificate.Height != cert.Height || part.HandoffCertificate.Attempt != cert.Attempt ||
+				part.HandoffCertificate.PartitionID != part.PartitionID || part.HandoffCertificate.UpdateDigest != part.UpdateDigest {
+				return fmt.Errorf("Porygon multi-shard handoff certificate binding mismatch for %s", part.PartitionID)
+			}
+		} else if part.ProtocolRound != 0 || part.HandoffCertificateDigest != "" || part.HandoffCertificate.CertificateDigest != "" {
+			return fmt.Errorf("legacy Porygon multi-shard certificate unexpectedly carries handoff fields for %s", part.PartitionID)
+		}
 		members := r.porygonStoragePartitionMembers(part.PartitionID)
 		threshold := porygonMultiShardUpdateThreshold(len(members))
 		if len(part.Acks) < threshold {
@@ -321,6 +450,12 @@ func (r *NodeRuntime) validatePorygonMultiShardCertificate(cert PorygonMultiShar
 			if ack.BlockHash != cert.BlockHash || ack.Height != cert.Height || ack.Attempt != cert.Attempt ||
 				ack.PartitionID != part.PartitionID || ack.UpdateDigest != part.UpdateDigest || ack.ProspectiveRoot != part.ProspectiveRoot {
 				return fmt.Errorf("Porygon multi-shard ACK certificate binding mismatch for %s", ack.NodeID)
+			}
+			if cert.HandoffEnforced && (ack.ProtocolRound != part.ProtocolRound || ack.HandoffCertificateDigest != part.HandoffCertificateDigest) {
+				return fmt.Errorf("Porygon multi-shard ACK handoff binding mismatch for %s", ack.NodeID)
+			}
+			if !cert.HandoffEnforced && (ack.ProtocolRound != 0 || ack.HandoffCertificateDigest != "") {
+				return fmt.Errorf("legacy Porygon multi-shard ACK unexpectedly carries handoff fields for %s", ack.NodeID)
 			}
 			if seenVoters[ack.NodeID] {
 				return fmt.Errorf("Porygon multi-shard duplicate ACK voter %s", ack.NodeID)
@@ -345,6 +480,9 @@ func (r *NodeRuntime) handlePorygonMultiShardUpdateCertificate(msg p2p.MessageEn
 	cert, err := p2p.DecodePayload[PorygonMultiShardUpdateCertificate](msg)
 	if err != nil {
 		return err
+	}
+	if r.porygonPipelineEnabledRuntime() && !cert.HandoffEnforced {
+		return fmt.Errorf("Porygon pipeline certificate missing following-ESC handoff proof")
 	}
 	if err := r.validatePorygonMultiShardCertificate(cert); err != nil {
 		return err
@@ -388,8 +526,11 @@ func (r *NodeRuntime) handlePorygonMultiShardUpdateCertificateRequest(ctx contex
 }
 
 func (r *NodeRuntime) porygonMultiShardUpdate(ctx context.Context, blockHash string, height uint64, updates map[string][]PorygonStateUpdate) (PorygonMultiShardUpdateCertificate, error) {
-	if len(updates) == 0 {
-		return PorygonMultiShardUpdateCertificate{}, nil
+	// A read-only/no-write CTx batch still needs an M-stage certificate so the
+	// cross-round pending frontier can advance.  Empty updates therefore become
+	// one authenticated no-op update per storage partition instead of bypassing M.
+	if updates == nil {
+		updates = map[string][]PorygonStateUpdate{}
 	}
 	// Include every storage partition so the certificate contains a complete
 	// protocol global-root vector, even when one partition has no writes.
@@ -401,64 +542,91 @@ func (r *NodeRuntime) porygonMultiShardUpdate(ctx context.Context, blockHash str
 	}
 	const maxAttempts = 2
 	if r.isCurrentLeader() {
+	attemptLoop:
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
-			for sid, items := range updates {
-				items = porygonCanonicalStateUpdates(items)
+			attemptCtx, cancelAttempt := context.WithTimeout(ctx, 750*time.Millisecond)
+			handoffs := map[string]PorygonUpdateHandoffCertificate{}
+			shards := make([]string, 0, len(updates))
+			for sid := range updates {
+				shards = append(shards, sid)
+			}
+			sort.Strings(shards)
+			for _, sid := range shards {
+				items := porygonCanonicalStateUpdates(updates[sid])
 				updates[sid] = items
-				request := PorygonPartitionUpdateRequest{BlockHash: blockHash, Height: height, PartitionID: sid, Updates: items, UpdateDigest: porygonUpdateDigest(items), Attempt: attempt}
+				handoffRequest, members, err := r.porygonBuildUpdateHandoffRequest(blockHash, height, attempt, sid, porygonUpdateDigest(items))
+				if err != nil {
+					cancelAttempt()
+					return PorygonMultiShardUpdateCertificate{}, err
+				}
+				handoff, err := r.collectPorygonUpdateHandoffCertificate(attemptCtx, handoffRequest, members)
+				if err != nil {
+					cancelAttempt()
+					r.addPorygonRuntimeMetric("porygon_multi_shard_update_retry_count", 1)
+					continue attemptLoop
+				}
+				handoffs[sid] = handoff
+				request := PorygonPartitionUpdateRequest{BlockHash: blockHash, Height: height, PartitionID: sid, Updates: items, UpdateDigest: porygonUpdateDigest(items), Attempt: attempt, ProtocolRound: handoff.ProtocolRound, HandoffCertificate: handoff}
 				for _, nodeID := range r.porygonStoragePartitionMembers(sid) {
 					if nodeID == r.node.NodeID {
-						snapshot := r.plugins.StateStorage.Snapshot(r.db)
-						root := porygonProspectivePartitionRoot(snapshot, sid, items)
-						ack, _ := r.signPorygonUpdateAck(PorygonPartitionUpdateAck{BlockHash: blockHash, Height: height, PartitionID: sid, UpdateDigest: request.UpdateDigest, ProspectiveRoot: root, Attempt: attempt})
+						_, root := r.porygonPreparePartitionState(blockHash, height, sid, items)
+						ack, _ := r.signPorygonUpdateAck(PorygonPartitionUpdateAck{BlockHash: blockHash, Height: height, PartitionID: sid, UpdateDigest: request.UpdateDigest, ProspectiveRoot: root, Attempt: attempt, ProtocolRound: request.ProtocolRound, HandoffCertificateDigest: request.HandoffCertificate.CertificateDigest})
 						_ = r.acceptPorygonUpdateAck(ack)
 						continue
 					}
 					env, err := p2p.NewEnvelope(porygonMultiShardUpdateMessage, r.node.NodeID, nodeID, r.node.ShardID, height, r.currentPBFTView(), height, request)
 					if err != nil {
+						cancelAttempt()
 						return PorygonMultiShardUpdateCertificate{}, err
 					}
-					if err := r.sendToNode(ctx, nodeID, env); err != nil {
+					if err := r.sendToNode(attemptCtx, nodeID, env); err != nil {
 						continue
 					}
 				}
 			}
-			deadline := time.NewTimer(750 * time.Millisecond)
 			ticker := time.NewTicker(2 * time.Millisecond)
 			for {
-				cert, ready, err := r.porygonTryBuildUpdateCertificate(blockHash, height, attempt, updates)
+				cert, ready, err := r.porygonTryBuildUpdateCertificate(blockHash, height, attempt, updates, handoffs)
 				if err != nil {
 					ticker.Stop()
-					deadline.Stop()
+					cancelAttempt()
 					return PorygonMultiShardUpdateCertificate{}, err
 				}
 				if ready {
 					ticker.Stop()
-					deadline.Stop()
+					cancelAttempt()
 					if err := r.validatePorygonMultiShardCertificate(cert); err != nil {
 						return PorygonMultiShardUpdateCertificate{}, err
 					}
 					r.broadcastPorygonMultiShardCertificate(ctx, cert)
 					porygonLatestGlobalRoots.Store(r, cert)
 					r.addPorygonRuntimeMetric("porygon_multi_shard_update_certificate_count", 1)
+					r.addPorygonRuntimeMetric("porygon_multi_shard_update_protocol_round", int64(porygonUpdateProtocolRound(height, attempt)))
 					return cert, nil
 				}
 				select {
 				case <-ctx.Done():
 					ticker.Stop()
-					deadline.Stop()
+					cancelAttempt()
 					return PorygonMultiShardUpdateCertificate{}, ctx.Err()
-				case <-deadline.C:
+				case <-attemptCtx.Done():
 					ticker.Stop()
-					goto retry
+					cancelAttempt()
+					r.addPorygonRuntimeMetric("porygon_multi_shard_update_retry_count", 1)
+					continue attemptLoop
 				case <-ticker.C:
 				}
 			}
-		retry:
-			r.addPorygonRuntimeMetric("porygon_multi_shard_update_retry_count", 1)
 		}
 		r.addPorygonRuntimeMetric("porygon_multi_shard_update_rollback_count", 1)
-		return PorygonMultiShardUpdateCertificate{BlockHash: blockHash, Height: height, Attempt: maxAttempts, RolledBack: true}, fmt.Errorf("Porygon multi-shard update exhausted retries")
+		if len(porygonRollbackMask(blockHash)) > 0 {
+			return PorygonMultiShardUpdateCertificate{}, fmt.Errorf("Porygon rollback-recovery update exhausted retries")
+		}
+		rollback, err := r.porygonTriggerRollback(ctx, blockHash, height, maxAttempts, updates)
+		if err != nil {
+			return PorygonMultiShardUpdateCertificate{}, err
+		}
+		return PorygonMultiShardUpdateCertificate{BlockHash: blockHash, Height: height, Attempt: maxAttempts, RolledBack: true, RollbackCertificate: &rollback}, nil
 	}
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
@@ -472,6 +640,9 @@ func (r *NodeRuntime) porygonMultiShardUpdate(ctx context.Context, blockHash str
 		if ok {
 			porygonLatestGlobalRoots.Store(r, cert)
 			return cert, nil
+		}
+		if rollback, rolledBack := r.porygonRollbackCertificate(blockHash); rolledBack {
+			return PorygonMultiShardUpdateCertificate{BlockHash: blockHash, Height: height, Attempt: rollback.FailedAttempt, RolledBack: true, RollbackCertificate: &rollback}, nil
 		}
 		select {
 		case <-ctx.Done():

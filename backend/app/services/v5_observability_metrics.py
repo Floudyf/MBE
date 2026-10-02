@@ -270,6 +270,150 @@ def summarize_network_usage(
 
 
 
+
+
+def _metatrack_dependency_closed_candidate_v662(candidate: list[dict[str, Any]]) -> bool:
+    if not candidate:
+        return False
+    ordinals = {int(tx.get("routing_ordinal") or 0) for tx in candidate}
+    if 0 in ordinals or len(ordinals) != len(candidate):
+        return False
+    minimum = min(ordinals)
+    for tx in candidate:
+        ordinal = int(tx.get("routing_ordinal") or 0)
+        for pred in tx.get("consensus_execution_predecessor_ordinals") or []:
+            pred = int(pred or 0)
+            if pred <= 0:
+                continue
+            if pred >= ordinal:
+                return False
+            if pred >= minimum and pred not in ordinals:
+                return False
+        for dep in tx.get("state_versions") or []:
+            if not isinstance(dep, dict) or int(dep.get("required_execution_round") or 0) <= 0:
+                continue
+            pred = int(dep.get("required_version") or 0)
+            if pred <= 0:
+                continue
+            if pred >= ordinal:
+                return False
+            if pred >= minimum and pred not in ordinals:
+                return False
+    return True
+
+
+def _metatrack_observed_method_id_v662(run_dir: Path, cluster: dict[str, Any]) -> str:
+    candidates = [cluster, _read_json(run_dir / "compiled_run_plan.json")]
+    for payload in candidates:
+        if not isinstance(payload, dict):
+            continue
+        for key in ("method_config_id", "method_id"):
+            value = payload.get(key)
+            if isinstance(value, str) and value:
+                return value
+        method = payload.get("method")
+        if isinstance(method, dict):
+            value = method.get("method_id") or method.get("method_config_id")
+            if isinstance(value, str) and value:
+                return value
+        spec = payload.get("experiment_spec")
+        if isinstance(spec, dict):
+            value = spec.get("method_config_id") or spec.get("method_id")
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
+
+
+def _metatrack_pipeline_coupled_candidate_v663(current: list[dict[str, Any]], next_batch: list[dict[str, Any]]) -> bool:
+    candidate=sorted(current+next_batch,key=lambda tx:int(tx.get("routing_ordinal") or 0))
+    if not _metatrack_dependency_closed_candidate_v662(candidate):
+        return False
+    if not current or not next_batch:
+        return False
+    tail_seq=max(int(tx.get("route_batch_sequence") or 0) for tx in current)
+    tail={int(tx.get("routing_ordinal") or 0) for tx in current if int(tx.get("route_batch_sequence") or 0)==tail_seq}
+    batch_ord={int(tx.get("routing_ordinal") or 0) for tx in next_batch}
+    roots=0
+    for tx in next_batch:
+        preds=[int(x or 0) for x in (tx.get("consensus_execution_predecessor_ordinals") or []) if int(x or 0)>0]
+        for dep in tx.get("state_versions") or []:
+            if isinstance(dep,dict) and int(dep.get("required_execution_round") or 0)>0 and int(dep.get("required_version") or 0)>0:
+                preds.append(int(dep.get("required_version") or 0))
+        has_batch=any(pred in batch_ord for pred in preds)
+        has_tail=any(pred in tail for pred in preds)
+        if not has_batch:
+            roots+=1
+            if not has_tail:
+                return False
+    return roots>0
+
+
+def _metatrack_block_producer_id_v663(run_dir: Path, cluster: dict[str, Any]) -> str:
+    compiled=_read_json(run_dir / "compiled_run_plan.json")
+    def scan(payload: Any) -> str:
+        if not isinstance(payload,dict):
+            return ""
+        profile=payload.get("plugin_profile") or payload.get("plugins")
+        if isinstance(profile,dict):
+            bp=profile.get("block_producer")
+            if isinstance(bp,dict):
+                value=bp.get("plugin_id") or bp.get("id")
+                if isinstance(value,str) and value:
+                    return value
+        selections=payload.get("plugin_selections")
+        if isinstance(selections,list):
+            for item in selections:
+                if isinstance(item,dict) and item.get("category")=="block_producer":
+                    value=item.get("plugin_id") or item.get("id")
+                    if isinstance(value,str) and value:
+                        return value
+        method=payload.get("method")
+        if isinstance(method,dict):
+            overrides=method.get("plugin_overrides")
+            if isinstance(overrides,dict):
+                value=overrides.get("block_producer")
+                if isinstance(value,str) and value:
+                    return value
+        for key in ("experiment_spec","plan"):
+            value=scan(payload.get(key))
+            if value:
+                return value
+        nodes=payload.get("node_configs")
+        if isinstance(nodes,list):
+            for node in nodes:
+                value=scan(node)
+                if value:
+                    return value
+        return ""
+    return scan(cluster) or scan(compiled)
+
+
+
+def _metatrack_critical_path_preserving_candidate_v665(current: list[dict[str, Any]], next_batch: list[dict[str, Any]]) -> bool:
+    if not current or not next_batch:
+        return False
+    current_l=_metatrack_recompute_critical_path(current)
+    batch_l=_metatrack_recompute_critical_path(next_batch)
+    candidate_l=_metatrack_recompute_critical_path(sorted(current+next_batch,key=lambda tx:int(tx.get("routing_ordinal") or 0)))
+    if current_l<=0 or batch_l<=0 or candidate_l<=0:
+        return False
+    return candidate_l <= max(current_l,batch_l)
+
+def _metatrack_n_over_l_improves_v668(current: list[dict[str, Any]], next_batch: list[dict[str, Any]]) -> bool:
+    if not current or not next_batch:
+        return False
+    current_l=_metatrack_recompute_critical_path(current)
+    candidate=sorted(current+next_batch,key=lambda tx:int(tx.get("routing_ordinal") or 0))
+    candidate_l=_metatrack_recompute_critical_path(candidate)
+    current_n=len(current); candidate_n=len(candidate)
+    if current_n<=0 or current_l<=0:
+        return True
+    if candidate_n<=current_n or candidate_l<=0:
+        return False
+    return candidate_n*current_l > current_n*candidate_l
+
 def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
     """Reconstruct v6.5.6.8 windows only from durable committed signed metadata."""
     run_dir = Path(run_dir)
@@ -298,9 +442,9 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
                 source_artifacts.append(rel)
 
     base: dict[str, Any] = {
-        "schema_version": "mbe_metatrack_consensus_window_observability_v656814",
+        "schema_version": "mbe_metatrack_consensus_window_observability_v665",
         "available": False,
-        "truth_scope": "durable_signed_consensus_window_metadata_post_run_reconstruction_v2",
+        "truth_scope": "durable_signed_critical_path_preserving_consensus_window_reconstruction_v665",
         "source_artifacts": sorted(source_artifacts),
         "metrics": {},
         "windows": [],
@@ -308,6 +452,10 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
     if not representative_blocks:
         base["unavailable_reason"] = "durable_metatrack_consensus_window_blocks_missing"
         return base
+
+    block_producer_id_v668 = _metatrack_block_producer_id_v663(run_dir, cluster)
+    single_route_batch_ablation = block_producer_id_v668 == "metatrack_route_batch_producer"
+    adaptive_n_over_l_v668 = block_producer_id_v668 == "metatrack_adaptive_window_producer"
 
     transactions: dict[int, dict[str, Any]] = {}
     block_rows: list[dict[str, Any]] = []
@@ -438,12 +586,19 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
             for tx in candidate:
                 candidate_counts[str(tx["execution_shard"])] += 1
             fits = block_limit is None or all(count <= block_limit for count in candidate_counts.values())
-            improves = candidate_n * recomputed_l > n * candidate_l if recomputed_l > 0 and candidate_l > 0 else False
-            if not fits:
+            critical_path_preserving = _metatrack_critical_path_preserving_candidate_v665(group, next_batch)
+            n_over_l_improves_v668 = _metatrack_n_over_l_improves_v668(group, next_batch)
+            if single_route_batch_ablation:
+                stop_reason = "single_route_batch_ablation"
+                decision_match = int(row["route_batch_count"]) == 1
+            elif not fits:
                 stop_reason = "block_size_limit"
                 decision_match = True
-            elif not improves:
-                stop_reason = "critical_width_not_improved"
+            elif adaptive_n_over_l_v668 and not n_over_l_improves_v668:
+                stop_reason = "n_over_l_non_improvement_boundary"
+                decision_match = True
+            elif (not adaptive_n_over_l_v668) and not critical_path_preserving:
+                stop_reason = "critical_path_extension_boundary"
                 decision_match = True
             else:
                 stop_reason = "signed_window_boundary_rule_mismatch"
@@ -534,7 +689,11 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
         "metatrack_consensus_window_average_structural_width": avg(widths),
         "metatrack_consensus_window_min_structural_width": min(widths) if widths else None,
         "metatrack_consensus_window_max_structural_width": max(widths) if widths else None,
-        "metatrack_consensus_window_critical_width_stop_count": stop_counts["critical_width_not_improved"],
+        "metatrack_consensus_window_critical_width_stop_count": stop_counts["critical_path_extension_boundary"],
+      "metatrack_consensus_window_n_over_l_stop_count": stop_counts["n_over_l_non_improvement_boundary"],
+        "metatrack_consensus_window_dependency_closure_stop_count": 0,
+        "metatrack_consensus_window_pipeline_independent_stop_count": 0,
+        "metatrack_consensus_window_single_route_batch_ablation_stop_count": stop_counts["single_route_batch_ablation"],
         "metatrack_consensus_window_block_size_stop_count": stop_counts["block_size_limit"],
         "metatrack_consensus_window_input_end_stop_count": stop_counts["input_end"],
         "metatrack_consensus_window_boundary_mismatch_count": stop_counts["signed_window_boundary_rule_mismatch"],
@@ -547,7 +706,7 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
         "metatrack_consensus_window_pbft_blocks_saved": max(0, baseline_blocks - expected_blocks),
         "metatrack_consensus_window_signed_reconstruction_match": global_consistent,
         "metatrack_consensus_window_actual_projection_match": actual_projection_match,
-        "metatrack_consensus_window_truth_scope": "durable_signed_consensus_window_metadata_post_run_reconstruction_v2",
+        "metatrack_consensus_window_truth_scope": ("durable_signed_adaptive_n_over_l_consensus_window_reconstruction_v668" if adaptive_n_over_l_v668 else "durable_signed_critical_path_preserving_consensus_window_reconstruction_v665"),
     }
     base["available"] = True
     base["metrics"] = metrics

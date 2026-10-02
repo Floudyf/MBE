@@ -103,7 +103,8 @@ const METATRACK_CONSENSUS_WINDOW_V656813: MetricDef[] = [
   { key: "metatrack_consensus_window_average_critical_path", label: "平均最长依赖链", help: "根据持久化签名前驱元数据重新计算的平均最长执行链 L。" },
   { key: "metatrack_consensus_window_max_critical_path", label: "最大最长依赖链", help: "所有窗口中重新计算得到的最大最长执行链 L。" },
   { key: "metatrack_consensus_window_average_structural_width", label: "平均结构并行宽度 N/L", help: "窗口交易数 N 与重建最长执行链 L 的比值，仅做运行后观测。" },
-  { key: "metatrack_consensus_window_critical_width_stop_count", label: "N/L 不再提高切窗次数", help: "运行后加入下一 RouteBatch 重算后，N/L 不再严格提高的窗口边界数量。" },
+  { key: "metatrack_consensus_window_critical_width_stop_count", label: "关键路径延长切窗次数", help: "运行后重建确认加入下一 RouteBatch 会延长当前/新批次已有执行关键路径，因此按原始 V661 规则在该边界收窗的次数。" },
+  { key: "metatrack_consensus_window_n_over_l_stop_count", label: "N/L 不再提高切窗次数", help: "实验版重建确认：加入下一完整 RouteBatch 后窗口交易数 N 与真实执行前驱最长链 L 的比值不再严格提高，因此在该边界收窗。" },
   { key: "metatrack_consensus_window_block_size_stop_count", label: "block_size 切窗次数", help: "重建确认候选窗口会超过配置 block_size 硬上限的次数。" },
   { key: "metatrack_consensus_window_input_end_stop_count", label: "输入结束收窗次数", help: "没有下一个 RouteBatch、由输入结束形成的最后窗口数量。" },
   { key: "metatrack_consensus_window_pbft_blocks_saved", label: "相对单 RouteBatch 省掉的 PBFT 块", help: "按每个 RouteBatch 实际活跃分片重建的基准块数，减去窗口聚合后的实际分片窗口块数。" },
@@ -301,6 +302,18 @@ const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; met
       { key: "porygon_executed_cross_shard_ratio", label: "实际执行跨片比例", help: "成功且未被 OC 冲突闭包放弃的 CTx 在实际执行交易中的比例。" },
       { key: "porygon_cross_esc_abandon_ratio", label: "跨 ESC 放弃比例", help: "按 Porygon 论文 OC 冲突规则被标记 Abandoned 的 CTx 占全部计划交易比例。" },
       { key: "porygon_cross_esc_conflict_closure_verified", label: "跨 ESC 冲突闭包", help: "所有未放弃交易在不同 ESC 之间均无剩余读写/写写冲突时为真。" },
+      { key: "porygon_full_woec_pipeline_overlap_claimed", label: "完整 W/O/E/M 实际重叠", help: "只有真实运行时间区间证明 Ordering/Execution 与 Execution/Commit 跨高度重叠时才为真；逻辑槽位不计。" },
+      { key: "porygon_ordering_execution_wall_clock_overlap_count", label: "排序-执行实际重叠块数", help: "后一高度 Ordering 与前一高度 Execution 在墙钟时间上真实相交的区块数。" },
+      { key: "porygon_execution_commit_wall_clock_overlap_count", label: "执行-提交实际重叠块数", help: "后一高度 Execution 与前一高度 Porygon 协议提交阶段在墙钟时间上真实相交的区块数。" },
+      { key: "porygon_proposal_carried_update_enforced", label: "Proposal-U 后续 EC 更新", help: "跨片更新由 PBFT 认证的 Proposal.U 携带，并由后续 EC 应用时为真。" },
+      { key: "porygon_compact_proposal_txlist_omitted", label: "Compact Proposal", help: "PBFT Proposal 省略完整 TxList，仅携带 TransactionBlock 引用与 L/U/T 时为真。" },
+      { key: "porygon_prepared_state_forwarding_used", label: "预备状态前传", help: "Paper2 应始终为假；执行状态只能来自 Proposal.T。" },
+      { key: "porygon_exact_multiround_rollback_claimed", label: "原文故障回滚完整复现", help: "只有真实观察到后续同 shard ESC 重试并最终通过 Proposal 携带 rollback transaction 时才可为真；当前 Paper2 正常路径保持 fail-closed。" },
+      { key: "porygon_paper_pending_transaction_count_max", label: "跨轮 Pending 峰值", help: "transaction-level 未提交交易集合在本次运行中的最大数量。" },
+      { key: "porygon_paper_itx_committed_count", label: "ITx 提交数", help: "满足论文四轮生命周期并提交的片内交易数量。" },
+      { key: "porygon_paper_ctx_committed_count", label: "CTx 提交数", help: "满足论文六轮生命周期并提交的跨片交易数量。" },
+
+
       { key: "porygon_esc_ownership_verified", label: "ESC 归属核验", help: "逐区块按动态 ESC role 与该区块执行直方图核对各 replica 的本地业务执行数量。" },
       { key: "porygon_business_execution_critical_path_ms", label: "业务执行关键路径", unit: "ms", help: "逐区块取 replica 业务执行最大值后跨区块求和。" },
       { key: "porygon_result_exchange_wait_critical_path_ms", label: "ESC 结果交换等待关键路径", unit: "ms", help: "逐区块取 replica ESC 结果交换等待最大值后跨区块求和。" },
@@ -368,7 +381,7 @@ export default function V5MechanismAnalysis({ children }: { children: V5FormalCh
       : [];
   const projectionFrontierDefinitions = metrics.metatrack_projection_frontier_policy ? METATRACK_PROJECTION_FRONTIER_V612 : [];
   const consensusWindowDefinitions = metrics.metatrack_consensus_window_observability_available ? METATRACK_CONSENSUS_WINDOW_V656813 : [];
-  const currentMetaTrack = ["metatrack_latest", "metatrack_ab_route", "metatrack_ab_track", "metatrack_ab_cons", "metatrack_ab_state"].includes(active);
+  const currentMetaTrack = ["metatrack_latest", "metatrack_unified", "metatrack_ab_route", "metatrack_ab_track", "metatrack_ab_cons", "metatrack_ab_state"].includes(active);
   const boundaryBatchDefinitions = currentMetaTrack && metrics.metatrack_closure_boundary_batch_policy ? METATRACK_BOUNDARY_BATCH_V621 : [];
   const asyncWritebackDefinitions = currentMetaTrack && metrics.metatrack_async_version_writeback_policy ? METATRACK_ASYNC_WRITEBACK_V640 : [];
   const incrementalRoutingDefinitions = currentMetaTrack && metrics.metatrack_incremental_routing_policy ? METATRACK_INCREMENTAL_ROUTING_V650 : [];
@@ -468,11 +481,11 @@ function formatMetric(value: number, unit?: string): string { if (unit === "B") 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();
   if (id === "metatrack_latest") return "Metatrack";
-  if (id === "metatrack_ab_route") return "消融-无共现矩阵分片";
-  if (id === "metatrack_ab_track") return "消融-无双轨执行";
-  if (id === "metatrack_ab_cons") return "消融-无共识批次聚合";
-  if (id === "metatrack_ab_state") return "消融-无状态预取";
-  if (id === "metatrack_ab_handoff") return "子消融-无本地版本交接";
+  if (id === "metatrack_ab_route") return "消融-哈希分片";
+  if (id === "metatrack_ab_track") return "消融-无双轨统一就绪";
+  if (id === "metatrack_ab_cons") return "消融-固定批次共识";
+  if (id === "metatrack_ab_state") return "消融-Home状态访问";
+  if (id === "metatrack_ab_handoff") return "历史子消融-无本地版本交接";
   if (id === "metatrack_exp") return "实验版（旧）";
   if (id === "metatrack_full_locality") return "MetaTrack（当前版）";
   if (id === "metatrack_block_stm") return "MetaTrack + Block-STM（历史）";

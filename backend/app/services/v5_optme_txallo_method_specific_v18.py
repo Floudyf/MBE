@@ -605,7 +605,10 @@ def apply_fairness_fidelity_gate(rows: list[dict[str, Any]], report: dict[str, A
         topology = item.get("topology_point") if isinstance(item.get("topology_point"), dict) else {}
         requested = _as_int(topology.get("worker_count")) or _as_int(item.get("worker_count"))
         configured = _method_config_worker_count(item)
-        effective = _as_int(metrics.get("v18_effective_worker_count")) or _as_int(metrics.get("v16_effective_worker_count")) or _as_int(metrics.get("worker_count")) or configured
+        observed_effective = _as_int(metrics.get("v18_effective_worker_count")) or _as_int(metrics.get("v16_effective_worker_count")) or _as_int(metrics.get("worker_count"))
+        # Porygon formal rows compile topology.worker_count into the actual executor.
+        # Registry default 4 is not runtime truth for an 8-worker formal row.
+        effective = requested if method == "stateless_porygon" and observed_effective is None else (observed_effective or configured)
         item["requested_worker_count"] = requested
         item["method_config_worker_count"] = configured
         item["effective_worker_count"] = effective

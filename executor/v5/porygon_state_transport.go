@@ -3,6 +3,7 @@ package v5
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +15,42 @@ import (
 const porygonStateProjectionAccessKindPrefix = "porygon_state_projection:"
 
 func porygonStateProjectionAccessKind(access tx.AccessItem) string {
-	return porygonStateProjectionAccessKindPrefix + string(access.Mode)
+	return porygonStateProjectionAccessKindForProposal(access, 0, "")
+}
+
+func porygonStateProjectionAccessKindForProposal(access tx.AccessItem, stateHeight uint64, stateRoot string) string {
+	base := porygonStateProjectionAccessKindPrefix + string(access.Mode)
+	if stateHeight == 0 || strings.TrimSpace(stateRoot) == "" {
+		return base
+	}
+	return base + "|state_height=" + strconv.FormatUint(stateHeight, 10) + "|state_root=" + stateRoot
+}
+
+// Legacy helper retained only so an old installed shared runtime remains
+// merge-compatible while Paper2 removes speculative epoch forwarding.
+func porygonStateProjectionAccessKindAtEpoch(access tx.AccessItem, epoch uint64) string {
+	return porygonStateProjectionAccessKind(access)
+}
+func porygonStateProjectionEpoch(kind string) (uint64, bool) { return 0, false }
+
+func porygonStateProjectionAnchor(kind string) (uint64, string, bool) {
+	if !isPorygonStateProjectionAccessKind(kind) {
+		return 0, "", false
+	}
+	var height uint64
+	root := ""
+	for _, part := range strings.Split(kind, "|") {
+		if strings.HasPrefix(part, "state_height=") {
+			value, err := strconv.ParseUint(strings.TrimPrefix(part, "state_height="), 10, 64)
+			if err == nil {
+				height = value
+			}
+		}
+		if strings.HasPrefix(part, "state_root=") {
+			root = strings.TrimSpace(strings.TrimPrefix(part, "state_root="))
+		}
+	}
+	return height, root, height > 0 && root != ""
 }
 
 func isPorygonStateProjectionAccessKind(kind string) bool {
@@ -26,33 +62,28 @@ func porygonStateProjectionWitnessDigest(response StateFetchResponse, accessKind
 	if response.PorygonProof != nil {
 		proofDigest = response.PorygonProof.ProofDigest
 	}
-	return stableTextDigest(strings.Join([]string{
-		response.BlockHash, response.QualifiedKey, response.Value, response.StateRoot,
-		response.HomeShard, response.ExecutionShard, accessKind, proofDigest,
-	}, "|"))
+	return stableTextDigest(strings.Join([]string{response.BlockHash, response.QualifiedKey, response.Value, response.StateRoot, response.HomeShard, response.ExecutionShard, accessKind, proofDigest}, "|"))
 }
 
-func (r *NodeRuntime) porygonFetchRemoteState(
-	ctx context.Context,
-	block realblock.Block,
-	item tx.SignedTransaction,
-	access tx.AccessItem,
-	homeShard string,
-) (response StateFetchResponse, latency time.Duration, fetchErr error) {
+func (r *NodeRuntime) porygonFetchRemoteState(ctx context.Context, block realblock.Block, item tx.SignedTransaction, access tx.AccessItem, homeShard string) (response StateFetchResponse, latency time.Duration, fetchErr error) {
 	targetNode := r.stateAccessLeaderID(homeShard)
 	if targetNode == "" {
 		return StateFetchResponse{}, 0, fmt.Errorf("porygon remote Storage Role leader missing for %s", homeShard)
 	}
-	requestID := stableTextDigest(strings.Join([]string{
-		"porygon-state-proof", r.node.NodeID, item.TxID, block.BlockHash,
-		access.Key, homeShard, r.stateAccessPartitionID(),
-	}, "|"))
+	requestID := stableTextDigest(strings.Join([]string{"porygon-state-proof", r.node.NodeID, item.TxID, block.BlockHash, access.Key, homeShard, r.stateAccessPartitionID()}, "|"))
 	started := time.Now()
-	accessKind := porygonStateProjectionAccessKind(access)
-	r.beginStateFetch(block, item, access, homeShard, requestID)
 	outcome := "response_received"
 	defer func() { r.finishStateFetch(requestID, outcome, started, fetchErr) }()
-
+	proposal, err := porygonProposalFromBlock(block)
+	if err != nil {
+		return StateFetchResponse{}, time.Since(started), err
+	}
+	partitionRoot := proposal.TPartitionRoots[homeShard]
+	if partitionRoot == "" {
+		return StateFetchResponse{}, time.Since(started), fmt.Errorf("porygon Proposal T missing home partition root %s", homeShard)
+	}
+	accessKind := porygonStateProjectionAccessKindForProposal(access, proposal.TStateHeight, partitionRoot)
+	r.beginStateFetch(block, item, access, homeShard, requestID)
 	waiter := make(chan StateFetchResponse, 1)
 	r.mu.Lock()
 	if r.stateFetchWaiters == nil {
@@ -60,21 +91,9 @@ func (r *NodeRuntime) porygonFetchRemoteState(
 	}
 	r.stateFetchWaiters[requestID] = waiter
 	r.mu.Unlock()
-	defer func() {
-		r.mu.Lock()
-		delete(r.stateFetchWaiters, requestID)
-		r.mu.Unlock()
-	}()
-
-	request := StateFetchRequest{
-		RequestID: requestID, TxID: item.TxID, BlockHash: block.BlockHash,
-		Key: access.Key, HomeShard: homeShard, ExecutionShard: r.stateAccessPartitionID(),
-		AccessKind: accessKind,
-	}
-	envelope, err := p2p.NewEnvelope(
-		stateFetchRequestMessage, r.node.NodeID, targetNode, r.node.ShardID,
-		block.Height, r.currentPBFTView(), block.Height, request,
-	)
+	defer func() { r.mu.Lock(); delete(r.stateFetchWaiters, requestID); r.mu.Unlock() }()
+	request := StateFetchRequest{RequestID: requestID, TxID: item.TxID, BlockHash: block.BlockHash, Key: access.Key, HomeShard: homeShard, ExecutionShard: r.stateAccessPartitionID(), AccessKind: accessKind}
+	envelope, err := p2p.NewEnvelope(stateFetchRequestMessage, r.node.NodeID, targetNode, r.node.ShardID, block.Height, r.currentPBFTView(), block.Height, request)
 	if err != nil {
 		outcome = "envelope_error"
 		fetchErr = err
@@ -93,6 +112,11 @@ func (r *NodeRuntime) porygonFetchRemoteState(
 		if !response.Success {
 			outcome = "remote_error"
 			fetchErr = fmt.Errorf("porygon remote state projection failed: %s", response.Error)
+			return response, latency, fetchErr
+		}
+		if response.StateRoot != partitionRoot {
+			outcome = "state_root_anchor_error"
+			fetchErr = fmt.Errorf("porygon state proof root does not match Proposal T")
 			return response, latency, fetchErr
 		}
 		if response.PorygonProof == nil || !porygonVerifyStateProof(*response.PorygonProof, response.QualifiedKey, response.Value, response.StateRoot) {

@@ -58,7 +58,9 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     initial = checked.plan.methods[-3]
     current = checked.plan.methods[-2]
     latest = checked.plan.methods[-1]
-    assert initial.plugin_overrides == current.plugin_overrides == latest.plugin_overrides
+    assert initial.plugin_overrides == current.plugin_overrides
+    assert latest.plugin_overrides["block_producer"] == "metatrack_dependency_window_producer"
+    assert latest.plugin_overrides["state_access"] == "metatrack_local_exact_access"
     assert current.plugin_overrides["block_executor"] == "metatrack_block_executor"
     routing_flag = "incremental_exact_continuity_routing_v65"
     assert initial.plugin_config_overrides["routing"] == current.plugin_config_overrides["routing"]
@@ -72,7 +74,9 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     assert latest.plugin_config_overrides["block_executor"]["control_policy"] == "declared_access_frontier_v2"
     assert "local_exact_version_handoff" not in initial.plugin_config_overrides["block_executor"]
     assert current.plugin_config_overrides["block_executor"]["local_exact_version_handoff"] is True
-    assert latest.plugin_config_overrides["block_executor"]["local_exact_version_handoff"] is True
+    assert latest.plugin_overrides["state_access"] == "metatrack_local_exact_access"
+    assert "local_exact_version_handoff" not in latest.plugin_config_overrides["block_executor"]
+    assert "worker_count" not in latest.plugin_config_overrides["block_executor"]
     assert current.plugin_config_overrides["block_executor"]["version_liveness"] is True
     assert current.plugin_config_overrides["block_executor"]["final_version_batch_writeback"] is True
     assert current.plugin_config_overrides["block_executor"].get("dependency_closed_consensus") is None

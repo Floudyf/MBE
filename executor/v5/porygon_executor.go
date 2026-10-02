@@ -72,11 +72,41 @@ func (p porygonBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecu
 }
 
 func executePorygonPlan(ctx context.Context, block realblock.Block, base map[string]string, baseCommitment *state.Commitment, plan porygonExecutionPlan, workerCount int, parseMS, verifyMS int64, verifyMode, storageShardID, executionShardID string, crossBatchWitnessOverlap bool, waveExchange PorygonWaveExchangeFunc, batchExchange PorygonBatchExchangeFunc, multiShardUpdate PorygonMultiShardUpdateFunc, stateFetch PorygonStateFetchFunc) (BlockExecutionResult, error) {
+	plan, rollbackAbandonedCount := porygonApplyRollbackMask(block, plan)
 	working := copyRegistryStringMap(base)
 	commitmentStarted := time.Now()
 	commitment := state.CloneOrBuild(baseCommitment, working)
 	before := commitment.Root()
 	stateCommitmentDuration := time.Since(commitmentStarted)
+	var executionDuration, applyDuration time.Duration
+
+	// Paper Figure 6: Proposal U is applied by this later EC before executing
+	// the new L transaction blocks.  Newly pre-executed CTx writes are *not*
+	// materialized in this round; they become S and are carried as a future U.
+	paperProposalMode := false
+	paperProposalUpdateCount := 0
+	paperProposal := PorygonProposalBody{}
+	if proposal, proposalErr := porygonProposalFromBlock(block); proposalErr == nil && proposal.Version == porygonCompactProposalVersion {
+		paperProposalMode = true
+		paperProposal = proposal
+		updateStarted := time.Now()
+		for _, update := range proposal.U {
+			for _, row := range update.Updates {
+				homeShard := fmt.Sprintf("s%d", porygonStateShard(row.Key, plan.ExecutionShardCount))
+				if strings.TrimSpace(storageShardID) != "" && homeShard != storageShardID {
+					continue
+				}
+				storageKey := qualifyStateKey(block.ShardID, row.Key)
+				if strings.TrimSpace(storageShardID) != "" {
+					storageKey = qualifyStateKey(homeShard, row.Key)
+				}
+				working[storageKey] = row.Value
+				commitment.Set(storageKey, row.Value)
+				paperProposalUpdateCount++
+			}
+		}
+		applyDuration += time.Since(updateStarted)
+	}
 
 	byID := make(map[string]tx.SignedTransaction, len(block.TxList))
 	indexByID := make(map[string]int, len(block.TxList))
@@ -114,7 +144,6 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 	poolSetupDuration := time.Since(poolSetupStarted)
 	defer pool.Close()
 
-	var executionDuration, applyDuration time.Duration
 	var exchangeWaitDuration time.Duration
 	var criticalPathDuration time.Duration
 	maximumObserved := 0
@@ -128,6 +157,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 	escCertificateCount := 0
 	multiShardUpdateCertificateDigest := ""
 	protocolGlobalStateRoot := ""
+	certifiedPartitionRoots := map[string]string{}
 	multiShardUpdateAttempt := 0
 	partitionMaterializationUpdateCount := 0
 	distributedOwnership := strings.TrimSpace(executionShardID) != "" && (batchExchange != nil || waveExchange != nil)
@@ -155,6 +185,14 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		executionView := copyRegistryStringMap(working)
 		localBatchResults := make([]porygonWaveResult, 0)
 		requiredSet := map[string]bool{}
+		// Paper Figure 6 requires every shard whose subtree is changed by U_i to
+		// return enough consistent roots.  This remains mandatory for L-empty
+		// maintenance proposals that exist only to drain the final CTx updates.
+		if paperProposalMode {
+			for sid := range porygonPaperProposalUpdateShardSet(paperProposal, plan.ExecutionShardCount) {
+				requiredSet[sid] = true
+			}
+		}
 		localExecutionUS := int64(0)
 		for waveIndex, wave := range plan.Waves {
 			localWave := make([]string, 0, len(wave))
@@ -195,9 +233,53 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		seen := map[string]bool{}
 		exchangeStarted := time.Now()
 		if batchExchange != nil {
+			// Paper2 separates the dynamic ESC role from the fixed Storage Role.
+			// The batch root must therefore describe the *logical execution shard*
+			// assigned to this ESC, never the physical Storage Role co-located on
+			// the current validator.  Storage replicas authenticate the prospective
+			// Proposal.T + U + current-ITx root; current CTx remain S candidates.
+			certifiedLogicalRoot := ""
+			if paperProposalMode {
+				if multiShardUpdate == nil {
+					return BlockExecutionResult{}, fmt.Errorf("Porygon Paper2 logical partition-root projection unavailable")
+				}
+				rootUpdates := porygonPaperLogicalPartitionUpdates(paperProposal, localBatchResults, assignmentByID, executionShardID, plan.ExecutionShardCount)
+				rootStarted := time.Now()
+				rootCert, err := multiShardUpdate(ctx, block.BlockHash, block.Height, map[string][]PorygonStateUpdate{executionShardID: rootUpdates})
+				exchangeWaitDuration += time.Since(rootStarted)
+				if err != nil {
+					return BlockExecutionResult{}, err
+				}
+				for _, part := range rootCert.Partitions {
+					if part.PartitionID == executionShardID {
+						certifiedLogicalRoot = part.ProspectiveRoot
+						break
+					}
+				}
+				if certifiedLogicalRoot == "" {
+					return BlockExecutionResult{}, fmt.Errorf("Porygon Paper2 logical partition-root certificate missing %s", executionShardID)
+				}
+			} else {
+				localCertifiedView := copyRegistryStringMap(working)
+				for _, localResult := range localBatchResults {
+					assignment := assignmentByID[localResult.Item.TxID]
+					if assignment.CrossShard || !localResult.Receipt.Success {
+						continue
+					}
+					for key, value := range localResult.Delta.WriteSet {
+						homeShard := fmt.Sprintf("s%d", porygonStateShard(key, plan.ExecutionShardCount))
+						if strings.TrimSpace(storageShardID) != "" && homeShard != storageShardID {
+							continue
+						}
+						storageKey := qualifyStateKey(homeShard, key)
+						localCertifiedView[storageKey] = value
+					}
+				}
+				certifiedLogicalRoot = state.RootOfSnapshot(localCertifiedView)
+			}
 			localPayload := PorygonESCBatchResult{
 				BlockHash: block.BlockHash, Height: block.Height, ExecutionShardID: executionShardID,
-				Results: make([]PorygonBatchTxResult, 0, len(localBatchResults)), BusinessExecutionUS: localExecutionUS,
+				Results: make([]PorygonBatchTxResult, 0, len(localBatchResults)), StateRoot: certifiedLogicalRoot, BusinessExecutionUS: localExecutionUS,
 			}
 			for _, item := range localBatchResults {
 				localPayload.Results = append(localPayload.Results, PorygonBatchTxResult{TxID: item.Item.TxID, Receipt: item.Receipt, Delta: item.Delta})
@@ -212,6 +294,10 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 			}
 			escCertificateCount = 1
 			for _, entry := range certificate.Entries {
+				if entry.Result.StateRoot == "" {
+					return BlockExecutionResult{}, fmt.Errorf("porygon ESC batch certificate missing partition state root for %s", entry.ExecutionShardID)
+				}
+				certifiedPartitionRoots[entry.ExecutionShardID] = entry.Result.StateRoot
 				for _, certified := range entry.Result.Results {
 					item, ok := byID[certified.TxID]
 					if !ok || seen[certified.TxID] {
@@ -282,7 +368,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		for _, assignment := range finalAssignments {
 			finalAssignmentByID[assignment.TxID] = assignment
 		}
-		if multiShardUpdate != nil {
+		if multiShardUpdate != nil && !paperProposalMode {
 			updates, updateCount := porygonPartitionMaterializationUpdates(finalAssignments, plan.ExecutionShardCount, distributedCertified)
 			partitionMaterializationUpdateCount += updateCount
 			if len(updates) > 0 {
@@ -385,35 +471,40 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 				actualMultiShardUpdates += len(updateShards)
 			}
 
-			applyStarted := time.Now()
-			for _, key := range keys {
-				storageKey := qualifyStateKey(block.ShardID, key)
-				if strings.TrimSpace(storageShardID) != "" {
-					homeShard := fmt.Sprintf("s%d", porygonStateShard(key, plan.ExecutionShardCount))
-					if homeShard != storageShardID {
-						continue
+			// ITx writes are materialized in this EC.  A CTx only produces its S
+			// candidate now; its writes are carried in a later proposal U and are
+			// applied by the later EC named by that proposal.
+			materializeThisRound := !paperProposalMode || !assignment.CrossShard
+			if materializeThisRound {
+				applyStarted := time.Now()
+				for _, key := range keys {
+					storageKey := qualifyStateKey(block.ShardID, key)
+					if strings.TrimSpace(storageShardID) != "" {
+						homeShard := fmt.Sprintf("s%d", porygonStateShard(key, plan.ExecutionShardCount))
+						if homeShard != storageShardID {
+							continue
+						}
+						storageKey = qualifyStateKey(homeShard, key)
 					}
-					storageKey = qualifyStateKey(homeShard, key)
+					working[storageKey] = txResult.Delta.WriteSet[key]
 				}
-				working[storageKey] = txResult.Delta.WriteSet[key]
-			}
-			applyDuration += time.Since(applyStarted)
-
-			commitmentStarted = time.Now()
-			for _, key := range keys {
-				storageKey := qualifyStateKey(block.ShardID, key)
-				if strings.TrimSpace(storageShardID) != "" {
-					homeShard := fmt.Sprintf("s%d", porygonStateShard(key, plan.ExecutionShardCount))
-					if homeShard != storageShardID {
-						continue
+				applyDuration += time.Since(applyStarted)
+				commitmentStarted = time.Now()
+				for _, key := range keys {
+					storageKey := qualifyStateKey(block.ShardID, key)
+					if strings.TrimSpace(storageShardID) != "" {
+						homeShard := fmt.Sprintf("s%d", porygonStateShard(key, plan.ExecutionShardCount))
+						if homeShard != storageShardID {
+							continue
+						}
+						storageKey = qualifyStateKey(homeShard, key)
 					}
-					storageKey = qualifyStateKey(homeShard, key)
+					commitment.Set(storageKey, txResult.Delta.WriteSet[key])
 				}
-				commitment.Set(storageKey, txResult.Delta.WriteSet[key])
+				stateCommitmentDuration += time.Since(commitmentStarted)
 			}
 			receipt := txResult.Receipt
 			receipt.StateRootAfterTx = commitment.Root()
-			stateCommitmentDuration += time.Since(commitmentStarted)
 
 			delta := txResult.Delta
 			delta.Receipt = receipt
@@ -528,6 +619,10 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_witnessed_block_count":                       1,
 		"porygon_validator_witness_verified":                  true,
 		"porygon_pipeline_enabled":                            plan.PipelineEnabled,
+		"porygon_compact_proposal_lut":                        paperProposalMode,
+		"porygon_proposal_u_applied_update_count":             paperProposalUpdateCount,
+		"porygon_certified_partition_roots":                   certifiedPartitionRoots,
+		"porygon_ctx_preexecution_materializes_state":         !paperProposalMode,
 		"porygon_cross_batch_witness_enabled":                 plan.CrossBatchWitness,
 		"porygon_cross_batch_witness_count":                   porygonCountPipelineStage(plan.Pipeline, "cross_batch_witness"),
 		"porygon_pipeline_overlap_slot_count":                 pipelineOverlapSlots,
@@ -568,10 +663,11 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_real_cross_execution_shard_network":          distributedOwnership,
 		"porygon_generic_relay_finalize_used":                 false,
 		"porygon_cross_shard_conflict_abandoned_count":        plan.AbandonedCrossShardTransactionCnt + postExecutionCTxITxConflictCount,
-		"porygon_protocol_abandoned_transaction_count":        plan.AbandonedCrossShardTransactionCnt + postExecutionCTxITxConflictCount,
+		"porygon_protocol_abandoned_transaction_count":        plan.AbandonedOrderingTransactionCnt + postExecutionCTxITxConflictCount,
 		"porygon_post_execution_candidate_quarantine_count":   postExecutionConflictPreviewCount,
 		"porygon_abandoned_ctx_itx_conflict_count":            postExecutionCTxITxConflictCount,
 		"porygon_abandoned_ctx_ctx_conflict_count":            plan.AbandonedCTxCTxConflictCnt,
+		"porygon_rollback_abandoned_ctx_count":                rollbackAbandonedCount,
 		"porygon_nonabandoned_cross_esc_conflict_pair_count":  finalNonAbandonedCrossESCConflictPairs,
 		"porygon_cross_esc_conflict_closure_verified":         finalConflictClosureVerified,
 		"porygon_partition_materialization_update_count":      partitionMaterializationUpdateCount,
@@ -593,7 +689,8 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_meta_remote_state_control_plane_used":        false,
 		"porygon_state_projection_remote_fetch_used":          stateFetch != nil,
 		"porygon_state_storage_identity":                      executionShardID,
-		"porygon_state_root_scope":                            map[bool]string{true: "local_execution_shard_storage_partition", false: "legacy_direct_executor_global_snapshot"}[strings.TrimSpace(executionShardID) != ""],
+		"porygon_state_root_scope":                            map[bool]string{true: "logical_execution_shard_storage_role_strict_majority_root", false: map[bool]string{true: "local_execution_shard_storage_partition", false: "legacy_direct_executor_global_snapshot"}[strings.TrimSpace(executionShardID) != ""]}[paperProposalMode],
+		"porygon_paper_storage_root_quorum_enforced":          paperProposalMode && batchExchange != nil && multiShardUpdate != nil,
 		"porygon_global_physical_state_root_claimed":          strings.TrimSpace(executionShardID) == "",
 		"porygon_physical_relay_protocol_used":                false,
 		"maximum_parallel_width":                              maximumObserved,
@@ -605,16 +702,16 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"worker_pool_create_count":                            1,
 		"worker_pool_setup_ms":                                poolSetupDuration.Milliseconds(),
 		"wave_barrier_count":                                  len(plan.Waves),
-		"abort_count":                                         plan.AbandonedCrossShardTransactionCnt + postExecutionCTxITxConflictCount,
+		"abort_count":                                         plan.AbandonedOrderingTransactionCnt + postExecutionCTxITxConflictCount,
 		"reexecution_count":                                   0,
 		"serializable":                                        finalConflictClosureVerified && finalNonAbandonedCrossESCConflictPairs == 0,
 		"porygon_mbe_consensus_adaptation":                    "single_global_pbft_ordering_domain_with_esc_quorum_result_exchange",
-		"porygon_storage_node_adaptation":                     "paper_storage_role_co_located_on_existing_mbe_nodes;consensus_identity_separated_from_execution_shard_storage_identity",
+		"porygon_storage_node_adaptation":                     "paper_storage_role_co_located_on_existing_mbe_nodes;dynamic_esc_identity_separated_from_fixed_storage_role;logical_partition_root_strict_majority_authenticated",
 		"porygon_witness_adaptation":                          "real_ec_witness_certificate_with_mbe_pbft_validator_identity",
 		"porygon_pipeline_timing_truth_boundary":              pipelineTimingTruthBoundary,
 		"porygon_wall_clock_pipeline_overlap_claimed":         wallClockPipelineOverlapClaimed,
 		"porygon_full_woec_pipeline_overlap_claimed":          false,
-		"porygon_cross_shard_atomicity_truth_boundary":        "single_esc_execution_then_oc_multi_shard_update_majority_root_certificate_then_partition_materialization",
+		"porygon_cross_shard_atomicity_truth_boundary":        "single_esc_preexecution_S_then_OC_U_then_following_EC_application_then_later_proposal_commit",
 	}
 	return BlockExecutionResult{
 		ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: plan.PlanDigest,
@@ -914,4 +1011,43 @@ func porygonPipelineOverlapSlots(stages []porygonPipelineStage) int {
 		}
 	}
 	return overlap
+}
+
+// porygonPaperLogicalPartitionUpdates returns the deterministic state changes
+// whose root is certified by one logical ESC in the current Paper2 execution
+// round. Proposal U is applied first; successful current ITx writes are applied
+// in the same round. Current CTx writes are deliberately excluded because they
+// remain pre-executed S candidates until a later Proposal U.
+func porygonPaperLogicalPartitionUpdates(proposal PorygonProposalBody, localResults []porygonWaveResult, assignmentByID map[string]porygonTxAssignment, executionShardID string, shardCount int) []PorygonStateUpdate {
+	updates := make([]PorygonStateUpdate, 0)
+	for _, proposalUpdate := range proposal.U {
+		for _, row := range proposalUpdate.Updates {
+			if row.Key == "" {
+				continue
+			}
+			homeShard := fmt.Sprintf("s%d", porygonStateShard(row.Key, shardCount))
+			if homeShard == executionShardID {
+				updates = append(updates, row)
+			}
+		}
+	}
+	for _, result := range localResults {
+		assignment, ok := assignmentByID[result.Item.TxID]
+		if !ok || assignment.Abandoned || assignment.CrossShard || !result.Receipt.Success {
+			continue
+		}
+		keys := make([]string, 0, len(result.Delta.WriteSet))
+		for key := range result.Delta.WriteSet {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			homeShard := fmt.Sprintf("s%d", porygonStateShard(key, shardCount))
+			if homeShard != executionShardID {
+				continue
+			}
+			updates = append(updates, PorygonStateUpdate{TxID: result.Delta.TxID, OriginalIndex: result.Delta.OriginalIndex, Key: key, Value: result.Delta.WriteSet[key]})
+		}
+	}
+	return porygonCanonicalStateUpdates(updates)
 }

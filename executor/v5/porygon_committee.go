@@ -16,6 +16,17 @@ type porygonSortitionEntry struct {
 	Score  string
 }
 
+func porygonExecutionShardID(index int) string {
+	return fmt.Sprintf("s%d", index)
+}
+
+func porygonPaperECSelectionHeight(proposalHeight uint64) uint64 {
+	if proposalHeight == 0 {
+		return 0
+	}
+	return proposalHeight - 1
+}
+
 func porygonCommitteeEpochSeed(height uint64, orderingDomain string) string {
 	raw := fmt.Sprintf("porygon-committee-v1|%s|%d", orderingDomain, height)
 	sum := sha256.Sum256([]byte(raw))
@@ -92,21 +103,10 @@ func porygonMultiShardUpdateThreshold(memberCount int) int {
 }
 
 func porygonWitnessCommittee(nodes []NodePlan, height uint64, orderingDomain, transactionBlockDigest string) []string {
-	ordered := porygonSortedValidators(nodes, height, orderingDomain+"|witness|"+transactionBlockDigest)
-	if len(ordered) <= 4 {
-		return ordered
-	}
-	// Keep a rotating super-majority-sized EC on small MBE clusters. This is a
-	// deployment-scale adapter; membership is deterministic and independently
-	// verifiable from the common epoch seed.
-	size := (len(ordered)*2 + 2) / 3
-	if size < 4 {
-		size = 4
-	}
-	if size > len(ordered) {
-		size = len(ordered)
-	}
-	return append([]string(nil), ordered[:size]...)
+	// Paper2: Witness and later Execution are phases of one EC lifecycle.  MBE
+	// keeps deterministic sortition over the fixed PBFT validator set instead
+	// of exact VRF, so the EC member set must not depend on transaction bytes.
+	return porygonSortedValidators(nodes, porygonPaperECSelectionHeight(height), orderingDomain)
 }
 
 func porygonWitnessFaultThreshold(memberCount int) int {
@@ -140,12 +140,26 @@ func (r *NodeRuntime) porygonExecutionRoleShardID(height uint64) string {
 	if r == nil {
 		return ""
 	}
-	return porygonExecutionShardForNode(r.node.NodeID, r.plan.NodeConfigs, height, r.node.ShardID, r.porygonExecutionShardCount())
+	return porygonExecutionShardForNode(r.node.NodeID, r.plan.NodeConfigs, porygonPaperECSelectionHeight(height), r.node.ShardID, r.porygonExecutionShardCount())
 }
 
 func (r *NodeRuntime) porygonExecutionRoleMembers(height uint64, shardID string) []string {
 	if r == nil {
 		return nil
 	}
-	return porygonExecutionShardMembersAtHeight(r.plan.NodeConfigs, height, r.node.ShardID, shardID, r.porygonExecutionShardCount())
+	return porygonExecutionShardMembersAtHeight(r.plan.NodeConfigs, porygonPaperECSelectionHeight(height), r.node.ShardID, shardID, r.porygonExecutionShardCount())
+}
+
+func (r *NodeRuntime) porygonExecutionCommitteeCount() int {
+	if r == nil {
+		return 3
+	}
+	for _, kind := range []string{"block_executor", "scheduler"} {
+		if item, ok := r.pluginSnapshot[kind]; ok {
+			if value := intValue(item.Config["execution_committee_count"]); value > 0 {
+				return value
+			}
+		}
+	}
+	return 3
 }

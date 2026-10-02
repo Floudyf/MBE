@@ -205,8 +205,9 @@ def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path)
     # All three MetaTrack profiles intentionally share plugin identities.
     # Initial, frozen-current v5 and new v6 are separated by configuration only,
     # so plugin-identity snapshots remain shared while config snapshots differ.
-    assert len({row["method_snapshot_digest"] for row in rows}) == 4
-    assert by_method["metatrack_serial"]["method_snapshot_digest"] == by_method["metatrack_full_locality"]["method_snapshot_digest"] == by_method["metatrack_latest"]["method_snapshot_digest"]
+    assert len({row["method_snapshot_digest"] for row in rows}) == 5
+    assert by_method["metatrack_serial"]["method_snapshot_digest"] == by_method["metatrack_full_locality"]["method_snapshot_digest"]
+    assert by_method["metatrack_latest"]["method_snapshot_digest"] != by_method["metatrack_full_locality"]["method_snapshot_digest"]
     assert by_method["metatrack_serial"]["method_config_snapshot_digest"] != by_method["metatrack_latest"]["method_config_snapshot_digest"]
 
     compiled_by_method = {
@@ -238,7 +239,7 @@ def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path)
     initial = compiled_by_method["metatrack_serial"]
     current = compiled_by_method["metatrack_full_locality"]
     latest = compiled_by_method["metatrack_latest"]
-    for method in (initial, current, latest):
+    for method in (initial, current):
         assert plugin(method, "routing")["plugin_id"] == "metatrack_coaccess_routing"
         assert plugin(method, "routing")["config"]["control_policy"] == "declared_access_frontier_v2"
         assert plugin(method, "execution")["plugin_id"] == "dual_track_execution"
@@ -248,18 +249,19 @@ def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path)
         assert plugin(method, "block_executor")["plugin_id"] == "metatrack_block_executor"
         assert plugin(method, "block_executor")["config"]["worker_count"] == 4
         assert plugin(method, "block_executor")["config"]["control_policy"] == "declared_access_frontier_v2"
-    assert plugin(initial, "block_executor")["config"]["local_exact_version_handoff"] is False
+    assert plugin(initial, "block_executor")["config"].get("local_exact_version_handoff", False) is False
     assert plugin(current, "block_executor")["config"]["local_exact_version_handoff"] is True
     assert plugin(current, "block_executor")["config"]["version_liveness"] is True
     assert plugin(current, "block_executor")["config"]["final_version_batch_writeback"] is True
     assert plugin(current, "block_executor")["config"]["dependency_closed_consensus"] is False
-    assert plugin(latest, "block_executor")["config"]["local_exact_version_handoff"] is True
+    assert plugin(latest, "state_access")["plugin_id"] == "metatrack_local_exact_access"
+    assert "local_exact_version_handoff" not in plugin(latest, "block_executor")["config"]
     assert plugin(latest, "block_executor")["config"]["version_liveness"] is True
     assert plugin(latest, "block_executor")["config"]["final_version_batch_writeback"] is True
     assert plugin(latest, "block_executor")["config"]["dependency_closed_consensus"] is True
     assert plugin(latest, "block_executor")["config"]["version_liveness_indexed"] is True
     assert plugin(latest, "block_executor")["config"]["single_final_seal"] is True
-    assert plugin(latest, "block_producer")["config"]["dependency_closed_consensus"] is True
+    assert plugin(latest, "block_producer")["plugin_id"] == "metatrack_dependency_window_producer"
 
 
 def test_formal_scheduler_start_records_in_process_worker_thread(monkeypatch) -> None:

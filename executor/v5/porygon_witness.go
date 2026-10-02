@@ -176,6 +176,9 @@ func (r *NodeRuntime) handlePorygonWitnessRequest(ctx context.Context, msg p2p.M
 	if err := r.porygonValidateWitnessRequest(request); err != nil {
 		return err
 	}
+	if err := r.porygonPersistTransactionBlock(porygonBuildTransactionBlock(request.Height, request.OrderingDomain, request.Transactions, "")); err != nil {
+		return err
+	}
 	members := porygonWitnessCommittee(r.plan.NodeConfigs, request.Height, request.OrderingDomain, request.FullBodyDigest)
 	if !containsString(members, r.node.NodeID) {
 		return nil
@@ -356,6 +359,34 @@ func (r *NodeRuntime) verifyPorygonWitnessCertificate(cert PorygonWitnessCertifi
 	return nil
 }
 
+func (r *NodeRuntime) verifyPorygonWitnessCertificateRef(cert PorygonWitnessCertificate, ref PorygonTransactionBlockRef) error {
+	members := porygonWitnessCommittee(r.plan.NodeConfigs, cert.Height, cert.OrderingDomain, cert.FullBodyDigest)
+	expectedThreshold := porygonConfiguredWitnessThreshold(porygonBlockProducerConfig(r.plugins.BlockProducer), len(members))
+	if cert.Height != ref.Height || cert.OrderingDomain != ref.OrderingDomain || cert.TransactionRoot != ref.TransactionRoot || cert.AccessRoot != ref.AccessRoot || cert.FullBodyDigest != ref.FullBodyDigest {
+		return fmt.Errorf("porygon witness certificate/ref mismatch")
+	}
+	if cert.CertificateDigest != ref.WitnessCertificateDigest || cert.CommitteeDigest != porygonWitnessCommitteeDigest(members) || cert.Threshold != expectedThreshold || len(cert.Votes) < expectedThreshold {
+		return fmt.Errorf("porygon witness certificate/ref threshold mismatch")
+	}
+	seen := map[string]bool{}
+	for _, vote := range cert.Votes {
+		if seen[vote.NodeID] {
+			return fmt.Errorf("porygon witness certificate duplicate voter %s", vote.NodeID)
+		}
+		seen[vote.NodeID] = true
+		if vote.WitnessID != cert.WitnessID || vote.Height != cert.Height || vote.TransactionRoot != cert.TransactionRoot || vote.AccessRoot != cert.AccessRoot || vote.FullBodyDigest != cert.FullBodyDigest || vote.CommitteeDigest != cert.CommitteeDigest {
+			return fmt.Errorf("porygon witness vote/ref identity mismatch")
+		}
+		if err := r.porygonVerifyWitnessVote(vote, members); err != nil {
+			return err
+		}
+	}
+	if cert.CertificateDigest == "" || cert.CertificateDigest != porygonWitnessCertificateDigest(cert) {
+		return fmt.Errorf("porygon witness certificate digest mismatch")
+	}
+	return nil
+}
+
 func porygonStorePrewitnessedBatch(pool *mempool.Mempool, batch porygonPrewitnessedBatch) {
 	if pool == nil || len(batch.Items) == 0 {
 		return
@@ -431,8 +462,11 @@ func porygonPrewitnessRunning(pool *mempool.Mempool) bool {
 }
 
 func (r *NodeRuntime) ensurePorygonWitnessedBlock(ctx context.Context, block realblock.Block) (realblock.Block, error) {
-	if r.plugins.BlockProducer == nil || r.plugins.BlockProducer.ID() != porygonBlockProducerID || len(block.TxList) == 0 {
+	if r.plugins.BlockProducer == nil || r.plugins.BlockProducer.ID() != porygonBlockProducerID {
 		return block, nil
+	}
+	if len(block.TxList) == 0 {
+		return r.bindPorygonCrossRoundEvidence(block)
 	}
 	evidence, err := decodePorygonTransactionBlockEvidence(block)
 	if err != nil {
@@ -448,15 +482,20 @@ func (r *NodeRuntime) ensurePorygonWitnessedBlock(ctx context.Context, block rea
 					changed = true
 				}
 			}
-			if !changed {
-				return block, nil
+			if changed {
+				if err := attachProposalEvidence(&block, porygonProposalEvidenceID, evidence); err != nil {
+					return block, err
+				}
+				realblock.AssignHash(&block)
 			}
-			if err := attachProposalEvidence(&block, porygonProposalEvidenceID, evidence); err != nil {
-				return block, err
-			}
-			realblock.AssignHash(&block)
-			return block, nil
+			return r.bindPorygonCrossRoundEvidence(block)
 		}
+	}
+	// Paper data availability boundary: the co-located Storage Role creates and
+	// persists the full Transaction Block before EC Witness. PBFT later carries
+	// only its compact reference and witness certificate.
+	if err := r.porygonPersistTransactionBlock(porygonBuildTransactionBlock(block.Height, block.ShardID, block.TxList, "")); err != nil {
+		return block, err
 	}
 	target := porygonWitnessTarget(block.Height, block.ShardID, block.TxList)
 	cert, err := r.collectPorygonWitnessCertificate(ctx, target)
@@ -476,21 +515,46 @@ func (r *NodeRuntime) ensurePorygonWitnessedBlock(ctx context.Context, block rea
 	}
 	realblock.AssignHash(&block)
 	r.addPorygonRuntimeMetric("porygon_witness_threshold_enforced_count", 1)
-	return block, nil
+	return r.bindPorygonCrossRoundEvidence(block)
 }
 
 func (r *NodeRuntime) verifyPorygonWitnessEvidence(block realblock.Block) error {
-	if r.plugins.BlockProducer == nil || r.plugins.BlockProducer.ID() != porygonBlockProducerID || len(block.TxList) == 0 {
+	if r.plugins.BlockProducer == nil || r.plugins.BlockProducer.ID() != porygonBlockProducerID {
 		return nil
 	}
 	evidence, err := decodePorygonTransactionBlockEvidence(block)
 	if err != nil {
 		return err
 	}
+	if porygonCompactProposalTransactions(block) && evidence.CompactProposal != nil && evidence.CompactProposal.Maintenance {
+		if len(evidence.CompactProposal.L) != 0 || evidence.WitnessPolicy != "paper_maintenance_no_witness_v1" || evidence.WitnessCertificate != nil {
+			return fmt.Errorf("porygon maintenance proposal witness boundary invalid")
+		}
+		if err := r.verifyPorygonCrossRoundEvidence(block); err != nil {
+			return err
+		}
+		r.addPorygonRuntimeMetric("porygon_maintenance_proposal_verified_count", 1)
+		return nil
+	}
 	if evidence.WitnessPolicy != "ec_witness_certificate_v1" || evidence.WitnessCertificate == nil {
 		return fmt.Errorf("porygon ordering requires an EC witness certificate")
 	}
-	if err := r.verifyPorygonWitnessCertificate(*evidence.WitnessCertificate, block.TxList); err != nil {
+	if porygonCompactProposalTransactions(block) {
+		if evidence.CompactProposal == nil || len(evidence.CompactProposal.L) != 1 {
+			return fmt.Errorf("porygon compact proposal L missing")
+		}
+		if err := r.verifyPorygonWitnessCertificateRef(*evidence.WitnessCertificate, evidence.CompactProposal.L[0]); err != nil {
+			return err
+		}
+	} else {
+		if len(block.TxList) == 0 {
+			return fmt.Errorf("porygon non-compact proposal has no transaction body")
+		}
+		if err := r.verifyPorygonWitnessCertificate(*evidence.WitnessCertificate, block.TxList); err != nil {
+			return err
+		}
+	}
+	if err := r.verifyPorygonCrossRoundEvidence(block); err != nil {
 		return err
 	}
 	r.addPorygonRuntimeMetric("porygon_witness_certificate_verified_count", 1)

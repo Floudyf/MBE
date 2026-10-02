@@ -72,47 +72,87 @@ def _parse_bool(value: object) -> bool:
 
 
 def _load_access(path: Path) -> tuple[dict[str, dict[str, Any]], str, list[str]]:
+    """Load Porygon replay entries while sharing the common logical workload digest.
+
+    Durable replay still uses tx_id, but cross-method fairness must hash the
+    method-independent workload projection used by v5_serial_order_oracle:
+    (index, logical_id, normalized AccessList). Physical tx ids and Porygon
+    storage placement are deliberately excluded from that digest.
+    """
     blockers: list[str] = []
     by_tx: dict[str, dict[str, Any]] = {}
     canonical: list[dict[str, Any]] = []
+    seen_indexes: set[int] = set()
     try:
         with gzip.open(path, "rt", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, 1):
                 if not line.strip():
                     continue
                 row = json.loads(line)
-                tx_id = str(row.get("tx_id") or "").strip()
-                logical_id = str(row.get("logical_id") or tx_id).strip()
-                accesses = row.get("access_list")
-                if not tx_id or not isinstance(accesses, list):
-                    blockers.append(f"porygon_oracle_invalid_resolved_access:{line_number}")
+                index = row.get("index")
+                if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                    blockers.append(f"porygon_oracle_invalid_resolved_access_index:{line_number}")
                     continue
+                if index in seen_indexes:
+                    blockers.append(f"porygon_oracle_duplicate_resolved_access_index:{index}")
+                    continue
+                seen_indexes.add(index)
+                tx_id = str(row.get("tx_id") or "").strip()
+                logical_id = str(row.get("logical_id") or "").strip()
+                accesses = row.get("access_list")
+                if not tx_id:
+                    blockers.append(f"porygon_oracle_missing_tx_id:{index}")
+                if not logical_id:
+                    blockers.append(f"porygon_oracle_missing_logical_id:{index}")
+                if not isinstance(accesses, list):
+                    blockers.append(f"porygon_oracle_missing_access_list:{index}")
+                    accesses = []
                 normalized: list[dict[str, Any]] = []
                 for ordinal, access in enumerate(accesses):
                     if not isinstance(access, dict):
-                        blockers.append(f"porygon_oracle_invalid_access:{line_number}:{ordinal}")
+                        blockers.append(f"porygon_oracle_invalid_access:{index}:{ordinal}")
                         continue
-                    key = str(access.get("key") or "").strip()
-                    mode = str(access.get("mode") or "").strip()
-                    semantics = str(access.get("update_semantics") or "").strip()
-                    try:
-                        delta = int(access.get("delta") or 0)
-                    except (TypeError, ValueError):
-                        blockers.append(f"porygon_oracle_invalid_delta:{line_number}:{ordinal}")
-                        delta = 0
-                    if not key or mode not in _SUPPORTED_MODES:
-                        blockers.append(f"porygon_oracle_invalid_access_semantics:{line_number}:{ordinal}")
-                    normalized.append({"key": key, "mode": mode, "update_semantics": semantics, "delta": delta})
-                entry = {"tx_id": tx_id, "logical_id": logical_id, "access_list": normalized}
-                if tx_id in by_tx:
+                    key = str(access.get("key") or "")
+                    mode = str(access.get("mode") or "")
+                    semantics = str(access.get("update_semantics") or "")
+                    delta = access.get("delta") or 0
+                    if not key:
+                        blockers.append(f"porygon_oracle_missing_key:{index}:{ordinal}")
+                    if mode not in _SUPPORTED_MODES:
+                        blockers.append(f"porygon_oracle_unsupported_mode:{index}:{ordinal}:{mode}")
+                    if isinstance(delta, bool) or not isinstance(delta, int):
+                        try:
+                            delta = int(delta)
+                        except (TypeError, ValueError):
+                            blockers.append(f"porygon_oracle_invalid_delta:{index}:{ordinal}")
+                            delta = 0
+                    normalized.append({
+                        "key": key,
+                        "mode": mode,
+                        "update_semantics": semantics,
+                        "delta": int(delta),
+                    })
+                entry = {
+                    "index": index,
+                    "tx_id": tx_id,
+                    "logical_id": logical_id,
+                    "access_list_schema": str(row.get("access_list_schema") or ""),
+                    "access_list_source": str(row.get("access_list_source") or ""),
+                    "access_list": normalized,
+                }
+                if tx_id and tx_id in by_tx:
                     blockers.append(f"porygon_oracle_duplicate_tx_id:{tx_id}")
-                else:
+                elif tx_id:
                     by_tx[tx_id] = entry
-                    canonical.append(entry)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                canonical.append({
+                    "index": index,
+                    "logical_id": logical_id,
+                    "access_list": normalized,
+                })
+    except (OSError, EOFError, gzip.BadGzipFile, UnicodeError, json.JSONDecodeError) as exc:
         blockers.append(f"porygon_oracle_access_unreadable:{type(exc).__name__}")
+    canonical.sort(key=lambda item: item["index"])
     return by_tx, _canonical_digest(canonical) if canonical else "", blockers
-
 
 def _load_blocks(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     blockers: list[str] = []
@@ -410,7 +450,7 @@ def evaluate_porygon_partitioned(run_dir: Path, summary: dict[str, Any]) -> dict
         "serial_order_replay_blockers": blockers,
         "serial_order_replay_structural_blockers": blockers,
         "serial_order_replay_supported_scope": "porygon_partitioned_global_order_statehome_v2",
-        "serial_order_replay_identity_basis": "tx_id",
+        "serial_order_replay_identity_basis": "logical_id_access_list_digest_for_workload;tx_id_for_durable_trace",
         "serial_order_replay_order_basis": "global_pbft_committed_chain_then_porygon_execution_trace",
         "serial_order_replay_original_index_semantics": "block_local_diagnostic_only",
         "serial_order_replay_initial_state_empty": True,
@@ -422,6 +462,7 @@ def evaluate_porygon_partitioned(run_dir: Path, summary: dict[str, Any]) -> dict
         "serial_order_replay_committed_block_count": len(blocks),
         "serial_order_replay_trace_reexecution_count": 0,
         "serial_order_replay_input_digest": input_digest,
+        "porygon_logical_workload_access_digest": input_digest,
         "serial_order_replay_commit_order_digest": _canonical_digest(logical_order) if logical_order else "",
         "serial_order_replay_tx_id_order_digest": _canonical_digest(committed_order) if committed_order else "",
         "serial_order_replay_business_state_digest": replay_global,

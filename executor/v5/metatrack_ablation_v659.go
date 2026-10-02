@@ -11,9 +11,13 @@ const (
 	metaTrackAblationIgnoreCoaccessRoutingV661    = "ablation_ignore_coaccess_routing_v661"
 	metaTrackAblationSingleReadyQueueV661         = "ablation_single_ready_queue_v661"
 	metaTrackAblationOnDemandStateFetchV661       = "ablation_on_demand_state_fetch_v661"
+	metaTrackAblationHashRoutingV662            = "ablation_hash_routing_v662"
 )
 
 func metaTrackForceAllConservativeEnabledV659(execution ExecutionPlugin) bool {
+	if execution != nil && execution.ID() == metaTrackSingleConservativeExecutionID {
+		return true
+	}
 	switch plugin := execution.(type) {
 	case dualTrackExecution:
 		return boolFromAny(plugin.config[metaTrackAblationForceAllConservativeV659])
@@ -124,4 +128,18 @@ func metaTrackAblationCoaccessLocalityV661(ignoreCoaccess bool, keys []string, s
 		return 0
 	}
 	return metaTrackIncrementalPairLocalityV650(keys, shard, state)
+}
+
+
+// planHashBaselineAblationV662 replaces only MetaTrack's workload/dependency-aware
+// execution-shard choice with the repository's deterministic hash baseline.  It
+// intentionally stays inside metaTrackRouting so signed execution-routing,
+// projection metadata, dependency closure, StateReady and Version Liveness keep
+// exactly the same MetaTrack capability contract.
+func (p *metaTrackRouting) planHashBaselineAblationV662(input BatchRoutingInput) BatchRoutingPlan {
+	baseline := statelessHashRouting{basicPlugin: p.basicPlugin}.PlanBatch(input)
+	baseline.PlacementPolicy = "metatrack_deterministic_hash_ablation_v662"
+	baseline.TransactionPolicy = "source_hash_or_state_hash_v2"
+	baseline.PlanDigest = routingPlanDigest(baseline)
+	return baseline
 }

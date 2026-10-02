@@ -173,7 +173,32 @@ func TestPorygonLocalStorageRoleProjectionDoesNotSendToSelfPeer(t *testing.T) {
 			return fmt.Errorf("self peer transport must not be used")
 		},
 	}
-	block := realblock.Block{Height: 1, BlockHash: "porygon-local-storage-role-block"}
+	block := realblock.Block{ShardID: "porygon-global", Height: 1, PreviousHash: "genesis", ProposerID: "n0"}
+	// Paper2 state projection is intentionally fail-closed without Proposal.T.
+	// Build the smallest valid maintenance proposal anchored to the local
+	// Storage Role snapshot so this test continues to exercise only the
+	// no-self-send property rather than the retired evidence-less path.
+	paperState := runtime.porygonPaperRuntimeState()
+	paperState.mu.Lock()
+	tHeight := paperState.latestCertifiedHeight
+	tRoot := paperState.certifiedRoots[tHeight]
+	tPartitionRoots := copyRegistryStringMap(paperState.certifiedPartitionRoots[tHeight])
+	paperState.mu.Unlock()
+	body := PorygonProposalBody{
+		Version: porygonCompactProposalVersion, Height: block.Height, OrderingDomain: block.ShardID,
+		TStateHeight: tHeight, TStateRoot: tRoot, TPartitionRoots: tPartitionRoots,
+		ExecutionCommittee:   PorygonECDescriptor{ECID: "unit-test-ec"},
+		PreviousProposalHash: block.PreviousHash, Maintenance: true,
+	}
+	body.ProposalDigest = porygonProposalBodyDigest(body)
+	evidence := buildPorygonTransactionBlockEvidence(block, 1)
+	evidence.WitnessPolicy = "paper_maintenance_no_witness_v1"
+	evidence.DataAvailabilityRef = "paper_maintenance_no_transaction_block"
+	evidence.CompactProposal = &body
+	if err := attachProposalEvidence(&block, porygonProposalEvidenceID, evidence); err != nil {
+		t.Fatal(err)
+	}
+	realblock.AssignHash(&block)
 	item := tx.SignedTransaction{TxID: "porygon-local-storage-role-tx"}
 	access := tx.AccessItem{Key: localKey, Mode: tx.AccessRead}
 	event, err := runtime.porygonStateProjectionFetch(context.Background(), block, item, access, "s0")

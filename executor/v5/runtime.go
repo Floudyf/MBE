@@ -1353,6 +1353,14 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		return r.handlePorygonWitnessRequest(ctx, msg)
 	case porygonWitnessVoteMessage:
 		return r.handlePorygonWitnessVote(msg)
+	case porygonTxBlockFetchRequestMessage:
+		return r.handlePorygonTxBlockFetchRequest(ctx, msg)
+	case porygonTxBlockFetchResponseMessage:
+		return r.handlePorygonTxBlockFetchResponse(msg)
+	case porygonPaperPartitionRootRequestMessage:
+		return r.handlePorygonPaperPartitionRootRequest(ctx, msg)
+	case porygonPaperPartitionRootAckMessage:
+		return r.handlePorygonPaperPartitionRootAck(msg)
 	case porygonESCBatchResultMessage:
 		return r.handlePorygonESCBatchResult(ctx, msg)
 	case porygonESCBatchCertificateMessage:
@@ -1746,6 +1754,9 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		return
 	}
 	r.mu.Unlock()
+	if !r.porygonPipelineOrderingWindowOpen() {
+		return
+	}
 	nextHeight := r.proposer.NextHeight
 	readySystemDeltas, systemDrainPending := r.remoteStateDeltaDrainState(nextHeight)
 
@@ -1761,12 +1772,20 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	if r.plugins.Routing != nil {
 		routingPluginID = r.plugins.Routing.ID()
 	}
+	porygonMaintenanceReady := false
+	porygonPaperRoundBlocked := false
+	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+		porygonMaintenanceReady = r.porygonPaperMaintenanceReady(nextHeight)
+		porygonPaperRoundBlocked = r.porygonPaperProposalRoundBlocked(nextHeight)
+	}
 	input := BlockProductionInput{
 		Pool:                            r.pool,
 		Proposer:                        r.proposer,
 		Limit:                           r.blockSize(),
 		Now:                             time.Now(),
 		SystemDeltaReady:                systemDrainPending,
+		PorygonMaintenanceReady:  porygonMaintenanceReady,
+		PorygonPaperRoundBlocked: porygonPaperRoundBlocked,
 		Context:                         ctx,
 		BaseStateSnapshot:               productionSnapshot,
 		WorkerCount:                     blockExecutorWorkerCountFromProfile(r.pluginSnapshot),
@@ -1820,7 +1839,7 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 			block = admitted
 		}
 	}
-	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID && len(block.TxList) > 0 {
+	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 		var witnessErr error
 		block, witnessErr = r.ensurePorygonWitnessedBlock(ctx, block)
 		if witnessErr != nil {
@@ -1871,8 +1890,9 @@ func (r *NodeRuntime) startContextProposalPlanning(ctx context.Context, block re
 	}
 	planCtx, cancel := context.WithCancel(ctx)
 	now := time.Now()
+	expectedHeight := r.porygonConsensusNextHeight()
 	r.mu.Lock()
-	if r.proposalInFlight || r.proposalPlanningInFlight || r.committedHeight+1 != block.Height {
+	if r.proposalInFlight || r.proposalPlanningInFlight || expectedHeight != block.Height {
 		r.mu.Unlock()
 		cancel()
 		return false
@@ -1923,7 +1943,7 @@ func (r *NodeRuntime) startContextProposalPlanning(ctx context.Context, block re
 		scheduledBlock.SystemStateDeltas = r.readyRemoteStateDeltasForConsensus(scheduledBlock.Height)
 		realblock.AssignHash(&scheduledBlock)
 		if !r.proposalPlanningStillCurrent(generation, view, block.Height) {
-			r.pool.ReleaseReserved(scheduledBlock.TxList)
+			r.pool.ReleaseReserved(porygonPlanningReservedItems(block, scheduledBlock))
 			r.finishProposalPlanning(generation)
 			return
 		}
@@ -1931,11 +1951,11 @@ func (r *NodeRuntime) startContextProposalPlanning(ctx context.Context, block re
 		r.recordScheduleEvents(scheduledBlock, planned.Events, true)
 		r.rememberVerifiedExecutionPlan(scheduledBlock)
 		proposalWorkUnits := r.estimateProposalValidationWork(scheduledBlock)
-		for _, item := range scheduledBlock.TxList {
+		for _, item := range porygonPlanningReservedItems(block, scheduledBlock) {
 			r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "proposed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: scheduledBlock.Height, Success: true})
 		}
 		if err := r.beginPBFTProposal(ctx, scheduledBlock, proposalWorkUnits); err != nil {
-			r.pool.ReleaseReserved(scheduledBlock.TxList)
+			r.pool.ReleaseReserved(porygonPlanningReservedItems(block, scheduledBlock))
 			r.setLastProposalError(err)
 		} else if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 			r.startPorygonCrossBatchWitness(ctx, scheduledBlock.Height)
@@ -1977,9 +1997,10 @@ func (r *NodeRuntime) proposalPlanningStillCurrent(generation, view, height uint
 	if state.View() != view || state.Leader() != r.node.NodeID {
 		return false
 	}
+	expectedHeight := r.porygonConsensusNextHeight()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.proposalPlanningInFlight && r.proposalPlanningGeneration == generation && r.proposalPlanningView == view && r.proposalPlanningHeight == height && r.committedHeight+1 == height
+	return r.proposalPlanningInFlight && r.proposalPlanningGeneration == generation && r.proposalPlanningView == view && r.proposalPlanningHeight == height && expectedHeight == height
 }
 
 func (r *NodeRuntime) finishProposalPlanning(generation uint64) {
@@ -2934,9 +2955,9 @@ func (r *NodeRuntime) validatePrePrepare(fromNode string, block realblock.Block)
 		return false, false, err
 	}
 
+	cursorHeight, committedHash := r.porygonConsensusCursor()
+	expectedHeight := cursorHeight + 1
 	r.mu.Lock()
-	expectedHeight := r.committedHeight + 1
-	committedHash := r.committedHash
 	fatal := firstNonEmpty(r.fatalPersistenceError, r.fatalExecutionError)
 	r.mu.Unlock()
 	if fatal != "" {
@@ -2984,9 +3005,9 @@ func (r *NodeRuntime) validateConsensusCommit(fromNode string, block realblock.B
 		return false, false, err
 	}
 
+	cursorHeight, committedHash := r.porygonConsensusCursor()
+	expectedHeight := cursorHeight + 1
 	r.mu.Lock()
-	expectedHeight := r.committedHeight + 1
-	committedHash := r.committedHash
 	remembered := r.proposals[block.BlockHash]
 	fatal := firstNonEmpty(r.fatalPersistenceError, r.fatalExecutionError)
 	r.mu.Unlock()
@@ -3502,7 +3523,7 @@ func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Bloc
 	if result.Disposition == CommitApplied {
 		r.recordMetaTrackCommittedRoutingOrdinalsV656(block)
 		if origin == CommitOriginConsensus || origin == CommitOriginCatchUp || origin == CommitOriginRecoveryReplay {
-			r.pbftState().MarkDurableCommit(block)
+			r.porygonMarkPBFTDurableWhenSafe(block)
 			r.maybeBroadcastPBFTCheckpoint(ctx, block)
 		}
 		r.replayDeferredPrePrepare(ctx)
@@ -3538,7 +3559,7 @@ func (r *NodeRuntime) drainPendingCommits(ctx context.Context, next realblock.Bl
 			return
 		}
 		if origin == CommitOriginConsensus || origin == CommitOriginCatchUp || origin == CommitOriginRecoveryReplay {
-			r.pbftState().MarkDurableCommit(next)
+			r.porygonMarkPBFTDurableWhenSafe(next)
 			r.maybeBroadcastPBFTCheckpoint(ctx, next)
 		}
 		next = result.Block
@@ -3547,6 +3568,16 @@ func (r *NodeRuntime) drainPendingCommits(ctx context.Context, next realblock.Bl
 
 func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, origin CommitOrigin) (CommitResult, error) {
 	r.setCommitPhase("enter", block)
+	consensusBlock := block
+	porygonCompactConsensus := porygonCompactProposalTransactions(block)
+	if porygonCompactConsensus {
+		hydrated, hydrateErr := r.porygonHydrateCompactProposal(ctx, block)
+		if hydrateErr != nil {
+			r.setCommitPhase("porygon_transaction_block_hydration_error", block)
+			return CommitResult{Disposition: CommitRejected, Block: block}, hydrateErr
+		}
+		block = hydrated
+	}
 	r.mu.Lock()
 	if r.fatalPersistenceError != "" {
 		err := fmt.Errorf("fatal persistence freeze: %s", r.fatalPersistenceError)
@@ -3683,13 +3714,20 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	executionPlanVerified := origin == CommitOriginConsensus && r.hasVerifiedExecutionPlan(block)
 	r.setCommitPhase("execute_block", block)
 	executeStarted := time.Now()
-	r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionStarted", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"tx_count": len(block.TxList)}})
-	r.updateBlockExecutionProgress(execution.BlockSTMProgress{BlockHeight: block.Height, TransactionCount: len(block.TxList), CurrentTxnIndex: -1, LastProgressAtMS: time.Now().UnixMilli()})
 	var executed BlockExecutionResult
-	if versionedWaveExecution {
-		executed, err = r.executeVersionedRemoteBlockWithCommitment(ctx, block, executionSnapshot, baseStateCommitment)
+	porygonPreparedExecutionUsed := false
+	if prepared, _, ok := r.porygonPipelinePreparedExecution(block); ok && origin == CommitOriginConsensus {
+		executed = prepared
+		porygonPreparedExecutionUsed = true
+		r.addPorygonRuntimeMetric("porygon_pipeline_precomputed_execution_reused_count", 1)
 	} else {
-		executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonExecutionShardID: r.porygonExecutionRoleShardID(block.Height), PorygonWaveExchange: r.porygonWaveExchange, PorygonBatchExchange: r.porygonBatchExchange, PorygonMultiShardUpdate: r.porygonMultiShardUpdate, PorygonStateFetch: porygonStateFetch, PorygonCrossBatchWitnessOverlap: r.porygonCrossBatchWitnessOverlapObserved(block.Height), CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, RemoteStateBatchFetch: r.metaTrackBatchStateFetcher(block), StateVersionPublish: r.stateVersionPublisher(block)})
+		r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionStarted", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"tx_count": len(block.TxList)}})
+		r.updateBlockExecutionProgress(execution.BlockSTMProgress{BlockHeight: block.Height, TransactionCount: len(block.TxList), CurrentTxnIndex: -1, LastProgressAtMS: time.Now().UnixMilli()})
+		if versionedWaveExecution {
+			executed, err = r.executeVersionedRemoteBlockWithCommitment(ctx, block, executionSnapshot, baseStateCommitment)
+		} else {
+			executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonExecutionShardID: r.porygonExecutionRoleShardID(block.Height), PorygonWaveExchange: r.porygonWaveExchange, PorygonBatchExchange: r.porygonBatchExchange, PorygonMultiShardUpdate: r.porygonMultiShardUpdate, PorygonStateFetch: porygonStateFetch, PorygonCrossBatchWitnessOverlap: r.porygonCrossBatchWitnessOverlapObserved(block.Height), CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, RemoteStateBatchFetch: r.metaTrackBatchStateFetcher(block), StateVersionPublish: r.stateVersionPublisher(block), MetaTrackExactAccessPolicy: metaTrackExactAccessPolicyID(r.plugins.StateAccess)})
+		}
 	}
 	if err != nil {
 		r.setCommitPhase("execute_block_error", block)
@@ -3755,7 +3793,9 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		}
 	}
 
-	executed.BlockExecutionMS = time.Since(executeStarted).Milliseconds()
+	if !porygonPreparedExecutionUsed {
+		executed.BlockExecutionMS = time.Since(executeStarted).Milliseconds()
+	}
 	// Preserve executor-owned phase timing. BlockExecutionMS is the common wall
 	// clock envelope; TransactionExecutionMS/DeterministicApplyMS/StateCommitmentMS
 	// are measured by the executor and must never be overwritten by that envelope.
@@ -3772,12 +3812,17 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		executed.StateRootVersion = executed.ExecutionResult.StateRootVersion
 	}
 	r.recordScheduleEvents(block, executed.ScheduleEvents, false)
-	r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionFinished", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"block_execution_ms": executed.BlockExecutionMS}})
+	if !porygonPreparedExecutionUsed {
+		r.emitRuntimeEvent(RuntimeEvent{Type: "ExecutionFinished", BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"block_execution_ms": executed.BlockExecutionMS}})
+	}
 	r.setCommitPhase("build_commit_plan", block)
 	commitDecision := r.plugins.Commit.DecideCommit(CommitInput{ShardID: r.node.ShardID, Height: block.Height, Transactions: block.TxList, TxDeltas: executed.ExecutionResult.TxDeltas, StateDelta: executed.StateDelta, BaseStateSnapshot: executionSnapshot})
 	physicalDelta := commitDecision.PhysicalStateDelta
 	if len(physicalDelta) == 0 {
 		physicalDelta = executed.StateDelta
+	}
+	if porygonCompactConsensus {
+		physicalDelta = append([]state.StateKV(nil), executed.StateDelta...)
 	}
 	physicalDelta = annotateStateDeltaTxIDs(physicalDelta, executed.ExecutionResult.TxDeltas, block.TxList)
 	if !r.statelessCalvinRemoteStateEnabled() {
@@ -3819,7 +3864,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
 	r.setCommitPhase("durable_commit", block)
-	storeMetrics, err := r.store.DurableCommitWithMetrics(block, result)
+	storeMetrics, err := r.store.DurableCommitWithMetrics(porygonConsensusStorageBlock(consensusBlock), result)
 	if err != nil {
 		r.setCommitPhase("durable_commit_error", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
@@ -3868,7 +3913,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	// Every production validator advances its local proposer head after durable
 	// commit so any replica can safely become the primary in a later PBFT view.
 	// Some focused unit tests construct NodeRuntime literals without a proposer.
-	if r.proposer != nil {
+	if r.proposer != nil && !r.porygonPipelineProposerAlreadyAdvanced(block) {
 		r.proposer.Confirm(block)
 	}
 	r.setCommitPhase("advance_runtime_state", block)
@@ -3929,6 +3974,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 			}
 		}
 	}
+	r.porygonPipelineOnDurable(block)
 	r.setCommitPhase("idle", realblock.Block{})
 	return CommitResult{Disposition: CommitApplied, Block: next}, nil
 }
@@ -4584,6 +4630,7 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 			WorkerCount:       blockExecutorWorkerCountFromProfile(r.pluginSnapshot),
 			Execution:         r.plugins.Execution,
 			Scheduler:         r.plugins.Scheduler,
+			MetaTrackExactAccessPolicy: metaTrackExactAccessPolicyID(r.plugins.StateAccess),
 			Progress:          r.updateBlockExecutionProgress,
 		}
 		var waveResult BlockExecutionResult
@@ -5280,12 +5327,24 @@ func (r *NodeRuntime) porygonStateProjectionFetch(
 ) (RemoteStateReadyEvent, error) {
 	localPartition := r.stateAccessPartitionID()
 	if homeShard == localPartition {
+		proposal, proposalErr := porygonProposalFromBlock(block)
+		if proposalErr != nil {
+			return RemoteStateReadyEvent{}, proposalErr
+		}
+		partitionRoot := proposal.TPartitionRoots[homeShard]
+		if partitionRoot == "" {
+			return RemoteStateReadyEvent{}, fmt.Errorf("porygon Proposal T missing local partition root %s", homeShard)
+		}
+		snapshot, snapshotErr := r.porygonPaperPartitionSnapshot(proposal.TStateHeight, homeShard, partitionRoot)
+		if snapshotErr != nil {
+			return RemoteStateReadyEvent{}, snapshotErr
+		}
 		request := StateFetchRequest{
 			RequestID: stableTextDigest(strings.Join([]string{"porygon-local-storage-role", r.node.NodeID, item.TxID, block.BlockHash, access.Key, homeShard, localPartition}, "|")),
 			TxID:      item.TxID, BlockHash: block.BlockHash, Key: access.Key,
-			HomeShard: homeShard, ExecutionShard: localPartition, AccessKind: string(access.Mode),
+			HomeShard: homeShard, ExecutionShard: localPartition, AccessKind: porygonStateProjectionAccessKindForProposal(access, proposal.TStateHeight, partitionRoot),
 		}
-		snapshot, snapshotRoot := r.stateFetchSnapshot(request)
+		snapshotRoot := partitionRoot
 		qualifiedKey := qualifyStateKey(homeShard, access.Key)
 		proof, ok := porygonGenerateStateProof(snapshot, qualifiedKey)
 		if !ok {
@@ -5297,7 +5356,7 @@ func (r *NodeRuntime) porygonStateProjectionFetch(
 			HomeShard: homeShard, ExecutionShard: localPartition, StateRoot: snapshotRoot, Success: true,
 			PorygonProof: &proof,
 		}
-		accessKind := porygonStateProjectionAccessKind(access)
+		accessKind := request.AccessKind
 		response.WitnessDigest = porygonStateProjectionWitnessDigest(response, accessKind)
 		if !porygonVerifyStateProof(proof, qualifiedKey, response.Value, snapshotRoot) {
 			return RemoteStateReadyEvent{}, fmt.Errorf("porygon local state proof verification failed for %s", access.Key)
@@ -5450,7 +5509,20 @@ func (r *NodeRuntime) handleStateFetchRequest(ctx context.Context, requester str
 	r.mu.Unlock()
 	response := cached
 	if !ok {
-		snapshot, snapshotRoot := r.stateFetchSnapshot(request)
+		var snapshot map[string]string
+		var snapshotRoot string
+		if stateHeight, stateRoot, porygonAnchor := porygonStateProjectionAnchor(request.AccessKind); porygonAnchor {
+			var snapshotErr error
+			snapshot, snapshotErr = r.porygonPaperPartitionSnapshot(stateHeight, request.HomeShard, stateRoot)
+			if snapshotErr != nil {
+				response = StateFetchResponse{TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, Success: false, Error: snapshotErr.Error()}
+				response.WitnessDigest = porygonStateProjectionWitnessDigest(response, request.AccessKind)
+				return r.enqueueStateFetchResponse(ctx, requester, response)
+			}
+			snapshotRoot = stateRoot
+		} else {
+			snapshot, snapshotRoot = r.stateFetchSnapshot(request)
+		}
 		response = StateFetchResponse{TxID: request.TxID, BlockHash: request.BlockHash, Key: request.Key, QualifiedKey: qualifiedKey, Value: snapshot[qualifiedKey], HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, StateRoot: snapshotRoot, Success: true}
 		if isPorygonStateProjectionAccessKind(request.AccessKind) {
 			proof, proofOK := porygonGenerateStateProof(snapshot, qualifiedKey)

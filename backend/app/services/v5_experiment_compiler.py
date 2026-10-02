@@ -202,7 +202,7 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
         raise V5CompatibilityError(materialized_blockers, code="v5_materialized_workload_incompatible")
     node_expected_artifacts = [f"nodes/{node.node_id}/{artifact}" for node in nodes for artifact in NODE_EXPECTED_ARTIFACTS]
     expected_artifacts = EXPECTED_ARTIFACTS + node_expected_artifacts + (DATASET_ARTIFACTS if workload.get("source_type") == "dataset" else [])
-    if profile.get("routing", {}).get("plugin_id") in {"metatrack_coaccess_routing", "stateless_hash_routing"}:
+    if profile.get("routing", {}).get("plugin_id") in {"metatrack_coaccess_routing", "metatrack_hash_routing", "stateless_hash_routing"}:
         expected_artifacts += [
             f"client/{artifact}"
             for artifact in METATRACK_CLIENT_ARTIFACTS

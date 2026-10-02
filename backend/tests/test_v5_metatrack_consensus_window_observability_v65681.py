@@ -1,6 +1,8 @@
 from __future__ import annotations
 import json
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 from backend.app.services.v5_observability_metrics import summarize_metatrack_consensus_windows
 
 def w(path: Path, rows):
@@ -27,14 +29,14 @@ def test_postrun_durable_reconstruction(tmp_path: Path):
     for sh,nodes in [('s0',['n0','n1']),('s1',['n4','n5'])]:
         for n in nodes:
             w(tmp_path/'nodes'/n/'blocks.jsonl',bs[sh]); w(tmp_path/'nodes'/n/'commit_markers.jsonl',[{'block_hash':x['block_hash'],'committed':True} for x in bs[sh]])
-    (tmp_path/'real_cluster_summary.json').write_text(json.dumps({'configured_block_size':1000}),encoding='utf-8')
+    (tmp_path/'real_cluster_summary.json').write_text(json.dumps({'configured_block_size':2,'method_config_id':'metatrack_latest'}),encoding='utf-8')
     s=summarize_metatrack_consensus_windows(tmp_path)
     assert s['available'] is True
-    assert s['truth_scope']=='durable_signed_consensus_window_metadata_post_run_reconstruction_v2'
+    assert s['truth_scope']=='durable_signed_critical_path_preserving_consensus_window_reconstruction_v665'
     assert [x['window_sequence'] for x in s['windows']]==[1,2]
     assert s['windows'][0]['recomputed_critical_path']==2
     assert s['windows'][0]['candidate_critical_path']==4
-    assert s['windows'][0]['stop_reason']=='critical_width_not_improved'
+    assert s['windows'][0]['stop_reason']=='block_size_limit'
     assert s['metrics']['metatrack_consensus_window_signed_reconstruction_match'] is True
     assert s['metrics']['metatrack_consensus_window_observed_pbft_block_count']==4
     assert s['metrics']['metatrack_consensus_window_baseline_route_batch_pbft_block_count']==6
@@ -78,3 +80,18 @@ def test_inconsistent_count_inside_same_shard_still_fails(tmp_path: Path):
     assert s['windows'][0]['metadata_match'] is True
     assert s['windows'][0]['shard_transaction_count_match'] is False
     assert s['metrics']['metatrack_consensus_window_signed_reconstruction_match'] is False
+
+
+def test_v663_fixed_route_batch_policy_is_plugin_driven():
+    source=Path("backend/app/services/v5_observability_metrics.py").read_text(encoding="utf-8")
+    assert "_metatrack_block_producer_id_v663" in source
+    assert "metatrack_route_batch_producer" in source
+    assert "critical_path_extension_boundary" in source
+
+
+def test_v668_observability_contract_tokens():
+    source=(ROOT / "backend/app/services/v5_observability_metrics.py").read_text(encoding="utf-8")
+    assert "_metatrack_n_over_l_improves_v668" in source
+    assert "metatrack_adaptive_window_producer" in source
+    assert "metatrack_consensus_window_n_over_l_stop_count" in source
+    assert "durable_signed_adaptive_n_over_l_consensus_window_reconstruction_v668" in source

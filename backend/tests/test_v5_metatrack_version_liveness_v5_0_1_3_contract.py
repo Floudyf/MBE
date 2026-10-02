@@ -7,8 +7,8 @@ def test_v5013_client_uses_existing_bool_helper_and_latest_only_gate() -> None:
     assert 'func boolFromAny(value any) bool' in runtime
     assert 'boolValue(' not in client
     assert 'versionLivenessEnabled = boolFromAny(config.Config["version_liveness"])' in client
-    assert 'if bindExecutionRouting && versionLivenessEnabled && plugins.Routing.ID() == "metatrack_coaccess_routing"' in client
-    assert 'if bindExecutionRouting && plugins.Routing.ID() == "metatrack_coaccess_routing"' not in client
+    assert 'if bindExecutionRouting && versionLivenessEnabled && isMetaTrackRoutingPlugin(plugins.Routing)' in client
+    assert 'if bindExecutionRouting && isMetaTrackRoutingPlugin(plugins.Routing)' not in client
 
 
 def test_v5013_reseal_occurs_before_route_plan_digest_binding() -> None:

@@ -17,7 +17,8 @@ def test_metatrack_current_freezes_v5_liveness_and_new_v6_adds_closure_without_p
     initial = BUILTIN_METHODS["metatrack_serial"]
     current = BUILTIN_METHODS["metatrack_full_locality"]
     latest = BUILTIN_METHODS["metatrack_latest"]
-    assert initial.plugin_overrides == current.plugin_overrides == latest.plugin_overrides
+    assert latest.plugin_overrides["block_producer"] == "metatrack_dependency_window_producer"
+    assert latest.plugin_overrides["state_access"] == "metatrack_local_exact_access"
     assert latest.plugin_overrides["block_executor"] == "metatrack_block_executor"
     assert latest.plugin_overrides.get("consensus") == initial.plugin_overrides.get("consensus")
     current_cfg = current.plugin_config_overrides["block_executor"]
@@ -27,7 +28,7 @@ def test_metatrack_current_freezes_v5_liveness_and_new_v6_adds_closure_without_p
     assert current_cfg["version_liveness"] is True
     assert current_cfg["final_version_batch_writeback"] is True
     assert current_cfg.get("dependency_closed_consensus") is None
-    assert latest_cfg["local_exact_version_handoff"] is True
+    assert "local_exact_version_handoff" not in latest_cfg
     assert latest_cfg["batch_entry_state_prefetch"] is True
     assert latest_cfg["batch_remote_writeback"] is True
     assert latest_cfg["version_liveness"] is True
@@ -55,10 +56,10 @@ def test_liveness_is_signed_at_route_batch_scope_and_runtime_gc_waits_for_actual
     assert 'RemoteOrderingSuccessorCount' in routing
     assert 'RequiredLivenessClass' in routing
     assert 'versionLivenessEnabled = boolFromAny(config.Config["version_liveness"])' in client
-    assert 'if bindExecutionRouting && versionLivenessEnabled && plugins.Routing.ID() == "metatrack_coaccess_routing"' in client
+    assert 'if bindExecutionRouting && versionLivenessEnabled && isMetaTrackRoutingPlugin(plugins.Routing)' in client
     assert 'resealMetaTrackVersionLivenessPlan(records, routePlan)' in client
     assert 'finalizeMetaTrackSignedBatchPlan' in client
-    assert 'if bindExecutionRouting && plugins.Routing.ID() == "metatrack_coaccess_routing"' not in client
+    assert 'if bindExecutionRouting && isMetaTrackRoutingPlugin(plugins.Routing)' not in client
     assert client.index('resealMetaTrackVersionLivenessPlan(records, routePlan)') < client.index('routePlanDigest = routePlan.PlanDigest')
     assert 'releaseMetaTrackTransientPredecessors(item)' in runtime
     assert 'metatrack_version_transient_ref_registered_count' in runtime

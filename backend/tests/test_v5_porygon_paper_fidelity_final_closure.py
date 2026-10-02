@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+import csv
+import gzip
+import hashlib
+import json
 
 from backend.app.services.v5_fairness_validator import _performance_contract_class, validate
-from backend.app.services.v5_formal_scheduler import _execution_semantics, _state_equivalence_individual_reasons
-from backend.app.services.v5_porygon_correctness_oracle import _owner_identity, _state_home
+from backend.app.services.v5_formal_scheduler import _build_external_performance_contract_reports, _execution_semantics, _state_equivalence_individual_reasons
+from backend.app.services.v5_porygon_correctness_oracle import _load_access, _owner_identity, _state_home
+from backend.app.services.v5_serial_order_oracle import _load_access_entries
 from backend.app.services.v5_paper_exporter import _individual_result_reasons
+from backend.app.services.v5_real_cluster_runner import _logical_initial_state_digest
 
 
 def _row(method: str, semantic: str, *, state_home: str, remote_fetch: str, remote_write: str, proof: str) -> dict:
@@ -21,6 +27,32 @@ def _row(method: str, semantic: str, *, state_home: str, remote_fetch: str, remo
         "measurement_boundary": "client_submit_to_method_terminal", "runnable": True, "blockers": [],
     }
 
+
+
+
+def test_porygon_workload_digest_matches_common_logical_access_projection(tmp_path: Path) -> None:
+    path = tmp_path / "resolved_access_lists.jsonl.gz"
+    rows = [
+        {
+            "index": 1, "tx_id": "physical-b", "logical_id": "logical-b",
+            "access_list_schema": "mbe", "access_list_source": "dataset",
+            "access_list": [{"key": "state/b", "mode": "write", "update_semantics": "replace", "delta": 0}],
+        },
+        {
+            "index": 0, "tx_id": "physical-a", "logical_id": "logical-a",
+            "access_list_schema": "mbe", "access_list_source": "dataset",
+            "access_list": [{"key": "state/a", "mode": "read_write", "update_semantics": "replace", "delta": 0}],
+        },
+    ]
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row) + "\n")
+
+    _, porygon_digest, porygon_blockers = _load_access(path)
+    _, common_digest, common_blockers = _load_access_entries(path)
+    assert porygon_blockers == []
+    assert common_blockers == []
+    assert porygon_digest == common_digest
 
 def test_porygon_owner_groups_related_alien_worlds_account_state() -> None:
     assert _owner_identity("m.federation/miners/alice") == "alice"
@@ -128,3 +160,64 @@ def test_porygon_protocol_abandoned_is_valid_terminal_semantics_but_runtime_fail
     oracle_failed["metrics"]["method_correctness_oracle_valid"] = False
     assert "method_correctness_oracle_not_true" in _state_equivalence_individual_reasons(oracle_failed)
     assert "method_correctness_oracle_not_true" in _individual_result_reasons(oracle_failed)
+
+
+def _write_empty_chain(root: Path, shard_ids: list[str]) -> None:
+    empty_root = hashlib.sha256(b"mbe-state-merkle-treap-v2:empty").hexdigest()
+    for index, shard_id in enumerate(shard_ids):
+        node = root / "nodes" / f"n{index}"
+        node.mkdir(parents=True, exist_ok=True)
+        with (node / "committed_chain.csv").open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["height", "shard_id", "block_hash", "state_root_before"])
+            writer.writeheader()
+            writer.writerow({"height": 1, "shard_id": shard_id, "block_hash": f"b{index}", "state_root_before": empty_root})
+
+
+def test_logical_initial_state_digest_ignores_physical_partition_names_for_proven_empty_state(tmp_path: Path) -> None:
+    metatrack = tmp_path / "metatrack"
+    porygon = tmp_path / "porygon"
+    _write_empty_chain(metatrack, ["s0", "s1"])
+    _write_empty_chain(porygon, ["porygon-global"])
+    left = _logical_initial_state_digest(metatrack)
+    right = _logical_initial_state_digest(porygon)
+    assert left
+    assert left == right
+
+
+def test_external_multishard_contract_uses_logical_not_physical_initial_state_digest() -> None:
+    base = {
+        "status": "completed",
+        "individual_result_valid": True,
+        "comparison_group_id": "g",
+        "performance_contract_class": "multi_shard_stateless_eventual_completion_v1",
+        "logical_initial_state_digest": "same-logical-empty",
+        "serial_order_replay_input_digest": "same-logical-access",
+        "serial_order_replay_applicable": True,
+        "serial_order_replay_equivalent": True,
+        "method_correctness_oracle_valid": True,
+        "global_final_state_digest": "diagnostic-only",
+    }
+    porygon = {**base, "method_config_id": "stateless_porygon", "comparison_semantics_class": "porygon_3d_global_ordering_paper_fidelity_v5", "initial_state_digest": "physical-porygon-global"}
+    metatrack = {**base, "method_config_id": "metatrack_latest", "comparison_semantics_class": "stateless_remote_home_v1", "initial_state_digest": "physical-s0-s1"}
+    reports, valid = _build_external_performance_contract_reports([porygon, metatrack])
+    assert valid is True
+    assert len(reports) == 1
+    assert reports[0]["status"] == "passed"
+    assert reports[0]["mismatched_evidence"] == {}
+    assert reports[0]["required_evidence"][:2] == ["logical_initial_state_digest", "serial_order_replay_input_digest"]
+
+
+def test_porygon_formal_worker_truth_uses_requested_runtime_resource_not_registry_default() -> None:
+    porygon = _row(
+        "stateless_porygon", "porygon_3d_global_ordering_paper_fidelity_v5",
+        state_home="porygon_account_object_owner_partition",
+        remote_fetch="signed_access_projection_with_physical_state_fetch_and_verified_merkle_treap_proof",
+        remote_write="oc_multi_shard_update_majority_ack_then_partition_materialization",
+        proof="ec_witness_certificate_plus_state_merkle_proof_plus_esc_batch_certificate_plus_multishard_root_certificate",
+    )
+    porygon["topology_point"]["worker_count"] = 8
+    porygon["method"] = {"method_id": "stateless_porygon", "plugin_config_overrides": {"block_executor": {"worker_count": 4}}}
+    checked, _ = validate([porygon])
+    assert checked[0]["requested_worker_count"] == 8
+    assert checked[0]["method_config_worker_count"] == 4
+    assert checked[0]["effective_worker_count"] == 8

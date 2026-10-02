@@ -418,7 +418,11 @@ func (r *NodeRuntime) validateConsensusBlockBody(block realblock.Block) error {
 			}
 		}
 	}
-	if metaTrackCriticalWidthWindowMetadataV6568(block) {
+	if r.metaTrackPartitionInvariantConsensusV658Enabled() && len(block.TxList) > 0 {
+		if _, err := r.validateMetaTrackPartitionInvariantFrontierV658(block); err != nil {
+			return fmt.Errorf("consensus block MetaTrack v6.5.8 partition-invariant frontier validation: %w", err)
+		}
+	} else if metaTrackCriticalWidthWindowMetadataV6568(block) {
 		if _, err := r.validateMetaTrackCriticalWidthWindowV6568(block); err != nil {
 			return fmt.Errorf("consensus block MetaTrack v6.5.6.8 critical-width window validation: %w", err)
 		}

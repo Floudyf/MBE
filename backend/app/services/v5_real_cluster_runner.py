@@ -651,6 +651,7 @@ def run(
     write_run_artifact_catalog(run_dir, run_id=run_id)
     summary = v5_real_cluster_artifacts.read_summary(run_dir)
     summary["initial_state_digest"] = _initial_state_digest(run_dir)
+    summary["logical_initial_state_digest"] = _logical_initial_state_digest(run_dir)
     summary["state_home_mapping_digest"] = _state_home_mapping_digest(run_dir)
     summary["global_final_state_digest"] = _global_final_state_digest(summary)
     # Diagnostic oracle only. Full global_final_state_digest remains the
@@ -833,6 +834,37 @@ def _initial_state_digest(run_dir: Path) -> str:
         return ""
     return _canonical_digest({shard: next(iter(values)) for shard, values in sorted(roots.items())})
 
+
+
+def _logical_initial_state_digest(run_dir: Path) -> str:
+    # Placement-independent cross-method initial-state truth. Non-empty states
+    # fail closed until a logical initial-business-state artifact exists.
+    empty_root = hashlib.sha256(b"mbe-state-merkle-treap-v2:empty").hexdigest()
+    roots: dict[str, set[str]] = {}
+    for path in sorted((run_dir / "nodes").glob("*/committed_chain.csv")):
+        try:
+            with path.open(newline="", encoding="utf-8-sig") as handle:
+                rows = list(csv.DictReader(handle))
+        except (OSError, csv.Error, UnicodeError):
+            return ""
+        if not rows:
+            continue
+        try:
+            first = min(rows, key=lambda row: int(str(row.get("height") or "0")))
+        except (TypeError, ValueError):
+            return ""
+        shard = str(first.get("shard_id") or "").strip()
+        root = _actual_first_block_state_root(path.parent, first)
+        if shard and root:
+            roots.setdefault(shard, set()).add(root)
+        else:
+            return ""
+    if not roots or any(len(values) != 1 for values in roots.values()):
+        return ""
+    physical_roots = [next(iter(values)) for _, values in sorted(roots.items())]
+    if not physical_roots or any(root != empty_root for root in physical_roots):
+        return ""
+    return _canonical_digest({"logical_initial_business_state": "empty"})
 
 def _state_home_mapping_digest(run_dir: Path) -> str:
     path = run_dir / "client" / "placement_plan.csv"

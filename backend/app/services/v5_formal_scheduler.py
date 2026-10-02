@@ -1386,7 +1386,10 @@ def _build_external_performance_contract_reports(items: list[dict]) -> tuple[lis
         method_ids = sorted({str(item.get("method_config_id") or "") for item in group_items})
         contract_supported = (
             len(contract_classes) == 1
-            and contract_classes[0] == "single_shard_stateful_eventual_completion_v1"
+            and contract_classes[0] in {
+                "single_shard_stateful_eventual_completion_v1",
+                "multi_shard_stateless_eventual_completion_v1",
+            }
             and len(method_ids) >= 2
         )
 
@@ -1395,11 +1398,16 @@ def _build_external_performance_contract_reports(items: list[dict]) -> tuple[lis
         oracle_failures: dict[str, list[str]] = {}
         correctness_oracle_failures: dict[str, list[str]] = {}
 
-        # The common external contract requires the same initial state and the
-        # same logical workload/access semantics. It intentionally does NOT
-        # require different serializable schedulers to choose the same final
-        # state digest when the transaction semantics are order-sensitive.
-        for field in ("initial_state_digest", "serial_order_replay_input_digest"):
+        # Cross-method performance compares logical input truth, not physical
+        # storage-domain names. Multi-shard stateless methods therefore use a
+        # placement-independent logical initial-state digest, while the legacy
+        # single-shard stateful contract keeps its established physical digest.
+        required_evidence_fields = (
+            ("logical_initial_state_digest", "serial_order_replay_input_digest")
+            if contract_classes == ["multi_shard_stateless_eventual_completion_v1"]
+            else ("initial_state_digest", "serial_order_replay_input_digest")
+        )
+        for field in required_evidence_fields:
             missing_ids = [
                 str(item.get("child_run_id") or "")
                 for item in group_items
@@ -1468,8 +1476,7 @@ def _build_external_performance_contract_reports(items: list[dict]) -> tuple[lis
             "method_config_ids": method_ids,
             "status": "passed" if passed else "failed",
             "required_evidence": [
-                "initial_state_digest",
-                "serial_order_replay_input_digest",
+                *required_evidence_fields,
                 "method_appropriate_correctness_oracle",
             ],
             "missing_evidence": missing,
@@ -1525,6 +1532,7 @@ def _apply_state_equivalence_gate(items: list[dict]) -> tuple[list[dict], dict]:
             **item,
             **({"paper_candidate": True} if recover_paper_candidate else {}),
             "initial_state_digest": summary.get("initial_state_digest", ""),
+            "logical_initial_state_digest": summary.get("logical_initial_state_digest", ""),
             "state_home_mapping_digest": summary.get("state_home_mapping_digest", ""),
             "global_final_state_digest": summary.get("global_final_state_digest", ""),
             "serial_order_oracle_status": metrics.get("serial_order_oracle_status", summary.get("serial_order_oracle_status")),

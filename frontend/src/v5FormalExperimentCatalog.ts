@@ -53,12 +53,13 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "stateless_txallo", title: "Stateless-TxAllo", description: "TxAllo 无状态适配：账户图、G/A-TxAllo 与冻结映射和原版一致，仅将执行状态承载替换为通用无状态远程获取/写回。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "metatrack_serial", title: "MetaTrack（初始版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
-{ methodId: "metatrack_latest", title: "Metatrack", description: "稳定完整版本：共现矩阵增量分片 + 有效独立前沿双轨 + 状态预取/本地版本交接 + 关键路径保持的依赖感知共识批次聚合。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
-  { methodId: "metatrack_ab_route", title: "消融-无共现矩阵分片", description: "保持同一个增量路由器、exact-version 前驱信息、远程代价、负载与容量约束，只让共现局部性不参与执行分片选择。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
-  { methodId: "metatrack_ab_track", title: "消融-无双轨执行", description: "保留 Fast/Conservative 分类证据、依赖 DAG、StateReady 与相同 Worker，只把运行时 Ready 队列合并为统一 FIFO 队列。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
-  { methodId: "metatrack_ab_cons", title: "消融-无共识批次聚合", description: "保持签名、依赖闭合、Version Liveness、PBFT 与节点验证不变，只让每个完整 RouteBatch 单独进行一次 PBFT。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
-  { methodId: "metatrack_ab_state", title: "消融-无状态预取", description: "保持本地版本交接与其它状态机制，禁止块入口提前获取远程状态；只有交易前驱满足、真正需要状态时才按需请求。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
-  { methodId: "metatrack_ab_handoff", title: "子消融-无本地版本交接", description: "状态模块子消融：保持状态预取、批量写回、折叠和 Version Liveness，只取消执行域内 exact-version 直接交接，所需版本强制经 Home 发布/获取。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+{ methodId: "metatrack_latest", title: "Metatrack", description: "完整版本：工作负载/依赖感知分流 + 有效独立前沿双轨 + 原始 V661 关键路径保持共识窗口 + 执行域本地 exact-version。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
+  { methodId: "metatrack_unified", title: "实验版", description: "恢复已验证的 v6.5.6.8 自适应共识窗口：保持完整 RouteBatch 投影，只在加入下一批后 N/L（窗口交易数/真实执行前驱最长链）严格提高且不超过 block_size 硬上限时聚合；无经验阈值。其余分流、双轨、StateReady、状态本地化、Version Liveness 与 PBFT 均与 Metatrack 一致。", family: "metatrack", comparisonVisible: true, mainVisible: true },
+  { methodId: "metatrack_ab_route", title: "消融-哈希分片", description: "仅将 routing 模块替换为确定性哈希分片；执行、共识窗口、状态访问与 PBFT 保持不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_track", title: "消融-无双轨统一就绪", description: "仅将 execution 模块替换为真正的单轨执行插件：保留同一依赖 DAG、StateReady、Worker、分流、V661 共识窗口与本地 exact-version 状态访问，但删除 Fast/Conservative 轨道判定、双 Ready 队列和 Fast-first；所有已就绪交易进入统一 FIFO Ready 队列。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_cons", title: "消融-固定批次共识", description: "仅将 block_producer 模块替换为一个完整 RouteBatch 一个 PBFT 单元；PBFT、Version Liveness 与执行路径保持不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_state", title: "消融-Home状态访问", description: "仅将 state_access 模块替换为 Home exact-version；预取、批量传输、Version Liveness、状态裁剪和其它模块保持不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_handoff", title: "历史子消融-无本地版本交接", description: "历史结果兼容项；不再进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_exp", title: "实验版（旧）", description: "历史流式实验结果兼容项，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 ];
 
@@ -76,7 +77,6 @@ export const METATRACK_ABLATION_METHOD_IDS = [
   "metatrack_ab_track",
   "metatrack_ab_state",
   "metatrack_ab_cons",
-  "metatrack_ab_handoff",
 ] as const;
 
 export const PARALLEL_WORKER_OPTIONS = [1, 2, 4, 8] as const;

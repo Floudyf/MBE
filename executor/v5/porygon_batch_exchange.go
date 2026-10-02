@@ -33,6 +33,7 @@ type PorygonESCBatchResult struct {
 	CommitteeEpochDigest string                 `json:"committee_epoch_digest"`
 	SenderNodeID         string                 `json:"sender_node_id"`
 	Results              []PorygonBatchTxResult `json:"results"`
+	StateRoot            string                 `json:"state_root"`
 	ResultDigest         string                 `json:"result_digest"`
 	BusinessExecutionUS  int64                  `json:"business_execution_us"`
 }
@@ -245,7 +246,11 @@ func (r *NodeRuntime) tryBuildPorygonBatchCertificate(blockHash string, height u
 		for _, bucket := range buckets {
 			if len(bucket.voters) >= threshold {
 				if chosen != nil && chosen.result.ResultDigest != bucket.result.ResultDigest {
-					return PorygonESCBatchCertificate{}, false, fmt.Errorf("multiple Porygon batch digests reached Te for %s", sid)
+					return PorygonESCBatchCertificate{}, false, fmt.Errorf(
+						"multiple Porygon batch digests reached Te for %s: digest_a=%s root_a=%s voters_a=%v digest_b=%s root_b=%s voters_b=%v",
+						sid, chosen.result.ResultDigest, chosen.result.StateRoot, sortedBoolKeys(chosen.voters),
+						bucket.result.ResultDigest, bucket.result.StateRoot, sortedBoolKeys(bucket.voters),
+					)
 				}
 				chosen = bucket
 			}

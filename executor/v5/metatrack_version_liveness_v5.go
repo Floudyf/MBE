@@ -549,7 +549,7 @@ func (r *NodeRuntime) deleteMetaTrackTransientVersion(key string, version uint64
 
 func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) StateVersionPublishFunc {
 	buffer := r.newMetaTrackVersionPublishBuffer(block)
-	forceHomeExactV660 := r.metaTrackBlockExecutorFlag(metaTrackAblationForceHomeExactV660)
+	forceHomeExactV660 := metaTrackForceHomeExactAccess(r.plugins.StateAccess) || r.metaTrackBlockExecutorFlag(metaTrackAblationForceHomeExactV660) // legacy flag fallback only
 	return func(ctx context.Context, item tx.SignedTransaction, delta execution.TxDelta, exactSnapshot map[string]string) error {
 		if item.ExecutionRouting == nil || len(item.ExecutionRouting.StateVersions) == 0 {
 			return nil

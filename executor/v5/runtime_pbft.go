@@ -389,6 +389,9 @@ func (r *NodeRuntime) enqueuePBFTCommittedBlock(block realblock.Block) error {
 		})
 	}
 	r.logConsensus("PBFT_COMMIT_CERTIFICATE", r.node.NodeID, block.BlockHash, block.Height)
+	if r.porygonPipelineEnabledRuntime() {
+		return r.porygonPipelineOnOrderingCertified(block)
+	}
 	return r.enqueueCommitTask(commitTaskConsensus, block, CommitOriginConsensus)
 }
 
@@ -627,8 +630,8 @@ func (r *NodeRuntime) checkPBFTLiveness(ctx context.Context) {
 func (r *NodeRuntime) rebroadcastCurrentPBFTViewChange(ctx context.Context) error {
 	r.mu.Lock()
 	target := r.viewChangeTarget
-	height := r.committedHeight + 1
 	r.mu.Unlock()
+	height := r.porygonConsensusNextHeight()
 	state := r.pbftState()
 	if target <= state.View() || target == 0 {
 		return nil
@@ -663,9 +666,7 @@ func (r *NodeRuntime) initiatePBFTViewChange(ctx context.Context, newView uint64
 	if state == nil || newView <= state.View() {
 		return
 	}
-	r.mu.Lock()
-	height := r.committedHeight + 1
-	r.mu.Unlock()
+	height := r.porygonConsensusNextHeight()
 
 	vc, err := state.BuildViewChange(newView, height)
 	if err != nil {
@@ -1165,9 +1166,9 @@ func (r *NodeRuntime) deferPBFTPrePrepareWithDisposition(fromNode string, pre pb
 	if block.BlockHash == "" || fromNode == "" {
 		return prePrepareDeferralIgnored
 	}
+	expectedHeight := r.porygonConsensusNextHeight()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	expectedHeight := r.committedHeight + 1
 	if block.Height < expectedHeight || block.Height > expectedHeight+8 {
 		return prePrepareDeferralIgnored
 	}
@@ -1197,8 +1198,8 @@ func (r *NodeRuntime) deferPBFTPrePrepareWithDisposition(fromNode string, pre pb
 }
 
 func (r *NodeRuntime) replayDeferredPBFTPrePrepare(ctx context.Context) {
+	expectedHeight := r.porygonConsensusNextHeight()
 	r.mu.Lock()
-	expectedHeight := r.committedHeight + 1
 	for height := range r.deferredPrePrepares {
 		if height < expectedHeight {
 			delete(r.deferredPrePrepares, height)

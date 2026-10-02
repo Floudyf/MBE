@@ -84,3 +84,31 @@ func TestMetaTrackAblationV661AlignedMechanisms(t *testing.T) {
 		t.Fatal("v661 runtime ablation controls missing")
 	}
 }
+
+
+func TestMetaTrackAblationV662HashBaselineKeepsMetaTrackCarrier(t *testing.T) {
+	if metaTrackAblationHashRoutingV662 == "" {
+		t.Fatal("v662 hash baseline ablation control missing")
+	}
+	p := &metaTrackRouting{basicPlugin: makeBasic("routing", "metatrack_coaccess_routing", map[string]any{})}
+	plan := p.planHashBaselineAblationV662(BatchRoutingInput{
+		BatchIndex: 0,
+		ExpectedTransactionCount: 2,
+		ShardIDs: []string{"s0", "s1"},
+		Records: []WorkloadRecord{{Index: 0, LogicalID: "tx0", SourceShard: "s1", StateKeys: []string{"k"}}},
+	})
+	if len(plan.TransactionPlacements) != 1 || plan.TransactionPlacements[0].ExecutionShard != "s1" {
+		t.Fatalf("hash baseline placement=%#v", plan.TransactionPlacements)
+	}
+	if plan.PlacementPolicy != "metatrack_deterministic_hash_ablation_v662" {
+		t.Fatalf("placement policy=%s", plan.PlacementPolicy)
+	}
+}
+
+
+func TestMetaTrackModularV663SingleConservativePluginActivatesWithoutAblationFlag(t *testing.T) {
+	execution := metaTrackSingleConservativeExecution{basicPlugin: makeBasic("execution", metaTrackSingleConservativeExecutionID, nil)}
+	if !metaTrackForceAllConservativeEnabledV659(execution) {
+		t.Fatal("single conservative execution plugin must activate the common conservative-track projection without an ablation flag")
+	}
+}

@@ -88,6 +88,86 @@ func metaTrackCriticalPathPreservingJoinV661(currentL, batchL, candidateL int) b
 	return candidateL <= maxInt(currentL, batchL)
 }
 
+
+// metaTrackDependencyClosedJoinV662 admits the largest contiguous safe prefix
+// without any empirical N/L or chain-length threshold.  Real cross-RouteBatch
+// dependency edges are allowed to extend the critical path: splitting PBFT
+// windows does not remove those dependencies.  We only require a valid ordinal
+// DAG and a closed predecessor set inside the candidate; predecessors before the
+// candidate start belong to an already earlier consensus window.
+func metaTrackDependencyClosedJoinV662(current, batch []metaTrackPreparedRecordV6568) bool {
+	candidate := make([]metaTrackPreparedRecordV6568, 0, len(current)+len(batch))
+	candidate = append(candidate, current...)
+	candidate = append(candidate, batch...)
+	if len(candidate) == 0 {
+		return false
+	}
+	ordinals := make(map[uint64]bool, len(candidate))
+	var minOrdinal uint64
+	for _, prepared := range candidate {
+		ordinal := prepared.Record.RoutingOrdinal
+		if ordinal == 0 || ordinals[ordinal] {
+			return false
+		}
+		ordinals[ordinal] = true
+		if minOrdinal == 0 || ordinal < minOrdinal {
+			minOrdinal = ordinal
+		}
+	}
+	for _, prepared := range candidate {
+		record := prepared.Record
+		for _, pred := range record.ConsensusExecutionPredecessorOrdinals {
+			if pred == 0 {
+				continue
+			}
+			if pred >= record.RoutingOrdinal {
+				return false
+			}
+			if pred >= minOrdinal && !ordinals[pred] {
+				return false
+			}
+		}
+		for _, dep := range record.StateVersions {
+			if dep.RequiredVersion == 0 || dep.RequiredExecutionRound == 0 {
+				continue
+			}
+			pred := dep.RequiredVersion
+			if pred >= record.RoutingOrdinal {
+				return false
+			}
+			if pred >= minOrdinal && !ordinals[pred] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+
+// metaTrackPipelineCoupledJoinV663 preserves streaming opportunity without an
+// empirical transaction-count or latency threshold. A next RouteBatch may join
+// only when every root of its internal dependency DAG is coupled to the tail
+// RouteBatch of the current window. If any root can start independently of the
+// current tail, the boundary is kept so that work can enter the next PBFT/execution
+// pipeline instead of waiting behind a larger aggregate.
+func metaTrackPipelineCoupledJoinV663(current, batch []metaTrackPreparedRecordV6568) bool {
+	if !metaTrackDependencyClosedJoinV662(current,batch) || len(current)==0 || len(batch)==0 { return false }
+	var tailSeq uint64
+	for _,p:=range current { if p.Record.RouteBatchSequence>tailSeq { tailSeq=p.Record.RouteBatchSequence } }
+	tail:=map[uint64]bool{}; inBatch:=map[uint64]bool{}
+	for _,p:=range current { if p.Record.RouteBatchSequence==tailSeq { tail[p.Record.RoutingOrdinal]=true } }
+	for _,p:=range batch { inBatch[p.Record.RoutingOrdinal]=true }
+	roots:=0
+	for _,p:=range batch {
+		preds:=append([]uint64(nil),p.Record.ConsensusExecutionPredecessorOrdinals...)
+		for _,d:=range p.Record.StateVersions { if d.RequiredVersion>0 && d.RequiredExecutionRound>0 { preds=append(preds,d.RequiredVersion) } }
+		hasBatchPred:=false; hasTailPred:=false
+		for _,pred:=range preds { if inBatch[pred] {hasBatchPred=true}; if tail[pred] {hasTailPred=true} }
+		if !hasBatchPred { roots++; if !hasTailPred { return false } }
+	}
+	return roots>0
+}
+
 func metaTrackCriticalWidthImprovesV6568(currentN, currentL, candidateN, candidateL int) bool {
 	if currentN <= 0 || currentL <= 0 {
 		return true
@@ -353,4 +433,90 @@ func (r *NodeRuntime) validateMetaTrackCriticalWidthWindowV6568(block realblock.
 		return nil, fmt.Errorf("metatrack v6.5.6.8 consensus window batch count mismatch")
 	}
 	return summaries, nil
+}
+
+
+// PushBatchAdaptiveNLV668 restores the original v6.5.6.8 adaptive window
+// admission as an experiment only. RouteBatch remains the routing window; a
+// complete next RouteBatch may share the PBFT window iff the exact structural
+// throughput proxy N/L strictly improves. blockLimit is the only hard ceiling.
+func (p *metaTrackCriticalWidthWindowPlannerV6568) PushBatchAdaptiveNLV668(batch []metaTrackPreparedRecordV6568, blockLimit int) ([]metaTrackPreparedRecordV6568, error) {
+	if len(batch) == 0 { return nil, nil }
+	if p == nil { return nil, fmt.Errorf("metatrack v6.5.6.8 adaptive N/L planner is nil") }
+	seq := batch[0].Record.RouteBatchSequence
+	for _, prepared := range batch {
+		if prepared.Record.RouteBatchSequence != seq { return nil, fmt.Errorf("metatrack v6.5.6.8 mixed route-batch sequence") }
+		if prepared.Record.ConsensusExecutionRound <= 0 { return nil, fmt.Errorf("metatrack v6.5.6.8 missing signed global execution round") }
+	}
+	if len(p.records) == 0 {
+		if err := p.resetWithBatch(batch); err != nil { return nil, err }
+		if !metaTrackCountsFitBlockV6568(p.shardCounts, blockLimit) { return nil, fmt.Errorf("metatrack v6.5.6.8 one route-batch projection exceeds block limit") }
+		return nil, nil
+	}
+	if seq != p.endBatch+1 { return nil, fmt.Errorf("metatrack v6.5.6.8 route batches are not contiguous") }
+	candidateDepth, candidateL := metaTrackExtendCriticalPathV6568(p.depthByOrdinal, batch)
+	candidateCounts := metaTrackShardCountsAfterV6568(p.shardCounts, batch)
+	candidateN := p.transactionCount + len(batch)
+	join := metaTrackCountsFitBlockV6568(candidateCounts, blockLimit) && metaTrackCriticalWidthImprovesV6568(p.transactionCount, p.criticalPath, candidateN, candidateL)
+	if join {
+		p.records = append(p.records, batch...)
+		p.depthByOrdinal = candidateDepth
+		p.criticalPath = candidateL
+		p.transactionCount = candidateN
+		p.shardCounts = candidateCounts
+		p.endBatch = seq
+		return nil, nil
+	}
+	closed := p.finalizeCurrent()
+	p.sequence++
+	if err := p.resetWithBatch(batch); err != nil { return nil, err }
+	if !metaTrackCountsFitBlockV6568(p.shardCounts, blockLimit) { return nil, fmt.Errorf("metatrack v6.5.6.8 one route-batch projection exceeds block limit") }
+	return closed, nil
+}
+
+func (p *metaTrackCriticalWidthWindowPlannerV6568) PushBatchFixedRouteBatchV663(batch []metaTrackPreparedRecordV6568, blockLimit int) ([]metaTrackPreparedRecordV6568, error) {
+	if len(batch)==0 { return nil,nil }
+	if p==nil { return nil,fmt.Errorf("metatrack v663 fixed-route-batch planner is nil") }
+	seq:=batch[0].Record.RouteBatchSequence
+	for _,prepared:=range batch { if prepared.Record.RouteBatchSequence!=seq { return nil,fmt.Errorf("metatrack v663 mixed route-batch sequence") }; if prepared.Record.ConsensusExecutionRound<=0 { return nil,fmt.Errorf("metatrack v663 missing signed global execution round") } }
+	if len(p.records)==0 { if err:=p.resetWithBatch(batch); err!=nil {return nil,err}; if !metaTrackCountsFitBlockV6568(p.shardCounts,blockLimit){return nil,fmt.Errorf("metatrack v663 one route-batch projection exceeds block limit")}; return nil,nil }
+	if seq!=p.endBatch+1 { return nil,fmt.Errorf("metatrack v663 route batches are not contiguous") }
+	closed:=p.finalizeCurrent(); p.sequence++
+	if err:=p.resetWithBatch(batch); err!=nil { return nil,err }
+	if !metaTrackCountsFitBlockV6568(p.shardCounts,blockLimit){return nil,fmt.Errorf("metatrack v663 one route-batch projection exceeds block limit")}
+	return closed,nil
+}
+
+
+func (p *metaTrackCriticalWidthWindowPlannerV6568) PushBatchPipelineCoupledV663(batch []metaTrackPreparedRecordV6568, blockLimit int) ([]metaTrackPreparedRecordV6568, error) {
+	if len(batch) == 0 { return nil, nil }
+	if p == nil { return nil, fmt.Errorf("metatrack v663 experimental pipeline window planner is nil") }
+	seq := batch[0].Record.RouteBatchSequence
+	for _, prepared := range batch {
+		if prepared.Record.RouteBatchSequence != seq { return nil, fmt.Errorf("metatrack v663 mixed route-batch sequence") }
+		if prepared.Record.ConsensusExecutionRound <= 0 { return nil, fmt.Errorf("metatrack v663 missing signed global execution round") }
+	}
+	if len(p.records) == 0 {
+		if err := p.resetWithBatch(batch); err != nil { return nil, err }
+		if !metaTrackCountsFitBlockV6568(p.shardCounts, blockLimit) { return nil, fmt.Errorf("metatrack v663 one route-batch projection exceeds block limit") }
+		return nil, nil
+	}
+	if seq != p.endBatch+1 { return nil, fmt.Errorf("metatrack v663 route batches are not contiguous") }
+	candidateDepth, candidateL := metaTrackExtendCriticalPathV6568(p.depthByOrdinal, batch)
+	candidateCounts := metaTrackShardCountsAfterV6568(p.shardCounts, batch)
+	candidateN := p.transactionCount + len(batch)
+	join := metaTrackCountsFitBlockV6568(candidateCounts, blockLimit) && metaTrackPipelineCoupledJoinV663(p.records, batch)
+	if join {
+		p.records = append(p.records, batch...)
+		p.depthByOrdinal = candidateDepth
+		p.criticalPath = candidateL
+		p.transactionCount = candidateN
+		p.shardCounts = candidateCounts
+		p.endBatch = seq
+		return nil, nil
+	}
+	closed := p.finalizeCurrent(); p.sequence++
+	if err := p.resetWithBatch(batch); err != nil { return nil, err }
+	if !metaTrackCountsFitBlockV6568(p.shardCounts, blockLimit) { return nil, fmt.Errorf("metatrack v663 one route-batch projection exceeds block limit") }
+	return closed, nil
 }
