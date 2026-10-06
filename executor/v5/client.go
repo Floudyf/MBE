@@ -217,11 +217,13 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if plugins.Routing.ID() == porygonRoutingID && strings.TrimSpace(record.RoutingSourceKey) != "" && len(shardIDs) > 0 {
 			// Porygon Single-Shard Execution follows the initiating account/object
 			// Storage Role, not the generic full-key workload SourceShard hash.
-			index := porygonStateShard(record.RoutingSourceKey, len(shardIDs))
-			executionShard = shardIDs[index] // porygon_initiating_account_state_home
+			executionShard = shardFor(plugins.Sharding, []string{record.RoutingSourceKey}, shardIDs)
+			if strings.TrimSpace(executionShard) == "" {
+				return fmt.Errorf("Porygon initiating account/object sharding returned no execution shard")
+			}
 		}
 		shardID := workloadIngressShard(record, route, statelessDirect)
-		if plugins.Routing.ID() == porygonRoutingID || plugins.Routing.ID() == calvinStatefulRoutingID || plugins.Routing.ID() == calvinStatelessRoutingID {
+		if plugins.Routing.ID() == porygonRoutingID || plugins.Routing.ID() == calvinStatefulRoutingID || plugins.Routing.ID() == calvinStatelessRoutingID || optmeGlobalOrderingEnabled(plugins) {
 			// Porygon and Calvin both separate logical execution/state partitions
 			// from one physical PBFT ordering domain. Keep route.ShardID as the
 			// logical workload/execution shard, but submit to that method's actual
@@ -342,7 +344,10 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			for index := range records {
 				ordinal := uint64(records[index].Index + 1)
 				records[index].RoutingOrdinal = ordinal
-				if plugins.Routing.ID() == calvinStatelessRoutingID {
+				// MBE_OPTME_V22_CLIENT_NO_SOURCE_VERSIONS: source/workload order must not
+				// become an execution constraint for post-consensus OptME. Calvin already
+				// follows the same principle and derives ordering from its consensus plan.
+				if plugins.Routing.ID() == calvinStatelessRoutingID || plugins.Routing.ID() == optmeStatelessRoutingID {
 					// MBE_CALVIN_CONSENSUS_VERSION_PLAN_V34: Stateless Calvin exact
 					// predecessor/producer versions are derived only from the final
 					// consensus-bound Calvin block order. Client/source order must not
@@ -413,8 +418,36 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					metatrackBatchRows[len(metatrackBatchRows)-1]["incremental_routing_plan_us"] = routePlanUS
 				}
 			} else if artifactFamily == "txallo" {
+				// MBE_TXALLO_REPRO_V202: export canonical logical accounts and causal history_mapping/fallback_hash provenance.
+				recordByIndex := map[int]WorkloadRecord{}
+				for _, rr := range routingRecords {
+					recordByIndex[rr.Index] = rr
+				}
+				mappingDigest := ""
+				if txalloBootstrapEvidence != nil {
+					mappingDigest = strings.TrimSpace(fmt.Sprint(txalloBootstrapEvidence["mapping_digest"]))
+				}
 				for _, placement := range routePlan.TransactionPlacements {
-					txalloPlacementRows = append(txalloPlacementRows, []string{fmt.Sprint(routePlan.BatchIndex), placement.LogicalID, fmt.Sprint(placement.TxIndex), placement.HomeShard, placement.ExecutionShard, placement.TargetShard, fmt.Sprint(placement.RemoteAccessCount), placement.Reason, routePlan.PlanDigest})
+					rr := recordByIndex[placement.TxIndex]
+					sender := strings.ToLower(strings.TrimSpace(rr.SenderID))
+					receiver := strings.ToLower(strings.TrimSpace(rr.ReceiverID))
+					senderSource := "fallback_hash"
+					if _, ok := txalloBootstrapMapping[sender]; ok {
+						senderSource = "history_mapping"
+					}
+					receiverSource := "none"
+					if receiver != "" {
+						receiverSource = "fallback_hash"
+						if _, ok := txalloBootstrapMapping[receiver]; ok {
+							receiverSource = "history_mapping"
+						}
+					}
+					involved := []string{placement.HomeShard}
+					if placement.TargetShard != "" && placement.TargetShard != placement.HomeShard {
+						involved = append(involved, placement.TargetShard)
+					}
+					sort.Strings(involved)
+					txalloPlacementRows = append(txalloPlacementRows, []string{fmt.Sprint(routePlan.BatchIndex), placement.LogicalID, fmt.Sprint(placement.TxIndex), sender, receiver, senderSource, receiverSource, placement.HomeShard, placement.TargetShard, strings.Join(involved, "|"), placement.HomeShard, placement.ExecutionShard, placement.TargetShard, fmt.Sprint(placement.TargetShard != "" && placement.TargetShard != placement.HomeShard), fmt.Sprint(placement.RemoteAccessCount), mappingDigest, placement.Reason, routePlan.PlanDigest})
 				}
 			}
 			for _, placement := range routePlan.TransactionPlacements {
@@ -482,7 +515,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if transactionFrontierV656Enabled {
 			if streamPartitionInvariantV658 {
 				for _, prepared := range preparedV6568 {
-					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
+					if err := submitRecord(prepared.Record, prepared.Route); err != nil {
+						return err
+					}
 				}
 			} else {
 				var closed []metaTrackPreparedRecordV6568
@@ -492,9 +527,13 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				} else {
 					closed, err = criticalWidthWindowV6568.PushBatch(preparedV6568, plugins.BlockProducer.BlockSize())
 				}
-				if err != nil { return err }
+				if err != nil {
+					return err
+				}
 				for _, prepared := range closed {
-					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
+					if err := submitRecord(prepared.Record, prepared.Route); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -528,22 +567,26 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			closed = criticalWidthWindowV6568.Flush()
 		}
 		for _, prepared := range closed {
-			if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
+			if err := submitRecord(prepared.Record, prepared.Route); err != nil {
+				return err
+			}
 		}
 	}
 	if streamPartitionInvariantV658 {
 		if err := SaveJSON(filepath.Join(outDir, "metatrack_partition_invariant_summary.json"), map[string]any{
-			"schema_version": "mbe_metatrack_partition_invariant_v658",
-			"policy": metaTrackPartitionInvariantPolicyV658,
-			"routing_mode": "single_record_stream_with_persistent_history",
+			"schema_version":            "mbe_metatrack_partition_invariant_v658",
+			"policy":                    metaTrackPartitionInvariantPolicyV658,
+			"routing_mode":              "single_record_stream_with_persistent_history",
 			"route_batch_semantic_role": "evidence_envelope_only",
-			"consensus_selection": "capacity_bounded_max_dependency_closed_frontier",
-			"version_liveness_mode": "conservative_unpruned_publish",
-			"routing_unit_size": 1,
-			"block_size": plugins.BlockProducer.BlockSize(),
-			"block_interval_ms": plugins.BlockProducer.Interval().Milliseconds(),
-			"route_batch_count": batchIndex,
-		}); err != nil { return err }
+			"consensus_selection":       "capacity_bounded_max_dependency_closed_frontier",
+			"version_liveness_mode":     "conservative_unpruned_publish",
+			"routing_unit_size":         1,
+			"block_size":                plugins.BlockProducer.BlockSize(),
+			"block_interval_ms":         plugins.BlockProducer.Interval().Milliseconds(),
+			"route_batch_count":         batchIndex,
+		}); err != nil {
+			return err
+		}
 	}
 	replaySummary := iterator.Summary()
 	replaySummary.SubmittedCount = len(rows)
@@ -592,6 +635,8 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 	}
 	if txalloBootstrapEvidence != nil {
+		if bootstrapper, ok := plugins.Sharding.(HistoricalAllocationBootstrapper); ok { txalloBootstrapEvidence = bootstrapper.HistoricalAllocationEvidence() }
+		if mapping, ok := plugins.Sharding.(txalloAccountMappingProvider); ok { txalloBootstrapMapping = mapping.TxAlloMappingSnapshot() }
 		if err := SaveJSON(filepath.Join(outDir, "txallo_allocation_summary.json"), txalloBootstrapEvidence); err != nil {
 			return err
 		}
@@ -600,7 +645,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 	}
 	if len(txalloPlacementRows) > 0 {
-		if err := metrics.WriteCSV(filepath.Join(outDir, "txallo_transaction_placement.csv"), []string{"batch_index", "logical_id", "tx_index", "home_shard", "execution_shard", "target_shard", "cross_shard_edge_count", "reason", "plan_digest"}, txalloPlacementRows); err != nil {
+		if err := metrics.WriteCSV(filepath.Join(outDir, "txallo_transaction_placement.csv"), []string{"batch_index", "logical_id", "tx_index", "sender_account", "receiver_account", "sender_mapping_source", "receiver_mapping_source", "sender_shard", "receiver_shard", "involved_shards", "home_shard", "execution_shard", "target_shard", "txallo_cross_shard", "cross_shard_edge_count", "mapping_digest", "reason", "plan_digest"}, txalloPlacementRows); err != nil {
 			return err
 		}
 	}
@@ -797,23 +842,24 @@ func statelessPayload(payload string) string {
 }
 
 type resolvedAccessEntry struct {
-	Index                 int             `json:"index"`
-	LogicalID             string          `json:"logical_id"`
-	TxID                  string          `json:"tx_id"`
-	Sender                string          `json:"sender"`
-	Receiver              string          `json:"receiver"`
-	SourceShard           string          `json:"source_shard"`
-	ExecutionShard        string          `json:"execution_shard"`
-	RoutingReason         string          `json:"routing_reason"`
-	RoutingEpoch          uint64          `json:"routing_epoch"`
-	RoutePlanDigest       string          `json:"route_plan_digest,omitempty"`
-	RouteEntryDigest      string          `json:"route_entry_digest,omitempty"`
-	PredictedRemoteReads  int             `json:"predicted_remote_reads"`
-	PredictedRemoteWrites int             `json:"predicted_remote_writes"`
-	AccessListDigest      string          `json:"access_list_digest"`
-	AccessListSchema      string          `json:"access_list_schema,omitempty"`
-	AccessListSource      string          `json:"access_list_source,omitempty"`
-	AccessList            []tx.AccessItem `json:"access_list"`
+	Index                 int                         `json:"index"`
+	LogicalID             string                      `json:"logical_id"`
+	TxID                  string                      `json:"tx_id"`
+	Sender                string                      `json:"sender"`
+	Receiver              string                      `json:"receiver"`
+	SourceShard           string                      `json:"source_shard"`
+	ExecutionShard        string                      `json:"execution_shard"`
+	RoutingReason         string                      `json:"routing_reason"`
+	RoutingEpoch          uint64                      `json:"routing_epoch"`
+	RoutePlanDigest       string                      `json:"route_plan_digest,omitempty"`
+	RouteEntryDigest      string                      `json:"route_entry_digest,omitempty"`
+	PredictedRemoteReads  int                         `json:"predicted_remote_reads"`
+	PredictedRemoteWrites int                         `json:"predicted_remote_writes"`
+	AccessListDigest      string                      `json:"access_list_digest"`
+	AccessListSchema      string                      `json:"access_list_schema,omitempty"`
+	AccessListSource      string                      `json:"access_list_source,omitempty"`
+	AccessList            []tx.AccessItem             `json:"access_list"`
+	StateVersions         []tx.StateVersionDependency `json:"state_versions,omitempty"` // MBE_TXALLO_EVIDENCE_V203
 }
 
 func resolvedAccessEntryFromTransaction(record WorkloadRecord, item tx.SignedTransaction, sourceShard, executionShard, reason string) resolvedAccessEntry {
@@ -821,7 +867,7 @@ func resolvedAccessEntryFromTransaction(record WorkloadRecord, item tx.SignedTra
 	if digest == "" {
 		digest = CanonicalAccessListDigest(item.AccessList)
 	}
-	entry := resolvedAccessEntry{Index: record.Index, LogicalID: firstNonEmpty(record.LogicalID, item.TxID), TxID: item.TxID, Sender: item.Sender, Receiver: item.Receiver, SourceShard: sourceShard, ExecutionShard: executionShard, RoutingReason: reason, RoutingEpoch: record.RoutingEpoch, RoutePlanDigest: record.RoutePlanDigest, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, AccessListDigest: digest, AccessListSchema: item.AccessListSchema, AccessListSource: item.AccessListSource, AccessList: append([]tx.AccessItem(nil), item.AccessList...)}
+	entry := resolvedAccessEntry{Index: record.Index, LogicalID: firstNonEmpty(record.LogicalID, item.TxID), TxID: item.TxID, Sender: item.Sender, Receiver: item.Receiver, SourceShard: sourceShard, ExecutionShard: executionShard, RoutingReason: reason, RoutingEpoch: record.RoutingEpoch, RoutePlanDigest: record.RoutePlanDigest, PredictedRemoteReads: record.PredictedRemoteReads, PredictedRemoteWrites: record.PredictedRemoteWrites, AccessListDigest: digest, AccessListSchema: item.AccessListSchema, AccessListSource: item.AccessListSource, AccessList: append([]tx.AccessItem(nil), item.AccessList...), StateVersions: append([]tx.StateVersionDependency(nil), record.StateVersions...)}
 	if item.ExecutionRouting != nil {
 		entry.RouteEntryDigest = item.ExecutionRouting.RouteEntryDigest
 	}

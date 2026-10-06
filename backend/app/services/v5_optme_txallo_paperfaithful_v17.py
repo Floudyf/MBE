@@ -238,54 +238,81 @@ def _split_accounts(value: str) -> list[str]:
 
 
 def compute_txallo_routing_coherence_v17(run_dir: Path | str) -> dict[str, Any]:
-    """Audit the paper contract: transaction involved shards are derived from account allocation."""
+    """Audit frozen-history mapping plus explicitly declared causal fallback.
+
+    v20.2+ placement artifacts export canonical logical accounts and mapping
+    provenance. Historical v17 artifacts used sender/receiver without provenance;
+    those remain readable under the original mapping-induced placement contract.
+    """
+    # MBE_TXALLO_REPRO_V202_ROUTING
     root = Path(run_dir)
     account_map, map_source = _mapping_rows(root)
     if not account_map:
-        return {"status": "missing_account_mapping", "paper_contract": "transaction_shards_derived_from_account_allocation"}
-    files = _candidate_files(root,
-        ("client/txallo_transaction_placement.csv", "txallo_transaction_placement.csv"),
-        ("*txallo*transaction*placement*.csv",))
+        return {"status":"missing_account_mapping", "passed":None, "paper_contract":"transaction_shards_derived_from_account_allocation"}
+    files = _candidate_files(root, ("client/txallo_transaction_placement.csv", "txallo_transaction_placement.csv"), ("*txallo*transaction*placement*.csv",))
     if not files:
-        return {"status": "missing_transaction_placement", "account_mapping_source": map_source,
-                "paper_contract": "transaction_shards_derived_from_account_allocation"}
-    checked = 0; mismatch = 0; unseen = 0; examples: list[dict[str, Any]] = []
+        return {"status":"missing_transaction_placement", "passed":None, "account_mapping_source":map_source, "paper_contract":"transaction_shards_derived_from_account_allocation"}
+    checked=0; mismatch=0; unseen=0; history=set(); fallback=set(); examples=[]; new_schema_rows=0; legacy_rows=0
     for row in _read_csv(files[0]):
-        low = {str(k).lower(): "" if v is None else str(v).strip() for k,v in row.items()}
-        accounts: list[str] = []
+        low={str(k).lower():"" if v is None else str(v).strip() for k,v in row.items()}
+        new_schema = any(k in low for k in ("sender_account","receiver_account","sender_mapping_source","receiver_mapping_source"))
+        if new_schema:
+            sender=low.get("sender_account",""); receiver=low.get("receiver_account","")
+            if not sender and not receiver:
+                continue
+            new_schema_rows += 1; checked += 1; expected=set()
+            for role,account in (("sender",sender),("receiver",receiver)):
+                if not account:
+                    continue
+                source=low.get(f"{role}_mapping_source",""); shard=low.get(f"{role}_shard",""); bad=False
+                if source=="history_mapping":
+                    history.add(account); bad=account_map.get(account)!=shard
+                elif source=="fallback_hash":
+                    fallback.add(account); bad=account in account_map or not shard
+                else:
+                    bad=True
+                if shard:
+                    expected.add(shard)
+                if bad:
+                    mismatch += 1
+                    if len(examples)<8:
+                        examples.append({"role":role,"account":account,"source":source,"shard":shard,"history_shard":account_map.get(account)})
+            claimed=set(_split_accounts(low.get("involved_shards","")))
+            if claimed != expected:
+                mismatch += 1
+                if len(examples)<8:
+                    examples.append({"logical_id":low.get("logical_id"),"expected_shards":sorted(expected),"claimed_shards":sorted(claimed)})
+            continue
+
+        # Historical artifact path: preserve the original v17 mapping audit.
+        accounts=[]
         for key in ("accounts", "account_ids", "involved_accounts", "input_accounts", "output_accounts",
                     "sender", "sender_id", "receiver", "receiver_id", "source_account", "target_account"):
-            accounts.extend(_split_accounts(low.get(key, "")))
-        accounts = list(dict.fromkeys(a for a in accounts if a))
-        if not accounts: continue
-        expected = {account_map[a] for a in accounts if a in account_map}
-        if any(a not in account_map for a in accounts): unseen += 1
-        if not expected: continue
-        checked += 1
-        recorded: set[str] = set()
-        for key in ("involved_shards", "shards", "execution_shards", "home_shard", "execution_shard", "target_shard"):
-            recorded.update(_split_accounts(low.get(key, "")))
-        recorded.discard("")
-        # Paper Definition 1: involved shards are exactly the shards maintaining associated accounts.
-        # Transport-specific single execution owner is allowed, but a claimed involved-shard list must match.
-        claimed_multi = set(_split_accounts(low.get("involved_shards", "") or low.get("shards", "") or low.get("execution_shards", "")))
-        bad = bool(claimed_multi and claimed_multi != expected)
-        if bad:
+            accounts.extend(_split_accounts(low.get(key,"")))
+        accounts=list(dict.fromkeys(a for a in accounts if a))
+        if not accounts:
+            continue
+        expected={account_map[a] for a in accounts if a in account_map}
+        if any(a not in account_map for a in accounts):
+            unseen += 1
+        if not expected:
+            continue
+        legacy_rows += 1; checked += 1
+        claimed=set(_split_accounts(low.get("involved_shards","") or low.get("shards","") or low.get("execution_shards","")))
+        if claimed and claimed != expected:
             mismatch += 1
-            if len(examples) < 8: examples.append({"accounts": accounts, "expected_shards": sorted(expected), "claimed_shards": sorted(claimed_multi)})
-    return {
-        "status": "available" if checked else "placement_rows_lack_account_identity",
-        "checked_transaction_count": checked,
-        "mismatch_count": mismatch if checked else None,
-        "unseen_account_transaction_count": unseen if checked else None,
-        "passed": mismatch == 0 if checked else None,
-        "examples": examples,
-        "account_mapping_source": map_source,
-        "transaction_placement_source": str(files[0].relative_to(root)).replace("\\", "/"),
-        "paper_contract": "transaction_involved_shards_are_induced_by_account_allocation_definition_1",
-    }
-
-
+            if len(examples)<8:
+                examples.append({"accounts":accounts,"expected_shards":sorted(expected),"claimed_shards":sorted(claimed)})
+    status = "available_causal_mapping_and_fallback_evidence" if new_schema_rows else ("available" if checked else "placement_rows_lack_account_identity")
+    return {"status":status, "checked_transaction_count":checked, "mismatch_count":mismatch if checked else None,
+            "unseen_account_transaction_count":unseen if legacy_rows else None,
+            "history_mapped_account_count":len(history) if new_schema_rows else None,
+            "fallback_account_count":len(fallback) if new_schema_rows else None,
+            "new_schema_row_count":new_schema_rows, "legacy_schema_row_count":legacy_rows,
+            "passed":mismatch==0 if checked else None, "examples":examples,
+            "account_mapping_source":map_source,
+            "transaction_placement_source":str(files[0].relative_to(root)).replace("\\","/"),
+            "paper_contract":"frozen_history_mapping_plus_causal_unseen_account_fallback_no_future_training" if new_schema_rows else "transaction_involved_shards_are_induced_by_account_allocation_definition_1"}
 
 def compute_txallo_physical_execution_coherence_v17(run_dir: Path | str) -> dict[str, Any]:
     """Compare paper-derived involved shards with observed stateful execution shards.
@@ -436,35 +463,87 @@ def compute_writeback_fanout_v17(run_dir: Path | str, metrics: dict[str, Any]) -
             "status": "summary_only_no_exact_identity" if legacy.get("physical_message_count") is not None else "missing"}
 
 
+# MBE_OPTME_V20_TX_EVIDENCE: prefer executor-emitted per-transaction truth.
 def compute_optme_transaction_evidence_v17(run_dir: Path | str, metrics: dict[str, Any]) -> dict[str, Any]:
     root = Path(run_dir)
+    tx: dict[str, dict[str, Any]] = {}
+    source_seen = False
+    for path in sorted((root / "nodes").glob("*/block_execution_summary.json")):
+        payload = _read_json(path)
+        if not isinstance(payload, dict) or payload.get("block_executor_id") not in {"optme_block_executor", "stateless_optme_block_executor"}:
+            continue
+        for block in payload.get("blocks") if isinstance(payload.get("blocks"), list) else []:
+            if not isinstance(block, dict):
+                continue
+            rows = block.get("optme_transaction_evidence")
+            if not isinstance(rows, list):
+                continue
+            source_seen = True
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                txid = str(row.get("logical_tx_id") or row.get("tx_id") or "")
+                if not txid:
+                    continue
+                state = tx.setdefault(txid, {
+                    "early_detected": False, "hierarchical_aborted": False, "rescheduled": False,
+                    "reexecution": False, "reordered": False, "simulation_failed": False,
+                    "reexecution_simulation_failed": False, "second_pass_invalidated": False,
+                })
+                state["early_detected"] |= bool(row.get("early_detected"))
+                state["hierarchical_aborted"] |= bool(row.get("hierarchical_aborted"))
+                state["rescheduled"] |= int(row.get("reschedule_epoch") or 0) > 0
+                state["reexecution"] |= bool(row.get("reexecuted"))
+                state["reordered"] |= bool(row.get("reordered"))
+                state["simulation_failed"] |= not bool(row.get("simulation_success"))
+                state["reexecution_simulation_failed"] |= bool(row.get("reexecuted")) and not bool(row.get("reexecution_success")) and not bool(row.get("second_pass_invalidated"))
+                state["second_pass_invalidated"] |= bool(row.get("second_pass_invalidated"))
+    if source_seen and tx:
+        return {
+            "status": "available",
+            "source": "nodes/*/block_execution_summary.json:optme_transaction_evidence",
+            "logical_transaction_count": len(tx),
+            "logical_early_detection_count": sum(1 for x in tx.values() if x["early_detected"]),
+            "logical_hierarchical_abort_count": sum(1 for x in tx.values() if x["hierarchical_aborted"]),
+            "logical_rescheduled_count": sum(1 for x in tx.values() if x["rescheduled"]),
+            "logical_early_abort_count": sum(1 for x in tx.values() if x["rescheduled"]),
+            "logical_reexecution_count": sum(1 for x in tx.values() if x["reexecution"]),
+            "logical_reordered_count": sum(1 for x in tx.values() if x["reordered"]),
+            "logical_simulation_failed_count": sum(1 for x in tx.values() if x["simulation_failed"]),
+            "logical_reexecution_simulation_failed_count": sum(1 for x in tx.values() if x["reexecution_simulation_failed"]),
+            "logical_second_pass_invalidated_count": sum(1 for x in tx.values() if x["second_pass_invalidated"]),
+            "paper_reference": OPTME_PAPER_REFERENCE,
+        }
+
     files = _candidate_files(root,
         ("aggregate/optme_transaction_fidelity.csv", "optme_transaction_fidelity.csv", "client/optme_transaction_fidelity.csv"),
         ("*optme*transaction*fidelity*.csv", "*optme*schedule*trace*.csv"))
-    for p in files:
-        rows = _read_csv(p)
-        if not rows: continue
-        tx: dict[str, dict[str, Any]] = {}
+    for path in files:
+        rows = _read_csv(path)
+        if not rows:
+            continue
+        legacy: dict[str, dict[str, bool]] = {}
         for row in rows:
-            low = {str(k).lower(): "" if v is None else str(v) for k,v in row.items()}
+            low = {str(k).lower(): "" if v is None else str(v) for k, v in row.items()}
             txid = low.get("logical_tx_id") or low.get("logical_id") or low.get("tx_id")
-            if not txid: continue
-            state = tx.setdefault(txid, {"early_abort":False,"reexecution":False,"reordered":False})
-            state["early_abort"] |= low.get("early_abort", "").lower() in {"1","true","yes"} or "abort" in low.get("event", "").lower()
-            state["reexecution"] |= low.get("reexecution", "").lower() in {"1","true","yes"} or "reexec" in low.get("event", "").lower()
-            state["reordered"] |= low.get("reordered", "").lower() in {"1","true","yes"} or "reorder" in low.get("event", "").lower() or "resched" in low.get("event", "").lower()
-        if tx:
-            return {"status":"available", "source":str(p.relative_to(root)).replace("\\","/"),
-                    "logical_transaction_count":len(tx),
-                    "logical_early_abort_count":sum(1 for x in tx.values() if x["early_abort"]),
-                    "logical_reexecution_count":sum(1 for x in tx.values() if x["reexecution"]),
-                    "logical_reordered_count":sum(1 for x in tx.values() if x["reordered"]),
-                    "paper_reference":OPTME_PAPER_REFERENCE}
-    return {"status":"missing_tx_level_fidelity_trace", "source":None, "paper_reference":OPTME_PAPER_REFERENCE,
-            "aggregate_early_abort_observation_count":_as_int(metrics.get("optme_early_abort_count")),
-            "aggregate_reexecution_observation_count":_as_int(metrics.get("optme_reexecution_count")),
-            "aggregate_reordered_observation_count":_as_int(metrics.get("optme_reordered_transaction_count"))}
-
+            if not txid:
+                continue
+            event = low.get("event", "").lower()
+            state = legacy.setdefault(txid, {"early_abort": False, "reexecution": False, "reordered": False})
+            state["early_abort"] |= low.get("early_abort", "").lower() in {"1", "true", "yes"} or "early_abort" in event
+            state["reexecution"] |= low.get("reexecution", "").lower() in {"1", "true", "yes"} or "reexec" in event
+            state["reordered"] |= low.get("reordered", "").lower() in {"1", "true", "yes"} or "reorder" in event
+        if legacy:
+            return {"status": "available", "source": str(path.relative_to(root)).replace("\\", "/"),
+                    "logical_transaction_count": len(legacy),
+                    "logical_early_abort_count": sum(1 for x in legacy.values() if x["early_abort"]),
+                    "logical_reexecution_count": sum(1 for x in legacy.values() if x["reexecution"]),
+                    "logical_reordered_count": sum(1 for x in legacy.values() if x["reordered"]),
+                    "paper_reference": OPTME_PAPER_REFERENCE}
+    return {"status": "missing_tx_level_fidelity_trace", "source": None, "paper_reference": OPTME_PAPER_REFERENCE,
+            "aggregate_early_abort_observation_count": _as_int(metrics.get("optme_early_abort_count")),
+            "aggregate_reexecution_observation_count": _as_int(metrics.get("optme_reexecution_count")),
+            "aggregate_reordered_observation_count": _as_int(metrics.get("optme_reordered_transaction_count"))}
 
 def enrich_metrics(run_dir: Path | str, method_id: str | None, result: dict[str, Any]) -> dict[str, Any]:
     out = v16.enrich_metrics(run_dir, method_id, result)

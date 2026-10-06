@@ -269,7 +269,7 @@ func (r *NodeRuntime) bindPorygonCrossRoundEvidence(block realblock.Block) (real
 	if err != nil {
 		return block, err
 	}
-	pending := r.porygonPaperPendingEvidence()
+	pending := r.porygonPaperPendingEvidenceForProposal(block.Height)
 	evidence.PreviousPendingTransactions = pending
 	evidence.PreviousPendingDigest = ""
 	if len(pending) > 0 {
@@ -291,7 +291,7 @@ func (r *NodeRuntime) verifyPorygonCrossRoundEvidence(block realblock.Block) err
 	if err != nil {
 		return err
 	}
-	expected := r.porygonPaperPendingEvidence()
+	expected := r.porygonPaperPendingEvidenceForProposal(block.Height)
 	actual := porygonCanonicalPendingEvidence(evidence.PreviousPendingTransactions)
 	if stableJSONDigest(actual) != stableJSONDigest(expected) {
 		return fmt.Errorf("porygon transaction-level pending evidence mismatch at height %d", block.Height)
@@ -308,9 +308,8 @@ func (r *NodeRuntime) verifyPorygonCrossRoundEvidence(block realblock.Block) err
 		if proposal.PendingTxDigest != evidence.PreviousPendingDigest {
 			return fmt.Errorf("porygon L/U/T proposal pending digest mismatch")
 		}
-		expectedUpdates := r.porygonPaperUpdatesForProposal(block.Height)
-		if stableJSONDigest(proposal.U) != stableJSONDigest(expectedUpdates) {
-			return fmt.Errorf("porygon L/U/T proposal U set mismatch at height %d", block.Height)
+		if err := r.porygonPaperVerifyCertifiedProposalU(block.Height, proposal.U); err != nil {
+			return err
 		}
 		expectedEC := porygonECDescriptorForHeight(r.plan.NodeConfigs, block.Height, block.ShardID, r.porygonExecutionShardCount(), r.porygonExecutionCommitteeCount())
 		if proposal.ExecutionCommittee.CommitteeDigest != expectedEC.CommitteeDigest || stableJSONDigest(proposal.ExecutionCommittee) != stableJSONDigest(expectedEC) {
@@ -488,7 +487,20 @@ func (r *NodeRuntime) executePorygonPipelineBlock(ctx context.Context, state *po
 			}
 		}
 	}
-	_, certifiedRoot := r.porygonPaperRecordCertifiedDelta(block.Height, executed.StateDelta, certifiedRoots)
+	certifiedSnapshot, certifiedRoot, certifyErr := r.porygonPaperRecordCertifiedDelta(block.Height, executed.StateDelta, certifiedRoots)
+	if certifyErr != nil {
+		return certifyErr
+	}
+	localCertifiedRoot, localRootReady := r.porygonPaperLocalCertifiedRootAtHeight(block.Height)
+	if !localRootReady {
+		return fmt.Errorf("Porygon canonical local partition root missing after execution at height %d", block.Height)
+	}
+	// Execution reads remain anchored at Proposal.T(h-2), but durable/materialized
+	// state is canonical state(h-1)+this round's explicit writes. Export the
+	// latter as StateRootAfter/StateUpdates so artifacts never report the stale
+	// T-relative working snapshot as durable truth.
+	executed.ExecutionResult.StateRootAfter = localCertifiedRoot
+	executed.ExecutionResult.StateUpdates = copyRegistryStringMap(certifiedSnapshot)
 	finished := time.Now()
 	if executed.ActualMetrics == nil {
 		executed.ActualMetrics = map[string]any{}
@@ -673,6 +685,11 @@ func (r *NodeRuntime) porygonPipelineOnDurable(block realblock.Block) {
 	if !r.porygonPipelineEnabledRuntime() {
 		return
 	}
+	if err := r.porygonPaperValidateDurableSnapshot(block.Height, r.plugins.StateStorage.Snapshot(r.db)); err != nil {
+		r.addPorygonRuntimeMetric("porygon_durable_snapshot_certified_root_mismatch_count", 1)
+		r.markFatalExecutionError(block, err)
+		return
+	}
 	state := r.porygonPipelineRuntime()
 	state.mu.Lock()
 	if item := state.blocks[block.Height]; item != nil && item.Block.BlockHash == block.BlockHash {
@@ -683,7 +700,6 @@ func (r *NodeRuntime) porygonPipelineOnDurable(block realblock.Block) {
 		state.durableHeight = block.Height
 	}
 	state.mu.Unlock()
-	r.porygonPaperRecordCertifiedSnapshot(block.Height, r.plugins.StateStorage.Snapshot(r.db))
 	r.addPorygonRuntimeMetric("porygon_pipeline_durable_count", 1)
 }
 

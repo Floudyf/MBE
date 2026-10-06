@@ -24,24 +24,45 @@ type optmeSimulationResult struct {
 }
 
 type optmeExecutionMetrics struct {
-	Mode                    string `json:"mode"`
-	WorkerCount             int    `json:"worker_count"`
-	SimulationMS            int64  `json:"simulation_ms"`
-	GraphSchedulingMS       int64  `json:"graph_scheduling_ms"`
-	CommitMS                int64  `json:"commit_ms"`
-	ReexecutionMS           int64  `json:"reexecution_ms"`
-	ValidationMS            int64  `json:"validation_ms"`
-	ObservedReadCount       int    `json:"observed_read_count"`
-	ObservedWriteCount      int    `json:"observed_write_count"`
-	AddressCount            int    `json:"address_count"`
-	UnitCount               int    `json:"unit_count"`
-	SequenceCount           int    `json:"sequence_count"`
-	MaximumSequenceWidth    int    `json:"maximum_sequence_width"`
-	EarlyAbortCount         int    `json:"early_abort_count"`
-	ReorderedCount          int    `json:"reordered_transaction_count"`
-	RescheduledEpochCount   int    `json:"rescheduled_epoch_count"`
-	ReexecutionCount        int    `json:"reexecution_count"`
-	ReexecutionInvalidCount int    `json:"reexecution_invalid_count"`
+	Mode                             string `json:"mode"`
+	WorkerCount                      int    `json:"worker_count"`
+	SimulationMS                     int64  `json:"simulation_ms"`
+	GraphSchedulingMS                int64  `json:"graph_scheduling_ms"`
+	CommitMS                         int64  `json:"commit_ms"`
+	ReexecutionMS                    int64  `json:"reexecution_ms"`
+	ValidationMS                     int64  `json:"validation_ms"`
+	ObservedReadCount                int    `json:"observed_read_count"`
+	ObservedWriteCount               int    `json:"observed_write_count"`
+	AddressCount                     int    `json:"address_count"`
+	UnitCount                        int    `json:"unit_count"`
+	SequenceCount                    int    `json:"sequence_count"`
+	MaximumSequenceWidth             int    `json:"maximum_sequence_width"`
+	EarlyAbortCount                  int    `json:"early_abort_count"`
+	EarlyDetectionCount              int    `json:"early_detection_count"`
+	HierarchicalAbortCount           int    `json:"hierarchical_abort_count"`
+	ReorderedCount                   int    `json:"reordered_transaction_count"`
+	RescheduledTransactionCount      int    `json:"rescheduled_transaction_count"`
+	RescheduledEpochCount            int    `json:"rescheduled_epoch_count"`
+	SimulationFailedCount            int    `json:"simulation_failed_count"`
+	ReexecutionCount                 int    `json:"reexecution_count"`
+	ReexecutionSimulationFailedCount int    `json:"reexecution_simulation_failed_count"`
+	ReexecutionInvalidCount          int    `json:"reexecution_invalid_count"`
+}
+
+type optmeTxEvidence struct {
+	TxID                  string `json:"tx_id"`
+	LogicalTxID           string `json:"logical_tx_id"`
+	OriginalIndex         int    `json:"original_index"`
+	SimulationSuccess     bool   `json:"simulation_success"`
+	EarlyDetected         bool   `json:"early_detected"`
+	HierarchicalAborted   bool   `json:"hierarchical_aborted"`
+	Reordered             bool   `json:"reordered"`
+	MainSequence          int    `json:"main_sequence"`
+	RescheduleEpoch       int    `json:"reschedule_epoch"`
+	Reexecuted            bool   `json:"reexecuted"`
+	ReexecutionSuccess    bool   `json:"reexecution_success"`
+	SecondPassInvalidated bool   `json:"second_pass_invalidated"`
+	TerminalSuccess       bool   `json:"terminal_success"`
 }
 
 func optmeObservedFromDeltas(deltas []execution.TxDelta) []optmeObservedTx {
@@ -130,6 +151,8 @@ func txIndexSet(items []int) map[int]bool {
 	return m
 }
 
+// MBE_OPTME_V20_TX_EVIDENCE: preserve the author scheduler while making MBE
+// simulation-failure terminalization and tx-level mechanism evidence explicit.
 func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecutionInput) (BlockExecutionResult, error) {
 	workers := configuredWorkerCount(p.config, input.WorkerCount)
 	if workers < 1 {
@@ -142,6 +165,15 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 	before := commitment.Root()
 	commitmentMS := time.Since(commitmentStarted)
 
+	evidence := make([]optmeTxEvidence, len(input.Block.TxList))
+	for idx, item := range input.Block.TxList {
+		logicalID := item.LogicalTxID
+		if logicalID == "" {
+			logicalID = item.TxID
+		}
+		evidence[idx] = optmeTxEvidence{TxID: item.TxID, LogicalTxID: logicalID, OriginalIndex: idx}
+	}
+
 	simStarted := time.Now()
 	simulated, maxSimulationWidth, err := runOptmeSimulation(ctx, input.Block, base, workers)
 	if err != nil {
@@ -150,21 +182,63 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 	simulationMS := time.Since(simStarted)
 	deltas := make([]execution.TxDelta, len(simulated))
 	receipts := make([]execution.Receipt, len(simulated))
-	observedReads, observedWrites := 0, 0
+	successfulDeltas := make([]execution.TxDelta, 0, len(simulated))
+	observedReads, observedWrites, simulationFailedCount := 0, 0, 0
 	for i, r := range simulated {
 		deltas[i] = r.delta
 		receipts[i] = r.receipt
+		if !r.delta.Success {
+			simulationFailedCount++
+			continue
+		}
+		evidence[i].SimulationSuccess = true
+		successfulDeltas = append(successfulDeltas, r.delta)
 		observedReads += len(r.delta.ReadSet)
 		observedWrites += len(r.delta.WriteSet)
 	}
-	observed := optmeObservedFromDeltas(deltas)
+	// MBE_OPTME_V23_MIN_TRUTH: keep OptME scheduling unchanged; only fail closed
+	// if actual simulation RW escapes the signed AccessList used by Stateless projection.
+	if err := validateOptMEV23ObservedAccessCoverage(input.Block, deltas); err != nil {
+		return BlockExecutionResult{}, err
+	}
+	observed := optmeObservedFromDeltas(successfulDeltas)
 	provider, ok := input.Scheduler.(optmeObservedScheduleProvider)
 	if !ok {
 		return BlockExecutionResult{}, fmt.Errorf("OptME scheduler does not expose observed-RW scheduling")
 	}
 	scheduleStarted := time.Now()
-	plan := provider.BuildObservedSchedule(observed)
+	plan := provider.BuildObservedSchedule(observed, workers)
 	schedulingMS := time.Since(scheduleStarted)
+
+	for seqIndex, seq := range plan.Sequences {
+		for _, idx := range seq {
+			if idx >= 0 && idx < len(evidence) {
+				evidence[idx].MainSequence = seqIndex + 1
+			}
+		}
+	}
+	for _, idx := range plan.EarlyDetected {
+		if idx >= 0 && idx < len(evidence) {
+			evidence[idx].EarlyDetected = true
+		}
+	}
+	for _, idx := range plan.HierarchicalAborted {
+		if idx >= 0 && idx < len(evidence) {
+			evidence[idx].HierarchicalAborted = true
+		}
+	}
+	for _, idx := range plan.Reordered {
+		if idx >= 0 && idx < len(evidence) {
+			evidence[idx].Reordered = true
+		}
+	}
+	for epochIndex, epoch := range plan.RescheduleEpochs {
+		for _, idx := range epoch {
+			if idx >= 0 && idx < len(evidence) {
+				evidence[idx].RescheduleEpoch = epochIndex + 1
+			}
+		}
+	}
 
 	result := execution.Result{BlockHash: input.Block.BlockHash, Height: input.Block.Height, StateRootBefore: before, Deterministic: true, StateUpdates: map[string]string{}, BlockExecutorID: p.ID(), ExecutorVersion: optmeEngineVersion, WorkerCount: workers, StateRootVersion: state.CommitmentVersion}
 	allDeltas := make([]execution.TxDelta, 0, len(input.Block.TxList))
@@ -172,10 +246,31 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 	events := []ScheduleEvent{}
 	attempts := []BusinessExecutionAttempt{}
 	committed := map[int]bool{}
+
+	// Author _simulate() filter_map excludes failed simulations from the ACG.
+	// MBE still owes every PBFT transaction a terminal receipt, so failed
+	// simulations are terminalized here without entering OptME scheduling.
+	for idx, r := range simulated {
+		if r.delta.Success {
+			continue
+		}
+		rc := r.receipt
+		commitmentStarted = time.Now()
+		rc.StateRootAfterTx = commitment.Root()
+		commitmentMS += time.Since(commitmentStarted)
+		d := r.delta
+		d.Receipt = rc
+		allDeltas = append(allDeltas, d)
+		allReceipts = append(allReceipts, rc)
+		committed[idx] = true
+		events = append(events, ScheduleEvent{TxID: input.Block.TxList[idx].TxID, Track: "optme", QueueName: "simulation_failed", DecisionReason: "author_source_simulation_filtered_mbe_terminal_failure", LocalExecution: true, Blocked: true})
+		attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: input.Block.Height, TxID: d.TxID, Track: p.ID(), Attempt: 1, Reason: "optme_simulation_failed_filtered_from_acg", Success: false, FinalCompletion: true})
+	}
+
 	commitStarted := time.Now()
-	// The source commits each OptME sequence concurrently. MBE materializes the already-simulated
-	// disjoint effects in deterministic transaction-index order inside a sequence so receipt roots
-	// remain reproducible while the final state is identical to the parallel commit.
+	// The source commits each OptME sequence concurrently. MBE materializes the
+	// already-simulated disjoint effects in deterministic index order so receipt
+	// roots remain reproducible while preserving the final state.
 	for seqIndex, seq := range plan.Sequences {
 		sorted := append([]int(nil), seq...)
 		sort.Ints(sorted)
@@ -183,19 +278,22 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 			if idx < 0 || idx >= len(deltas) {
 				return BlockExecutionResult{}, fmt.Errorf("OptME schedule references invalid transaction index %d", idx)
 			}
-			d, r := optmeApplyDelta(input.Block, working, commitment, deltas[idx], receipts[idx])
+			if !deltas[idx].Success {
+				return BlockExecutionResult{}, fmt.Errorf("OptME schedule references simulation-failed transaction index %d", idx)
+			}
+			d, rc := optmeApplyDelta(input.Block, working, commitment, deltas[idx], receipts[idx])
 			deltas[idx] = d
-			receipts[idx] = r
+			receipts[idx] = rc
 			committed[idx] = true
 			allDeltas = append(allDeltas, d)
-			allReceipts = append(allReceipts, r)
+			allReceipts = append(allReceipts, rc)
 			events = append(events, ScheduleEvent{TxID: input.Block.TxList[idx].TxID, Track: "optme", QueueName: fmt.Sprintf("sequence_%d", seqIndex+1), DecisionReason: "author_source_hierarchical_schedule", LocalExecution: true, ReadyQueueDepth: len(seq)})
 			attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: input.Block.Height, TxID: d.TxID, Track: p.ID(), Attempt: 1, Reason: "optme_simulation_effect_commit", Success: d.Success, FinalCompletion: true})
 		}
 	}
 	commitMS := time.Since(commitStarted)
 
-	reexecutionCount, invalidCount := 0, 0
+	reexecutionCount, reexecutionSimulationFailedCount, invalidCount := 0, 0, 0
 	var reexecutionMS, validationMS time.Duration
 	serial := execution.NewSerialExecutor()
 	for epochIndex, epoch := range plan.RescheduleEpochs {
@@ -234,13 +332,34 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 			return BlockExecutionResult{}, firstErr
 		}
 		reexecutionCount += len(rerun)
-		// Author validation accepts the first transactions whose write sets are pairwise disjoint
-		// within this re-execution group. Later write/write conflicts are invalidated; the author's
-		// third fallback is commented out, so MBE records an explicit terminal failure receipt.
+		rerunDeltas := make([]execution.TxDelta, 0, len(rerun))
+		for _, rr := range rerun {
+			rerunDeltas = append(rerunDeltas, rr.delta)
+		}
+		if err := validateOptMEV23ObservedAccessCoverage(input.Block, rerunDeltas); err != nil {
+			return BlockExecutionResult{}, fmt.Errorf("OptME v23 reexecution access boundary: %w", err)
+		}
 		validateStarted := time.Now()
 		usedWrites := map[string]bool{}
 		sort.SliceStable(rerun, func(i, j int) bool { return rerun[i].index < rerun[j].index })
 		for _, rr := range rerun {
+			evidence[rr.index].Reexecuted = true
+			if !rr.delta.Success {
+				reexecutionSimulationFailedCount++
+				rc := rr.receipt
+				commitmentStarted = time.Now()
+				rc.StateRootAfterTx = commitment.Root()
+				commitmentMS += time.Since(commitmentStarted)
+				d := rr.delta
+				d.Receipt = rc
+				allDeltas = append(allDeltas, d)
+				allReceipts = append(allReceipts, rc)
+				committed[rr.index] = true
+				events = append(events, ScheduleEvent{TxID: input.Block.TxList[rr.index].TxID, Track: "optme", QueueName: fmt.Sprintf("reschedule_epoch_%d", epochIndex+1), DecisionReason: "author_source_second_pass_simulation_failed", LocalExecution: true, Blocked: true})
+				attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: input.Block.Height, TxID: d.TxID, Track: p.ID(), Attempt: 2, Reason: "optme_reexecution_simulation_failed", Success: false, FinalCompletion: true})
+				continue
+			}
+			evidence[rr.index].ReexecutionSuccess = true
 			conflict := false
 			for k := range rr.delta.WriteSet {
 				if usedWrites[k] {
@@ -250,20 +369,21 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 			}
 			if conflict {
 				invalidCount++
-				r := rr.receipt
-				r.Success = false
-				r.Error = "optme_second_pass_invalidated_no_source_fallback"
+				evidence[rr.index].SecondPassInvalidated = true
+				rc := rr.receipt
+				rc.Success = false
+				rc.Error = "optme_second_pass_invalidated_no_source_fallback"
 				d := rr.delta
 				d.Success = false
-				d.Error = r.Error
+				d.Error = rc.Error
 				d.WriteSet = map[string]string{}
-				d.Receipt = r
+				d.Receipt = rc
 				commitmentStarted = time.Now()
-				r.StateRootAfterTx = commitment.Root()
+				rc.StateRootAfterTx = commitment.Root()
 				commitmentMS += time.Since(commitmentStarted)
-				d.Receipt = r
+				d.Receipt = rc
 				allDeltas = append(allDeltas, d)
-				allReceipts = append(allReceipts, r)
+				allReceipts = append(allReceipts, rc)
 				committed[rr.index] = true
 				events = append(events, ScheduleEvent{TxID: input.Block.TxList[rr.index].TxID, Track: "optme", QueueName: fmt.Sprintf("reschedule_epoch_%d", epochIndex+1), DecisionReason: "author_source_second_pass_invalidated_no_fallback", LocalExecution: true, Blocked: true})
 				attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: input.Block.Height, TxID: d.TxID, Track: p.ID(), Attempt: 2, Reason: "optme_second_pass_invalidated_no_source_fallback", Success: false, FinalCompletion: true})
@@ -272,33 +392,37 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 			for k := range rr.delta.WriteSet {
 				usedWrites[k] = true
 			}
-			d, r := optmeApplyDelta(input.Block, working, commitment, rr.delta, rr.receipt)
+			d, rc := optmeApplyDelta(input.Block, working, commitment, rr.delta, rr.receipt)
 			allDeltas = append(allDeltas, d)
-			allReceipts = append(allReceipts, r)
+			allReceipts = append(allReceipts, rc)
 			committed[rr.index] = true
 			events = append(events, ScheduleEvent{TxID: input.Block.TxList[rr.index].TxID, Track: "optme", QueueName: fmt.Sprintf("reschedule_epoch_%d", epochIndex+1), DecisionReason: "author_source_reexecute_validate_commit", LocalExecution: true, ReadyQueueDepth: len(epoch)})
 			attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: input.Block.Height, TxID: d.TxID, Track: p.ID(), Attempt: 2, Reason: "optme_reexecution", Success: d.Success, FinalCompletion: true})
 		}
 		validationMS += time.Since(validateStarted)
 	}
-	// Defensive fail-closed: every consensus transaction must have a terminal receipt.
+
 	if len(committed) != len(input.Block.TxList) {
 		return BlockExecutionResult{}, fmt.Errorf("OptME produced terminal results for %d/%d transactions", len(committed), len(input.Block.TxList))
 	}
-
 	sort.Slice(allDeltas, func(i, j int) bool { return allDeltas[i].OriginalIndex < allDeltas[j].OriginalIndex })
 	byTxReceipt := map[string]execution.Receipt{}
-	for _, r := range allReceipts {
-		byTxReceipt[r.TxID] = r
+	for _, rc := range allReceipts {
+		byTxReceipt[rc.TxID] = rc
 	}
 	orderedReceipts := make([]execution.Receipt, 0, len(input.Block.TxList))
-	for _, item := range input.Block.TxList {
-		orderedReceipts = append(orderedReceipts, byTxReceipt[item.TxID])
+	for idx, item := range input.Block.TxList {
+		rc, ok := byTxReceipt[item.TxID]
+		if !ok {
+			return BlockExecutionResult{}, fmt.Errorf("OptME terminal receipt missing for %s", item.TxID)
+		}
+		orderedReceipts = append(orderedReceipts, rc)
+		evidence[idx].TerminalSuccess = rc.Success
 	}
 	result.TxDeltas = allDeltas
 	result.Receipts = orderedReceipts
-	for _, r := range orderedReceipts {
-		if r.Success {
+	for _, rc := range orderedReceipts {
+		if rc.Success {
 			result.SuccessfulTxs++
 		} else {
 			result.FailedTxs++
@@ -310,13 +434,60 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 		result.StateUpdates[k] = v
 	}
 	result.StateDelta = literatureStateDelta(base, working)
-	planDigest := stableJSONDigest(map[string]any{"algorithm": "optme_author_source_4cac103", "block_hash": input.Block.BlockHash, "sequences": plan.Sequences, "reschedule_epochs": plan.RescheduleEpochs, "early_aborted": plan.EarlyAborted, "reordered": plan.Reordered})
+	planDigest := stableJSONDigest(map[string]any{
+		"algorithm":            "optme_author_source_4cac103_parallel_acg_mbe_v20",
+		"block_hash":           input.Block.BlockHash,
+		"sequences":            plan.Sequences,
+		"reschedule_epochs":    plan.RescheduleEpochs,
+		"early_detected":       plan.EarlyDetected,
+		"hierarchical_aborted": plan.HierarchicalAborted,
+		"reordered":            plan.Reordered,
+		"rescheduled":          plan.Rescheduled,
+	})
 	result.Plan = execution.ExecutionPlan{EngineID: p.ID(), EngineVersion: optmeEngineVersion, BlockHash: input.Block.BlockHash, BlockHeight: input.Block.Height, OrderedTransactionIDs: transactionIDs(input.Block.TxList), WorkerCount: workers, PlanDigest: planDigest}
 	result.PlanDigest = planDigest
 	result.TransactionExecutionMS = (simulationMS + reexecutionMS).Milliseconds()
 	result.DeterministicMaterializationMS = commitMS.Milliseconds()
 	result.StateCommitmentMS = commitmentMS.Milliseconds()
-	metrics := optmeExecutionMetrics{Mode: p.mode, WorkerCount: workers, SimulationMS: simulationMS.Milliseconds(), GraphSchedulingMS: schedulingMS.Milliseconds(), CommitMS: commitMS.Milliseconds(), ReexecutionMS: reexecutionMS.Milliseconds(), ValidationMS: validationMS.Milliseconds(), ObservedReadCount: observedReads, ObservedWriteCount: observedWrites, AddressCount: plan.AddressCount, UnitCount: plan.UnitCount, SequenceCount: len(plan.Sequences), MaximumSequenceWidth: plan.MaxWidth, EarlyAbortCount: len(plan.EarlyAborted), ReorderedCount: len(plan.Reordered), RescheduledEpochCount: len(plan.RescheduleEpochs), ReexecutionCount: reexecutionCount, ReexecutionInvalidCount: invalidCount}
-	actual := map[string]any{"optme_metrics": metrics, "optme_mode": p.mode, "optme_source_commit": "4cac103bd98440670d71219dfa185b8516ea6512", "optme_simulation_ms": metrics.SimulationMS, "optme_graph_scheduling_ms": metrics.GraphSchedulingMS, "optme_commit_ms": metrics.CommitMS, "optme_reexecution_ms": metrics.ReexecutionMS, "optme_validation_ms": metrics.ValidationMS, "optme_observed_read_count": observedReads, "optme_observed_write_count": observedWrites, "optme_address_count": plan.AddressCount, "optme_unit_count": plan.UnitCount, "optme_sequence_count": len(plan.Sequences), "optme_maximum_sequence_width": plan.MaxWidth, "optme_early_abort_count": len(plan.EarlyAborted), "optme_reordered_transaction_count": len(plan.Reordered), "optme_rescheduled_epoch_count": len(plan.RescheduleEpochs), "optme_reexecution_count": reexecutionCount, "optme_reexecution_invalid_count": invalidCount, "maximum_parallel_width": maxInt(plan.MaxWidth, maxSimulationWidth), "abort_count": len(plan.EarlyAborted), "reexecution_count": reexecutionCount, "serializable": true, "optme_plan_digest": planDigest}
+	metrics := optmeExecutionMetrics{
+		Mode: p.mode, WorkerCount: workers,
+		SimulationMS: simulationMS.Milliseconds(), GraphSchedulingMS: schedulingMS.Milliseconds(), CommitMS: commitMS.Milliseconds(), ReexecutionMS: reexecutionMS.Milliseconds(), ValidationMS: validationMS.Milliseconds(),
+		ObservedReadCount: observedReads, ObservedWriteCount: observedWrites, AddressCount: plan.AddressCount, UnitCount: plan.UnitCount, SequenceCount: len(plan.Sequences), MaximumSequenceWidth: plan.MaxWidth,
+		EarlyAbortCount: len(plan.Rescheduled), EarlyDetectionCount: len(plan.EarlyDetected), HierarchicalAbortCount: len(plan.HierarchicalAborted), ReorderedCount: len(plan.Reordered), RescheduledTransactionCount: len(plan.Rescheduled), RescheduledEpochCount: len(plan.RescheduleEpochs),
+		SimulationFailedCount: simulationFailedCount, ReexecutionCount: reexecutionCount, ReexecutionSimulationFailedCount: reexecutionSimulationFailedCount, ReexecutionInvalidCount: invalidCount,
+	}
+	actual := map[string]any{
+		"optme_metrics":                             metrics,
+		"optme_mode":                                p.mode,
+		"optme_source_commit":                       "4cac103bd98440670d71219dfa185b8516ea6512",
+		"optme_parallel_acg":                        true,
+		"optme_simulation_ms":                       metrics.SimulationMS,
+		"optme_graph_scheduling_ms":                 metrics.GraphSchedulingMS,
+		"optme_commit_ms":                           metrics.CommitMS,
+		"optme_reexecution_ms":                      metrics.ReexecutionMS,
+		"optme_validation_ms":                       metrics.ValidationMS,
+		"optme_observed_read_count":                 observedReads,
+		"optme_observed_write_count":                observedWrites,
+		"optme_address_count":                       plan.AddressCount,
+		"optme_unit_count":                          plan.UnitCount,
+		"optme_sequence_count":                      len(plan.Sequences),
+		"optme_maximum_sequence_width":              plan.MaxWidth,
+		"optme_early_abort_count":                   len(plan.Rescheduled),
+		"optme_early_detection_count":               len(plan.EarlyDetected),
+		"optme_hierarchical_abort_count":            len(plan.HierarchicalAborted),
+		"optme_reordered_transaction_count":         len(plan.Reordered),
+		"optme_rescheduled_transaction_count":       len(plan.Rescheduled),
+		"optme_rescheduled_epoch_count":             len(plan.RescheduleEpochs),
+		"optme_simulation_failed_count":             simulationFailedCount,
+		"optme_reexecution_count":                   reexecutionCount,
+		"optme_reexecution_simulation_failed_count": reexecutionSimulationFailedCount,
+		"optme_reexecution_invalid_count":           invalidCount,
+		"optme_transaction_evidence":                evidence,
+		"maximum_parallel_width":                    maxInt(plan.MaxWidth, maxSimulationWidth),
+		"abort_count":                               len(plan.Rescheduled),
+		"reexecution_count":                         reexecutionCount,
+		"serializable":                              true,
+		"optme_plan_digest":                         planDigest,
+	}
 	return BlockExecutionResult{ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: planDigest, WorkerCount: workers, BlockExecutionMS: (simulationMS + schedulingMS + commitMS + reexecutionMS + validationMS + commitmentMS).Milliseconds(), TransactionExecutionMS: result.TransactionExecutionMS, DeterministicApplyMS: result.DeterministicMaterializationMS, StateCommitmentMS: result.StateCommitmentMS, StateRootVersion: state.CommitmentVersion, ScheduleEvents: events, ActualMetrics: actual, BusinessAttempts: attempts}, nil
 }

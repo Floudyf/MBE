@@ -73,3 +73,4 @@ frontend/playwright-report/
 /dataset/
 .mbe_fix_backups/
 .mbe_evidence_runs/
+.mbe_fix_receipts/

@@ -209,7 +209,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
             "routing": "metatrack_coaccess_routing",
-            "block_producer": "metatrack_dependency_window_producer",
+            "block_producer": "metatrack_nl_window_v669",
             "execution": "dual_track_execution",
             "scheduler": "fast_first_scheduler",
             "block_executor": "metatrack_block_executor",
@@ -242,12 +242,12 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
     "metatrack_ab_route": V5FormalMethod(
         method_id="metatrack_ab_route",
-        display_name="消融-哈希分片",
+        display_name="去掉共现矩阵分片",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
-            "routing": "metatrack_hash_routing",
-            "block_producer": "metatrack_dependency_window_producer",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
             "execution": "dual_track_execution",
             "scheduler": "fast_first_scheduler",
             "block_executor": "metatrack_block_executor",
@@ -255,18 +255,18 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "ablation_no_coaccess_sharding_v675": True},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
     "metatrack_ab_track": V5FormalMethod(
         method_id="metatrack_ab_track",
-        display_name="消融-无双轨统一就绪",
+        display_name="去掉双轨",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
             "routing": "metatrack_coaccess_routing",
-            "block_producer": "metatrack_dependency_window_producer",
+            "block_producer": "metatrack_nl_window_v669",
             "execution": "metatrack_single_execution",
             "scheduler": "fast_first_scheduler",
             "block_executor": "metatrack_block_executor",
@@ -280,7 +280,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
     "metatrack_ab_cons": V5FormalMethod(
         method_id="metatrack_ab_cons",
-        display_name="消融-固定批次共识",
+        display_name="去掉共识聚合",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -299,12 +299,12 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
     "metatrack_ab_state": V5FormalMethod(
         method_id="metatrack_ab_state",
-        display_name="消融-Home状态访问",
+        display_name="去掉状态预取",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
             "routing": "metatrack_coaccess_routing",
-            "block_producer": "metatrack_dependency_window_producer",
+            "block_producer": "metatrack_nl_window_v669",
             "execution": "dual_track_execution",
             "scheduler": "fast_first_scheduler",
             "block_executor": "metatrack_block_executor",
@@ -444,25 +444,49 @@ CALVIN_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
 
 
 OPTME_TXALLO_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
+# MBE_OPTME_V20_PLUGIN_PROFILE
+    # MBE_OPTME_V22_GLOBAL_ORDER_PROFILE
     "stateful_optme": V5FormalMethod(
         method_id="stateful_optme", display_name="OptME", role="baseline",
         plugin_overrides={
-            "routing": "hash_routing_baseline",
+            "transaction_admission": "signature_nonce_admission",
+            "txpool": "fifo_per_node_mempool",
+            "sharding": "deterministic_state_key_sharding",
+            "routing": "optme_global_routing",
+            "block_producer": "time_or_count_block_producer",
+            "consensus": "pbft_style_consensus",
+            "network": "localhost_tcp_typed_network",
             "execution": "optme_execution",
             "scheduler": "optme_scheduler",
             "block_executor": "optme_block_executor",
+            "state_access": "direct_state_access",
+            "state_storage": "persistent_local_state_store",
+            "cross_shard": "optme_global_no_relay",
             "commit": "normal_commit",
+            "metrics": "runtime_core_metrics",
+            "observability": "node_network_consensus_observer",
         },
         plugin_config_overrides={"block_executor": {"worker_count": 4}},
     ),
     "stateless_optme": V5FormalMethod(
         method_id="stateless_optme", display_name="Stateless-OptME", role="baseline",
         plugin_overrides={
+            "transaction_admission": "signature_nonce_admission",
+            "txpool": "fifo_per_node_mempool",
+            "sharding": "deterministic_state_key_sharding",
             "routing": "stateless_optme_routing",
+            "block_producer": "time_or_count_block_producer",
+            "consensus": "pbft_style_consensus",
+            "network": "localhost_tcp_typed_network",
             "execution": "optme_execution",
             "scheduler": "optme_scheduler",
             "block_executor": "stateless_optme_block_executor",
+            "state_access": "direct_state_access",
+            "state_storage": "optme_partition_state_store",
+            "cross_shard": "optme_global_no_relay",
             "commit": "normal_commit",
+            "metrics": "runtime_core_metrics",
+            "observability": "node_network_consensus_observer",
         },
         plugin_config_overrides={"block_executor": {"worker_count": 4}},
     ),
@@ -477,7 +501,7 @@ OPTME_TXALLO_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "normal_commit",
         },
         plugin_config_overrides={
-            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_records": 5000, "adaptive_chunk_records": 500},
+            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": True},
             "block_executor": {"worker_count": 1},
         },
     ),
@@ -490,9 +514,10 @@ OPTME_TXALLO_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "scheduler": "fifo_serial_scheduler",
             "block_executor": "serial_block_executor",
             "commit": "normal_commit",
+            "cross_shard": "txallo_no_relay",
         },
         plugin_config_overrides={
-            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_records": 5000, "adaptive_chunk_records": 500},
+            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": True},
             "block_executor": {"worker_count": 1},
         },
     ),
@@ -506,6 +531,8 @@ PORYGON_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         display_name="Porygon",
         role="baseline",
         plugin_overrides={
+            "transaction_admission": "porygon_access_admission",
+            "sharding": "porygon_object_sharding",
             "routing": "porygon_stateless_routing",
             "block_producer": "porygon_transaction_block_producer",
             "execution": "porygon_execution",

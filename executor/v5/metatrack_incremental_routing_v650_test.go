@@ -214,3 +214,52 @@ func TestMetaTrackV650DisabledPreservesLegacyPlanner(t *testing.T) {
 		t.Fatalf("legacy policy changed: %#v", plan)
 	}
 }
+
+
+func TestMetaTrackV669RoutingContextMatchesReferenceSignals(t *testing.T) {
+    shards := []string{"s0", "s1"}
+    sharding := builtinSharding{makeBasic("sharding", "deterministic_state_key_sharding", nil)}
+    k0 := metaTrackV650TestKeyForShard(t, "s0", shards)
+    k1 := metaTrackV650TestKeyForShard(t, "s1", shards)
+    planner := metaTrackV650Planner()
+    state := &metaTrackIncrementalRoutingStateV650{
+        ProducerByVersion: map[metaTrackIncrementalVersionSlotV650]metaTrackIncrementalProducerV650{
+            {Key: k0, Version: 7}: {Shard: "s0", Ordinal: 1, FinishRank: 4},
+            {Key: k1, Version: 8}: {Shard: "s1", Ordinal: 2, FinishRank: 6},
+        },
+        PairShardSupport: map[string]map[string]int{keyPair(k0, k1): {"s0": 3, "s1": 5}},
+        KeyShardSupport: map[string]map[string]int{},
+    }
+    record := WorkloadRecord{
+        Index: 2, RoutingOrdinal: 3,
+        AccessList: []tx.AccessItem{{Key: k0, Mode: tx.AccessReadWrite}, {Key: k1, Mode: tx.AccessRead}},
+        StateVersions: []tx.StateVersionDependency{{Key: k0, RequiredVersion: 7}, {Key: k1, RequiredVersion: 8}},
+    }
+    ctx := metaTrackBuildRoutingRecordContextV669(planner, record, sharding, shards, state)
+    for _, shard := range shards {
+        if got, want := metaTrackReadyRankFromContextV669(ctx, shard), metaTrackIncrementalReadyRankV651(record, shard, state); got != want {
+            t.Fatalf("ready rank %s got=%d want=%d", shard, got, want)
+        }
+        if got, want := metaTrackExactCrossFromContextV669(ctx, shard), metaTrackIncrementalExactCrossV650(record, shard, state); got != want {
+            t.Fatalf("exact cross %s got=%d want=%d", shard, got, want)
+        }
+        gotR, gotW := metaTrackRemoteCountsFromContextV669(ctx, shard)
+        wantR, wantW := metaTrackPredictedRemoteAccessCounts(planner, sharding, shards, normalizedAccessItems(record), shard)
+        if gotR != wantR || gotW != wantW { t.Fatalf("remote split %s got=%d/%d want=%d/%d", shard, gotR, gotW, wantR, wantW) }
+        if got, want := metaTrackCoaccessFromContextV669(false, ctx, shard, state), metaTrackIncrementalPairLocalityV650(ctx.Keys, shard, state); got != want {
+            t.Fatalf("coaccess %s got=%d want=%d", shard, got, want)
+        }
+    }
+}
+
+
+func TestMetaTrackV675NoCoaccessPlannerDoesNotBuildPairMatrix(t *testing.T) {
+	planner:=metaTrackV650Planner()
+	input:=BatchRoutingInput{BatchIndex:0,ExpectedTransactionCount:4,ShardIDs:[]string{"s0","s1"},Sharding:builtinSharding{makeBasic("sharding","deterministic_state_key_sharding",nil)},Records:[]WorkloadRecord{
+		{Index:0,LogicalID:"a",AccessList:[]tx.AccessItem{{Key:"k:a",Mode:tx.AccessReadWrite,UpdateSemantics:"set"}}},
+		{Index:1,LogicalID:"b",AccessList:[]tx.AccessItem{{Key:"k:b",Mode:tx.AccessReadWrite,UpdateSemantics:"set"}}},
+	}}
+	plan:=planner.planNoCoaccessShardingV675(input)
+	if len(plan.CoaccessEdges)!=0 { t.Fatalf("no-coaccess treatment built pair matrix: %#v",plan.CoaccessEdges) }
+	if plan.PlacementPolicy!="historical_frequency_load_only_no_coaccess_v675" { t.Fatalf("placement policy=%q",plan.PlacementPolicy) }
+}

@@ -1,16 +1,24 @@
-# Porygon v8 correctness invariants
+# Porygon correctness invariants — current MBE adaptation
 
-- `porygon_stateless_routing` implements `RoutingPlugin` only; it must not implement `BatchRoutingPlugin` or `RoutingRuntimeCapabilities`.
-- Formal runs expose frontend `topology.shards` as the logical ESC count while compiling all validators into exactly one physical `porygon-global` MBE/PBFT ordering domain.
-- Porygon never consumes `SchedulingAccessList` or MetaTrack state-version metadata.
+- The Porygon frontend method is a required plugin composition. Selecting any Porygon plugin without `porygon_access_admission`, `porygon_object_sharding`, Porygon routing/producer/execution/scheduler/executor/state-access/state-storage/cross-shard plugins must fail closed.
+- `porygon_stateless_routing` implements `RoutingPlugin` and Porygon finality capability only; it must not implement `BatchRoutingPlugin` or `RoutingRuntimeCapabilities`.
+- Formal runs expose frontend `topology.shards` as the logical ESC/StateOwner partition count while compiling all validators into exactly one physical `porygon-global` MBE/PBFT ordering domain.
+- `porygon_access_admission` verifies the signed transaction before mempool admission and requires a non-empty, unique, known-mode signed runtime `AccessList`.
+- Porygon never substitutes `SchedulingAccessList` or MetaTrack state-version metadata for runtime access truth.
+- `porygon_object_sharding` and Porygon consensus planning use the same stable account/object owner semantics; related fields of one object must not be split merely because their full field keys differ.
 - Porygon logical cross-shard classification never enters MBE Relay/Finalize.
-- Every transaction has exactly one owning execution ESC. Replicas inside that ESC independently execute the transaction and attest the same result digest; validators outside the owning ESC never re-execute it.
-- Production ESC result certificates must contain a strict-majority set of independently verifiable Ed25519 attestations bound to the block/wave/ESC/result digest.
-- Missing certificate delivery is recoverable through bounded leader-side certificate caching and explicit request/retransmission.
-- Same-ESC transactions are ordered; declared state conflicts preserve global OC order.
-- Disjoint transactions on different ESCs may execute in the same wave.
+- Fixed Storage Role identity never rotates with dynamic EC/ESC assignment.
+- Full TransactionBlocks may be transiently cached by Witness/Execution roles but durable TransactionBlock sources advertised by Proposal.L must belong to exactly one deterministic fixed Storage Role partition.
+- A non-maintenance compact proposal must carry a valid Witness Certificate before PBFT ordering.
+- Proposal.T partition roots are authoritative for state projection; height zero is a valid explicit anchor. A returned state proof/root mismatch always fails closed.
+- Every transaction has exactly one owning execution ESC. Replicas inside that ESC independently execute and attest the same semantic result digest; validators outside the owning ESC never re-execute it.
+- Production ESC batch certificates must contain at least `Te=f+1` independently verifiable Ed25519 attestations from the dynamic owning ESC. Multi-Shard Update partition roots separately require a strict majority of the fixed Storage Role replicas.
+- Missing ESC certificate delivery is recoverable through bounded leader-side certificate caching and explicit request/retransmission.
+- Same-ESC transactions preserve deterministic order; declared cross-ESC conflicts follow the Porygon OC abandonment rules; disjoint transactions on different ESCs may execute concurrently.
+- The cross-round Pending set contains CTx only and is a deterministic function of consensus-bound transaction origin/proposal height, never replica-local background execution timing.
 - Actual read/write keys must be covered by the signed AccessList; violations fail closed as deterministic execution errors.
-- Multi-state writes are materialized deterministically and atomically at the MBE commit boundary.
-- All validators recompute and verify proposal/plan evidence.
-- Final state must match the deterministic serialization oracle for supported workload semantics.
-- Pipeline evidence must retain `wall_clock_overlap_not_claimed`.
+- CTx pre-execution does not materialize final state in the same paper round; later Proposal.U and authenticated partition roots govern the update.
+- All validators recompute and verify compact proposal, plan and certificate evidence.
+- Final state must match the method oracle/serialization contract for supported workload semantics.
+- Pipeline speedup may be claimed only when runtime interval evidence proves real cross-height Ordering/Execution and/or Execution/Commit overlap. PBFT ordering heights themselves remain sequential.
+- Full future-ESC retry plus proposal-carried rollback is not yet an exact claim; the current fault path remains explicitly fail-closed.

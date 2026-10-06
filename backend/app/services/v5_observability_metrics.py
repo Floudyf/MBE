@@ -401,6 +401,37 @@ def _metatrack_critical_path_preserving_candidate_v665(current: list[dict[str, A
         return False
     return candidate_l <= max(current_l,batch_l)
 
+def _metatrack_dependency_closed_candidate_v669(current: list[dict[str, Any]], next_batch: list[dict[str, Any]]) -> bool:
+    candidate = list(current) + list(next_batch)
+    if not candidate:
+        return False
+    ordinals = [int(tx.get("routing_ordinal") or 0) for tx in candidate]
+    if any(value <= 0 for value in ordinals) or len(set(ordinals)) != len(ordinals):
+        return False
+    ordinal_set = set(ordinals)
+    minimum = min(ordinals)
+    for tx in candidate:
+        ordinal = int(tx.get("routing_ordinal") or 0)
+        raw_preds = [int(value) for value in (tx.get("consensus_execution_predecessor_ordinals") or []) if int(value) > 0]
+        for dep in tx.get("state_versions") or []:
+            if not isinstance(dep, dict):
+                continue
+            pred = int(dep.get("required_version") or 0)
+            required_round = int(dep.get("required_execution_round") or 0)
+            if pred > 0 and required_round > 0:
+                raw_preds.append(pred)
+        for pred in raw_preds:
+            if pred >= ordinal:
+                return False
+            if pred >= minimum and pred not in ordinal_set:
+                return False
+    return True
+
+
+def _metatrack_n_over_l_improves_v669(current: list[dict[str, Any]], next_batch: list[dict[str, Any]]) -> bool:
+    return _metatrack_n_over_l_improves_v668(current, next_batch)
+
+
 def _metatrack_n_over_l_improves_v668(current: list[dict[str, Any]], next_batch: list[dict[str, Any]]) -> bool:
     if not current or not next_batch:
         return False
@@ -442,9 +473,9 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
                 source_artifacts.append(rel)
 
     base: dict[str, Any] = {
-        "schema_version": "mbe_metatrack_consensus_window_observability_v665",
+        "schema_version": "mbe_metatrack_consensus_window_observability_v669",
         "available": False,
-        "truth_scope": "durable_signed_critical_path_preserving_consensus_window_reconstruction_v665",
+        "truth_scope": "durable_signed_consensus_window_reconstruction_v669",
         "source_artifacts": sorted(source_artifacts),
         "metrics": {},
         "windows": [],
@@ -455,7 +486,22 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
 
     block_producer_id_v668 = _metatrack_block_producer_id_v663(run_dir, cluster)
     single_route_batch_ablation = block_producer_id_v668 == "metatrack_route_batch_producer"
-    adaptive_n_over_l_v668 = block_producer_id_v668 == "metatrack_adaptive_window_producer"
+    historical_n_over_l_v668 = block_producer_id_v668 == "metatrack_adaptive_window_producer"
+    formal_n_over_l_v669 = block_producer_id_v668 == "metatrack_nl_window_v669"
+    window_truth_scope = (
+        "durable_signed_dependency_closed_adaptive_n_over_l_consensus_window_reconstruction_v669"
+        if formal_n_over_l_v669
+        else (
+            "durable_signed_adaptive_n_over_l_consensus_window_reconstruction_v668"
+            if historical_n_over_l_v668
+            else (
+                "durable_signed_fixed_route_batch_consensus_window_reconstruction_v663"
+                if single_route_batch_ablation
+                else "durable_signed_critical_path_preserving_consensus_window_reconstruction_v665"
+            )
+        )
+    )
+    base["truth_scope"] = window_truth_scope
 
     transactions: dict[int, dict[str, Any]] = {}
     block_rows: list[dict[str, Any]] = []
@@ -576,6 +622,36 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
             "exact_version_predecessor_edge_count": len(exact_edges),
             "cross_shard_exact_predecessor_edge_count": len(cross_edges),
         }
+        internal_admission_rule_match = True
+        if len(expected_batches) > 1:
+            prefix: list[dict[str, Any]] = []
+            for batch_sequence in expected_batches:
+                batch_part = sorted(by_batch.get(batch_sequence, []), key=lambda tx: int(tx["routing_ordinal"]))
+                if not batch_part:
+                    internal_admission_rule_match = False
+                    break
+                if not prefix:
+                    prefix = list(batch_part)
+                    continue
+                internal_candidate = prefix + batch_part
+                internal_counts: dict[str, int] = defaultdict(int)
+                for candidate_tx in internal_candidate:
+                    internal_counts[str(candidate_tx["execution_shard"])] += 1
+                internal_fits = block_limit is None or all(count <= block_limit for count in internal_counts.values())
+                if formal_n_over_l_v669:
+                    admitted = internal_fits and _metatrack_dependency_closed_candidate_v669(prefix, batch_part) and _metatrack_n_over_l_improves_v669(prefix, batch_part)
+                elif historical_n_over_l_v668:
+                    admitted = internal_fits and _metatrack_n_over_l_improves_v668(prefix, batch_part)
+                elif single_route_batch_ablation:
+                    admitted = False
+                else:
+                    admitted = internal_fits and _metatrack_critical_path_preserving_candidate_v665(prefix, batch_part)
+                if not admitted:
+                    internal_admission_rule_match = False
+                    break
+                prefix = internal_candidate
+        row["internal_admission_rule_match"] = internal_admission_rule_match
+
         next_batch_sequence = end_batch + 1
         next_batch = sorted(by_batch.get(next_batch_sequence, []), key=lambda tx: int(tx["routing_ordinal"]))
         if next_batch:
@@ -587,17 +663,25 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
                 candidate_counts[str(tx["execution_shard"])] += 1
             fits = block_limit is None or all(count <= block_limit for count in candidate_counts.values())
             critical_path_preserving = _metatrack_critical_path_preserving_candidate_v665(group, next_batch)
+            dependency_closed_v669 = _metatrack_dependency_closed_candidate_v669(group, next_batch)
             n_over_l_improves_v668 = _metatrack_n_over_l_improves_v668(group, next_batch)
+            n_over_l_improves_v669 = _metatrack_n_over_l_improves_v669(group, next_batch)
             if single_route_batch_ablation:
                 stop_reason = "single_route_batch_ablation"
                 decision_match = int(row["route_batch_count"]) == 1
             elif not fits:
                 stop_reason = "block_size_limit"
                 decision_match = True
-            elif adaptive_n_over_l_v668 and not n_over_l_improves_v668:
+            elif formal_n_over_l_v669 and not dependency_closed_v669:
+                stop_reason = "dependency_closure_boundary"
+                decision_match = True
+            elif formal_n_over_l_v669 and not n_over_l_improves_v669:
                 stop_reason = "n_over_l_non_improvement_boundary"
                 decision_match = True
-            elif (not adaptive_n_over_l_v668) and not critical_path_preserving:
+            elif historical_n_over_l_v668 and not n_over_l_improves_v668:
+                stop_reason = "n_over_l_non_improvement_boundary"
+                decision_match = True
+            elif (not formal_n_over_l_v669) and (not historical_n_over_l_v668) and not critical_path_preserving:
                 stop_reason = "critical_path_extension_boundary"
                 decision_match = True
             else:
@@ -628,6 +712,7 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
             tx_count_match,
             shard_count_match,
             signed_critical_match,
+            bool(row["internal_admission_rule_match"]),
             bool(row["decision_rule_match"]),
         ])
         row["signed_reconstruction_match"] = row_consistent
@@ -691,12 +776,13 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
         "metatrack_consensus_window_max_structural_width": max(widths) if widths else None,
         "metatrack_consensus_window_critical_width_stop_count": stop_counts["critical_path_extension_boundary"],
       "metatrack_consensus_window_n_over_l_stop_count": stop_counts["n_over_l_non_improvement_boundary"],
-        "metatrack_consensus_window_dependency_closure_stop_count": 0,
+        "metatrack_consensus_window_dependency_closure_stop_count": stop_counts["dependency_closure_boundary"],
         "metatrack_consensus_window_pipeline_independent_stop_count": 0,
         "metatrack_consensus_window_single_route_batch_ablation_stop_count": stop_counts["single_route_batch_ablation"],
         "metatrack_consensus_window_block_size_stop_count": stop_counts["block_size_limit"],
         "metatrack_consensus_window_input_end_stop_count": stop_counts["input_end"],
         "metatrack_consensus_window_boundary_mismatch_count": stop_counts["signed_window_boundary_rule_mismatch"],
+        "metatrack_consensus_window_internal_admission_mismatch_count": sum(1 for row in windows if not bool(row.get("internal_admission_rule_match"))),
         "metatrack_consensus_window_average_shard_tx_imbalance": avg(imbalances),
         "metatrack_consensus_window_exact_predecessor_edge_count": sum(int(row["exact_version_predecessor_edge_count"]) for row in windows),
         "metatrack_consensus_window_cross_shard_exact_predecessor_edge_count": sum(int(row["cross_shard_exact_predecessor_edge_count"]) for row in windows),
@@ -704,9 +790,10 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
         "metatrack_consensus_window_expected_pbft_block_count": expected_blocks,
         "metatrack_consensus_window_baseline_route_batch_pbft_block_count": baseline_blocks,
         "metatrack_consensus_window_pbft_blocks_saved": max(0, baseline_blocks - expected_blocks),
+        "metatrack_consensus_window_aggregation_active": bool(global_consistent and formal_n_over_l_v669 and max(0, baseline_blocks - expected_blocks) > 0 and any(int(row["route_batch_count"]) > 1 for row in windows)),
         "metatrack_consensus_window_signed_reconstruction_match": global_consistent,
         "metatrack_consensus_window_actual_projection_match": actual_projection_match,
-        "metatrack_consensus_window_truth_scope": ("durable_signed_adaptive_n_over_l_consensus_window_reconstruction_v668" if adaptive_n_over_l_v668 else "durable_signed_critical_path_preserving_consensus_window_reconstruction_v665"),
+        "metatrack_consensus_window_truth_scope": window_truth_scope,
     }
     base["available"] = True
     base["metrics"] = metrics

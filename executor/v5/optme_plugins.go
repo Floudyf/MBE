@@ -14,7 +14,7 @@ const (
 	optmeStatelessRoutingID  = "stateless_optme_routing"
 	optmeStatefulMode        = "stateful"
 	optmeStatelessMode       = "stateless"
-	optmeEngineVersion       = "1.0.0"
+	optmeEngineVersion       = "1.1.0"
 )
 
 type optmeExecution struct{ basicPlugin }
@@ -35,12 +35,15 @@ func (p optmeScheduler) Schedule(items []tx.SignedTransaction, _ ExecutionPlugin
 	}
 	return out
 }
-func (p optmeScheduler) BuildObservedSchedule(observed []optmeObservedTx) optmeSchedule {
-	return buildOptmeSchedule(observed)
+
+// MBE_OPTME_V20_PLUGIN_PROFILE: the scheduler owns the paper algorithm; MBE
+// supplies worker_count as the execution-resource dimension.
+func (p optmeScheduler) BuildObservedSchedule(observed []optmeObservedTx, workers int) optmeSchedule {
+	return buildOptmeScheduleWithWorkers(observed, workers)
 }
 
 type optmeObservedScheduleProvider interface {
-	BuildObservedSchedule([]optmeObservedTx) optmeSchedule
+	BuildObservedSchedule([]optmeObservedTx, int) optmeSchedule
 }
 
 type statelessOptmeRouting struct{ basicPlugin }
@@ -63,10 +66,10 @@ func (p statelessOptmeRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPl
 func (p statelessOptmeRouting) StatelessDirectExecution() bool     { return true }
 func (p statelessOptmeRouting) BatchRoutingArtifactFamily() string { return "generic_stateless" }
 
-// Stateless-OptME keeps OptME scheduling post-consensus, but the MBE stateless
-// substrate binds an algorithm-agnostic global exact-version chain for state
-// transport. Runtime must not replace OptME with the generic versioned-wave
-// executor; the metadata is consumed only by remote fetch/writeback/admission.
+// Stateless-OptME v22 keeps execution routing metadata for placement/projection
+// identity only. Client/source order never creates transaction StateVersions;
+// execution uses one consensus-bound H-1 block-start projection and the
+// author-source OptME scheduler remains authoritative.
 func (p statelessOptmeRouting) BindExecutionRoutingMetadata() bool { return true }
 func (p statelessOptmeRouting) BindBatchProjectionMetadata() bool  { return false }
 func (p statelessOptmeRouting) BatchExecutionPlanAlgorithmID() string {
@@ -74,9 +77,12 @@ func (p statelessOptmeRouting) BatchExecutionPlanAlgorithmID() string {
 }
 func (p statelessOptmeRouting) SignedBatchExecutionPlan() bool  { return false }
 func (p statelessOptmeRouting) NativeVersionedStateReady() bool { return false }
-func (p statelessOptmeRouting) StatelessVersionAdmission() bool { return true }
+
+// MBE_OPTME_V22_GLOBAL_ORDER_PROJECTION
+func (p statelessOptmeRouting) StatelessVersionAdmission() bool { return false }
 
 func registerOptMEPlugins(register func(string, string, Factory)) {
+	registerOptMEV22Plugins(register)
 	register("execution", optmeExecutionID, func(c map[string]any) (Plugin, error) {
 		return optmeExecution{makeBasic("execution", optmeExecutionID, c)}, nil
 	})
@@ -108,14 +114,11 @@ func validateOptMEPluginCombination(p RuntimePlugins) error {
 	if p.Routing != nil {
 		routingID = p.Routing.ID()
 	}
-	selected := executionID == optmeExecutionID || schedulerID == optmeSchedulerID || executorID == optmeStatefulExecutorID || executorID == optmeStatelessExecutorID || routingID == optmeStatelessRoutingID
+	selected := executionID == optmeExecutionID || schedulerID == optmeSchedulerID ||
+		executorID == optmeStatefulExecutorID || executorID == optmeStatelessExecutorID ||
+		routingID == optmeStatefulRoutingID || routingID == optmeStatelessRoutingID
 	if !selected {
 		return nil
-	}
-	stateless := executorID == optmeStatelessExecutorID || routingID == optmeStatelessRoutingID
-	stateful := executorID == optmeStatefulExecutorID || (selected && routingID == "hash_routing_baseline")
-	if stateless && stateful && executorID == optmeStatefulExecutorID {
-		return fmt.Errorf("OptME stateful and stateless profiles may not be mixed")
 	}
 	if executionID != optmeExecutionID {
 		return fmt.Errorf("OptME requires execution:%s", optmeExecutionID)
@@ -123,23 +126,44 @@ func validateOptMEPluginCombination(p RuntimePlugins) error {
 	if schedulerID != optmeSchedulerID {
 		return fmt.Errorf("OptME requires scheduler:%s", optmeSchedulerID)
 	}
+	stateless := executorID == optmeStatelessExecutorID || routingID == optmeStatelessRoutingID
 	if stateless {
 		if executorID != optmeStatelessExecutorID || routingID != optmeStatelessRoutingID {
 			return fmt.Errorf("Stateless-OptME requires routing:%s and block_executor:%s", optmeStatelessRoutingID, optmeStatelessExecutorID)
 		}
-	} else {
-		if executorID != optmeStatefulExecutorID || routingID != "hash_routing_baseline" {
-			return fmt.Errorf("OptME requires routing:hash_routing_baseline and block_executor:%s", optmeStatefulExecutorID)
+	} else if executorID != optmeStatefulExecutorID || routingID != optmeStatefulRoutingID {
+		return fmt.Errorf("OptME requires routing:%s and block_executor:%s", optmeStatefulRoutingID, optmeStatefulExecutorID)
+	}
+	storageID := "persistent_local_state_store"
+	if stateless {
+		storageID = optmePartitionStateStorageID
+	}
+	required := []struct {
+		category string
+		actual   Plugin
+		id       string
+	}{
+		{"transaction_admission", p.Admission, "signature_nonce_admission"},
+		{"txpool", p.TxPool, "fifo_per_node_mempool"},
+		{"sharding", p.Sharding, "deterministic_state_key_sharding"},
+		{"block_producer", p.BlockProducer, "time_or_count_block_producer"},
+		{"consensus", p.Consensus, "pbft_style_consensus"},
+		{"network", p.Network, "localhost_tcp_typed_network"},
+		{"state_access", p.StateAccess, "direct_state_access"},
+		{"state_storage", p.StateStorage, storageID},
+		{"cross_shard", p.CrossShard, optmeGlobalCrossShardID},
+		{"commit", p.Commit, "normal_commit"},
+		{"metrics", p.Metrics, "runtime_core_metrics"},
+		{"observability", p.Observability, "node_network_consensus_observer"},
+	}
+	for _, item := range required {
+		if item.actual == nil || item.actual.ID() != item.id {
+			actual := "<nil>"
+			if item.actual != nil {
+				actual = item.actual.ID()
+			}
+			return fmt.Errorf("OptME requires %s:%s, got %s", item.category, item.id, actual)
 		}
-	}
-	if p.Consensus == nil || p.Consensus.ID() != "pbft_style_consensus" {
-		return fmt.Errorf("OptME requires the shared PBFT consensus plugin")
-	}
-	if p.BlockProducer == nil || p.BlockProducer.ID() != "time_or_count_block_producer" {
-		return fmt.Errorf("OptME is post-consensus and requires the shared time_or_count_block_producer")
-	}
-	if p.Commit == nil || p.Commit.ID() != "normal_commit" {
-		return fmt.Errorf("OptME requires normal_commit")
 	}
 	return nil
 }

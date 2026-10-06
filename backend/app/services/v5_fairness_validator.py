@@ -49,6 +49,13 @@ def _performance_contract_class(row: dict) -> str:
     except (TypeError, ValueError):
         shards = 0
     semantic_class = str(row.get("comparison_semantics_class") or "custom_unknown")
+    # MBE_OPTME_V23_FAIRNESS: common externally visible durable-completion contract.
+    if (
+        semantic_class in {"optme_global_order_stateful_v23", "optme_global_order_partition_projection_v23"}
+        and row.get("legacy_cross_shard_protocol") is False
+        and str(row.get("measurement_boundary") or "") == "client_submit_to_optme_global_durable_commit"
+    ):
+        return "optme_global_order_eventual_completion_v1"
     if (
         shards > 1
         and semantic_class in {"porygon_3d_global_ordering_paper_fidelity_v5", "stateless_remote_home_v1"}
@@ -90,6 +97,7 @@ def validate(rows: list[dict]) -> tuple[list[dict], dict]:
             and contract_classes[0] in {
                 "single_shard_stateful_eventual_completion_v1",
                 "multi_shard_stateless_eventual_completion_v1",
+                "optme_global_order_eventual_completion_v1",
             }
         )
         performance_valid = same_internal_semantics or common_external_contract

@@ -10,17 +10,21 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"metaverse-chainlab/executor/realism/tx"
 )
 
 const (
-	txalloShardingID         = "txallo_account_sharding"
-	txalloRoutingID          = "txallo_routing"
-	txalloStatelessRoutingID = "stateless_txallo_routing"
-	txalloTruthBoundary      = "txallo_icde2023_algorithm1_2_account_graph_frozen_pre_evaluation_history_v1"
+	txalloShardingID          = "txallo_account_sharding"
+	txalloRoutingID           = "txallo_routing"
+	txalloStatelessRoutingID  = "stateless_txallo_routing"
+	txalloNoRelayCrossShardID = "txallo_no_relay"
+	txalloTruthBoundary       = "txallo_icde2023_algorithm1_2_deterministic_multilevel_louvain_g_snapshot_v2"
 )
 
 type HistoricalAllocationBootstrapInput struct {
@@ -52,11 +56,13 @@ func (p *metaTrackRouting) BatchRoutingArtifactFamily() string { return "metatra
 
 type txalloAccountSharding struct {
 	basicPlugin
-	mu        sync.RWMutex
-	allocator *txalloAllocator
-	shards    []string
-	aliases   map[string]string // runtime account/address -> logical TxAllo account
-	evidence  map[string]any
+	mu                     sync.RWMutex
+	allocator              *txalloAllocator
+	shards                 []string
+	aliases                map[string]string // runtime account/address -> logical TxAllo account
+	evidence               map[string]any
+	provisionalAccounts    map[string]bool
+	provisionalLookupCount int
 }
 
 func (p *txalloAccountSharding) configuredFloat(key string, fallback float64) float64 {
@@ -94,16 +100,24 @@ func (p *txalloAccountSharding) ShardForAccount(account string, shards []string)
 		return p.fallbackShard(account, shards)
 	}
 	p.mu.RLock()
-	defer p.mu.RUnlock()
 	logical := account
 	if x := p.aliases[account]; x != "" {
 		logical = x
 	}
 	if p.allocator != nil {
 		if s := p.allocator.Mapping[logical]; s != "" {
+			p.mu.RUnlock()
 			return s
 		}
 	}
+	p.mu.RUnlock()
+	p.mu.Lock()
+	if p.provisionalAccounts == nil {
+		p.provisionalAccounts = map[string]bool{}
+	}
+	p.provisionalAccounts[logical] = true
+	p.provisionalLookupCount++
+	p.mu.Unlock()
 	return p.fallbackShard(account, shards)
 }
 func (p *txalloAccountSharding) ShardFor(keys, shards []string) string {
@@ -137,6 +151,8 @@ func (p *txalloAccountSharding) TxAlloEvidenceSnapshot() map[string]any {
 	for k, v := range p.evidence {
 		out[k] = v
 	}
+	out["provisional_account_count"] = len(p.provisionalAccounts)
+	out["provisional_lookup_count"] = p.provisionalLookupCount
 	return out
 }
 func (p *txalloAccountSharding) HistoricalAllocationEvidence() map[string]any {
@@ -219,6 +235,150 @@ func txalloHistoryFromCanonical(rows []canonicalWireRecord) []txalloHistoryTx {
 	return out
 }
 
+type txalloHistorySidecarRow struct {
+	SchemaVersion  string   `json:"schema_version"`
+	SourceOrder    int      `json:"source_order"`
+	TransactionID  string   `json:"transaction_id"`
+	Timestamp      string   `json:"timestamp"`
+	BlockNum       int      `json:"block_num"`
+	GlobalSequence int64    `json:"global_sequence"`
+	SenderID       string   `json:"sender_id"`
+	ReceiverID     string   `json:"receiver_id"`
+	Accounts       []string `json:"accounts"`
+}
+type txalloGCachePayload struct {
+	SchemaVersion string            `json:"schema_version"`
+	CacheKey      string            `json:"cache_key"`
+	Mapping       map[string]string `json:"mapping"`
+	Evidence      map[string]any    `json:"evidence"`
+}
+
+func txalloRunHistoryPath(dataDir, relative string) (string, error) {
+	relative = filepath.ToSlash(strings.TrimSpace(relative))
+	if relative == "" || filepath.IsAbs(relative) || strings.Contains(relative, "../") || strings.HasPrefix(relative, "/") {
+		return "", fmt.Errorf("unsafe TxAllo history relative path")
+	}
+	// mbe-client receives outDir=<child>/client. The compiler stores reviewed
+	// TxAllo history under <child>/workload. Also accept dataDir itself for
+	// focused tests/older launchers.
+	candidates := []string{
+		filepath.Join(dataDir, filepath.FromSlash(relative)),
+		filepath.Join(dataDir, "..", filepath.FromSlash(relative)),
+	}
+	for _, candidate := range candidates {
+		clean := filepath.Clean(candidate)
+		if info, err := os.Stat(clean); err == nil && !info.IsDir() {
+			return clean, nil
+		}
+	}
+	return "", fmt.Errorf("TxAllo history sidecar is not available")
+}
+func readTxAlloHistorySidecar(path string, expected int) ([]txalloHistoryTx, []txalloHistorySidecarRow, error) {
+	f, e := os.Open(path)
+	if e != nil {
+		return nil, nil, e
+	}
+	defer f.Close()
+	gz, e := gzip.NewReader(f)
+	if e != nil {
+		return nil, nil, e
+	}
+	defer gz.Close()
+	sc := bufio.NewScanner(gz)
+	sc.Buffer(make([]byte, 64*1024), maxWorkloadRecordBytes)
+	history := make([]txalloHistoryTx, 0, expected)
+	rows := make([]txalloHistorySidecarRow, 0, expected)
+	last := -1
+	for sc.Scan() {
+		var r txalloHistorySidecarRow
+		if e := json.Unmarshal(sc.Bytes(), &r); e != nil {
+			return nil, nil, e
+		}
+		if r.SchemaVersion != "mbe_txallo_history_record_v1" {
+			return nil, nil, fmt.Errorf("unsupported TxAllo history schema")
+		}
+		if r.SourceOrder <= last {
+			return nil, nil, fmt.Errorf("TxAllo history source order is not strictly increasing")
+		}
+		last = r.SourceOrder
+		a := txalloUniqueSortedStrings(r.Accounts)
+		if len(a) == 0 {
+			return nil, nil, fmt.Errorf("TxAllo history row has no accounts")
+		}
+		history = append(history, txalloHistoryTx{Accounts: a})
+		rows = append(rows, r)
+	}
+	if e := sc.Err(); e != nil {
+		return nil, nil, e
+	}
+	if expected > 0 && len(history) != expected {
+		return nil, nil, fmt.Errorf("TxAllo history count=%d want=%d", len(history), expected)
+	}
+	return history, rows, nil
+}
+func txalloHistoryAudit(plan WorkloadPlan) (map[string]any, error) {
+	raw, ok := plan.AuditMetadata["txallo_history"]
+	if !ok {
+		return nil, fmt.Errorf("TxAllo history audit metadata missing")
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("TxAllo history audit metadata invalid")
+	}
+	if strings.TrimSpace(fmt.Sprint(m["selection_policy"])) != "preceding_ratio_v1" {
+		return nil, fmt.Errorf("TxAllo history policy mismatch")
+	}
+	if intValue(m["future_evaluation_transactions_used"]) != 0 {
+		return nil, fmt.Errorf("TxAllo future-data leakage")
+	}
+	return m, nil
+}
+func txalloGCacheKey(historySHA string, shards []string, eta, lambda, epsilon float64) string {
+	return stableJSONDigest(map[string]any{"algorithm": "txallo_paper_v20_ratio_g_v21", "history_sha256": historySHA, "shards": shards, "eta": eta, "configured_lambda": lambda, "configured_epsilon": epsilon})
+}
+func txalloLoadGCache(path, key string, shards []string) (txalloGCachePayload, bool) {
+	var p txalloGCachePayload
+	b, e := os.ReadFile(path)
+	if e != nil {
+		return p, false
+	}
+	if json.Unmarshal(b, &p) != nil || p.SchemaVersion != "mbe_txallo_g_cache_v1" || p.CacheKey != key || len(p.Mapping) == 0 {
+		return txalloGCachePayload{}, false
+	}
+	valid := map[string]bool{}
+	for _, s := range shards {
+		valid[s] = true
+	}
+	for _, s := range p.Mapping {
+		if !valid[s] {
+			return txalloGCachePayload{}, false
+		}
+	}
+	n := intValue(p.Evidence["graph_account_count"])
+	if n <= 0 || len(p.Mapping) != n {
+		return txalloGCachePayload{}, false
+	}
+	return p, true
+}
+func txalloWriteGCache(path string, p txalloGCachePayload) error {
+	if e := os.MkdirAll(filepath.Dir(path), 0o755); e != nil {
+		return e
+	}
+	b, e := json.MarshalIndent(p, "", "  ")
+	if e != nil {
+		return e
+	}
+	tmp := fmt.Sprintf("%s.tmp-%d", path, time.Now().UnixNano())
+	if e = os.WriteFile(tmp, append(b, '\n'), 0o644); e != nil {
+		return e
+	}
+	if e = os.Rename(tmp, path); e != nil {
+		_ = os.Remove(tmp)
+		return e
+	}
+	return nil
+}
+
 func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Context, input HistoricalAllocationBootstrapInput) error {
 	started := time.Now()
 	shards := append([]string(nil), input.ShardIDs...)
@@ -226,82 +386,98 @@ func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Contex
 	if len(shards) == 0 {
 		return fmt.Errorf("TxAllo requires at least one shard")
 	}
+	mode := strings.TrimSpace(fmt.Sprint(p.config["allocation_mode"]))
+	if mode == "" {
+		mode = "paper_g_ratio_snapshot"
+	}
+	if mode != "paper_g_ratio_snapshot" {
+		return fmt.Errorf("TxAllo formal mode requires paper_g_ratio_snapshot, got %q", mode)
+	}
+	meta, err := txalloHistoryAudit(input.Plan)
+	if err != nil {
+		return err
+	}
+	rel := strings.TrimSpace(fmt.Sprint(meta["history_relative_path"]))
+	count := intValue(meta["selected_history_count"])
+	if rel == "" || count <= 0 {
+		return fmt.Errorf("TxAllo selected pre-evaluation history is empty")
+	}
+	path, err := txalloRunHistoryPath(input.DataDir, rel)
+	if err != nil {
+		return err
+	}
+	history, rows, err := readTxAlloHistorySidecar(path, count)
+	if err != nil {
+		return fmt.Errorf("TxAllo history sidecar: %w", err)
+	}
+	if len(history) == 0 {
+		return fmt.Errorf("TxAllo requires non-empty pre-evaluation history")
+	}
 	eta := p.configuredFloat("eta", 2)
 	lambda := p.configuredFloat("lambda", 0)
 	epsilon := p.configuredFloat("epsilon", 0)
-	historyLimit := p.configuredInt("history_records", 5000)
-	adaptiveChunk := p.configuredInt("adaptive_chunk_records", 500)
-	history := []txalloHistoryTx{}
+	hsha := strings.TrimSpace(fmt.Sprint(meta["selected_history_sha256"]))
+	key := txalloGCacheKey(hsha, shards, eta, lambda, epsilon)
+	cdir := strings.TrimSpace(fmt.Sprint(meta["g_cache_dir"]))
+	cpath := ""
+	if cdir != "" {
+		cpath = filepath.Join(cdir, key+".json")
+	}
 	aliases := map[string]string{}
-	cutoff := -1
-	source := "synthetic_cold_start_no_future_history"
-	if input.Plan.SourceType == "dataset" && input.Plan.MaterializedRelativePath != "" && input.Plan.CanonicalRelativePath != "" {
-		evalPath, err := workloadPath(input.DataDir, input.Plan.MaterializedRelativePath)
-		if err != nil {
-			return err
+	for _, r := range rows {
+		ls := strings.ToLower(strings.TrimSpace(r.SenderID))
+		if ls != "" {
+			aliases[strings.ToLower(canonicalRuntimeSenderAddress(input.Plan, ls))] = ls
 		}
-		cutoff, err = readFirstCanonicalSourceRow(evalPath)
-		if err != nil {
-			return fmt.Errorf("TxAllo evaluation cutoff: %w", err)
-		}
-		canonicalPath, err := workloadPath(input.DataDir, input.Plan.CanonicalRelativePath)
-		if err != nil {
-			return err
-		}
-		rows, err := readTxAlloCanonicalHistory(canonicalPath, cutoff, historyLimit)
-		if err != nil {
-			return fmt.Errorf("TxAllo history: %w", err)
-		}
-		history = txalloHistoryFromCanonical(rows)
-		source = "canonical_pre_evaluation_history"
-		for _, r := range rows {
-			logicalSender := strings.ToLower(r.SenderID)
-			if logicalSender != "" {
-				aliases[strings.ToLower(canonicalRuntimeSenderAddress(input.Plan, logicalSender))] = logicalSender
-			}
-			logicalReceiver := strings.ToLower(r.ReceiverID)
-			if logicalReceiver != "" {
-				aliases["receiver_"+logicalReceiver] = logicalReceiver
-			}
+		lr := strings.ToLower(strings.TrimSpace(r.ReceiverID))
+		if lr != "" {
+			aliases["receiver_"+lr] = lr
 		}
 	}
 	alloc := newTxAlloAllocator(shards, eta, lambda, epsilon)
-	gCount, aCount := 0, 0
-	if len(history) > 0 {
-		firstEnd := len(history)
-		if adaptiveChunk > 0 && len(history) > adaptiveChunk {
-			firstEnd = len(history) % adaptiveChunk
-			if firstEnd == 0 {
-				firstEnd = adaptiveChunk
+	hit := false
+	ev := map[string]any{}
+	if cpath != "" {
+		if cached, ok := txalloLoadGCache(cpath, key, shards); ok {
+			hit = true
+			alloc.Mapping = copyMapping(cached.Mapping)
+			alloc.Eta = floatValue(cached.Evidence["eta"])
+			alloc.Lambda = floatValue(cached.Evidence["lambda"])
+			alloc.Epsilon = floatValue(cached.Evidence["epsilon"])
+			for k, v := range cached.Evidence {
+				ev[k] = v
 			}
 		}
-		alloc.RunG(history[:firstEnd])
-		gCount++
-		for start := firstEnd; start < len(history); start += adaptiveChunk {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			end := start + adaptiveChunk
-			if end > len(history) {
-				end = len(history)
-			}
-			alloc.RunA(history[start:end])
-			aCount++
-		}
-	} else {
-		// No committed pre-window history exists (for example a prefix starting at row 0
-		// or a synthetic workload). Keep the mapping empty and route unseen accounts by
-		// deterministic hash. Never train on the evaluation batch itself.
-		alloc.params()
 	}
-	mapping := copyMapping(alloc.Mapping)
-	digest := stableJSONDigest(mapping)
-	objective := txalloEvaluate(alloc.Graph, mapping, shards, alloc.Eta, alloc.Lambda)
+	if !hit {
+		alloc.RunG(history)
+		if len(alloc.Graph.Nodes) <= 0 || len(alloc.Mapping) <= 0 {
+			return fmt.Errorf("TxAllo G produced empty graph/mapping")
+		}
+		if len(alloc.Mapping) != len(alloc.Graph.Nodes) {
+			return fmt.Errorf("TxAllo G mapping incomplete")
+		}
+		obj := alloc.Metrics.Objective
+		ev = map[string]any{"graph_account_count": len(alloc.Graph.Nodes), "graph_edge_count": len(alloc.Graph.Edges), "eta": alloc.Eta, "lambda": alloc.Lambda, "epsilon": alloc.Epsilon, "mapping_digest": stableJSONDigest(alloc.Mapping), "mapped_account_count": len(alloc.Mapping), "modeled_throughput": obj.Throughput, "modeled_cross_shard_ratio": obj.CrossShardRatio, "modeled_workload_stddev": obj.WorkloadStdDev, "louvain_level_count": alloc.Metrics.LouvainLevels}
+		if cpath != "" {
+			_ = txalloWriteGCache(cpath, txalloGCachePayload{SchemaVersion: "mbe_txallo_g_cache_v1", CacheKey: key, Mapping: copyMapping(alloc.Mapping), Evidence: ev})
+		}
+	}
+	graphCount := intValue(ev["graph_account_count"])
+	if graphCount <= 0 || len(alloc.Mapping) <= 0 || len(alloc.Mapping) != graphCount {
+		return fmt.Errorf("TxAllo mapping is not operationally valid")
+	}
+	for k, v := range map[string]any{"truth_boundary": txalloTruthBoundary, "allocation_mode": mode, "history_source": "manifest_preanchor_ratio_sidecar", "history_policy": "preceding_ratio_v1", "history_ratio": floatValue(meta["history_ratio"]), "history_pool_count": intValue(meta["history_pool_count"]), "history_transaction_count": len(history), "history_window_start_source_order": intValue(meta["history_window_start_source_order"]), "history_window_end_source_order": intValue(meta["history_window_end_source_order"]), "history_selected_sha256": hsha, "g_cache_hit": hit, "g_cache_key": key, "g_txallo_run_count": 1, "g_txallo_executed_this_run": !hit, "a_txallo_run_count": 0, "dynamic_a_txallo_runtime_enabled": false, "mapping_nonempty": len(alloc.Mapping) > 0, "mapping_structurally_complete": len(alloc.Mapping) == graphCount, "mapping_operationally_valid": len(alloc.Mapping) > 0 && len(alloc.Mapping) == graphCount, "future_evaluation_transactions_used": 0, "bootstrap_ms": time.Since(started).Milliseconds()} {
+		ev[k] = v
+	}
 	p.mu.Lock()
 	p.allocator = alloc
 	p.shards = shards
 	p.aliases = aliases
-	p.evidence = map[string]any{"truth_boundary": txalloTruthBoundary, "history_source": source, "history_cutoff_source_row_index": cutoff, "history_transaction_count": len(history), "history_limit": historyLimit, "adaptive_chunk_records": adaptiveChunk, "g_txallo_run_count": gCount, "a_txallo_run_count": aCount, "graph_account_count": len(alloc.Graph.Nodes), "graph_edge_count": len(alloc.Graph.Edges), "eta": alloc.Eta, "lambda": alloc.Lambda, "epsilon": alloc.Epsilon, "mapping_digest": digest, "mapped_account_count": len(mapping), "modeled_throughput": objective.Throughput, "modeled_cross_shard_ratio": objective.CrossShardRatio, "modeled_workload_stddev": objective.WorkloadStdDev, "bootstrap_ms": time.Since(started).Milliseconds(), "future_evaluation_transactions_used": 0}
+	p.evidence = ev
+	if p.provisionalAccounts == nil {
+		p.provisionalAccounts = map[string]bool{}
+	}
 	p.mu.Unlock()
 	return nil
 }
@@ -312,12 +488,32 @@ type txalloRouting struct {
 }
 
 func (p txalloRouting) BatchRoutingArtifactFamily() string { return "txallo" }
+
+// MBE_TXALLO_REPRO_V202: dataset cross-shard labels are input annotations, not
+// physical placement truth. Strip any legacy wrapper and rebuild it solely from
+// the frozen TxAllo account allocation.
+func txalloBusinessPayload(payload string) string {
+	payload = strings.TrimSpace(payload)
+	if !strings.HasPrefix(payload, "v5_cross:") {
+		return payload
+	}
+	remainder := strings.TrimPrefix(payload, "v5_cross:")
+	if colon := strings.Index(remainder, ":"); colon >= 0 {
+		if business := remainder[colon+1:]; business != "" {
+			return business
+		}
+	}
+	return "v5_safe"
+}
+
 func (p txalloRouting) ApplyAccountPlacement(record WorkloadRecord, placement TransactionPlacement) WorkloadRecord {
+	basePayload := txalloBusinessPayload(record.Payload)
 	record.SourceShard = placement.HomeShard
 	record.TargetShard = placement.TargetShard
 	record.CrossShard = placement.TargetShard != "" && placement.TargetShard != placement.HomeShard
-	if record.CrossShard && !strings.HasPrefix(record.Payload, "v5_cross:") {
-		record.Payload = "v5_cross:" + placement.TargetShard + ":" + record.Payload
+	record.Payload = basePayload
+	if record.CrossShard {
+		record.Payload = "v5_cross:" + placement.TargetShard + ":" + basePayload
 	}
 	return record
 }
@@ -378,6 +574,30 @@ func (p txalloRouting) SignedBatchExecutionPlan() bool  { return false }
 func (p txalloRouting) NativeVersionedStateReady() bool { return false }
 func (p txalloRouting) StatelessVersionAdmission() bool { return p.stateless }
 
+// Stateless-TxAllo uses remote exact-version state transport and must never
+// re-execute the business transaction through MBE Relay/Finalize.
+type txalloNoRelayCrossShard struct{ basicPlugin }
+
+func (p txalloNoRelayCrossShard) IsCrossShard(tx.SignedTransaction) bool { return false }
+func (p txalloNoRelayCrossShard) SourceLock(input CrossShardRelayInput) CrossShardEvent {
+	return CrossShardEvent{TxID: input.Tx.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "TxAlloStatelessNoRelay", Success: true}
+}
+func (p txalloNoRelayCrossShard) TargetCommit(input CrossShardFinalizeInput) CrossShardEvent {
+	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "TxAlloStatelessNoRelay", Success: true}
+}
+func (p txalloNoRelayCrossShard) HandleFinalize(input CrossShardFinalizeInput) CrossShardEvent {
+	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "TxAlloStatelessNoRelay", Success: true}
+}
+func (p txalloNoRelayCrossShard) TimeoutRefund(input CrossShardFinalizeInput, reason string) CrossShardEvent {
+	return CrossShardEvent{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard, Stage: "TxAlloStatelessNoRelay", Success: false, Error: reason}
+}
+func (p txalloNoRelayCrossShard) BuildRelay(input CrossShardRelayInput) Relay {
+	return Relay{Tx: input.Tx, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard}
+}
+func (p txalloNoRelayCrossShard) BuildFinalize(input CrossShardFinalizeInput) Finalize {
+	return Finalize{TxID: input.TxID, LogicalTxID: input.LogicalTxID, SourceShard: input.SourceShard, TargetShard: input.TargetShard}
+}
+
 func registerTxAlloPlugins(register func(string, string, Factory)) {
 	register("sharding", txalloShardingID, func(c map[string]any) (Plugin, error) {
 		return &txalloAccountSharding{basicPlugin: makeBasic("sharding", txalloShardingID, c), aliases: map[string]string{}, evidence: map[string]any{}}, nil
@@ -387,6 +607,9 @@ func registerTxAlloPlugins(register func(string, string, Factory)) {
 	})
 	register("routing", txalloStatelessRoutingID, func(c map[string]any) (Plugin, error) {
 		return txalloRouting{basicPlugin: makeBasic("routing", txalloStatelessRoutingID, c), stateless: true}, nil
+	})
+	register("cross_shard", txalloNoRelayCrossShardID, func(c map[string]any) (Plugin, error) {
+		return txalloNoRelayCrossShard{basicPlugin: makeBasic("cross_shard", txalloNoRelayCrossShardID, c)}, nil
 	})
 }
 func validateTxAlloPluginCombination(p RuntimePlugins) error {
@@ -418,6 +641,15 @@ func validateTxAlloPluginCombination(p RuntimePlugins) error {
 	}
 	if p.Consensus == nil || p.Consensus.ID() != "pbft_style_consensus" {
 		return fmt.Errorf("TxAllo requires shared PBFT")
+	}
+	if p.CrossShard == nil {
+		return fmt.Errorf("TxAllo requires an explicit cross_shard plugin")
+	}
+	if rid == txalloStatelessRoutingID && p.CrossShard.ID() != txalloNoRelayCrossShardID {
+		return fmt.Errorf("Stateless-TxAllo requires cross_shard:%s", txalloNoRelayCrossShardID)
+	}
+	if rid == txalloRoutingID && p.CrossShard.ID() != "relay_certificate_protocol" {
+		return fmt.Errorf("stateful TxAllo requires cross_shard:relay_certificate_protocol")
 	}
 	return nil
 }

@@ -47,6 +47,7 @@ type metaTrackIncrementalRoutingStateV650 struct {
 	ProducerByVersion        map[metaTrackIncrementalVersionSlotV650]metaTrackIncrementalProducerV650
 	PairShardSupport         map[string]map[string]int
 	KeyShardSupport          map[string]map[string]int
+	HomeShardByKey           map[string]string
 	HistoryDigest            string
 }
 
@@ -56,10 +57,97 @@ type metaTrackIncrementalCandidateV650 struct {
 	ReadyRank        int
 	ExactCross       int
 	CoaccessLocality int
+	RemoteReads      int
+	RemoteWrites     int
 	RemoteCost       int
 	Load             int
 	WorstRank        int
 	RankSum          int
+}
+
+type metaTrackResolvedExactDependencyV669 struct {
+	Key      string
+	Producer metaTrackIncrementalProducerV650
+}
+
+type metaTrackRoutingRecordContextV669 struct {
+	Accesses       []tx.AccessItem
+	Keys           []string
+	Pairs          []string
+	ExactDeps      []metaTrackResolvedExactDependencyV669
+	ReadHomeCount  map[string]int
+	WriteHomeCount map[string]int
+	TotalHomeReads int
+	TotalHomeWrites int
+}
+
+func metaTrackBuildRoutingRecordContextV669(p *metaTrackRouting, record WorkloadRecord, sharding ShardingPlugin, shardIDs []string, state *metaTrackIncrementalRoutingStateV650) metaTrackRoutingRecordContextV669 {
+	if state.HomeShardByKey == nil { state.HomeShardByKey = map[string]string{} }
+	ctx := metaTrackRoutingRecordContextV669{
+		Accesses: normalizedAccessItems(record),
+		ReadHomeCount: map[string]int{},
+		WriteHomeCount: map[string]int{},
+	}
+	accessByKey := map[string]tx.AccessItem{}
+	seenKey := map[string]bool{}
+	for _, access := range ctx.Accesses {
+		if access.Key == "" { continue }
+		if _, ok := accessByKey[access.Key]; !ok { accessByKey[access.Key] = access }
+		if !seenKey[access.Key] { seenKey[access.Key] = true; ctx.Keys = append(ctx.Keys, access.Key) }
+		home, cached := state.HomeShardByKey[access.Key]
+		if !cached {
+			home = p.LogicalStateHome(access.Key, sharding, shardIDs).ServingShard
+			state.HomeShardByKey[access.Key] = home
+		}
+		if home == "" { continue }
+		if isReadMode(access.Mode) { ctx.ReadHomeCount[home]++; ctx.TotalHomeReads++ }
+		if isWriteMode(access.Mode) { ctx.WriteHomeCount[home]++; ctx.TotalHomeWrites++ }
+	}
+	sort.Strings(ctx.Keys)
+	for left := 0; left < len(ctx.Keys); left++ {
+		for right := left + 1; right < len(ctx.Keys); right++ { ctx.Pairs = append(ctx.Pairs, keyPair(ctx.Keys[left], ctx.Keys[right])) }
+	}
+	for _, dep := range record.StateVersions {
+		if dep.Key == "" || dep.RequiredVersion == 0 { continue }
+		access, ok := accessByKey[dep.Key]
+		if !ok || !requiresExactStateValue(access) { continue }
+		producer, ok := state.ProducerByVersion[metaTrackIncrementalVersionSlotV650{Key: dep.Key, Version: dep.RequiredVersion}]
+		if !ok || strings.TrimSpace(producer.Shard) == "" { continue }
+		ctx.ExactDeps = append(ctx.ExactDeps, metaTrackResolvedExactDependencyV669{Key: dep.Key, Producer: producer})
+	}
+	return ctx
+}
+
+func metaTrackRemoteCountsFromContextV669(ctx metaTrackRoutingRecordContextV669, shard string) (int, int) {
+	return ctx.TotalHomeReads - ctx.ReadHomeCount[shard], ctx.TotalHomeWrites - ctx.WriteHomeCount[shard]
+}
+
+func metaTrackReadyRankFromContextV669(ctx metaTrackRoutingRecordContextV669, shard string) int {
+	readyRank := 0
+	seenProducer := map[uint64]bool{}
+	for _, dep := range ctx.ExactDeps {
+		producer := dep.Producer
+		if seenProducer[producer.Ordinal] { continue }
+		seenProducer[producer.Ordinal] = true
+		candidateRank := producer.FinishRank
+		if producer.Shard != shard { candidateRank++ }
+		if candidateRank > readyRank { readyRank = candidateRank }
+	}
+	return readyRank
+}
+
+func metaTrackExactCrossFromContextV669(ctx metaTrackRoutingRecordContextV669, shard string) int {
+	cross := 0
+	for _, dep := range ctx.ExactDeps { if dep.Producer.Shard != shard { cross++ } }
+	return cross
+}
+
+func metaTrackCoaccessFromContextV669(ignoreCoaccess bool, ctx metaTrackRoutingRecordContextV669, shard string, state *metaTrackIncrementalRoutingStateV650) int {
+	if ignoreCoaccess { return 0 }
+	score := 0
+	for _, pair := range ctx.Pairs { score += state.PairShardSupport[pair][shard] }
+	if len(ctx.Keys) == 1 { score += state.KeyShardSupport[ctx.Keys[0]][shard] }
+	return score
 }
 
 func newMetaTrackIncrementalRoutingStateV650(input BatchRoutingInput) *metaTrackIncrementalRoutingStateV650 {
@@ -81,6 +169,7 @@ func newMetaTrackIncrementalRoutingStateV650(input BatchRoutingInput) *metaTrack
 		ProducerByVersion:        map[metaTrackIncrementalVersionSlotV650]metaTrackIncrementalProducerV650{},
 		PairShardSupport:         map[string]map[string]int{},
 		KeyShardSupport:          map[string]map[string]int{},
+		HomeShardByKey:           map[string]string{},
 		HistoryDigest:            stableDigest("metatrack_incremental_exact_continuity_v650:genesis"),
 	}
 }
@@ -311,8 +400,9 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 	routingEpoch := uint64(maxInt(0, intValue(p.config["routing_epoch"])))
 
 	for _, record := range input.Records {
-		accesses := normalizedAccessItems(record)
-		keys := metaTrackIncrementalKeysV650(record)
+		routingCtx := metaTrackBuildRoutingRecordContextV669(p, record, input.Sharding, input.ShardIDs, state)
+		accesses := routingCtx.Accesses
+		keys := routingCtx.Keys
 		logicalID := firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index))
 		for _, access := range accesses {
 			if access.Key == "" {
@@ -333,10 +423,8 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 			}
 			batchKeys[access.Key] = true
 		}
-		for left := 0; left < len(keys); left++ {
-			for right := left + 1; right < len(keys); right++ {
-				batchCoaccess[keyPair(keys[left], keys[right])]++
-			}
+		for _, pair := range routingCtx.Pairs {
+			batchCoaccess[pair]++
 		}
 
 		candidates := make([]metaTrackIncrementalCandidateV650, 0, len(input.ShardIDs))
@@ -346,13 +434,15 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 			if admissible {
 				anyAdmissible = true
 			}
-			reads, writes := metaTrackPredictedRemoteAccessCounts(p, input.Sharding, input.ShardIDs, accesses, shard)
+			reads, writes := metaTrackRemoteCountsFromContextV669(routingCtx, shard)
 			candidates = append(candidates, metaTrackIncrementalCandidateV650{
 				Shard:            shard,
 				Admissible:       admissible,
-				ReadyRank:        metaTrackIncrementalReadyRankV651(record, shard, state),
-				ExactCross:       metaTrackIncrementalExactCrossV650(record, shard, state),
-				CoaccessLocality: metaTrackAblationCoaccessLocalityV661(ignoreCoaccessV661, keys, shard, state),
+				ReadyRank:        metaTrackReadyRankFromContextV669(routingCtx, shard),
+				ExactCross:       metaTrackExactCrossFromContextV669(routingCtx, shard),
+				CoaccessLocality: metaTrackCoaccessFromContextV669(ignoreCoaccessV661, routingCtx, shard, state),
+				RemoteReads:      reads,
+				RemoteWrites:     writes,
 				RemoteCost:       reads + writes,
 				Load:             state.ShardLoad[shard],
 			})
@@ -399,7 +489,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 			plan.IncrementalLoadTiebreakCount++
 		}
 
-		remoteReads, remoteWrites := metaTrackPredictedRemoteAccessCounts(p, input.Sharding, input.ShardIDs, accesses, selected.Shard)
+		remoteReads, remoteWrites := selected.RemoteReads, selected.RemoteWrites
 		plan.RemoteAccessEstimate += remoteReads + remoteWrites
 		homeShard := firstNonEmpty(record.SourceShard, shardFor(input.Sharding, record.StateKeys, input.ShardIDs))
 		targetShard := record.TargetShard
@@ -427,18 +517,8 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		// Exact-version edge metrics are computed against the same pre-decision
 		// producer index used by routing, so they describe the actual choice.
 		seenPred := map[uint64]bool{}
-		for _, dep := range record.StateVersions {
-			if dep.Key == "" || dep.RequiredVersion == 0 {
-				continue
-			}
-			access, ok := metaTrackIncrementalAccessForKeyV650(record, dep.Key)
-			if !ok || !requiresExactStateValue(access) {
-				continue
-			}
-			producer, ok := state.ProducerByVersion[metaTrackIncrementalVersionSlotV650{Key: dep.Key, Version: dep.RequiredVersion}]
-			if !ok || producer.Shard == "" {
-				continue
-			}
+		for _, dep := range routingCtx.ExactDeps {
+			producer := dep.Producer
 			plan.IncrementalExactStateEdgeCount++
 			if producer.Shard == selected.Shard {
 				plan.IncrementalExactLocalStateEdgeCount++
@@ -464,15 +544,12 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 			}
 			state.KeyShardSupport[key][selected.Shard]++
 		}
-		for left := 0; left < len(keys); left++ {
-			for right := left + 1; right < len(keys); right++ {
-				pair := keyPair(keys[left], keys[right])
-				if state.PairShardSupport[pair] == nil {
-					state.PairShardSupport[pair] = map[string]int{}
-				}
-				state.PairShardSupport[pair][selected.Shard]++
-				plan.IncrementalCoaccessPairUpdateCount++
+		for _, pair := range routingCtx.Pairs {
+			if state.PairShardSupport[pair] == nil {
+				state.PairShardSupport[pair] = map[string]int{}
 			}
+			state.PairShardSupport[pair][selected.Shard]++
+			plan.IncrementalCoaccessPairUpdateCount++
 		}
 		for _, dep := range record.StateVersions {
 			if dep.Key == "" || dep.ProducedVersion == 0 {

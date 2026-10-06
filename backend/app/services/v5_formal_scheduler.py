@@ -17,6 +17,7 @@ from backend.app.services import v5_formal_artifact_storage, v5_real_cluster_run
 from backend.app.services.v5_formal_run_store import children, group_dir, read_group, write_attempt, write_child, write_group
 from backend.app.services.v5_fairness_validator import validate as validate_fairness, write_artifacts as write_fairness_artifacts
 from backend.app.services.v5_metric_extractor import extract as extract_metrics
+from backend.app.services.v5_optme_txallo_method_specific_v18 import enrich_metrics as enrich_optme_txallo_v18
 from backend.app.services.v5_serial_order_oracle import evaluate as evaluate_serial_order_oracle
 from backend.app.services.v5_compatibility_engine import V5CompatibilityError, _cross_shard_fault_unsupported
 from backend.app.services.v5_plugin_manifest_store import STORE
@@ -466,6 +467,31 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
 
 
 def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[str, object]:
+    # MBE_OPTME_V23_FORMAL_TRUTH: both cards share one global order; only the
+    # state substrate differs.
+    if method_id == "stateful_optme" or snapshot.get("block_executor") == "optme_block_executor":
+        return {
+            "comparison_semantics_class": "optme_global_order_stateful_v23",
+            "state_access_semantics": "global_order_optme_local_full_state",
+            "state_home_mapping_policy": "globally_replicated_state",
+            "remote_fetch_policy": "none",
+            "remote_writeback_policy": "none",
+            "proof_policy": "existing_optme_transaction_evidence_replay_v23",
+            "legacy_cross_shard_protocol": False,
+            "measurement_boundary": "client_submit_to_optme_global_durable_commit",
+        }
+    if method_id == "stateless_optme" or snapshot.get("block_executor") == "stateless_optme_block_executor":
+        return {
+            "comparison_semantics_class": "optme_global_order_partition_projection_v23",
+            "state_access_semantics": "global_order_hminus1_partition_projection",
+            "state_home_mapping_policy": "deterministic_state_key_partition_home",
+            "remote_fetch_policy": "hminus1_snapshot_projection",
+            "remote_writeback_policy": "none_partition_owned_materialization",
+            "version_plan_policy": "none_no_transaction_versions",
+            "proof_policy": "existing_optme_transaction_evidence_replay_v23",
+            "legacy_cross_shard_protocol": False,
+            "measurement_boundary": "client_submit_to_optme_global_durable_commit",
+        }
     if method_id == "stateful_calvin" or snapshot.get("block_executor") == "calvin_block_executor":
         return {
             "comparison_semantics_class": "calvin_deterministic_locking_stateful_pbft_adapted_v2",
@@ -852,6 +878,10 @@ def _run_worker(group_id: str) -> None:
                         result_summary=oracle_summary,
                     )
                     metrics |= serial_oracle
+                    # MBE_TXALLO_EVIDENCE_V203: v18 must see the strong oracle fields;
+                    # extract_metrics ran before evaluate_serial_order_oracle.
+                    if str(row.get("method_config_id") or "") in {"stateful_optme", "stateless_optme", "stateful_txallo", "stateless_txallo"}:
+                        metrics = enrich_optme_txallo_v18(result_dir, row.get("method_config_id"), metrics)
                     if isinstance(result.get("summary"), dict):
                         # Persist the exact semantic contract used by the oracle so
                         # exported child/result evidence is self-describing.
@@ -1817,6 +1847,7 @@ def _serial_oracle_summary(result_summary: dict | None, formal_row: dict) -> dic
         value = formal_row.get(field)
         if value is not None:
             summary[field] = value
+    summary["method_config_id"] = str(formal_row.get("method_config_id") or "")
     return summary
 
 

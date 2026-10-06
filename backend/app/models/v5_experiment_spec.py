@@ -67,8 +67,8 @@ class V5WorkloadSourceSpec(BaseModel):
             raise ValueError("derived workload_source target_alpha is not supported")
         if self.variant_mode in {"contract_zipf", "key_zipf"} and not self.skew_axis:
             raise ValueError("derived workload_source requires skew_axis")
-        if self.selection_mode == "validated_prefix" and not self.variant_parameters:
-            raise ValueError("validated_prefix workload_source requires variant_parameters")
+        if self.selection_mode == "validated_prefix" and self.variant_mode != "original_window" and not self.variant_parameters:
+            raise ValueError("parameterized validated_prefix workload_source requires variant_parameters")
         if self.use_full_dataset and self.requested_tx_count < 1:
             raise ValueError("full dataset workload_source requires a positive requested_tx_count mirror")
         return self

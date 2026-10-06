@@ -1,24 +1,26 @@
 {
   "schema_version": "mbe_dataset_manifest_v2",
   "dataset_id": "alien_worlds_layered_v2_historical",
-  "display_name": "Alien Worlds V2 历史回放声明",
-  "description": "Alien Worlds 历史 10K 的分层静态声明回放。分类器只读取 V2 input；oracle 不进入运行链。",
+  "display_name": "Alien Worlds V2 历史原负载 1M 对齐回放",
+  "description": "Alien Worlds 真实历史原负载的 Layered V2 静态声明回放；现有 historical 10K 保持为字节级完全相同前缀，并向后连续扩展到 1M。",
   "source_platform": "alien_worlds",
   "source_chain": "wax_mainnet",
   "dataset_type": "layered_historical_replay_projection",
   "adapter_id": "alien_worlds_layered_v2",
   "source_layout": "single_file",
-  "local_raw_relative_path": "dataset/Alien_World/layered_v2/bundles/selected_template_10k_original/selected_template_10k_original.v2.input.jsonl",
-  "source_sha256": "860b51e61776e19d2e0a9c2039ddd71f31b19b8f650b0982292a50e5799327ca",
-  "row_count": 10000,
+  "local_raw_relative_path": "dataset/Alien_World/layered_v2/bundles/historical_aligned_1m/historical_aligned_1m.v2.input.jsonl",
+  "source_sha256": "5a29e6842cd6d01006b857ef590ee77dceed5b5ea8a4eebd9c2e927bfd348ba9",
+  "row_count": 1000000,
   "truth_label": "real_replay_projected",
-  "catalog_validation": "full",
+  "catalog_validation": "file_metadata",
   "supported_tx_counts": [
     100,
     1000,
     2500,
     5000,
-    10000
+    10000,
+    100000,
+    1000000
   ],
   "allow_full_dataset": true,
   "supported_skew_axes": [
@@ -31,14 +33,54 @@
   "variant_definitions": [
     {
       "variant_mode": "original_window",
-      "display_name": "历史回放静态声明",
+      "display_name": "历史原负载静态声明（对齐前缀）",
       "kind": "original",
-      "selection_mode": "contiguous_window",
+      "selection_mode": "validated_prefix",
       "parameters": []
     }
   ],
-  "generator_version": "mbe_aw_v2_historical_inplace_contract_semantic_audit_20260920_v1",
-  "verification_method": "layered_v2_bundle_manifest_adapter_validation_plus_mfederation_mine_contract_semantic_audit",
-  "verification_results": "in-place historical semantic audit: preserved 10000 rows, transaction/source order, static envelope, keys and access modes; RW/UNKNOWN -> RW/RMW only for audited m.federation::mine state families (m.federation/landcomms=9998, m.federation/minerclaim=10000, m.federation/miners=10000, m.federation/pltdtapconf=10000, m.federation/pools=10000, m.federation/state3=10000, m.federation/tooluse=21994); unresolved UNKNOWN families={}; no execution oracle, StateVersion, StateReady, TopoSafe or Fast/Conservative labels injected",
-  "usage_note": "Historical entity attributes remain offline replay declaration projection, not native signed WAX access declarations. Write semantics for audited m.federation::mine state families are statically derived from contract program behavior; runtime values and classification outcomes are not encoded."
+  "generator_version": "mbe_aw_historical_aligned_1m_20261003_v1",
+  "verification_method": "exact_current_10k_byte_prefix_plus_contiguous_real_source_extension_plus_layered_v2_adapter_validation",
+  "verification_results": "PASS: current historical 10K is byte-identical prefix; source anchor row=97000; aligned candidate=1,000,000 unique transactions; adapter validation passed; only historical dataset/data-plane count support changed.",
+  "usage_note": "Historical entity attributes remain offline replay declaration projection, not native signed WAX access declarations. 10K/100K/1M are nested validated prefixes. Pre-anchor real source rows are retained in the upstream AW source for later TxAllo history integration.",
+  "_large_history_alignment": {
+    "schema": "aw_historical_alignment_v1",
+    "source_aw_sha256": "1e99f65fb190d37c5d91cce31a34be4ce129b4b062b7bb61d6c604c8fc1a37b8",
+    "anchor_source_row_index": 97000,
+    "prehistory_records_available": 97000,
+    "current_10k_prefix_sha256": "860b51e61776e19d2e0a9c2039ddd71f31b19b8f650b0982292a50e5799327ca",
+    "aligned_1m_sha256": "5a29e6842cd6d01006b857ef590ee77dceed5b5ea8a4eebd9c2e927bfd348ba9",
+    "selection_contract": {
+      "10000": "rows[0,10000)",
+      "100000": "rows[0,100000)",
+      "1000000": "rows[0,1000000)"
+    },
+    "txallo_note": "pre-anchor history is not part of this runtime input; TxAllo history lifecycle must consume the preserved upstream history separately or via a later anchor-aware history path."
+  },
+  "preview_policy": "validated_prefix_streaming_v1",
+  "source_size_bytes": 3493916757,
+  "materialization_policy": "validated_prefix_attested_prefix_v1",
+  "_runtime_integration": {
+    "materialization_policy": "validated_prefix_attested_prefix_v1",
+    "source_identity_gate": "exact_source_sha256_cached_per_unchanged_file_identity",
+    "selected_prefix_schema_gate": true,
+    "full_1m_canonicalization_required_for_small_prefix": false,
+    "layered_v4_routing_basis": "logical_routing_key"
+  },
+  "txallo_history_pool": {
+    "schema_version": "mbe_txallo_history_pool_v1",
+    "selection_policy": "preceding_ratio_v1",
+    "history_ratio": 0.1,
+    "row_count": 97000,
+    "sha256": "2f3082d24b3bed78dbae7a85b1f32aee571e04f827dc907da078456a74c3ff5d",
+    "local_relative_path": "dataset/Alien_World/layered_v2/history/txallo_preanchor_97k.jsonl.gz",
+    "source_raw_relative_path": "dataset/Alien_World/AW/alien_worlds_2026-04-06_full_day_mbe_logical_access_list_v1.csv",
+    "evaluation_anchor_raw_row_index": 97000,
+    "evaluation_anchor_transaction_id": "85bf66e2d2fc674aa4b9d54a2e7010350bdf958a1e51effabc4883ad492ba3d",
+    "first_source_order": 0,
+    "last_source_order": 96999,
+    "accounts_semantics": "sender_receiver_accounts_only",
+    "future_evaluation_transactions_used": 0,
+    "paper_note": "The 10% history ratio is an MBE experiment policy, not a TxAllo paper invariant."
+  }
 }

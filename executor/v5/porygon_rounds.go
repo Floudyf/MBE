@@ -101,23 +101,35 @@ func porygonPaperPruneCertifiedLocked(state *porygonPaperRuntimeState) {
 	}
 }
 
-func (r *NodeRuntime) porygonPaperRecordCertifiedSnapshot(height uint64, snapshot map[string]string) {
+// Durable storage is a materialization witness for an already certified
+// Porygon partition root.  It must never create or rewrite consensus truth:
+// pipeline execution/Storage-Role certificates own certifiedPartitionRoots and
+// certifiedRoots, while the durable DB only proves that this replica materialized
+// the root it already accepted.
+func (r *NodeRuntime) porygonPaperValidateDurableSnapshot(height uint64, snapshot map[string]string) error {
 	state := r.porygonPaperRuntimeState()
 	root := statepkg.RootOfSnapshot(snapshot)
+	partitionID := r.stateAccessPartitionID()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.certifiedSnapshots[height] = copyRegistryStringMap(snapshot)
-	partitionRoots := copyRegistryStringMap(state.certifiedPartitionRoots[state.latestCertifiedHeight])
+	partitionRoots := state.certifiedPartitionRoots[height]
 	if partitionRoots == nil {
-		partitionRoots = map[string]string{}
+		return fmt.Errorf("Porygon durable snapshot has no certified partition-root set at height %d", height)
 	}
-	partitionRoots[r.stateAccessPartitionID()] = root
-	state.certifiedPartitionRoots[height] = partitionRoots
-	state.certifiedRoots[height] = stableJSONDigest(partitionRoots)
-	if height > state.latestCertifiedHeight {
-		state.latestCertifiedHeight = height
+	expected := partitionRoots[partitionID]
+	if expected == "" {
+		return fmt.Errorf("Porygon durable snapshot has no certified root at height %d partition %s", height, partitionID)
 	}
-	porygonPaperPruneCertifiedLocked(state)
+	if root != expected {
+		return fmt.Errorf("Porygon durable snapshot/certified partition root mismatch at height %d partition %s", height, partitionID)
+	}
+	if existing := state.certifiedSnapshots[height]; existing != nil {
+		if existingRoot := statepkg.RootOfSnapshot(existing); existingRoot != root {
+			return fmt.Errorf("Porygon durable snapshot conflicts with certified snapshot at height %d partition %s", height, partitionID)
+		}
+	}
+	state.certifiedSnapshots[height] = copyRegistryStringMap(snapshot)
+	return nil
 }
 
 // Concurrent proposal execution may start from an older agreed T root.  Never
@@ -125,13 +137,17 @@ func (r *NodeRuntime) porygonPaperRecordCertifiedSnapshot(height uint64, snapsho
 // would erase disjoint writes already certified by another pipeline stage.
 // Merge only this execution's deterministic materialized delta onto the latest
 // canonical certified snapshot, then certify the merged root.
-func (r *NodeRuntime) porygonPaperRecordCertifiedDelta(height uint64, delta []statepkg.StateKV, observedPartitionRoots map[string]string) (map[string]string, string) {
+func (r *NodeRuntime) porygonPaperRecordCertifiedDelta(height uint64, delta []statepkg.StateKV, observedPartitionRoots map[string]string) (map[string]string, string, error) {
 	state := r.porygonPaperRuntimeState()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	base := copyRegistryStringMap(state.certifiedSnapshots[state.latestCertifiedHeight])
+	baseHeight := state.baselineHeight
+	if height > state.baselineHeight {
+		baseHeight = height - 1
+	}
+	base := copyRegistryStringMap(state.certifiedSnapshots[baseHeight])
 	if base == nil {
-		base = map[string]string{}
+		return nil, "", fmt.Errorf("Porygon canonical base snapshot unavailable at height %d for certification of height %d", baseHeight, height)
 	}
 	for _, item := range delta {
 		if item.Key == "" {
@@ -139,26 +155,94 @@ func (r *NodeRuntime) porygonPaperRecordCertifiedDelta(height uint64, delta []st
 		}
 		base[item.Key] = item.Value
 	}
-	localRoot := statepkg.RootOfSnapshot(base)
-	partitionRoots := copyRegistryStringMap(state.certifiedPartitionRoots[state.latestCertifiedHeight])
+	partitionRoots := copyRegistryStringMap(state.certifiedPartitionRoots[baseHeight])
 	if partitionRoots == nil {
-		partitionRoots = map[string]string{}
+		return nil, "", fmt.Errorf("Porygon canonical partition-root base unavailable at height %d", baseHeight)
 	}
 	for shard, root := range observedPartitionRoots {
 		if shard != "" && root != "" {
 			partitionRoots[shard] = root
 		}
 	}
-	partitionRoots[r.stateAccessPartitionID()] = localRoot
-	state.certifiedSnapshots[height] = copyRegistryStringMap(base)
-	state.certifiedPartitionRoots[height] = partitionRoots
+	if len(partitionRoots) < r.porygonExecutionShardCount() {
+		return nil, "", fmt.Errorf("Porygon certified partition-root coverage incomplete at height %d", height)
+	}
+	localPartition := r.stateAccessPartitionID()
+	localRoot := statepkg.RootOfSnapshot(base)
+	expectedLocalRoot := partitionRoots[localPartition]
+	if expectedLocalRoot == "" {
+		return nil, "", fmt.Errorf("Porygon certified local partition root missing at height %d partition %s", height, localPartition)
+	}
+	if localRoot != expectedLocalRoot {
+		return nil, "", fmt.Errorf("Porygon local snapshot/certified partition root mismatch at height %d partition %s", height, localPartition)
+	}
 	globalRoot := stableJSONDigest(partitionRoots)
+	if existing := state.certifiedPartitionRoots[height]; existing != nil && stableJSONDigest(existing) != globalRoot {
+		return nil, "", fmt.Errorf("Porygon certified state equivocation at height %d", height)
+	}
+	if existingRoot := state.certifiedRoots[height]; existingRoot != "" && existingRoot != globalRoot {
+		return nil, "", fmt.Errorf("Porygon certified global root equivocation at height %d", height)
+	}
+	state.certifiedSnapshots[height] = copyRegistryStringMap(base)
+	state.certifiedPartitionRoots[height] = copyRegistryStringMap(partitionRoots)
 	state.certifiedRoots[height] = globalRoot
 	if height > state.latestCertifiedHeight {
 		state.latestCertifiedHeight = height
 	}
 	porygonPaperPruneCertifiedLocked(state)
-	return copyRegistryStringMap(base), globalRoot
+	return copyRegistryStringMap(base), globalRoot, nil
+}
+
+// porygonPaperCanonicalPartitionBase separates the execution read anchor T(h-2)
+// from canonical materialization.  State certified for height h is folded onto
+// the already certified state at h-1, never onto whichever height happened to
+// finish most recently on this replica.
+func (r *NodeRuntime) porygonPaperCanonicalPartitionBase(height uint64, partitionID string) (uint64, string, bool) {
+	state := r.porygonPaperRuntimeState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	baseHeight := state.baselineHeight
+	if height > state.baselineHeight {
+		baseHeight = height - 1
+	}
+	root := state.certifiedPartitionRoots[baseHeight][partitionID]
+	return baseHeight, root, root != ""
+}
+
+// Proposal semantic verification is meaningful only after this replica has the
+// local execution result that the paper says B_h depends on.  A slow backup is
+// not a Byzantine mismatch: it waits for the same PRE-PREPARE retransmission.
+func (r *NodeRuntime) porygonPaperProposalValidationReady(proposalHeight uint64) (bool, string) {
+	if r == nil || proposalHeight == 0 {
+		return false, "invalid proposal height"
+	}
+	state := r.porygonPaperRuntimeState()
+	state.mu.Lock()
+	baseline := state.baselineHeight
+	desired := baseline
+	if proposalHeight > baseline+2 {
+		desired = proposalHeight - 2
+	}
+	root := state.certifiedRoots[desired]
+	coverage := len(state.certifiedPartitionRoots[desired])
+	state.mu.Unlock()
+	if root == "" || coverage < r.porygonExecutionShardCount() {
+		return false, fmt.Sprintf("certified T state not ready at height %d", desired)
+	}
+	if desired <= baseline {
+		return true, ""
+	}
+	pipeline := r.porygonPipelineRuntime()
+	pipeline.mu.Lock()
+	executedHeight := pipeline.executedHeight
+	pipeline.mu.Unlock()
+	if executedHeight < desired {
+		return false, fmt.Sprintf("execution height %d below required T height %d", executedHeight, desired)
+	}
+	if _, err := r.porygonPaperCertifiedUpdatesForProposal(proposalHeight); err != nil {
+		return false, err.Error()
+	}
+	return true, ""
 }
 
 func (r *NodeRuntime) porygonPaperStateAnchor() (uint64, string, map[string]string) {
@@ -214,9 +298,14 @@ func (r *NodeRuntime) porygonPaperUpdatesForProposal(height uint64) []PorygonPro
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	rows := append([]PorygonProposalUpdate(nil), state.proposalUpdates[height]...)
-	sort.Slice(rows, func(i, j int) bool {
+	sort.SliceStable(rows, func(i, j int) bool {
 		if rows[i].OriginHeight != rows[j].OriginHeight {
 			return rows[i].OriginHeight < rows[j].OriginHeight
+		}
+		left := porygonPaperProposalUpdateOrderIndex(rows[i])
+		right := porygonPaperProposalUpdateOrderIndex(rows[j])
+		if left != right {
+			return left < right
 		}
 		return rows[i].TxID < rows[j].TxID
 	})
@@ -375,6 +464,34 @@ func (r *NodeRuntime) porygonPaperPendingEvidence() []porygonPendingTransactionE
 			continue
 		}
 		out = append(out, porygonPendingTransactionEvidence{TxID: lifecycle.TxID, Height: lifecycle.OriginHeight, Accesses: append([]tx.AccessItem(nil), lifecycle.Accesses...), LockedKeys: append([]string(nil), lifecycle.LockedKeys...)})
+	}
+	return porygonCanonicalPendingEvidence(out)
+}
+
+// porygonPaperPendingEvidenceForProposal is consensus-time truth.  It must not
+// depend on whether one replica happened to finish a background Execution/Commit
+// worker earlier than another.  Figure 6 keeps a CTx ordered in B_h protected
+// while B_(h+1), B_(h+2) and B_(h+3) are ordered.  B_(h+4) may be proposed only
+// after E(B_(h+2)) has completed (porygonPaperProposalRoundBlocked), so the CTx
+// has left the conflict-pending window at that deterministic proposal height.
+// ITx never enters the cross-round CTx pending set.
+func (r *NodeRuntime) porygonPaperPendingEvidenceForProposal(proposalHeight uint64) []porygonPendingTransactionEvidence {
+	state := r.porygonPaperRuntimeState()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	out := []porygonPendingTransactionEvidence{}
+	for _, lifecycle := range state.txs {
+		if lifecycle == nil || !lifecycle.CrossShard || lifecycle.OriginHeight == 0 || proposalHeight <= lifecycle.OriginHeight {
+			continue
+		}
+		if proposalHeight >= lifecycle.OriginHeight+4 {
+			continue
+		}
+		out = append(out, porygonPendingTransactionEvidence{
+			TxID: lifecycle.TxID, Height: lifecycle.OriginHeight,
+			Accesses: append([]tx.AccessItem(nil), lifecycle.Accesses...),
+			LockedKeys: append([]string(nil), lifecycle.LockedKeys...),
+		})
 	}
 	return porygonCanonicalPendingEvidence(out)
 }

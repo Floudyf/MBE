@@ -82,6 +82,23 @@ def compute_method_specific_correctness_v18(method_id: str, metrics: dict[str, A
     if method not in TARGETS:
         return {"status": "not_applicable", "valid": None, "blockers": []}
 
+    # MBE_OPTME_V23_V18_TRUTH: v22 intentionally retired OptME's old
+    # transaction exact-version/multi-PBFT adaptation. Use the method-specific
+    # v23 replay proof; TxAllo keeps the historical v18 rules below.
+    if method in {"stateful_optme", "stateless_optme"}:
+        kind = str(metrics.get("method_correctness_oracle_kind") or "")
+        if kind.startswith("optme_v23_"):
+            status = str(metrics.get("method_correctness_oracle_status") or "unproven")
+            valid = metrics.get("method_correctness_oracle_valid")
+            return {
+                "status": status,
+                "valid": valid if isinstance(valid, bool) else None,
+                "kind": kind,
+                "scope": metrics.get("method_correctness_oracle_scope"),
+                "blockers": list(metrics.get("method_correctness_oracle_blockers") or []),
+                "legacy_generic_oracle_status": metrics.get("serial_order_oracle_status"),
+            }
+
     serial_status = str(metrics.get("serial_order_oracle_status") or "").lower()
     serial_equiv = metrics.get("serial_order_replay_equivalent")
     serial_scope = str(metrics.get("serial_order_replay_supported_scope") or metrics.get("method_correctness_oracle_scope") or "")
@@ -160,80 +177,86 @@ def compute_method_specific_correctness_v18(method_id: str, metrics: dict[str, A
 
 
 def compute_txallo_independent_account_coverage_v18(run_dir: Path | str) -> dict[str, Any]:
-    """Independently reconstruct the evaluated-account set when artifact identity permits.
+    """Validate canonical v20.2 accounts while preserving legacy artifact audits.
 
-    Runtime ``mapped_account_count`` is not used as the reference count.  Accounts are
-    collected from the evaluation transaction-placement artifact first, then from the
-    resolved signed/access-list stream when it exposes explicit sender/receiver identities.
-    Missing identity is reported as UNPROVEN rather than guessed from state-key prefixes.
+    New evaluation-only accounts may use deterministic causal fallback. Older
+    artifacts that do not export mapping provenance retain the original v18
+    completeness check and are not silently reclassified.
     """
-    root = Path(run_dir)
-    mapping, mapping_source = v17._mapping_rows(root)
+    # MBE_TXALLO_REPRO_V202_COVERAGE
+    root=Path(run_dir); mapping,mapping_source=v17._mapping_rows(root)
     if not mapping:
-        return {"status": "missing_account_mapping", "passed": None, "mapping_source": mapping_source}
+        return {"status":"missing_account_mapping","passed":None,"mapping_source":mapping_source}
+    files=_candidate_files(root,("client/txallo_transaction_placement.csv","txallo_transaction_placement.csv"),("*txallo*transaction*placement*.csv",))
+    if not files:
+        return {"status":"missing_transaction_placement","passed":None,"mapping_source":mapping_source}
+    rows_data=_read_csv(files[0])
+    new_schema=any(any(str(k).lower() in {"sender_account","receiver_account","sender_mapping_source","receiver_mapping_source"} for k in row) for row in rows_data)
+    if new_schema:
+        accounts=set(); history=set(); fallback=set(); mismatches=[]; rows=0
+        for row in rows_data:
+            low={str(k).lower():"" if v is None else str(v).strip() for k,v in row.items()}
+            if not low.get("sender_account") and not low.get("receiver_account"):
+                continue
+            rows += 1
+            for role in ("sender","receiver"):
+                account=low.get(f"{role}_account","")
+                if not account:
+                    continue
+                accounts.add(account); source=low.get(f"{role}_mapping_source",""); shard=low.get(f"{role}_shard","")
+                if source=="history_mapping":
+                    history.add(account)
+                    if mapping.get(account)!=shard and len(mismatches)<16:
+                        mismatches.append({"role":role,"account":account,"reason":"history_mapping_shard_mismatch"})
+                elif source=="fallback_hash":
+                    fallback.add(account)
+                    if (account in mapping or not shard) and len(mismatches)<16:
+                        mismatches.append({"role":role,"account":account,"reason":"invalid_fallback"})
+                elif len(mismatches)<16:
+                    mismatches.append({"role":role,"account":account,"reason":"mapping_source_missing_or_invalid"})
+        return {"status":"available_causal_mapping_and_fallback_evidence" if rows else "placement_rows_lack_canonical_account_identity",
+                "passed":not mismatches if rows else None, "reference_account_count":len(accounts),
+                "history_mapped_account_count":len(history), "fallback_account_count":len(fallback),
+                "fallback_account_ratio":len(fallback)/len(accounts) if accounts else None,
+                "mismatch_count":len(mismatches), "examples":mismatches, "mapping_source":mapping_source,
+                "reference_source_files":[str(files[0].relative_to(root)).replace("\\","/")],
+                "runtime_mapped_count_not_used_as_reference":True,
+                "truth_boundary":"canonical_logical_account_identity_history_mapping_or_causal_fallback"}
 
-    accounts: set[str] = set()
-    sources: list[str] = []
-    placement_files = _candidate_files(root,
-        ("client/txallo_transaction_placement.csv", "txallo_transaction_placement.csv"),
-        ("*txallo*transaction*placement*.csv",))
-    for path in placement_files[:1]:
-        for row in _read_csv(path):
-            low = {str(k).lower(): "" if v is None else str(v).strip() for k, v in row.items()}
-            for key in ("accounts", "account_ids", "involved_accounts", "input_accounts", "output_accounts",
-                        "sender", "sender_id", "receiver", "receiver_id", "source_account", "target_account"):
-                accounts.update(x for x in _split(low.get(key, "")) if x)
-        if accounts:
-            sources.append(str(path.relative_to(root)).replace("\\", "/"))
-
-    # Optional JSONL/GZ path. Only explicit sender/receiver fields count; state keys are
-    # deliberately not reinterpreted as accounts because that would manufacture identity.
+    # Historical v18 path: preserve old completeness semantics for artifacts
+    # that never exported mapping provenance.
+    accounts=set(); sources=[]
+    for row in rows_data:
+        low={str(k).lower():"" if v is None else str(v).strip() for k,v in row.items()}
+        for key in ("accounts", "account_ids", "involved_accounts", "input_accounts", "output_accounts",
+                    "sender", "sender_id", "receiver", "receiver_id", "source_account", "target_account"):
+            accounts.update(x for x in _split(low.get(key,"")) if x)
+    if accounts:
+        sources.append(str(files[0].relative_to(root)).replace("\\","/"))
     if not accounts:
         for rel in ("client/resolved_access_lists.jsonl.gz", "client/resolved_access_lists.jsonl"):
-            path = root / rel
+            path=root/rel
             if not path.is_file():
                 continue
             try:
-                opener = gzip.open if path.suffix == ".gz" else open
-                with opener(path, "rt", encoding="utf-8") as handle:  # type: ignore[arg-type]
+                opener=gzip.open if path.suffix==".gz" else open
+                with opener(path,"rt",encoding="utf-8") as handle:  # type: ignore[arg-type]
                     for line in handle:
-                        try:
-                            obj = json.loads(line)
-                        except Exception:
-                            continue
+                        try: obj=json.loads(line)
+                        except Exception: continue
                         for key in ("sender", "sender_id", "receiver", "receiver_id", "source_account", "target_account"):
-                            value = obj.get(key) if isinstance(obj, dict) else None
-                            if value:
-                                accounts.add(str(value))
-                if accounts:
-                    sources.append(rel)
+                            value=obj.get(key) if isinstance(obj,dict) else None
+                            if value: accounts.add(str(value))
+                if accounts: sources.append(rel)
             except Exception:
                 pass
-
     if not accounts:
-        return {
-            "status": "evaluation_transactions_lack_explicit_account_identity",
-            "passed": None,
-            "mapping_source": mapping_source,
-            "reference_source_files": [],
-            "runtime_mapped_count_not_used_as_reference": True,
-        }
-
-    missing = sorted(a for a in accounts if a not in mapping)
-    extras = sorted(a for a in mapping if a not in accounts)
-    return {
-        "status": "available",
-        "passed": not missing,
-        "reference_account_count": len(accounts),
-        "mapped_account_count": len(mapping),
-        "missing_account_count": len(missing),
-        "missing_accounts": missing[:32],
-        "extra_mapping_account_count": len(extras),
-        "mapping_source": mapping_source,
-        "reference_source_files": sources,
-        "runtime_mapped_count_not_used_as_reference": True,
-    }
-
+        return {"status":"evaluation_transactions_lack_explicit_account_identity","passed":None,"mapping_source":mapping_source,
+                "reference_source_files":[],"runtime_mapped_count_not_used_as_reference":True}
+    missing=sorted(a for a in accounts if a not in mapping); extras=sorted(a for a in mapping if a not in accounts)
+    return {"status":"available","passed":not missing,"reference_account_count":len(accounts),"mapped_account_count":len(mapping),
+            "missing_account_count":len(missing),"missing_accounts":missing[:32],"extra_mapping_account_count":len(extras),
+            "mapping_source":mapping_source,"reference_source_files":sources,"runtime_mapped_count_not_used_as_reference":True}
 
 def compute_stateless_txallo_relay_guard_v18(run_dir: Path | str) -> dict[str, Any]:
     """Detect accidental legacy relay execution of a stateless TxAllo transaction.
@@ -343,7 +366,7 @@ def compute_writeback_fanout_v18(run_dir: Path | str, metrics: dict[str, Any]) -
                     # ApplyOrigin=versioned_remote_home and ProducedVersion>0 but
                     # intentionally leaves UpdateSemantics empty. Canonicalise only
                     # the audit identity, never the runtime request itself.
-                    if row.get("apply_origin", "").lower() == "versioned_remote_home":
+                    if row.get("apply_origin", "").lower() in {"versioned_remote_home", "optme_txallo_versioned_remote_home_v10"}:  # MBE_TXALLO_EVIDENCE_V203
                         value = "exact_version_set_default"
                         canonicalized_default_set += 1
                 if not value:
@@ -465,7 +488,7 @@ def enrich_metrics(run_dir: Path | str, method_id: str | None, result: dict[str,
         out["v18_txallo_independent_account_coverage"] = compute_txallo_independent_account_coverage_v18(run_dir)
         # Keep v17 mapping->placement truth, but V18 treats absence as UNPROVEN, never a warning-only candidate.
         audit = out.get("v17_txallo_paper_audit") or v17.compute_txallo_paper_audit_v17(run_dir, out)
-        out["v18_txallo_mapping_to_placement"] = audit.get("routing_coherence") or {}
+        out["v18_txallo_mapping_to_placement"] = v17.compute_txallo_routing_coherence_v17(run_dir)
         if method == "stateful_txallo":
             out["v18_txallo_placement_to_execution"] = audit.get("physical_execution_coherence") or {}
         else:
@@ -538,7 +561,7 @@ def _canonical_child(item: dict[str, Any]) -> dict[str, Any]:
             elif relay.get("passed") is not True:
                 blockers.append("stateless_txallo_legacy_relay_guard_unproven")
 
-    if _is_stateless(method):
+    if _is_stateless(method) and not _is_optme(method):
         wb = metrics.get("v18_writeback_evidence") or {}
         if wb.get("status") != "available_exact_logical_dedup":
             blockers.append("exact_version_writeback_five_tuple_unproven")

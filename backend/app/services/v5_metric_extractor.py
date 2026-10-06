@@ -344,6 +344,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
 
     _apply_block_stm_metrics(metrics, run_dir)
     _apply_stateless_version_frontier_metrics(metrics, run_dir)
+    _apply_optme_v22_projection_metrics(metrics, run_dir, method_id)
     _apply_metatrack_projection_frontier_v612_metrics(metrics, run_dir)
     _apply_metatrack_liveness_safe_boundary_batch_v621_metrics(metrics, run_dir)
     _apply_metatrack_async_version_writeback_v640_metrics(metrics, run_dir)
@@ -916,7 +917,13 @@ def _apply_stateless_version_frontier_metrics(metrics: dict[str, Any], run_dir: 
         "stateless_version_admission_internal_candidate_dependency_edge_count",
         "stateless_version_admission_deferred_direct_external_not_ready_count",
         "stateless_version_admission_deferred_internal_propagation_count",
+        # MBE_OPTME_V21_TRANSPORT_METRICS
         "method_preserving_exact_version_publish_tx_count",
+        "optme_method_preserving_publish_block_count",
+        "optme_method_preserving_publish_wave_count",
+        "optme_method_preserving_publish_parallel_wave_count",
+        "optme_method_preserving_publish_parallel_tx_count",
+        "optme_method_preserving_publish_wall_ms",
         "method_preserving_source_local_version_admission_hit_count",
         "method_preserving_home_version_wait_count",
         "method_preserving_source_local_version_fetch_count",
@@ -950,6 +957,33 @@ def _apply_stateless_version_frontier_metrics(metrics: dict[str, Any], run_dir: 
     metrics["stateless_version_admission_internal_propagated_blocked_ratio"] = totals["stateless_version_admission_deferred_internal_propagation_count"] / candidate if candidate else None
     metrics["stateless_version_admission_truth_scope"] = "sum_of_preconsensus_leader_candidate_events_across_execution_shards;no_pbft_replica_multiplication"
     metrics["method_preserving_writebehind_truth_scope"] = "leader_per_execution_shard_runtime_counts;source_local_exact_version_hits_are_not_physical_remote_operations;Home_remains_authoritative_persistent_state"
+    if totals.get("optme_method_preserving_publish_block_count", 0) > 0:
+        metrics["optme_state_transport_truth_scope"] = (
+            "mbe_stateless_adaptation_only;exact_version_identity_preserved;"
+            "home_previous_to_produced_continuity_preserved;parallelism_only_across_per_key_order_safe_publication_waves;"
+            "excluded_from_optme_paper_block_execution_wall_clock"
+        )
+
+
+# MBE_OPTME_V22_PROJECTION_METRICS
+def _apply_optme_v22_projection_metrics(metrics: dict[str, Any], run_dir: Path, method_id: str | None) -> None:
+    if str(method_id or "") != "stateless_optme":
+        return
+    leader_ids = _leader_node_ids(run_dir)
+    keys = ("optme_projection_block_count", "optme_projection_unique_key_count", "optme_projection_remote_fetch_count", "optme_projection_home_root_count", "optme_projection_build_ms", "optme_projection_home_root_mismatch_count", "optme_partition_materialized_key_count")
+    totals = {key: 0 for key in keys}
+    seen = False
+    for node_id in leader_ids:
+        payload = _read_json(run_dir / f"nodes/{node_id}/node_summary.json")
+        counts = payload.get("runtime_metric_counts") if isinstance(payload.get("runtime_metric_counts"), dict) else {}
+        if counts:
+            seen = True
+        for key in keys:
+            totals[key] += _int(counts.get(key))
+    if not seen:
+        return
+    metrics.update(totals)
+    metrics["optme_v22_state_transport_truth_scope"] = "single_global_pbft_order;H_minus_1_block_start_projection;no_transaction_stateversions;no_optme_version_admission;partition_owned_final_materialization"
 
 
 def _network_message_count(metrics: dict[str, Any], message_type: str) -> int:
@@ -1371,10 +1405,13 @@ def _apply_optme_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
                 mode = mode or block.get("optme_mode")
     if not blocks:
         return
+    # MBE_OPTME_V20_METRICS: keep legacy early_abort while exposing source-stage truth.
     total_keys = (
         "optme_simulation_ms", "optme_graph_scheduling_ms", "optme_commit_ms", "optme_reexecution_ms", "optme_validation_ms",
         "optme_observed_read_count", "optme_observed_write_count", "optme_address_count", "optme_unit_count",
-        "optme_early_abort_count", "optme_reordered_transaction_count", "optme_reexecution_count", "optme_reexecution_invalid_count",
+        "optme_early_abort_count", "optme_early_detection_count", "optme_hierarchical_abort_count",
+        "optme_reordered_transaction_count", "optme_rescheduled_transaction_count", "optme_simulation_failed_count",
+        "optme_reexecution_count", "optme_reexecution_simulation_failed_count", "optme_reexecution_invalid_count",
     )
     metrics["optme_metrics_available"] = True
     metrics["optme_mode"] = mode
@@ -1384,7 +1421,7 @@ def _apply_optme_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     metrics["optme_rescheduled_epoch_count"] = sum(_int(block.get("optme_rescheduled_epoch_count")) for block in blocks)
     metrics["optme_maximum_sequence_width"] = max((_int(block.get("optme_maximum_sequence_width")) for block in blocks), default=0)
     metrics["optme_source_commit"] = next((block.get("optme_source_commit") for block in blocks if block.get("optme_source_commit")), None)
-    metrics["optme_truth_scope"] = "post_consensus_actual_rw_simulation_author_source_schedule;accesslist_only_bounds_stateless_projection"
+    metrics["optme_truth_scope"] = "post_consensus_successful_simulation_actual_rw_author_parallel_acg_schedule;failed_simulations_terminalized_outside_acg;accesslist_only_bounds_stateless_projection"
 
 
 def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
@@ -1403,11 +1440,25 @@ def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         return
     metrics["txallo_metrics_available"] = True
     for key in (
-        "history_source", "history_cutoff_source_row_index", "history_transaction_count", "history_limit", "adaptive_chunk_records",
-        "g_txallo_run_count", "a_txallo_run_count", "graph_account_count", "graph_edge_count", "eta", "lambda", "epsilon",
-        "mapping_digest", "mapped_account_count", "modeled_throughput", "modeled_cross_shard_ratio", "modeled_workload_stddev",
-        "bootstrap_ms", "future_evaluation_transactions_used", "truth_boundary",
-    ):
+        "allocation_mode", "history_source", "history_cutoff_source_row_index", "history_transaction_count", "history_limit",
+        "g_txallo_run_count", "a_txallo_run_count", "louvain_level_count", "graph_account_count", "graph_edge_count", "eta", "lambda", "lambda_source", "epsilon", "epsilon_source",
+        "mapping_digest", "mapped_account_count", "mapping_complete", "modeled_throughput", "modeled_cross_shard_ratio", "modeled_workload_stddev",
+        "bootstrap_ms", "future_evaluation_transactions_used", "dynamic_a_txallo_runtime_enabled", "truth_boundary",
+            "history_policy",
+        "history_ratio",
+        "history_pool_count",
+        "history_window_start_source_order",
+        "history_window_end_source_order",
+        "history_selected_sha256",
+        "g_cache_hit",
+        "g_cache_key",
+        "g_txallo_executed_this_run",
+        "mapping_nonempty",
+        "mapping_structurally_complete",
+        "mapping_operationally_valid",
+        "provisional_account_count",
+        "provisional_lookup_count",
+):
         if key in summary:
             metrics["txallo_" + key if not key.startswith("txallo_") else key] = summary[key]
     total = cross = 0
@@ -2229,6 +2280,11 @@ def _apply_mechanism_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
                 "influence_changed_choice_count": metatrack.get("influence_changed_choice_count"),
                 "ready_round_event_drain_skip_count": metatrack.get("ready_round_event_drain_skip_count"),
                 "cross_round_bypass_count": metatrack.get("cross_round_bypass_count"),
+                "metatrack_single_fifo_hol_enabled": metatrack.get("metatrack_single_fifo_hol_enabled"),
+                "metatrack_single_fifo_bypass_prevented_count": metatrack.get("metatrack_single_fifo_bypass_prevented_count"),
+                "metatrack_single_fifo_head_block_count": metatrack.get("metatrack_single_fifo_head_block_count"),
+                "metatrack_single_serial_execution_enabled": metatrack.get("metatrack_single_serial_execution_enabled"),
+                "metatrack_single_serial_dispatch_limit": metatrack.get("metatrack_single_serial_dispatch_limit"),
                 "ready_round_metric_truth_scope": metatrack.get("ready_round_metric_truth_scope"),
                 "ready_round_observed_block_count": metatrack.get("ready_round_observed_block_count"),
             }
@@ -2494,7 +2550,11 @@ def _apply_metatrack_consensus_window_observability(metrics: dict, run_dir: Path
     for key, value in payload.items():
         metrics[key] = value
     metrics["metatrack_consensus_window_observability_available"] = bool(summary.get("available"))
-    metrics["metatrack_consensus_window_truth_scope"] = "durable_signed_consensus_window_metadata_post_run_reconstruction_v2"
+    metrics["metatrack_consensus_window_truth_scope"] = (
+        payload.get("metatrack_consensus_window_truth_scope")
+        or summary.get("truth_scope")
+        or "durable_signed_consensus_window_metadata_post_run_reconstruction_v2"
+    )
     artifacts = metrics.get("source_artifacts")
     if isinstance(artifacts, list) and "metatrack_consensus_window_summary.json" not in artifacts:
         artifacts.append("metatrack_consensus_window_summary.json")

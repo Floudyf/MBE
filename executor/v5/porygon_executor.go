@@ -563,7 +563,15 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 	for key, value := range working {
 		result.StateUpdates[key] = value
 	}
-	result.StateDelta = executionStateDelta(base, working)
+	if paperProposalMode {
+		materializedDelta, materializationErr := porygonPaperDurableStateDelta(paperProposal, allDeltas, finalAssignments, block.ShardID, storageShardID, plan.ExecutionShardCount)
+		if materializationErr != nil {
+			return BlockExecutionResult{}, materializationErr
+		}
+		result.StateDelta = porygonPaperExecutionStateDelta(materializedDelta)
+	} else {
+		result.StateDelta = executionStateDelta(base, working)
+	}
 
 	readKeys := map[string]bool{}
 	writeKeys := map[string]bool{}
@@ -1049,5 +1057,5 @@ func porygonPaperLogicalPartitionUpdates(proposal PorygonProposalBody, localResu
 			updates = append(updates, PorygonStateUpdate{TxID: result.Delta.TxID, OriginalIndex: result.Delta.OriginalIndex, Key: key, Value: result.Delta.WriteSet[key]})
 		}
 	}
-	return porygonCanonicalStateUpdates(updates)
+	return porygonPaperCollapseOrderedStateUpdates(updates)
 }

@@ -474,6 +474,48 @@ func (p *metaTrackCriticalWidthWindowPlannerV6568) PushBatchAdaptiveNLV668(batch
 	return closed, nil
 }
 
+// PushBatchAdaptiveNLV669 is the formal MetaTrack consensus-window rule.
+// A complete next RouteBatch may share the PBFT window iff the candidate
+// remains dependency-closed, fits the existing block-size hard ceiling, and
+// strictly improves the exact structural throughput proxy N/L. No empirical
+// transaction-count, latency, chain-length, or ratio threshold is introduced.
+func (p *metaTrackCriticalWidthWindowPlannerV6568) PushBatchAdaptiveNLV669(batch []metaTrackPreparedRecordV6568, blockLimit int) ([]metaTrackPreparedRecordV6568, error) {
+	if len(batch) == 0 { return nil, nil }
+	if p == nil { return nil, fmt.Errorf("metatrack v669 adaptive N/L planner is nil") }
+	seq := batch[0].Record.RouteBatchSequence
+	for _, prepared := range batch {
+		if prepared.Record.RouteBatchSequence != seq { return nil, fmt.Errorf("metatrack v669 mixed route-batch sequence") }
+		if prepared.Record.ConsensusExecutionRound <= 0 { return nil, fmt.Errorf("metatrack v669 missing signed global execution round") }
+	}
+	if len(p.records) == 0 {
+		if err := p.resetWithBatch(batch); err != nil { return nil, err }
+		if !metaTrackCountsFitBlockV6568(p.shardCounts, blockLimit) { return nil, fmt.Errorf("metatrack v669 one route-batch projection exceeds block limit") }
+		return nil, nil
+	}
+	if seq != p.endBatch+1 { return nil, fmt.Errorf("metatrack v669 route batches are not contiguous") }
+	candidateDepth, candidateL := metaTrackExtendCriticalPathV6568(p.depthByOrdinal, batch)
+	candidateCounts := metaTrackShardCountsAfterV6568(p.shardCounts, batch)
+	candidateN := p.transactionCount + len(batch)
+	join := metaTrackCountsFitBlockV6568(candidateCounts, blockLimit) &&
+		metaTrackDependencyClosedJoinV662(p.records, batch) &&
+		metaTrackCriticalWidthImprovesV6568(p.transactionCount, p.criticalPath, candidateN, candidateL)
+	if join {
+		p.records = append(p.records, batch...)
+		p.depthByOrdinal = candidateDepth
+		p.criticalPath = candidateL
+		p.transactionCount = candidateN
+		p.shardCounts = candidateCounts
+		p.endBatch = seq
+		return nil, nil
+	}
+	closed := p.finalizeCurrent()
+	p.sequence++
+	if err := p.resetWithBatch(batch); err != nil { return nil, err }
+	if !metaTrackCountsFitBlockV6568(p.shardCounts, blockLimit) { return nil, fmt.Errorf("metatrack v669 one route-batch projection exceeds block limit") }
+	return closed, nil
+}
+
+
 func (p *metaTrackCriticalWidthWindowPlannerV6568) PushBatchFixedRouteBatchV663(batch []metaTrackPreparedRecordV6568, blockLimit int) ([]metaTrackPreparedRecordV6568, error) {
 	if len(batch)==0 { return nil,nil }
 	if p==nil { return nil,fmt.Errorf("metatrack v663 fixed-route-batch planner is nil") }

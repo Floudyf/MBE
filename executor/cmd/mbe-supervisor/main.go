@@ -360,7 +360,7 @@ func runV5(planPath, dataDir string) error {
 			outcomeNet, _ := summary["calvin_outcome_network"].(bool)
 			summary["real_cross_shard_network"] = readNet || outcomeNet
 		} else {
-			summary["real_cross_shard_network"] = value > 0 && finalityMode != v5.CrossShardFinalityPorygonGlobalCommit
+			summary["real_cross_shard_network"] = value > 0 && finalityMode != v5.CrossShardFinalityPorygonGlobalCommit && finalityMode != v5.CrossShardFinalityOptMEGlobalCommit
 		}
 	}
 	if value, ok := finality["cross_shard_refunded_unique_count"].(int); ok {
@@ -1185,7 +1185,7 @@ func deriveFinalityArtifacts(dataDir string, nodes []v5.NodePlan, statelessDirec
 }
 
 func deriveFinalityArtifactsWithMode(dataDir string, nodes []v5.NodePlan, finalityMode string) (map[string]any, error) {
-	directCommitFinality := finalityMode == v5.CrossShardFinalityStatelessDirect || finalityMode == v5.CrossShardFinalityPorygonGlobalCommit || finalityMode == v5.CrossShardFinalityCalvinGlobalCommit
+	directCommitFinality := finalityMode == v5.CrossShardFinalityStatelessDirect || finalityMode == v5.CrossShardFinalityPorygonGlobalCommit || finalityMode == v5.CrossShardFinalityCalvinGlobalCommit || finalityMode == v5.CrossShardFinalityOptMEGlobalCommit
 	drain, err := readDrainStatus(dataDir)
 	if err != nil {
 		return nil, err
@@ -2286,7 +2286,7 @@ func writeRemoteStateAggregate(dataDir string, nodes []v5.NodePlan, logicalTxCou
 	unknown := 0
 	dedup := map[string]op{}
 	physicalRows := [][]string{}
-	physicalHeader := []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "normalized_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error", "delta_id", "source_height", "source_block_hash", "update_semantics"}
+	physicalHeader := []string{"timestamp", "node_id", "execution_shard", "height", "block_hash", "tx_id", "state_key", "qualified_home_key", "home_shard", "response_execution_shard", "access_kind", "normalized_kind", "latency_ms", "witness_digest", "home_state_root", "success", "error", "delta_id", "source_height", "source_block_hash", "update_semantics", "logical_tx_ids", "previous_version", "produced_version", "ordering_noop", "apply_origin", "delta_kind"} // MBE_TXALLO_EVIDENCE_V203
 	for _, node := range nodes {
 		path := filepath.Join(node.DataDir, "remote_state_access.csv")
 		file, err := os.Open(path)
@@ -2337,6 +2337,12 @@ func writeRemoteStateAggregate(dataDir string, nodes []v5.NodePlan, logicalTxCou
 				csvValue(row, header, "source_height", ""),
 				csvValue(row, header, "source_block_hash", ""),
 				csvValue(row, header, "update_semantics", ""),
+				csvValue(row, header, "logical_tx_ids", ""),
+				csvValue(row, header, "previous_version", ""),
+				csvValue(row, header, "produced_version", ""),
+				csvValue(row, header, "ordering_noop", ""),
+				csvValue(row, header, "apply_origin", ""),
+				csvValue(row, header, "delta_kind", ""),
 			})
 			if !csvBool(row, header, "success") {
 				physicalFailed++
@@ -2634,6 +2640,11 @@ func aggregateMetaTrackReadyRoundEvidenceV352(nodes []v5.NodePlan) (map[string]a
 	influenceChangedChoiceCount := 0
 	readyRoundEventDrainSkipCount := 0
 	crossRoundBypassCount := 0
+	singleFIFOHOLEnabled := false
+	singleFIFOBypassPreventedCount := 0
+	singleFIFOHeadBlockCount := 0
+	singleSerialExecutionEnabled := false
+	singleSerialDispatchLimit := 0
 
 	for _, shardID := range shardIDs {
 		nodePlan := canonical[shardID]
@@ -2681,6 +2692,13 @@ func aggregateMetaTrackReadyRoundEvidenceV352(nodes []v5.NodePlan) (map[string]a
 			influenceChangedChoiceCount += readyRoundMetricIntV352(block["influence_changed_choice_count"])
 			readyRoundEventDrainSkipCount += readyRoundMetricIntV352(block["ready_round_event_drain_skip_count"])
 			crossRoundBypassCount += readyRoundMetricIntV352(block["cross_round_bypass_count"])
+			singleFIFOHOLEnabled = singleFIFOHOLEnabled || readyRoundMetricBoolV352(block["metatrack_single_fifo_hol_enabled"])
+			singleFIFOBypassPreventedCount += readyRoundMetricIntV352(block["metatrack_single_fifo_bypass_prevented_count"])
+			singleFIFOHeadBlockCount += readyRoundMetricIntV352(block["metatrack_single_fifo_head_block_count"])
+			singleSerialExecutionEnabled = singleSerialExecutionEnabled || readyRoundMetricBoolV352(block["metatrack_single_serial_execution_enabled"])
+			if limit := readyRoundMetricIntV352(block["metatrack_single_serial_dispatch_limit"]); limit > 0 {
+				singleSerialDispatchLimit = limit
+			}
 		}
 	}
 	if !applicable {
@@ -2705,6 +2723,11 @@ func aggregateMetaTrackReadyRoundEvidenceV352(nodes []v5.NodePlan) (map[string]a
 		"influence_changed_choice_count":                   influenceChangedChoiceCount,
 		"ready_round_event_drain_skip_count":               readyRoundEventDrainSkipCount,
 		"cross_round_bypass_count":                         crossRoundBypassCount,
+		"metatrack_single_fifo_hol_enabled":                singleFIFOHOLEnabled,
+		"metatrack_single_fifo_bypass_prevented_count":     singleFIFOBypassPreventedCount,
+		"metatrack_single_fifo_head_block_count":           singleFIFOHeadBlockCount,
+		"metatrack_single_serial_execution_enabled":        singleSerialExecutionEnabled,
+		"metatrack_single_serial_dispatch_limit":           singleSerialDispatchLimit,
 		"ready_round_metric_truth_scope":                   "canonical_node_per_shard_from_block_execution_summary",
 		"ready_round_canonical_node_by_shard":              canonicalNodeByShard,
 		"ready_round_observed_block_count":                 observedBlockCount,
@@ -3200,7 +3223,7 @@ func v5LogicalPath(dataDir, target string) string {
 
 func calvinConsistencyShardID(node v5.NodePlan) string {
 	if executor, ok := node.PluginProfile["block_executor"]; ok {
-		if executor.PluginID == "calvin_block_executor" || executor.PluginID == "stateless_calvin_block_executor" || executor.PluginID == "porygon_block_executor" {
+		if executor.PluginID == "calvin_block_executor" || executor.PluginID == "stateless_calvin_block_executor" || executor.PluginID == "porygon_block_executor" || executor.PluginID == "stateless_optme_block_executor" { // MBE_OPTME_V23_PARTITION_TRUTH
 			if strings.TrimSpace(node.ExecutionShardID) != "" {
 				return node.ExecutionShardID
 			}
@@ -3251,7 +3274,7 @@ func writeHeightRootMatrix(dataDir string, nodes []v5.NodePlan) (bool, bool, err
 				// Porygon Storage Roles are partitioned, so only replicas of the
 				// same execution/storage partition must share a receipt root.
 				if executor, ok := node.PluginProfile["block_executor"]; ok &&
-					(executor.PluginID == "calvin_block_executor" || executor.PluginID == "stateless_calvin_block_executor") {
+					(executor.PluginID == "calvin_block_executor" || executor.PluginID == "stateless_calvin_block_executor" || executor.PluginID == "stateless_optme_block_executor") {
 					if globalCalvinReceiptRoots[record[2]] == nil {
 						globalCalvinReceiptRoots[record[2]] = map[string]bool{}
 					}

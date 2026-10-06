@@ -155,3 +155,40 @@ func TestMetaTrackV668ExperimentalNLWindow(t *testing.T) {
         if x.Record.ConsensusWindowStartBatchSequence != 1 || x.Record.ConsensusWindowEndBatchSequence != 2 || x.Record.ConsensusWindowRouteBatchCount != 2 || x.Record.ConsensusWindowTransactionCount != 4 || x.Record.ConsensusWindowCriticalPath != 2 { t.Fatalf("bad adaptive window %#v", x.Record) }
     }
 }
+
+
+func TestMetaTrackV669FormalAdaptiveAllowsCriticalPathGrowthWhenNLImproves(t *testing.T) {
+	p := newMetaTrackCriticalWidthWindowPlannerV6568()
+	b1 := []metaTrackPreparedRecordV6568{preparedV6568(1, 1, "s0"), preparedV6568(2, 1, "s1", 1)}
+	if closed, err := p.PushBatchAdaptiveNLV669(b1, 100); err != nil || closed != nil { t.Fatalf("start: %v %v", closed, err) }
+	// N=4,L=3: V661 rejects the 2->3 critical-path growth, while N/L improves 1 -> 4/3.
+	b2 := []metaTrackPreparedRecordV6568{preparedV6568(3, 2, "s0", 2), preparedV6568(4, 2, "s1")}
+	if closed, err := p.PushBatchAdaptiveNLV669(b2, 100); err != nil || closed != nil { t.Fatalf("formal adaptive should aggregate: %v %v", closed, err) }
+	closed := p.Flush()
+	if len(closed) != 4 || closed[0].Record.ConsensusWindowRouteBatchCount != 2 || closed[0].Record.ConsensusWindowCriticalPath != 3 { t.Fatalf("unexpected adaptive window: %#v", closed) }
+}
+
+func TestMetaTrackV669FormalAdaptiveRequiresDependencyClosure(t *testing.T) {
+	p := newMetaTrackCriticalWidthWindowPlannerV6568()
+	b1 := []metaTrackPreparedRecordV6568{preparedV6568(1, 1, "s0"), preparedV6568(2, 1, "s1", 1)}
+	if closed, err := p.PushBatchAdaptiveNLV669(b1, 100); err != nil || closed != nil { t.Fatalf("start: %v %v", closed, err) }
+	broken := []metaTrackPreparedRecordV6568{preparedV6568(4, 2, "s0", 3), preparedV6568(5, 2, "s1")}
+	closed, err := p.PushBatchAdaptiveNLV669(broken, 100)
+	if err != nil { t.Fatal(err) }
+	if len(closed) != 2 { t.Fatalf("dependency-open candidate must close prior window, closed=%d", len(closed)) }
+}
+
+func TestMetaTrackV669DoesNotRewriteHistoricalV668Rule(t *testing.T) {
+	b1 := []metaTrackPreparedRecordV6568{preparedV6568(1, 1, "s0"), preparedV6568(2, 1, "s1", 1)}
+	broken := []metaTrackPreparedRecordV6568{preparedV6568(4, 2, "s0", 3), preparedV6568(5, 2, "s1")}
+	p668 := newMetaTrackCriticalWidthWindowPlannerV6568()
+	if closed, err := p668.PushBatchAdaptiveNLV668(b1, 100); err != nil || closed != nil { t.Fatalf("v668 start: %v %v", closed, err) }
+	closed668, err := p668.PushBatchAdaptiveNLV668(broken, 100)
+	if err != nil { t.Fatal(err) }
+	if closed668 != nil { t.Fatal("historical V668 N/L-only rule unexpectedly rejected attractive candidate") }
+	p669 := newMetaTrackCriticalWidthWindowPlannerV6568()
+	if closed, err := p669.PushBatchAdaptiveNLV669(b1, 100); err != nil || closed != nil { t.Fatalf("v669 start: %v %v", closed, err) }
+	closed669, err := p669.PushBatchAdaptiveNLV669(broken, 100)
+	if err != nil { t.Fatal(err) }
+	if len(closed669) != 2 { t.Fatal("formal V669 must reject dependency-open candidate") }
+}

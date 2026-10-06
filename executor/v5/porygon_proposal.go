@@ -166,14 +166,14 @@ func (r *NodeRuntime) porygonBindCompactProposalContext(block realblock.Block) (
 			return block, fmt.Errorf("Porygon compact transaction proposal requires witness certificate")
 		}
 		body := porygonBuildTransactionBlock(block.Height, block.ShardID, block.TxList, evidence.WitnessCertificate.CertificateDigest)
-		if err := r.porygonPersistTransactionBlock(body); err != nil {
+		if err := r.porygonStoreTransactionBlockForRole(body); err != nil {
 			return block, err
 		}
 		ref := porygonTransactionBlockRef(body)
-		ref.StorageNodeIDs = append([]string(nil), evidence.WitnessCertificate.CommitteeMembers...)
-		ref.StorageNodeIDs = append(ref.StorageNodeIDs, r.node.NodeID)
-		ref.StorageNodeIDs = uniqueStrings(ref.StorageNodeIDs)
-		sort.Strings(ref.StorageNodeIDs)
+		ref.StorageNodeIDs = r.porygonTransactionBlockStorageNodeIDs(body)
+		if len(ref.StorageNodeIDs) == 0 {
+			return block, fmt.Errorf("Porygon transaction block %s has no durable Storage Role source", body.TransactionBlockID)
+		}
 		refs = append(refs, ref)
 	} else {
 		evidence.WitnessPolicy = "paper_maintenance_no_witness_v1"
@@ -185,7 +185,10 @@ func (r *NodeRuntime) porygonBindCompactProposalContext(block realblock.Block) (
 	if stateRoot == "" {
 		return block, fmt.Errorf("Porygon compact proposal agreed T state unavailable")
 	}
-	updates := r.porygonPaperUpdatesForProposal(block.Height)
+	updates, updatesErr := r.porygonPaperCertifiedUpdatesForProposal(block.Height)
+	if updatesErr != nil {
+		return block, updatesErr
+	}
 	ec := porygonECDescriptorForHeight(r.plan.NodeConfigs, block.Height, block.ShardID, r.porygonExecutionShardCount(), r.porygonExecutionCommitteeCount())
 	proposal := PorygonProposalBody{
 		Version: porygonCompactProposalVersion, Height: block.Height, OrderingDomain: block.ShardID,
@@ -219,9 +222,6 @@ func (r *NodeRuntime) porygonHydrateCompactProposal(ctx context.Context, compact
 		return compact, fmt.Errorf("Porygon compact proposal body missing")
 	}
 	candidates := []string{}
-	if evidence.WitnessCertificate != nil {
-		candidates = append(candidates, evidence.WitnessCertificate.CommitteeMembers...)
-	}
 	items := []tx.SignedTransaction{}
 	txIDs := []string{}
 	for _, ref := range proposal.L {

@@ -20,7 +20,10 @@ func porygonStateProjectionAccessKind(access tx.AccessItem) string {
 
 func porygonStateProjectionAccessKindForProposal(access tx.AccessItem, stateHeight uint64, stateRoot string) string {
 	base := porygonStateProjectionAccessKindPrefix + string(access.Mode)
-	if stateHeight == 0 || strings.TrimSpace(stateRoot) == "" {
+	// Height zero is the legitimate genesis/baseline Proposal.T anchor.  Root
+	// presence, not height>0, distinguishes an anchored Paper2 projection from
+	// the legacy unanchored helper.
+	if strings.TrimSpace(stateRoot) == "" {
 		return base
 	}
 	return base + "|state_height=" + strconv.FormatUint(stateHeight, 10) + "|state_root=" + stateRoot
@@ -39,18 +42,22 @@ func porygonStateProjectionAnchor(kind string) (uint64, string, bool) {
 	}
 	var height uint64
 	root := ""
+	heightSeen := false
+	rootSeen := false
 	for _, part := range strings.Split(kind, "|") {
 		if strings.HasPrefix(part, "state_height=") {
 			value, err := strconv.ParseUint(strings.TrimPrefix(part, "state_height="), 10, 64)
 			if err == nil {
 				height = value
+				heightSeen = true
 			}
 		}
 		if strings.HasPrefix(part, "state_root=") {
 			root = strings.TrimSpace(strings.TrimPrefix(part, "state_root="))
+			rootSeen = true
 		}
 	}
-	return height, root, height > 0 && root != ""
+	return height, root, heightSeen && rootSeen && root != ""
 }
 
 func isPorygonStateProjectionAccessKind(kind string) bool {

@@ -13,6 +13,7 @@ import math
 import os
 import shutil
 import tempfile
+import threading
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -27,12 +28,15 @@ from backend.app.services.workload_adapters.registry import get_adapter
 # 100 is the bounded four-method smoke tier retained by the V5 data-plane
 # acceptance evidence.  It exercises the real dataset-derived path without
 # silently falling back to synthetic workload generation.
-SUPPORTED_COUNTS = frozenset({100, 1_000, 10_000, 50_000, 100_000, 250_000})
+SUPPORTED_COUNTS = frozenset({100, 1_000, 10_000, 50_000, 100_000, 250_000, 1_000_000})
 SUPPORTED_ALPHAS = frozenset({0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4})
 GENERATOR_VERSION = "v5_workload_data_plane_v4_universal_access_list"
 SELECTOR_VERSION = "universal_selector_v1"
 MAX_JSONL_RECORD_BYTES = 1024 * 1024
 MANIFEST_ROOT = ROOT / "data" / "workloads" / "manifests"
+
+_SOURCE_IDENTITY_CACHE_LOCK = threading.Lock()
+_SOURCE_IDENTITY_CACHE: dict[tuple[str, int, int, str], str] = {}
 
 
 class WorkloadDataError(ValueError):
@@ -711,6 +715,163 @@ def _canonical_bytes(record: dict[str, Any]) -> bytes:
     return (json.dumps(record, ensure_ascii=False, separators=(",", ":"), sort_keys=False) + "\n").encode("utf-8")
 
 
+def _verify_manifest_source_identity(path: Path, manifest: dict[str, Any]) -> str:
+    # Exact source bytes are hashed once per unchanged file identity in this process.
+    expected = str(manifest.get("source_sha256") or "").lower()
+    if len(expected) != 64:
+        raise WorkloadDataError("validated-prefix source requires manifest source_sha256")
+    if not path.is_file():
+        raise WorkloadDataError("validated-prefix source file is missing")
+    stat = path.stat()
+    expected_size = int(manifest.get("source_size_bytes") or 0)
+    if expected_size and stat.st_size != expected_size:
+        raise WorkloadDataError("validated-prefix source size does not match manifest")
+    key = (str(path.resolve()), int(stat.st_size), int(stat.st_mtime_ns), expected)
+    with _SOURCE_IDENTITY_CACHE_LOCK:
+        cached = _SOURCE_IDENTITY_CACHE.get(key)
+    if cached == expected:
+        return expected
+    actual = sha256_file(path).lower()
+    if actual != expected:
+        raise WorkloadDataError("validated-prefix source SHA-256 does not match manifest")
+    with _SOURCE_IDENTITY_CACHE_LOCK:
+        path_text = str(path.resolve())
+        for old_key in list(_SOURCE_IDENTITY_CACHE):
+            if old_key[0] == path_text and old_key != key:
+                _SOURCE_IDENTITY_CACHE.pop(old_key, None)
+        _SOURCE_IDENTITY_CACHE[key] = actual
+    return actual
+
+
+def build_validated_prefix_canonical(
+    source_path: Path,
+    cache_root: Path,
+    manifest: dict[str, Any],
+    *,
+    requested_tx_count: int,
+) -> dict[str, Any]:
+    # Full reviewed source is authenticated by exact SHA; only the selected
+    # prefix is parsed/schema-validated/canonicalized for this child.
+    if str(manifest.get("materialization_policy") or "") != "validated_prefix_attested_prefix_v1":
+        raise WorkloadDataError("validated-prefix canonical builder requires reviewed policy")
+    total = int(manifest.get("row_count") or 0)
+    count = int(requested_tx_count)
+    if total <= 0 or count <= 0 or count > total:
+        raise WorkloadDataError("invalid validated-prefix materialization count")
+    source_file_sha256 = _verify_manifest_source_identity(source_path, manifest)
+    identity_source_sha256 = str(
+        manifest.get("dataset_source_sha256")
+        or manifest.get("source_sha256")
+        or source_file_sha256
+    )
+    adapter_id = str(manifest.get("adapter_id") or "decentraland_sales_v1")
+    content_id = hashlib.sha256(
+        json.dumps(
+            {
+                "dataset_id": manifest["dataset_id"],
+                "adapter_id": adapter_id,
+                "source_file_sha256": source_file_sha256,
+                "generator_version": GENERATOR_VERSION,
+                "selection_mode": "validated_prefix",
+                "prefix_record_count": count,
+                "materialization_policy": "validated_prefix_attested_prefix_v1",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    target = cache_root / "canonical_prefix" / content_id
+    output = target / "workload.jsonl.gz"
+    summary_path = target / "canonical_summary.json"
+    if output.is_file() and summary_path.is_file():
+        existing = json.loads(summary_path.read_text(encoding="utf-8"))
+        if (
+            existing.get("source_file_sha256") == source_file_sha256
+            and int(existing.get("row_count") or 0) == count
+            and existing.get("canonical_sha256") == sha256_file(output)
+        ):
+            existing = dict(existing)
+            existing["cache_hit"] = True
+            return existing
+        raise WorkloadDataError("validated-prefix canonical cache hash mismatch")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{content_id}.", dir=target.parent))
+    adapter = adapter_for_manifest(manifest)
+    operation_counts: Counter[str] = Counter()
+    selected_count = 0
+    previous_key: tuple[int, int] | None = None
+    try:
+        canonical_path = temporary / "workload.jsonl.gz"
+        with canonical_path.open("wb") as raw:
+            with gzip.GzipFile(
+                filename="",
+                mode="wb",
+                fileobj=raw,
+                compresslevel=9,
+                mtime=0,
+            ) as compressed:
+                for index, item in enumerate(adapter.iter_canonical_records(source_path, manifest)):
+                    if index >= count:
+                        break
+                    record = _validate_canonical_record(
+                        item,
+                        dataset_id=manifest["dataset_id"],
+                        row_number=index,
+                    )
+                    key = (record["timestamp_ms"], int(record["source_row_index"]))
+                    if previous_key is not None and key < previous_key:
+                        raise WorkloadDataError(
+                            "source order violates the canonical "
+                            "(timestamp_ms, source_row_index) contract"
+                        )
+                    previous_key = key
+                    compressed.write(_canonical_bytes(record))
+                    operation_counts[str(record.get("operation_type") or "unknown")] += 1
+                    selected_count += 1
+        if selected_count != count:
+            raise WorkloadDataError(
+                f"validated-prefix source ended early: got {selected_count}, expected {count}"
+            )
+        result = {
+            "dataset_id": manifest["dataset_id"],
+            "source_sha256": identity_source_sha256,
+            "source_file_sha256": source_file_sha256,
+            "canonical_sha256": sha256_file(canonical_path),
+            "row_count": selected_count,
+            "canonical_relative_path": f"canonical_prefix/{content_id}/workload.jsonl.gz",
+            "generator_version": GENERATOR_VERSION,
+            "operation_counts": dict(operation_counts),
+            "category_counts": dict(operation_counts),
+            "cache_hit": False,
+            "source_validation_scope": "exact_source_sha_plus_selected_prefix_schema",
+            "full_source_schema_audit_provenance": str(
+                manifest.get("verification_method") or ""
+            ),
+        }
+        (temporary / "canonical_summary.json").write_text(
+            json.dumps(result, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            os.replace(temporary, target)
+            return result
+        except OSError:
+            if output.is_file() and summary_path.is_file():
+                existing = json.loads(summary_path.read_text(encoding="utf-8"))
+                if (
+                    existing.get("source_file_sha256") == source_file_sha256
+                    and int(existing.get("row_count") or 0) == count
+                    and existing.get("canonical_sha256") == sha256_file(output)
+                ):
+                    shutil.rmtree(temporary, ignore_errors=True)
+                    existing = dict(existing)
+                    existing["cache_hit"] = True
+                    return existing
+            raise
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+
 def build_canonical(csv_path: Path, cache_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     """Build a deterministic canonical JSONL.GZ file and atomically publish it."""
     try:
@@ -1000,8 +1161,188 @@ def _selection_preview(canonical_path: Path, *, dataset_id: str, source_sha256: 
     selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{dataset_id}|{source_sha256}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}") if _is_derived_variant(variant_mode) else base_records
     return _selected_window_preview(spec, selected, start=start, count=count, selected_start_ms=selected_start_ms, selected_end_ms=selected_end_ms, base_window_sha256=base_hash, shards=shards)
 
+def _validated_prefix_streaming_preview(
+    csv_path: Path,
+    manifest: dict[str, Any],
+    *,
+    requested_tx_count: int,
+    seed: int,
+    variant_mode: str = "original_window",
+    target_alpha: float | None = None,
+    skew_axis: str | None = None,
+    shards: int = 4,
+    selection_mode: str = "validated_prefix",
+    supported_counts: set[int] | frozenset[int] | None = None,
+    variant_parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Preview a reviewed validated prefix without rescanning the full 1M source.
+
+    Preview validates every selected row. Formal materialization remains the
+    authoritative full-file SHA/schema gate and is intentionally unchanged.
+    """
+    if selection_mode != "validated_prefix" or variant_mode != "original_window":
+        raise WorkloadDataError("streaming prefix preview requires original validated_prefix mode")
+
+    total = int(manifest.get("row_count") or 0)
+    source_identity = str(manifest.get("dataset_source_sha256") or manifest.get("source_sha256") or "")
+    if total <= 0 or len(source_identity) != 64:
+        raise WorkloadDataError("streaming prefix preview requires reviewed row_count/source_sha256")
+
+    preview_canonical_identity = hashlib.sha256(
+        (
+            "mbe_validated_prefix_preview_v1|"
+            + str(manifest.get("dataset_id") or "")
+            + "|"
+            + source_identity
+            + "|"
+            + str(manifest.get("adapter_id") or "")
+            + "|"
+            + GENERATOR_VERSION
+        ).encode("utf-8")
+    ).hexdigest()
+
+    spec, count, variant_mode, skew_axis = _selection_spec(
+        dataset_id=manifest["dataset_id"],
+        source_sha256=source_identity,
+        canonical_sha256=preview_canonical_identity,
+        requested_tx_count=requested_tx_count,
+        seed=seed,
+        total=total,
+        variant_mode=variant_mode,
+        target_alpha=target_alpha,
+        skew_axis=skew_axis,
+        selection_mode=selection_mode,
+        supported_counts=supported_counts,
+        variant_parameters=variant_parameters,
+    )
+    start = _selection_start(spec, total, count)
+    if start != 0:
+        raise WorkloadDataError("validated_prefix preview must start at row zero")
+
+    adapter = adapter_for_manifest(manifest)
+    base_hash_builder = hashlib.sha256()
+    operation_counts: Counter[str] = Counter()
+    shard_distribution: Counter[str] = Counter({f"s{i}": 0 for i in range(max(1, shards))})
+    cross_shard_count = 0
+    skew_keys: Counter[str] = Counter()
+    senders: set[str] = set()
+    receivers: set[str] = set()
+    occurrences: Counter[int] = Counter()
+    state_key_touches: Counter[str] = Counter()
+    direct_access_count = 0
+    selected_start_ms: int | None = None
+    selected_end_ms: int | None = None
+    previous_key: tuple[int, int] | None = None
+    selected_count = 0
+
+    for index, item in enumerate(adapter.iter_canonical_records(csv_path, manifest)):
+        if index >= count:
+            break
+        record = _validate_canonical_record(item, dataset_id=manifest["dataset_id"], row_number=index)
+        key = (record["timestamp_ms"], int(record["source_row_index"]))
+        if previous_key is not None and key < previous_key:
+            raise WorkloadDataError(
+                "source order violates the canonical (timestamp_ms, source_row_index) contract"
+            )
+        previous_key = key
+
+        base_hash_builder.update(_canonical_bytes(record))
+        selected_start_ms = record["timestamp_ms"] if selected_start_ms is None else selected_start_ms
+        selected_end_ms = record["timestamp_ms"]
+        selected_count += 1
+
+        # Preserve the existing preview semantics exactly.
+        if record.get("schema_version") in {"mbe_workload_record_v3", "mbe_workload_record_v4"}:
+            direct_access_count += 1
+        operation_counts[str(record.get("operation_type") or "unknown")] += 1
+        source_shard = _stable_shard(record.get("routing_source_key") or record.get("sender_id"), shards)
+        target_shard = _stable_shard(
+            record.get("routing_target_key") or record.get("receiver_id") or record.get("routing_source_key"),
+            shards,
+        )
+        shard_distribution[f"s{source_shard}"] += 1
+        if source_shard != target_shard:
+            cross_shard_count += 1
+
+        if skew_axis and record.get("skew_keys", {}).get(str(skew_axis)):
+            skew_keys[record["skew_keys"][str(skew_axis)]] += 1
+        elif record.get("routing_target_key"):
+            skew_keys[str(record["routing_target_key"])] += 1
+
+        senders.add(str(record.get("sender_id") or ""))
+        if record.get("receiver_id"):
+            receivers.add(str(record["receiver_id"]))
+        occurrences[int(record.get("source_row_index", index))] += 1
+        for state_key in set(str(k) for k in (record.get("state_keys") or []) if str(k)):
+            state_key_touches[state_key] += 1
+
+    if selected_count != count:
+        raise WorkloadDataError(
+            f"validated prefix preview ended early: got {selected_count}, expected {count}"
+        )
+
+    operation_data = dict(operation_counts)
+    base_hash = base_hash_builder.hexdigest()
+    theta_fit = _finite_zipf_metrics(state_key_touches)
+    routing_source_basis = (
+        "logical_routing_key"
+        if selected_count and direct_access_count == selected_count
+        else ("runtime_identity" if direct_access_count == 0 else "mixed")
+    )
+    return {
+        "requested_tx_count": spec["requested_tx_count"],
+        "actual_selected_count": selected_count,
+        "selected_time_range": {"start_ms": selected_start_ms, "end_ms": selected_end_ms},
+        "category_counts": operation_data,
+        "operation_counts": operation_data,
+        "category_percentages": _operation_percentages(operation_data, selected_count),
+        "operation_percentages": _operation_percentages(operation_data, selected_count),
+        "realized_skew": _skew_statistics(
+            skew_keys, senders, receivers, max(1, selected_count), occurrences,
+            str(skew_axis) if skew_axis else None,
+        ),
+        "target_access_theta": (spec.get("variant_parameters") or {}).get("target_theta"),
+        "measured_access_theta": theta_fit["theta"],
+        "theta_axis": "unique_transaction_state_key_touches",
+        "theta_fit_ks": theta_fit["ks"],
+        "theta_touch_count": theta_fit["touches"],
+        "theta_unique_state_key_count": theta_fit["unique_keys"],
+        "cross_shard_count": cross_shard_count,
+        "cross_shard_ratio": cross_shard_count / selected_count if selected_count else 0,
+        "routing_source_basis": routing_source_basis,
+        "shard_distribution": dict(sorted(shard_distribution.items())),
+        "selection_digest": _selection_digest(
+            spec, start=0, count=count, base_window_sha256=base_hash
+        ),
+        "selection_mode": spec["selection_mode"],
+        "selector_version": spec["selector_version"],
+        "start_offset": 0,
+        "end_offset": count - 1,
+        "base_window_sha256": base_hash,
+        "preview_validation_scope": "selected_prefix_only",
+        "formal_materialization_revalidates_full_source": True,
+    }
+
 def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4, selection_mode: str = "contiguous_window", supported_counts: set[int] | frozenset[int] | None = None, variant_parameters: dict[str, Any] | None = None) -> dict[str, Any]:
     adapter = adapter_for_manifest(manifest)
+    if (
+        str(manifest.get("preview_policy") or "") == "validated_prefix_streaming_v1"
+        and selection_mode == "validated_prefix"
+        and variant_mode == "original_window"
+    ):
+        return _validated_prefix_streaming_preview(
+            csv_path,
+            manifest,
+            requested_tx_count=requested_tx_count,
+            seed=seed,
+            variant_mode=variant_mode,
+            target_alpha=target_alpha,
+            skew_axis=skew_axis,
+            shards=shards,
+            selection_mode=selection_mode,
+            supported_counts=supported_counts,
+            variant_parameters=variant_parameters,
+        )
     summary = _csv_summary(adapter.validate_source(csv_path, manifest, expected_sha256=manifest.get("source_sha256") or None))
     canonical_sha256 = _canonical_sha256_from_source(csv_path, manifest)
     identity_hash = str(manifest.get("dataset_source_sha256") or summary.source_sha256)
@@ -1034,7 +1375,7 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
     direct_access_count = 0
     skew_axis = spec.get("skew_axis")
     for index, record in enumerate(selected):
-        if record.get("schema_version") == "mbe_workload_record_v3":
+        if record.get("schema_version") in {"mbe_workload_record_v3", "mbe_workload_record_v4"}:
             direct_access_count += 1
         operation_counts[str(record.get("operation_type") or "unknown")] += 1
         source_shard = _stable_shard(record.get("routing_source_key") or record.get("sender_id"), shards)
@@ -1241,7 +1582,20 @@ def materialize_request(request: WorkloadPreviewRequest) -> WorkloadMaterializeD
     skew_axis = str(parameters["skew_axis"]) if "skew_axis" in parameters else request.skew_axis
     selection_mode = str(definition.get("selection_mode") or request.selection_mode)
     supported_counts = {int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()}
-    canonical = build_canonical(source_path, WORKLOAD_CACHE_ROOT, selected_manifest)
+    if (
+        selection_mode == "validated_prefix"
+        and str(selected_manifest.get("source_layout") or "single_file") == "single_file"
+        and str(selected_manifest.get("materialization_policy") or "")
+        == "validated_prefix_attested_prefix_v1"
+    ):
+        canonical = build_validated_prefix_canonical(
+            source_path,
+            WORKLOAD_CACHE_ROOT,
+            selected_manifest,
+            requested_tx_count=requested,
+        )
+    else:
+        canonical = build_canonical(source_path, WORKLOAD_CACHE_ROOT, selected_manifest)
     summary = materialize(
         WORKLOAD_CACHE_ROOT / canonical["canonical_relative_path"], WORKLOAD_CACHE_ROOT,
         dataset_id=manifest["dataset_id"], source_sha256=str(manifest.get("source_sha256") or canonical["source_sha256"]),

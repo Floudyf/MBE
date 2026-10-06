@@ -10,6 +10,7 @@ from backend.app.services.v5_compatibility_engine import V5CompatibilityError, v
 from backend.app.services.v5_plugin_manifest_store import STORE
 from backend.app.services import v5_workload_data_plane as workload_plane
 from backend.app.services.v5_workload_data_plane import WorkloadPreviewRequest
+from backend.app.services.v5_txallo_history_ratio_v21 import compile_txallo_history
 
 
 EXPECTED_ARTIFACTS = [
@@ -162,6 +163,8 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
     block_executor_id = profile.get("block_executor", {}).get("plugin_id")
     porygon_selected = block_executor_id == "porygon_block_executor"
     calvin_selected = block_executor_id in {"calvin_block_executor", "stateless_calvin_block_executor"}
+    # MBE_OPTME_V22_GLOBAL_ORDER_DOMAIN: topology.shards remains the logical state-partition count; both OptME cards use one unchanged PBFT ordering domain.
+    optme_selected = block_executor_id in {"optme_block_executor", "stateless_optme_block_executor"}
     if porygon_selected:
         for category in ("scheduler", "block_executor", "cross_shard"):
             if category in profile:
@@ -184,6 +187,11 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
             validators = list(all_node_ids)
             shard_id = "calvin-global"
             consensus_domain_id = "calvin-global"
+            leader = index == 0
+        elif optme_selected:
+            validators = list(all_node_ids)
+            shard_id = "optme-global"
+            consensus_domain_id = "optme-global"
             leader = index == 0
         else:
             validators = [f"n{execution_shard_index * spec.topology.validators_per_shard + offset}" for offset in range(spec.topology.validators_per_shard)]
@@ -221,6 +229,7 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
             f"client/{artifact}"
             for artifact in TXALLO_CLIENT_ARTIFACTS
         ]
+        expected_artifacts += ["workload/txallo_history.jsonl.gz", "workload/txallo_history_summary.json"]
 
     if (
         profile.get("block_executor", {}).get("plugin_id") in {"optme_block_executor", "stateless_optme_block_executor"}
@@ -363,5 +372,10 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         "generator_version": workload_plane.GENERATOR_VERSION,
         "no_fallback": True,
     }
+    txallo_history = compile_txallo_history(run_dir=run_dir, manifest=manifest, workload_plan=plan, profile=profile)
+    if txallo_history is not None:
+        audit_metadata = dict(plan.get("audit_metadata") or {})
+        audit_metadata["txallo_history"] = txallo_history
+        plan["audit_metadata"] = audit_metadata
     (run_dir / "compiled_workload_plan.json").write_text(json.dumps(plan, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return plan

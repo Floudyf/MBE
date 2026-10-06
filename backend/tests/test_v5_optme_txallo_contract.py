@@ -108,30 +108,28 @@ def test_stateful_optme_accepts_common_mbe_physical_shard_counts() -> None:
         assert not any("requires exactly 1 physical PBFT shard" in item for item in result.blockers)
 
 
-def test_optme_topology_truth_boundary_does_not_claim_paper_sharding() -> None:
+# MBE_OPTME_V22_TEST_CONTRACT
+def test_optme_topology_truth_boundary_is_one_global_ordering_domain() -> None:
     root = Path(__file__).resolve().parents[2]
     source = (root / "frontend" / "src" / "v5FormalExperimentCatalog.ts").read_text(encoding="utf-8")
     line = next(item for item in source.splitlines() if 'methodId: "stateful_optme"' in item)
-    assert "MBE 多分片集成" in line
-    assert "多分片拓扑不作为原论文贡献" in line
+    assert "optme-global PBFT 排序域" in line
+    assert "逻辑状态分区数" in line
 
 
 
-def test_stateless_optme_txallo_bind_exact_versions_without_metatrack_scheduler() -> None:
+def test_stateless_optme_exits_source_order_exact_versions_while_txallo_keeps_them() -> None:
     root = Path(__file__).resolve().parents[2]
     optme = (root / "executor" / "v5" / "optme_plugins.go").read_text(encoding="utf-8")
     txallo = (root / "executor" / "v5" / "txallo_plugins.go").read_text(encoding="utf-8")
     runtime = (root / "executor" / "v5" / "runtime.go").read_text(encoding="utf-8")
-    assert "BindExecutionRoutingMetadata() bool { return true }" in optme
-    assert "StatelessVersionAdmission() bool { return true }" in optme
-    assert "BindExecutionRoutingMetadata() bool { return p.stateless }" in txallo
+    client = (root / "executor" / "v5" / "client.go").read_text(encoding="utf-8")
+    assert "StatelessVersionAdmission() bool { return false }" in optme
     assert "StatelessVersionAdmission() bool { return p.stateless }" in txallo
-    assert "case optmeStatelessRoutingID, txalloStatelessRoutingID:" in runtime
-    assert "never divert them into the generic stateless versioned-wave scheduler" in runtime
-    assert "methodPreservingExactVersionTransportEnabled" in runtime
-    assert "publishMethodPreservingStateVersions" in runtime
-    assert "publishTransactionStateVersions(ctx, block, item, delta, nil)" in runtime
-    assert "method_preserving_exact_version_publish" in runtime
+    assert "case txalloStatelessRoutingID:" in runtime
+    assert "case optmeStatelessRoutingID, txalloStatelessRoutingID:" not in runtime
+    assert "plugins.Routing.ID() == calvinStatelessRoutingID || plugins.Routing.ID() == optmeStatelessRoutingID" in client
+    assert "prepareOptMEStatelessProjection" in runtime
 
 
 def test_txallo_stateful_is_no_longer_custom_unknown_semantics_fallback() -> None:
@@ -157,16 +155,17 @@ def test_optme_txallo_client_emits_standard_state_home_evidence_without_metatrac
     assert 'BatchRoutingArtifactFamily() string { return "txallo" }' in txallo
 
 
-def test_stateless_optme_txallo_manifest_declares_exact_version_transport_and_preserves_method_scheduler() -> None:
+def test_stateless_optme_manifest_uses_block_projection_while_txallo_keeps_exact_versions() -> None:
     optme_routing = STORE.get("stateless_optme_routing")
     optme_executor = STORE.get("stateless_optme_block_executor")
     txallo_routing = STORE.get("stateless_txallo_routing")
-    assert "exact_state_version_transport" in optme_routing.capabilities
-    assert "exact_state_version_transport" in optme_executor.capabilities
+    assert "block_start_snapshot_projection" in optme_routing.capabilities
+    assert "no_transaction_version_admission" in optme_routing.capabilities
+    assert "exact_state_version_transport" not in optme_routing.capabilities
+    assert "partition_owned_materialization" in optme_executor.capabilities
     assert "preserve_optme_scheduler" in optme_executor.capabilities
     assert "exact_state_version_transport" in txallo_routing.capabilities
     assert "preserve_txallo_fifo_scheduler" in txallo_routing.capabilities
-    assert "single_pbft_shard" not in STORE.get("optme_block_executor").truth_boundary
 
 
 
@@ -189,7 +188,7 @@ def test_v10_method_preserving_writebehind_is_isolated_from_other_algorithms() -
     # Existing MetaTrack/legacy origin remains present and is not renamed to the
     # OptME/TxAllo-specific v10 origin.
     assert 'applyOrigin := "versioned_remote_home"' in runtime
-    assert "case optmeStatelessRoutingID, txalloStatelessRoutingID:" in runtime
+    assert "case txalloStatelessRoutingID:" in runtime
     for metric in (
         "method_preserving_source_local_version_admission_hit_count",
         "method_preserving_home_version_wait_count",
@@ -211,7 +210,7 @@ def test_v14_method_preserving_network_truth_overrides_legacy_zero_remote_metric
             "V5_STATE_DELTA_APPLY_ACK": {"message_count": 43},
         },
     }
-    _apply_method_preserving_remote_transport_truth(metrics, "stateless_optme")
+    _apply_method_preserving_remote_transport_truth(metrics, "stateless_txallo")
     assert metrics["physical_remote_fetch_count"] == 101
     assert metrics["physical_remote_writeback_count"] == 43
     assert metrics["physical_remote_operation_count"] == 144
@@ -229,3 +228,18 @@ def test_v14_method_preserving_network_truth_is_isolated_from_other_methods() ->
     _apply_method_preserving_remote_transport_truth(metrics, "metatrack")
     assert metrics["physical_remote_fetch_count"] == 7
     assert "method_preserving_physical_remote_fetch_request_count" not in metrics
+
+# MBE_OPTME_V22_6_STATEFUL_CARD_CONTRACT
+def test_optme_frontend_catalog_contains_live_stateful_and_stateless_cards() -> None:
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "frontend" / "src" / "v5FormalExperimentCatalog.ts").read_text(encoding="utf-8")
+    assert r'// MBE_OPTME_V22_CATALOG\n  { methodId: "stateful_optme"' not in source
+    stateful = [line for line in source.splitlines() if 'methodId: "stateful_optme"' in line]
+    stateless = [line for line in source.splitlines() if 'methodId: "stateless_optme"' in line]
+    assert len(stateful) == 1
+    assert len(stateless) == 1
+    assert stateful[0].lstrip().startswith('{ methodId: "stateful_optme"')
+    assert stateless[0].lstrip().startswith('{ methodId: "stateless_optme"')
+    assert 'family: "stateful"' in stateful[0]
+    assert 'comparisonVisible: true' in stateful[0]
+    assert 'mainVisible: true' in stateful[0]

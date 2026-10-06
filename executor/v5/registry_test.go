@@ -1502,3 +1502,19 @@ func TestMetaTrackAdmissiblePlacementBreaksConnectedCoaccessCollapse(t *testing.
 		t.Fatalf("admissible placement must remain deterministic: %s != %s", plan.PlanDigest, second.PlanDigest)
 	}
 }
+
+
+
+
+func TestMetaTrackSingleExecutionStrictSerialEvenWhenAllReadyV675(t *testing.T) {
+	txs:=independentTransferTxs(4)
+	result:=runMetaTrackExecutorTestBlockWithExecution(t,4,txs,map[string]any{"business_execution_delay_ms":15},metaTrackSingleExecution{makeBasic("execution",metaTrackSingleExecutionID,nil)})
+	if got:=intMetric(t,result.ActualMetrics,"max_inflight_business_executions"); got!=1 { t.Fatalf("strict serial inflight=%d want=1 metrics=%#v",got,result.ActualMetrics) }
+	if enabled,ok:=result.ActualMetrics["metatrack_single_serial_execution_enabled"].(bool); !ok || !enabled { t.Fatalf("strict serial treatment metric missing: %#v",result.ActualMetrics) }
+	if got:=intMetric(t,result.ActualMetrics,"metatrack_single_serial_dispatch_limit"); got!=1 { t.Fatalf("dispatch limit=%d want=1",got) }
+	dispatch:=[]string{}
+	for _,event:=range result.ScheduleEvents { if strings.HasPrefix(event.DecisionReason,"actual_dispatch") { dispatch=append(dispatch,event.TxID) } }
+	if len(dispatch)!=len(txs) { t.Fatalf("dispatch=%#v",dispatch) }
+	for i,item:=range txs { if dispatch[i]!=item.TxID { t.Fatalf("non-canonical dispatch=%#v",dispatch) } }
+	assertMetaTrackSerialEquivalent(t,result.ExecutionResult,txs)
+}

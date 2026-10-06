@@ -17,7 +17,7 @@ def test_metatrack_current_freezes_v5_liveness_and_new_v6_adds_closure_without_p
     initial = BUILTIN_METHODS["metatrack_serial"]
     current = BUILTIN_METHODS["metatrack_full_locality"]
     latest = BUILTIN_METHODS["metatrack_latest"]
-    assert latest.plugin_overrides["block_producer"] == "metatrack_dependency_window_producer"
+    assert latest.plugin_overrides["block_producer"] == "metatrack_nl_window_v669"
     assert latest.plugin_overrides["state_access"] == "metatrack_local_exact_access"
     assert latest.plugin_overrides["block_executor"] == "metatrack_block_executor"
     assert latest.plugin_overrides.get("consensus") == initial.plugin_overrides.get("consensus")

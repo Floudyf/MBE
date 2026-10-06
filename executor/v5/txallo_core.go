@@ -1,8 +1,11 @@
 package v5
 
+// MBE_TXALLO_PAPER_V20: ICDE 2023 Algorithm 1/2 paper-fidelity core.
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"sort"
 )
@@ -86,64 +89,137 @@ func (g *txalloGraph) neighbors(v string) map[string]float64 {
 	}
 	return out
 }
+func (g *txalloGraph) selfWeight(v string) float64 {
+	return g.Edges[txalloPair(v, v)]
+}
+
+type txalloCommunityStat struct {
+	Workload float64
+	Uncapped float64
+}
 
 type txalloObjective struct {
 	Throughput, CrossShardRatio, WorkloadStdDev float64
 	Workloads                                   map[string]float64
 }
 
-func txalloEvaluate(g *txalloGraph, mapping map[string]string, shards []string, eta, lambda float64) txalloObjective {
-	workloads := map[string]float64{}
-	hat := map[string]float64{}
-	for _, s := range shards {
-		workloads[s] = 0
-		hat[s] = 0
+func txalloShardSet(shards []string) map[string]bool {
+	out := make(map[string]bool, len(shards))
+	for _, shard := range shards {
+		if shard != "" {
+			out[shard] = true
+		}
 	}
-	total := 0.0
-	cross := 0.0
+	return out
+}
+
+// txalloBuildCommunityStats implements the paper's per-community workload
+// sigma_i and sufficient-capacity throughput \hat{Lambda}_i. For a partial
+// mapping (used only while Algorithm 1/2 places new nodes), an unassigned node
+// is treated as outside every surviving shard. It is never silently assigned to
+// shard 0.
+func txalloBuildCommunityStats(g *txalloGraph, mapping map[string]string, shards []string, eta float64) map[string]txalloCommunityStat {
+	stats := map[string]txalloCommunityStat{}
+	valid := txalloShardSet(shards)
+	for _, shard := range shards {
+		stats[shard] = txalloCommunityStat{}
+	}
 	for e, w := range g.Edges {
-		total += w
-		sa := mapping[e.A]
-		sb := mapping[e.B]
-		if sa == "" && len(shards) > 0 {
-			sa = shards[0]
+		sa, sb := mapping[e.A], mapping[e.B]
+		if !valid[sa] {
+			sa = ""
 		}
-		if sb == "" {
-			sb = sa
+		if !valid[sb] {
+			sb = ""
 		}
-		if e.A == e.B || sa == sb {
-			workloads[sa] += w
-			hat[sa] += w
-		} else {
-			cross += w
-			workloads[sa] += eta * w
-			workloads[sb] += eta * w
-			hat[sa] += w / 2
-			hat[sb] += w / 2
+		if e.A == e.B {
+			if sa != "" {
+				row := stats[sa]
+				row.Workload += w
+				row.Uncapped += w
+				stats[sa] = row
+			}
+			continue
+		}
+		switch {
+		case sa != "" && sa == sb:
+			row := stats[sa]
+			row.Workload += w
+			row.Uncapped += w
+			stats[sa] = row
+		case sa != "" && sb != "" && sa != sb:
+			ra := stats[sa]
+			ra.Workload += eta * w
+			ra.Uncapped += w / 2
+			stats[sa] = ra
+			rb := stats[sb]
+			rb.Workload += eta * w
+			rb.Uncapped += w / 2
+			stats[sb] = rb
+		case sa != "":
+			ra := stats[sa]
+			ra.Workload += eta * w
+			ra.Uncapped += w / 2
+			stats[sa] = ra
+		case sb != "":
+			rb := stats[sb]
+			rb.Workload += eta * w
+			rb.Uncapped += w / 2
+			stats[sb] = rb
 		}
 	}
+	return stats
+}
+
+func txalloThroughputFromStat(stat txalloCommunityStat, lambda float64) float64 {
+	if stat.Workload <= 0 {
+		return 0
+	}
+	if stat.Workload <= lambda {
+		return stat.Uncapped
+	}
+	return lambda / stat.Workload * stat.Uncapped
+}
+
+// txalloEvaluate is intentionally complete-mapping only. Algorithm 1/2 partial
+// placement is evaluated by Eq. (6)/(8) helpers below. This fail-closed contract
+// prevents the old behavior that silently treated every unassigned account as
+// belonging to shard 0.
+func txalloEvaluate(g *txalloGraph, mapping map[string]string, shards []string, eta, lambda float64) txalloObjective {
+	valid := txalloShardSet(shards)
+	for node := range g.Nodes {
+		shard := mapping[node]
+		if !valid[shard] {
+			panic(fmt.Sprintf("TxAllo incomplete mapping: account %q has invalid shard %q", node, shard))
+		}
+	}
+	stats := txalloBuildCommunityStats(g, mapping, shards, eta)
+	workloads := map[string]float64{}
 	throughput := 0.0
 	mean := 0.0
-	for _, s := range shards {
-		sigma := workloads[s]
-		h := hat[s]
-		if sigma <= lambda || sigma == 0 {
-			throughput += h
-		} else {
-			throughput += (lambda / sigma) * h
-		}
-		mean += sigma
+	for _, shard := range shards {
+		row := stats[shard]
+		workloads[shard] = row.Workload
+		throughput += txalloThroughputFromStat(row, lambda)
+		mean += row.Workload
 	}
 	if len(shards) > 0 {
 		mean /= float64(len(shards))
 	}
 	variance := 0.0
-	for _, s := range shards {
-		d := workloads[s] - mean
+	for _, shard := range shards {
+		d := workloads[shard] - mean
 		variance += d * d
 	}
 	if len(shards) > 0 {
 		variance /= float64(len(shards))
+	}
+	total, cross := 0.0, 0.0
+	for e, w := range g.Edges {
+		total += w
+		if e.A != e.B && mapping[e.A] != mapping[e.B] {
+			cross += w
+		}
 	}
 	ratio := 0.0
 	if total > 0 {
@@ -170,10 +246,7 @@ func txalloNodeOrder(nodes map[string]bool) []string {
 	return out
 }
 
-// deterministicLouvainInitialization implements the deterministic local-moving
-// phase of Louvain used by TxAllo as its initialization. Account hash order is
-// fixed, as required by the paper for deterministic outputs.
-func deterministicLouvainInitialization(g *txalloGraph) map[string]int {
+func deterministicLouvainOneLevel(g *txalloGraph) map[string]int {
 	nodes := txalloNodeOrder(g.Nodes)
 	comm := map[string]int{}
 	for i, n := range nodes {
@@ -232,7 +305,6 @@ func deterministicLouvainInitialization(g *txalloGraph) map[string]int {
 			break
 		}
 	}
-	// normalize community ids deterministically by smallest member.
 	members := map[int][]string{}
 	for n, c := range comm {
 		members[c] = append(members[c], n)
@@ -257,8 +329,84 @@ func deterministicLouvainInitialization(g *txalloGraph) map[string]int {
 	return comm
 }
 
+func txalloProjectCommunities(comm map[string]int, members map[string][]string) map[string]int {
+	groups := map[int][]string{}
+	for node, community := range comm {
+		groups[community] = append(groups[community], members[node]...)
+	}
+	type row struct {
+		id      int
+		members []string
+		min     string
+	}
+	rows := make([]row, 0, len(groups))
+	for id, original := range groups {
+		sort.Strings(original)
+		rows = append(rows, row{id: id, members: original, min: original[0]})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].min < rows[j].min })
+	out := map[string]int{}
+	for normalized, item := range rows {
+		for _, original := range item.members {
+			out[original] = normalized
+		}
+	}
+	return out
+}
+
+// deterministicLouvainInitialization is a complete deterministic multi-level
+// Louvain initialization: local moving is followed by community aggregation and
+// repeated on the coarsened graph until no further coarsening occurs. The
+// original-account projection is retained across levels.
+func deterministicLouvainInitialization(g *txalloGraph) (map[string]int, int) {
+	if len(g.Nodes) == 0 {
+		return map[string]int{}, 0
+	}
+	current := g
+	members := map[string][]string{}
+	for node := range g.Nodes {
+		members[node] = []string{node}
+	}
+	for level := 1; level <= 64; level++ {
+		comm := deterministicLouvainOneLevel(current)
+		communityNodes := map[int][]string{}
+		for node, c := range comm {
+			communityNodes[c] = append(communityNodes[c], node)
+		}
+		if len(communityNodes) == len(current.Nodes) {
+			return txalloProjectCommunities(comm, members), level
+		}
+		communityID := map[int]string{}
+		nextMembers := map[string][]string{}
+		for c, nodes := range communityNodes {
+			original := []string{}
+			for _, node := range nodes {
+				original = append(original, members[node]...)
+			}
+			sort.Strings(original)
+			id := fmt.Sprintf("louvain:%02d:%s", level, original[0])
+			communityID[c] = id
+			nextMembers[id] = original
+		}
+		next := newTxAlloGraph()
+		for _, id := range communityID {
+			next.Nodes[id] = true
+		}
+		for edge, weight := range current.Edges {
+			a := communityID[comm[edge.A]]
+			b := communityID[comm[edge.B]]
+			next.Edges[txalloPair(a, b)] += weight
+		}
+		current = next
+		members = nextMembers
+	}
+	comm := deterministicLouvainOneLevel(current)
+	return txalloProjectCommunities(comm, members), 64
+}
+
 type txalloRunMetrics struct {
 	GRunCount, A_RunCount, ChangedAccounts, Iterations int
+	LouvainLevels                                      int
 	Objective                                          txalloObjective
 }
 
@@ -267,11 +415,12 @@ type txalloAllocator struct {
 	Mapping              map[string]string
 	Shards               []string
 	Eta, Lambda, Epsilon float64
+	Stats                map[string]txalloCommunityStat
 	Metrics              txalloRunMetrics
 }
 
 func newTxAlloAllocator(shards []string, eta, lambda, epsilon float64) *txalloAllocator {
-	return &txalloAllocator{Graph: newTxAlloGraph(), Mapping: map[string]string{}, Shards: append([]string(nil), shards...), Eta: eta, Lambda: lambda, Epsilon: epsilon}
+	return &txalloAllocator{Graph: newTxAlloGraph(), Mapping: map[string]string{}, Shards: append([]string(nil), shards...), Eta: eta, Lambda: lambda, Epsilon: epsilon, Stats: map[string]txalloCommunityStat{}}
 }
 
 func (a *txalloAllocator) params() {
@@ -292,6 +441,11 @@ func (a *txalloAllocator) params() {
 		}
 	}
 }
+
+func (a *txalloAllocator) rebuildStats() {
+	a.Stats = txalloBuildCommunityStats(a.Graph, a.Mapping, a.Shards, a.Eta)
+}
+
 func (a *txalloAllocator) candidateShards(v string, includeAllWhenEmpty bool) []string {
 	seen := map[string]bool{}
 	for nb := range a.Graph.neighbors(v) {
@@ -310,6 +464,7 @@ func (a *txalloAllocator) candidateShards(v string, includeAllWhenEmpty bool) []
 	}
 	return out
 }
+
 func copyMapping(m map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range m {
@@ -317,34 +472,104 @@ func copyMapping(m map[string]string) map[string]string {
 	}
 	return out
 }
-func (a *txalloAllocator) bestMove(v string, cands []string) (string, float64) {
-	base := txalloEvaluate(a.Graph, a.Mapping, a.Shards, a.Eta, a.Lambda).Throughput
-	best := ""
-	gain := 0.0
-	old := a.Mapping[v]
-	for _, s := range cands {
-		if s == old {
-			continue
-		}
-		a.Mapping[v] = s
-		g := txalloEvaluate(a.Graph, a.Mapping, a.Shards, a.Eta, a.Lambda).Throughput - base
-		a.Mapping[v] = old
-		if g > gain+1e-12 || (math.Abs(g-gain) <= 1e-12 && g > 0 && (best == "" || s < best)) {
-			gain = g
-			best = s
+
+func (a *txalloAllocator) incident(v, shard string) (self, totalOther, toShard float64) {
+	self = a.Graph.selfWeight(v)
+	for nb, weight := range a.Graph.neighbors(v) {
+		totalOther += weight
+		if a.Mapping[nb] == shard {
+			toShard += weight
 		}
 	}
-	return best, gain
+	return self, totalOther, toShard
 }
+
+// Eq. (6): throughput gain when an unassigned/small-community node joins q.
+func (a *txalloAllocator) joinResult(v, q string) (txalloCommunityStat, float64) {
+	before := a.Stats[q]
+	self, totalOther, toQ := a.incident(v, q)
+	after := before
+	after.Workload += self + a.Eta*(totalOther-toQ) + (1-a.Eta)*toQ
+	after.Uncapped += self + totalOther/2
+	gain := txalloThroughputFromStat(after, a.Lambda) - txalloThroughputFromStat(before, a.Lambda)
+	return after, gain
+}
+
+func (a *txalloAllocator) leaveResult(v, p string) (txalloCommunityStat, float64) {
+	before := a.Stats[p]
+	self, totalOther, toP := a.incident(v, p)
+	outsideP := totalOther - toP
+	after := before
+	after.Workload -= self + a.Eta*outsideP - (a.Eta-1)*toP
+	after.Uncapped -= self + totalOther/2
+	if after.Workload < 0 && after.Workload > -1e-9 {
+		after.Workload = 0
+	}
+	if after.Uncapped < 0 && after.Uncapped > -1e-9 {
+		after.Uncapped = 0
+	}
+	gain := txalloThroughputFromStat(after, a.Lambda) - txalloThroughputFromStat(before, a.Lambda)
+	return after, gain
+}
+
+func (a *txalloAllocator) bestJoin(v string, cands []string) (string, float64) {
+	best := ""
+	bestGain := math.Inf(-1)
+	for _, shard := range cands {
+		_, gain := a.joinResult(v, shard)
+		if gain > bestGain+1e-12 || (math.Abs(gain-bestGain) <= 1e-12 && (best == "" || shard < best)) {
+			best, bestGain = shard, gain
+		}
+	}
+	return best, bestGain
+}
+
+// Eq. (8): only p and q change when v moves p -> q.
+func (a *txalloAllocator) bestMove(v string, cands []string) (string, float64) {
+	old := a.Mapping[v]
+	best := ""
+	bestGain := 0.0
+	for _, shard := range cands {
+		if shard == old || shard == "" {
+			continue
+		}
+		_, leaveGain := a.leaveResult(v, old)
+		_, joinGain := a.joinResult(v, shard)
+		gain := leaveGain + joinGain
+		if gain > bestGain+1e-12 || (math.Abs(gain-bestGain) <= 1e-12 && gain > 0 && (best == "" || shard < best)) {
+			best, bestGain = shard, gain
+		}
+	}
+	return best, bestGain
+}
+
+func (a *txalloAllocator) applyJoin(v, shard string) {
+	after, _ := a.joinResult(v, shard)
+	a.Mapping[v] = shard
+	a.Stats[shard] = after
+}
+
+func (a *txalloAllocator) applyMove(v, target string) {
+	source := a.Mapping[v]
+	leaveAfter, _ := a.leaveResult(v, source)
+	joinAfter, _ := a.joinResult(v, target)
+	a.Mapping[v] = target
+	a.Stats[source] = leaveAfter
+	a.Stats[target] = joinAfter
+}
+
 func (a *txalloAllocator) optimize(nodes []string) {
 	for pass := 0; pass < 100; pass++ {
 		delta := 0.0
 		for _, v := range nodes {
-			c := a.candidateShards(v, false)
-			best, g := a.bestMove(v, c)
-			if best != "" && g > 0 {
-				a.Mapping[v] = best
-				delta += g
+			if a.Mapping[v] == "" {
+				continue
+			}
+			cands := a.candidateShards(v, false)
+			best, gain := a.bestMove(v, cands)
+			if best != "" && gain > 0 {
+				a.applyMove(v, best)
+				delta += gain
 				a.Metrics.ChangedAccounts++
 			}
 		}
@@ -359,12 +584,12 @@ func (a *txalloAllocator) RunG(history []txalloHistoryTx) {
 	a.Graph = newTxAlloGraph()
 	a.Graph.addAll(history)
 	a.params()
-	community := deterministicLouvainInitialization(a.Graph)
+	community, levels := deterministicLouvainInitialization(a.Graph)
+	a.Metrics.LouvainLevels = levels
 	groups := map[int][]string{}
 	for n, c := range community {
 		groups[c] = append(groups[c], n)
 	}
-	// Rank Louvain communities by paper workload sigma; tie by smallest account.
 	type gr struct {
 		id    int
 		nodes []string
@@ -381,11 +606,11 @@ func (a *txalloAllocator) RunG(history []txalloHistoryTx) {
 		for _, n := range ns {
 			temp[n] = "in"
 		}
-		obj := txalloEvaluate(a.Graph, temp, []string{"in", "other"}, a.Eta, math.MaxFloat64)
-		rows = append(rows, gr{c, ns, obj.Workloads["in"], ns[0]})
+		stats := txalloBuildCommunityStats(a.Graph, temp, []string{"in", "other"}, a.Eta)
+		rows = append(rows, gr{c, ns, stats["in"].Workload, ns[0]})
 	}
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].work != rows[j].work {
+		if math.Abs(rows[i].work-rows[j].work) > 1e-12 {
 			return rows[i].work > rows[j].work
 		}
 		return rows[i].min < rows[j].min
@@ -395,38 +620,39 @@ func (a *txalloAllocator) RunG(history []txalloHistoryTx) {
 	if len(rows) < limit {
 		limit = len(rows)
 	}
-	large := map[int]string{}
 	for i := 0; i < limit; i++ {
-		large[rows[i].id] = a.Shards[i]
 		for _, n := range rows[i].nodes {
 			a.Mapping[n] = a.Shards[i]
 		}
 	}
-	// Nodes from small communities: Algorithm 1 lines 2-9, joining gain; direct objective evaluation is mathematically equivalent to Eq. (6)/(8) but slower.
+	a.rebuildStats()
+
+	small := map[string]bool{}
 	for i := limit; i < len(rows); i++ {
-		for _, v := range rows[i].nodes {
-			cands := a.candidateShards(v, true)
-			best := ""
-			bestObj := -1.0
-			for _, s := range cands {
-				a.Mapping[v] = s
-				o := txalloEvaluate(a.Graph, a.Mapping, a.Shards, a.Eta, a.Lambda).Throughput
-				if o > bestObj+1e-12 || (math.Abs(o-bestObj) <= 1e-12 && (best == "" || s < best)) {
-					bestObj = o
-					best = s
-				}
-			}
-			a.Mapping[v] = best
+		for _, n := range rows[i].nodes {
+			small[n] = true
 		}
 	}
-	// Any nodes omitted because Louvain produced fewer communities/new isolated nodes.
+	for _, v := range txalloNodeOrder(small) {
+		cands := a.candidateShards(v, true)
+		best, _ := a.bestJoin(v, cands)
+		if best == "" && len(a.Shards) > 0 {
+			best = a.Shards[0]
+		}
+		if best != "" {
+			a.applyJoin(v, best)
+		}
+	}
 	for _, v := range txalloNodeOrder(a.Graph.Nodes) {
-		if a.Mapping[v] == "" {
-			best, _ := a.bestMove(v, a.Shards)
-			if best == "" {
-				best = a.Shards[0]
-			}
-			a.Mapping[v] = best
+		if a.Mapping[v] != "" {
+			continue
+		}
+		best, _ := a.bestJoin(v, a.Shards)
+		if best == "" && len(a.Shards) > 0 {
+			best = a.Shards[0]
+		}
+		if best != "" {
+			a.applyJoin(v, best)
 		}
 	}
 	a.optimize(txalloNodeOrder(a.Graph.Nodes))
@@ -435,15 +661,17 @@ func (a *txalloAllocator) RunG(history []txalloHistoryTx) {
 }
 
 func (a *txalloAllocator) RunA(newTxs []txalloHistoryTx) {
-	affectedMap := map[string]bool{}
 	known := map[string]bool{}
 	for n := range a.Graph.Nodes {
 		known[n] = true
 	}
 	a.Graph.addAll(newTxs)
 	a.params()
-	for _, t := range newTxs {
-		for _, v := range txalloUniqueSortedStrings(t.Accounts) {
+	// New edges change sigma/hat even before any node moves.
+	a.rebuildStats()
+	affectedMap := map[string]bool{}
+	for _, item := range newTxs {
+		for _, v := range txalloUniqueSortedStrings(item.Accounts) {
 			affectedMap[v] = true
 		}
 	}
@@ -453,20 +681,13 @@ func (a *txalloAllocator) RunA(newTxs []txalloHistoryTx) {
 			continue
 		}
 		cands := a.candidateShards(v, true)
-		best := ""
-		bestObj := -1.0
-		for _, s := range cands {
-			a.Mapping[v] = s
-			o := txalloEvaluate(a.Graph, a.Mapping, a.Shards, a.Eta, a.Lambda).Throughput
-			if o > bestObj+1e-12 || (math.Abs(o-bestObj) <= 1e-12 && (best == "" || s < best)) {
-				bestObj = o
-				best = s
-			}
-		}
+		best, _ := a.bestJoin(v, cands)
 		if best == "" && len(a.Shards) > 0 {
 			best = a.Shards[0]
 		}
-		a.Mapping[v] = best
+		if best != "" {
+			a.applyJoin(v, best)
+		}
 	}
 	a.optimize(affected)
 	a.Metrics.A_RunCount++

@@ -176,7 +176,7 @@ func (r *NodeRuntime) handlePorygonWitnessRequest(ctx context.Context, msg p2p.M
 	if err := r.porygonValidateWitnessRequest(request); err != nil {
 		return err
 	}
-	if err := r.porygonPersistTransactionBlock(porygonBuildTransactionBlock(request.Height, request.OrderingDomain, request.Transactions, "")); err != nil {
+	if err := r.porygonStoreTransactionBlockForRole(porygonBuildTransactionBlock(request.Height, request.OrderingDomain, request.Transactions, "")); err != nil {
 		return err
 	}
 	members := porygonWitnessCommittee(r.plan.NodeConfigs, request.Height, request.OrderingDomain, request.FullBodyDigest)
@@ -494,7 +494,7 @@ func (r *NodeRuntime) ensurePorygonWitnessedBlock(ctx context.Context, block rea
 	// Paper data availability boundary: the co-located Storage Role creates and
 	// persists the full Transaction Block before EC Witness. PBFT later carries
 	// only its compact reference and witness certificate.
-	if err := r.porygonPersistTransactionBlock(porygonBuildTransactionBlock(block.Height, block.ShardID, block.TxList, "")); err != nil {
+	if err := r.porygonStoreTransactionBlockForRole(porygonBuildTransactionBlock(block.Height, block.ShardID, block.TxList, "")); err != nil {
 		return block, err
 	}
 	target := porygonWitnessTarget(block.Height, block.ShardID, block.TxList)

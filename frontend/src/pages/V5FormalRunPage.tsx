@@ -589,6 +589,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     const source = currentWorkloadSource();
     let localWorkloadRunnable = workloadRunnable;
     if (source && (!workloadPreview || workloadPreviewDirty || workloadPreviewError)) {
+      setBusy(true);
       try {
         const nextPreview = await previewV5Workload(source);
         setWorkloadPreview(nextPreview);
@@ -600,6 +601,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         setWorkloadPreviewError(errorMessage(caught));
         setWorkloadPreviewDirty(true);
         localWorkloadRunnable = false;
+      } finally {
+        setBusy(false);
       }
     }
     const form = formError({ catalogReady, selected, selectedSuite, topology, blockProduction, source, seeds, repeats, workloadPoints, topologyPoints, faultPoints, estimatedChildren: resources.children, workloadRunnable: localWorkloadRunnable, workerCount });

@@ -603,6 +603,12 @@ def _txallo_diagnostics(metrics: dict[str, Any]) -> dict[str, Any]:
     evaluation_count = _as_int(_first(metrics, ("txallo_evaluation_transaction_count",)))
     stddev = _as_float(_first(metrics, ("txallo_modeled_workload_stddev", "txallo_workload_stddev")))
     modeled_throughput = _as_float(_first(metrics, ("txallo_modeled_throughput", "txallo_evaluation_throughput")))
+    allocation_mode = _first(metrics, ("txallo_allocation_mode",))
+    louvain_levels = _as_int(_first(metrics, ("txallo_louvain_level_count",)))
+    mapping_complete = _first(metrics, ("txallo_mapping_complete",))
+    lambda_source = _first(metrics, ("txallo_lambda_source",))
+    epsilon_source = _first(metrics, ("txallo_epsilon_source",))
+    dynamic_a_enabled = _first(metrics, ("txallo_dynamic_a_txallo_runtime_enabled",))
 
     epsilon_implied_reference_count = None
     if eps is not None and eps >= 0:
@@ -627,6 +633,12 @@ def _txallo_diagnostics(metrics: dict[str, Any]) -> dict[str, Any]:
     )
 
     return {
+        "allocation_mode": allocation_mode,
+        "louvain_level_count": louvain_levels,
+        "mapping_complete": mapping_complete,
+        "lambda_source": lambda_source,
+        "epsilon_source": epsilon_source,
+        "dynamic_a_txallo_runtime_enabled": dynamic_a_enabled,
         "history_transaction_count": history,
         "mapped_account_count": accounts,
         "graph_edge_count": edges,
@@ -842,6 +854,7 @@ def _txallo_topology_diagnostics(item: dict[str, Any], metrics: dict[str, Any]) 
     topology = item.get("topology_point") if isinstance(item.get("topology_point"), dict) else {}
     k = _as_int(topology.get("shards"))
     d = metrics.get("v16_txallo_diagnostics") if isinstance(metrics.get("v16_txallo_diagnostics"), dict) else _txallo_diagnostics(metrics)
+    allocation_mode = str(d.get("allocation_mode") or "")
     history = _as_int(d.get("history_transaction_count"))
     lam = _as_float(d.get("lambda_processing_capacity_per_shard"))
     eps = _as_float(d.get("epsilon_convergence_threshold"))
@@ -866,7 +879,22 @@ def _txallo_topology_diagnostics(item: dict[str, Any], metrics: dict[str, Any]) 
 
     cadence_consistent = None
     reconstructed_history = None
-    if history is not None and initial_window_from_lambda is not None and chunk is not None and aruns is not None:
+    if allocation_mode in {"paper_g_snapshot", "paper_g_ratio_snapshot"}:
+        # snapshot-family mode: one G run over the complete selected pre-evaluation
+        # history and no synthetic A updates. With paper auto-calibration, both
+        # lambda*k and epsilon/1e-5 refer to this same history window.
+        epsilon_ok = initial_window_from_epsilon is None or history is None or int(initial_window_from_epsilon) == history
+        lambda_ok = initial_window_from_lambda is None or history is None or initial_window_from_lambda == history
+        cadence_consistent = bool(
+            history is not None
+            and (history == 0 or gruns == 1)
+            and (aruns in (None, 0))
+            and lambda_ok
+            and epsilon_ok
+        )
+        reconstructed_history = history
+    elif history is not None and initial_window_from_lambda is not None and chunk is not None and aruns is not None:
+        # Backward-compatible interpretation of archived pre-v20 runs.
         reconstructed_history = initial_window_from_lambda + chunk * aruns
         epsilon_ok = (
             initial_window_from_epsilon is None
@@ -895,6 +923,7 @@ def _txallo_topology_diagnostics(item: dict[str, Any], metrics: dict[str, Any]) 
     completeness = metrics.get("v16_txallo_account_mapping_completeness_passed")
 
     return {
+        "allocation_mode": allocation_mode,
         "shard_count_k": k,
         "eta_cross_shard_workload_multiplier": eta,
         "lambda_processing_capacity_per_shard": lam,
@@ -1093,8 +1122,15 @@ def _canonical_child(item: dict[str, Any]) -> dict[str, Any]:
         if topo_diag.get("extreme_workload_imbalance_suspected"):
             warnings.append("txallo_extreme_workload_imbalance_suspected")
         if topo_diag.get("account_mapping_proves_fewer_nonempty_shards_than_k"):
-            blockers.append("txallo_account_mapping_uses_fewer_nonempty_shards_than_configured")
-            warnings.append("txallo_account_mapping_uses_fewer_nonempty_shards_than_configured")
+            # MBE_TXALLO_PAPER_V20_FIDELITY: Algorithm 1 explicitly allows l < k
+            # after Louvain and initializes V_j=empty for j>l. Therefore fewer
+            # non-empty output shards is an allocation-quality warning, not a
+            # paper-fidelity blocker, for the paper G-snapshot family.
+            if topo_diag.get("allocation_mode") in {"paper_g_snapshot", "paper_g_ratio_snapshot"}:
+                warnings.append("txallo_paper_allows_empty_louvain_shards;fewer_nonempty_shards_observed")
+            else:
+                blockers.append("txallo_account_mapping_uses_fewer_nonempty_shards_than_configured")
+                warnings.append("txallo_account_mapping_uses_fewer_nonempty_shards_than_configured")
         if metrics.get("v16_txallo_account_graph_tree_like_suspected"):
             warnings.append("txallo_account_graph_projection_suspicious_tree_like")
         if out.get("v16_txallo_account_mapping_uniqueness_passed") is None:

@@ -2,6 +2,7 @@ package v5
 
 import (
 	"sort"
+	"sync"
 )
 
 // optmeObservedTx is the post-consensus simulation result consumed by the
@@ -16,13 +17,18 @@ type optmeObservedTx struct {
 }
 
 type optmeSchedule struct {
-	Sequences        [][]int
-	RescheduleEpochs [][]int
-	EarlyAborted     []int
-	Reordered        []int
-	AddressCount     int
-	UnitCount        int
-	MaxWidth         int
+	Sequences           [][]int
+	RescheduleEpochs    [][]int
+	EarlyDetected       []int
+	HierarchicalAborted []int
+	Reordered           []int
+	Rescheduled         []int
+	// EarlyAborted is retained as a legacy compatibility alias for the final
+	// reschedule path. New code must use EarlyDetected/HierarchicalAborted/Rescheduled.
+	EarlyAborted []int
+	AddressCount int
+	UnitCount    int
+	MaxWidth     int
 }
 
 type optmeUnitType uint8
@@ -32,17 +38,38 @@ const (
 	optmeUnitWrite
 )
 
+type optmeAbortStage uint8
+
+const (
+	optmeAbortNone optmeAbortStage = iota
+	optmeAbortEarlyDetection
+	optmeAbortHierarchical
+)
+
 type optmeTxNode struct {
 	index      int
 	txID       string
 	sequence   int
 	aborted    bool
+	abortStage optmeAbortStage
 	readKeys   map[string]bool
 	writeKeys  map[string]bool
 	writeUnits []*optmeUnit
 }
 
 func (t *optmeTxNode) sorted() bool { return t.sequence != 0 || t.aborted }
+func (t *optmeTxNode) abortEarly() {
+	if t.abortStage == optmeAbortNone {
+		t.abortStage = optmeAbortEarlyDetection
+	}
+	t.aborted = true
+}
+func (t *optmeTxNode) abortHierarchical() {
+	if t.abortStage == optmeAbortNone {
+		t.abortStage = optmeAbortHierarchical
+	}
+	t.aborted = true
+}
 func (t *optmeTxNode) reorderable() bool {
 	if len(t.writeUnits) <= 1 {
 		return false
@@ -132,7 +159,7 @@ func (w *optmeWriteUnits) sortUnits(reads *optmeReadUnits) {
 			u.tx.sequence = reads.incrementAndGetMaxSeq()
 			w.firstUpdaterFlag = true
 		} else {
-			u.tx.aborted = true
+			u.tx.abortHierarchical()
 		}
 	}
 	for _, u := range sorted {
@@ -140,7 +167,7 @@ func (w *optmeWriteUnits) sortUnits(reads *optmeReadUnits) {
 			continue
 		}
 		if u.tx.sequence < reads.maxSeq {
-			u.tx.aborted = true
+			u.tx.abortHierarchical()
 		}
 	}
 	writeSeq := reads.incrementAndGetMaxSeq()
@@ -207,7 +234,11 @@ func uniqueSortedStrings(xs []string) []string {
 	return out
 }
 
-func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
+// MBE_OPTME_V20_PARALLEL_ACG: author-source par_construct adaptation.
+// MBE supplies the experiment worker_count in place of num_cpus::get(); each
+// chunk is built independently and pairwise left.merge(right) preserves the
+// source First-Updater-Wins direction.
+func buildOptmeSubGraph(observed []optmeObservedTx) *optmeGraph {
 	g := newOptmeGraph()
 	for _, in := range observed {
 		tx := &optmeTxNode{index: in.Index, txID: in.TxID, readKeys: map[string]bool{}, writeKeys: map[string]bool{}}
@@ -217,26 +248,27 @@ func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
 		for _, k := range uniqueSortedStrings(in.WriteKeys) {
 			tx.writeKeys[k] = true
 		}
-		writeUnits := make([]*optmeUnit, 0, len(tx.writeKeys))
 		writeKeys := make([]string, 0, len(tx.writeKeys))
 		for k := range tx.writeKeys {
 			writeKeys = append(writeKeys, k)
 		}
 		sort.Strings(writeKeys)
+		writeUnits := make([]*optmeUnit, 0, len(writeKeys))
 		for _, k := range writeKeys {
 			writeUnits = append(writeUnits, &optmeUnit{tx: tx, typ: optmeUnitWrite, address: k, coLocated: tx.readKeys[k]})
 		}
 		earlyAbort := false
 		for _, u := range writeUnits {
-			if u.coLocated {
-				if a := g.addresses[u.address]; a != nil && a.firstUpdaterFlag {
-					earlyAbort = true
-					break
-				}
+			if !u.coLocated {
+				continue
+			}
+			if a := g.addresses[u.address]; a != nil && a.firstUpdaterFlag {
+				earlyAbort = true
+				break
 			}
 		}
 		if earlyAbort {
-			tx.aborted = true
+			tx.abortEarly()
 			g.aborted = append(g.aborted, tx)
 			continue
 		}
@@ -249,7 +281,8 @@ func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
 		for _, k := range readKeys {
 			readUnits = append(readUnits, &optmeUnit{tx: tx, typ: optmeUnitRead, address: k})
 		}
-		// Source _set_wr_dependencies: every write/read pair at different addresses contributes degree to both units.
+		// Source _set_wr_dependencies: every write/read pair at different
+		// addresses contributes degree to both units.
 		for _, w := range writeUnits {
 			for _, r := range readUnits {
 				if w.address != r.address {
@@ -267,9 +300,126 @@ func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
 				g.addresses[u.address] = a
 			}
 			a.add(u)
-			g.unitCount++
 		}
 	}
+	g.recountUnits()
+	return g
+}
+
+func (a *optmeAddress) merge(other *optmeAddress) {
+	if a.firstUpdaterFlag && other.firstUpdaterFlag {
+		// Faithful to author Address::merge(): unwind the later (right-side)
+		// co-located updater and do not merge that conflicting address payload.
+		for _, u := range other.reads.units {
+			if u.coLocated {
+				u.tx.abortEarly()
+				a.inDegree += other.inDegree
+				a.inDegree -= u.degree
+				break
+			}
+		}
+		for _, u := range other.writes.units {
+			if u.coLocated {
+				u.tx.abortEarly()
+				a.inDegree += other.inDegree
+				a.inDegree -= u.degree
+				break
+			}
+		}
+		return
+	}
+	a.inDegree += other.inDegree
+	a.outDegree += other.outDegree
+	a.reads.units = append(a.reads.units, other.reads.units...)
+	a.writes.units = append(a.writes.units, other.writes.units...)
+	a.firstUpdaterFlag = a.firstUpdaterFlag || other.firstUpdaterFlag
+}
+
+func (g *optmeGraph) merge(other *optmeGraph) {
+	keys := make([]string, 0, len(other.addresses))
+	for key := range other.addresses {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		right := other.addresses[key]
+		if left := g.addresses[key]; left != nil {
+			left.merge(right)
+		} else {
+			g.addresses[key] = right
+		}
+	}
+	for idx, tx := range other.txs {
+		g.txs[idx] = tx
+	}
+	g.aborted = append(g.aborted, other.aborted...)
+	g.recountUnits()
+}
+
+func (g *optmeGraph) recountUnits() {
+	count := 0
+	for _, a := range g.addresses {
+		count += len(a.reads.units) + len(a.writes.units)
+	}
+	g.unitCount = count
+}
+
+func buildOptmeGraphParallel(observed []optmeObservedTx, workers int) *optmeGraph {
+	if len(observed) == 0 {
+		return newOptmeGraph()
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	chunkSize := len(observed) / workers
+	if chunkSize < 1 {
+		chunkSize = 1
+	}
+	chunkCount := (len(observed) + chunkSize - 1) / chunkSize
+	subgraphs := make([]*optmeGraph, chunkCount)
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	for chunkIndex, start := 0, 0; start < len(observed); chunkIndex, start = chunkIndex+1, start+chunkSize {
+		end := start + chunkSize
+		if end > len(observed) {
+			end = len(observed)
+		}
+		idx, lo, hi := chunkIndex, start, end
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			subgraphs[idx] = buildOptmeSubGraph(observed[lo:hi])
+		}()
+	}
+	wg.Wait()
+
+	for len(subgraphs) > 1 {
+		next := make([]*optmeGraph, (len(subgraphs)+1)/2)
+		wg = sync.WaitGroup{}
+		for pair := 0; pair < len(next); pair++ {
+			pairIndex := pair
+			leftIndex := pair * 2
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				left := subgraphs[leftIndex]
+				if leftIndex+1 < len(subgraphs) {
+					left.merge(subgraphs[leftIndex+1])
+				}
+				next[pairIndex] = left
+			}()
+		}
+		wg.Wait()
+		subgraphs = next
+	}
+	return subgraphs[0]
+}
+
+func finalizeOptmeSchedule(g *optmeGraph) optmeSchedule {
 	// Algorithm 1 address ranking: in-degree asc, out-degree desc, address asc.
 	addresses := make([]*optmeAddress, 0, len(g.addresses))
 	for _, a := range g.addresses {
@@ -289,25 +439,36 @@ func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
 		a.writes.sortUnits(&a.reads)
 	}
 
-	// Source reorder(): extract aborted txs from the sorted set; only write-only txs with >1 write units are reorderable.
+	// Source reorder(): collect all aborted transactions, then rescue only the
+	// author-defined write-only >1-write-unit candidates.
 	extracted := append([]*optmeTxNode(nil), g.aborted...)
-	for idx, t := range g.txs {
-		if t.aborted {
-			extracted = append(extracted, t)
+	for idx, tx := range g.txs {
+		if tx.aborted {
+			extracted = append(extracted, tx)
 			delete(g.txs, idx)
 		}
 	}
 	sort.Slice(extracted, func(i, j int) bool { return extracted[i].index < extracted[j].index })
+	earlyDetectedSet := map[int]bool{}
+	hierarchicalSet := map[int]bool{}
+	for _, tx := range extracted {
+		switch tx.abortStage {
+		case optmeAbortEarlyDetection:
+			earlyDetectedSet[tx.index] = true
+		case optmeAbortHierarchical:
+			hierarchicalSet[tx.index] = true
+		}
+	}
 	reordered := []int{}
 	stillAborted := []*optmeTxNode{}
-	for _, t := range extracted {
-		if !t.reorderable() {
-			stillAborted = append(stillAborted, t)
+	for _, tx := range extracted {
+		if !tx.reorderable() {
+			stillAborted = append(stillAborted, tx)
 			continue
 		}
 		seq := 0
 		seen := map[string]bool{}
-		for _, u := range t.writeUnits {
+		for _, u := range tx.writeUnits {
 			if seen[u.address] {
 				continue
 			}
@@ -327,16 +488,16 @@ func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
 		if seq == 0 {
 			seq = 1
 		}
-		t.aborted = false
-		t.sequence = seq
-		g.txs[t.index] = t
-		reordered = append(reordered, t.index)
+		tx.aborted = false
+		tx.sequence = seq
+		g.txs[tx.index] = tx
+		reordered = append(reordered, tx.index)
 	}
 
 	type pair struct{ idx, seq int }
 	ordered := make([]pair, 0, len(g.txs))
-	for idx, t := range g.txs {
-		ordered = append(ordered, pair{idx, t.sequence})
+	for idx, tx := range g.txs {
+		ordered = append(ordered, pair{idx, tx.sequence})
 	}
 	sort.Slice(ordered, func(i, j int) bool {
 		if ordered[i].seq != ordered[j].seq {
@@ -346,26 +507,27 @@ func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
 	})
 	sequences := [][]int{}
 	lastSeq := -1
-	for _, p := range ordered {
-		if p.seq != lastSeq {
+	for _, item := range ordered {
+		if item.seq != lastSeq {
 			sequences = append(sequences, []int{})
-			lastSeq = p.seq
+			lastSeq = item.seq
 		}
-		sequences[len(sequences)-1] = append(sequences[len(sequences)-1], p.idx)
+		sequences[len(sequences)-1] = append(sequences[len(sequences)-1], item.idx)
 	}
 
-	// Source ScheduledInfo::_schedule_aborted_txs: tx-id/index order, first epoch whose prior writes do not conflict with this tx's reads OR writes.
+	// Source ScheduledInfo::_schedule_aborted_txs: tx-id/index order, first
+	// epoch whose prior writes do not conflict with this tx's reads OR writes.
 	sort.Slice(stillAborted, func(i, j int) bool { return stillAborted[i].index < stillAborted[j].index })
 	epochWrites := []map[string]bool{}
 	epochs := [][]int{}
-	early := []int{}
-	for _, t := range stillAborted {
-		early = append(early, t.index)
+	rescheduled := []int{}
+	for _, tx := range stillAborted {
+		rescheduled = append(rescheduled, tx.index)
 		keys := map[string]bool{}
-		for k := range t.readKeys {
+		for k := range tx.readKeys {
 			keys[k] = true
 		}
-		for k := range t.writeKeys {
+		for k := range tx.writeKeys {
 			keys[k] = true
 		}
 		epoch := 0
@@ -386,21 +548,57 @@ func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
 			epochWrites = append(epochWrites, map[string]bool{})
 			epochs = append(epochs, []int{})
 		}
-		for k := range t.writeKeys {
+		for k := range tx.writeKeys {
 			epochWrites[epoch][k] = true
 		}
-		epochs[epoch] = append(epochs[epoch], t.index)
+		epochs[epoch] = append(epochs[epoch], tx.index)
 	}
+
+	toSorted := func(set map[int]bool) []int {
+		out := make([]int, 0, len(set))
+		for idx := range set {
+			out = append(out, idx)
+		}
+		sort.Ints(out)
+		return out
+	}
+	earlyDetected := toSorted(earlyDetectedSet)
+	hierarchicalAborted := toSorted(hierarchicalSet)
+	sort.Ints(reordered)
+	sort.Ints(rescheduled)
+	g.recountUnits()
 	maxWidth := 0
-	for _, w := range sequences {
-		if len(w) > maxWidth {
-			maxWidth = len(w)
+	for _, wave := range sequences {
+		if len(wave) > maxWidth {
+			maxWidth = len(wave)
 		}
 	}
-	for _, w := range epochs {
-		if len(w) > maxWidth {
-			maxWidth = len(w)
+	for _, wave := range epochs {
+		if len(wave) > maxWidth {
+			maxWidth = len(wave)
 		}
 	}
-	return optmeSchedule{Sequences: sequences, RescheduleEpochs: epochs, EarlyAborted: early, Reordered: reordered, AddressCount: len(g.addresses), UnitCount: g.unitCount, MaxWidth: maxWidth}
+	return optmeSchedule{
+		Sequences:           sequences,
+		RescheduleEpochs:    epochs,
+		EarlyDetected:       earlyDetected,
+		HierarchicalAborted: hierarchicalAborted,
+		Reordered:           reordered,
+		Rescheduled:         rescheduled,
+		EarlyAborted:        append([]int(nil), rescheduled...),
+		AddressCount:        len(g.addresses),
+		UnitCount:           g.unitCount,
+		MaxWidth:            maxWidth,
+	}
+}
+
+func buildOptmeScheduleWithWorkers(observed []optmeObservedTx, workers int) optmeSchedule {
+	if workers <= 1 {
+		return finalizeOptmeSchedule(buildOptmeSubGraph(observed))
+	}
+	return finalizeOptmeSchedule(buildOptmeGraphParallel(observed, workers))
+}
+
+func buildOptmeSchedule(observed []optmeObservedTx) optmeSchedule {
+	return buildOptmeScheduleWithWorkers(observed, 1)
 }

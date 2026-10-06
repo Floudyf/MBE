@@ -631,6 +631,11 @@ def _evaluate_calvin_partitioned(run_dir: Path, summary: dict[str, Any]) -> dict
     }
 
 def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, Any]:
+    # MBE_TXALLO_EVIDENCE_V203: Stateless-TxAllo needs a real multi-shard
+    # logical serial replay, not the generic replica-determinism fallback.
+    if str((result_summary or {}).get("method_config_id") or "") == "stateless_txallo":
+        from backend.app.services.v5_txallo_stateless_oracle import evaluate as evaluate_txallo_stateless
+        return evaluate_txallo_stateless(run_dir, dict(result_summary or {}))
     """Validate durable transaction identity/order and method-appropriate state correctness.
 
     Direct-state executors use observed-order serial replay. Groundhog explicitly
@@ -647,6 +652,11 @@ def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, 
     run_dir = Path(run_dir)
     summary = result_summary if isinstance(result_summary, dict) else {}
     executor_id = str(summary.get("block_executor_id") or "")
+    # MBE_OPTME_V23_ORACLE_DISPATCH: use existing OptME per-tx sequence/epoch
+    # evidence instead of replaying PBFT input order.
+    if executor_id in {"optme_block_executor", "stateless_optme_block_executor"}:
+        from backend.app.services.v5_optme_correctness_oracle_v23 import evaluate_optme
+        return evaluate_optme(run_dir, summary)
     groundhog_mode = executor_id == "groundhog_block_executor"
     if executor_id == "porygon_block_executor":
         from backend.app.services.v5_porygon_correctness_oracle import evaluate_porygon_partitioned

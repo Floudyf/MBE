@@ -22,17 +22,17 @@ def tx(t,r): return {'tx_id':t,'execution_routing':r}
 def block(h,sh,height,txs): return {'block_hash':h,'shard_id':sh,'height':height,'tx_list':txs}
 
 def test_postrun_durable_reconstruction(tmp_path: Path):
-    t1=tx('t1',routing(1,'s0',1,1,1,2,4,2,2,1)); t2=tx('t2',routing(2,'s1',1,1,1,2,4,2,2,1))
-    t3=tx('t3',routing(3,'s0',2,1,1,2,4,2,2,2,[1])); t4=tx('t4',routing(4,'s1',2,1,1,2,4,2,2,2,req=2,rr=1))
-    t5=tx('t5',routing(5,'s0',3,2,3,3,2,1,2,3,[3])); t6=tx('t6',routing(6,'s1',3,2,3,3,2,1,2,4,[5]))
+    t1=tx('t1',routing(1,'s0',1,1,1,2,4,2,2,1)); t2=tx('t2',routing(2,'s1',1,1,1,2,4,2,2,2,[1]))
+    t3=tx('t3',routing(3,'s0',2,1,1,2,4,2,2,3)); t4=tx('t4',routing(4,'s1',2,1,1,2,4,2,2,4,[3]))
+    t5=tx('t5',routing(5,'s0',3,2,3,3,2,1,2,5,[4])); t6=tx('t6',routing(6,'s1',3,2,3,3,2,1,2,6,[5]))
     bs={'s0':[block('a','s0',1,[t1,t3]),block('b','s0',2,[t5])], 's1':[block('c','s1',1,[t2,t4]),block('d','s1',2,[t6])]}
     for sh,nodes in [('s0',['n0','n1']),('s1',['n4','n5'])]:
         for n in nodes:
             w(tmp_path/'nodes'/n/'blocks.jsonl',bs[sh]); w(tmp_path/'nodes'/n/'commit_markers.jsonl',[{'block_hash':x['block_hash'],'committed':True} for x in bs[sh]])
-    (tmp_path/'real_cluster_summary.json').write_text(json.dumps({'configured_block_size':2,'method_config_id':'metatrack_latest'}),encoding='utf-8')
+    (tmp_path/'real_cluster_summary.json').write_text(json.dumps({'configured_block_size':2,'method_config_id':'metatrack_latest','plugin_profile':{'block_producer':{'plugin_id':'metatrack_nl_window_v669'}}}),encoding='utf-8')
     s=summarize_metatrack_consensus_windows(tmp_path)
     assert s['available'] is True
-    assert s['truth_scope']=='durable_signed_critical_path_preserving_consensus_window_reconstruction_v665'
+    assert s['truth_scope']=='durable_signed_dependency_closed_adaptive_n_over_l_consensus_window_reconstruction_v669'
     assert [x['window_sequence'] for x in s['windows']]==[1,2]
     assert s['windows'][0]['recomputed_critical_path']==2
     assert s['windows'][0]['candidate_critical_path']==4
@@ -41,6 +41,8 @@ def test_postrun_durable_reconstruction(tmp_path: Path):
     assert s['metrics']['metatrack_consensus_window_observed_pbft_block_count']==4
     assert s['metrics']['metatrack_consensus_window_baseline_route_batch_pbft_block_count']==6
     assert s['metrics']['metatrack_consensus_window_pbft_blocks_saved']==2
+    assert s['metrics']['metatrack_consensus_window_aggregation_active'] is True
+    assert s['metrics']['metatrack_consensus_window_internal_admission_mismatch_count']==0
     assert (tmp_path/'metatrack_consensus_window_plan.jsonl').is_file()
     assert (tmp_path/'aggregate/metatrack_consensus_window_summary.json').is_file()
 
@@ -89,9 +91,16 @@ def test_v663_fixed_route_batch_policy_is_plugin_driven():
     assert "critical_path_extension_boundary" in source
 
 
-def test_v668_observability_contract_tokens():
+def test_v669_observability_contract_tokens():
     source=(ROOT / "backend/app/services/v5_observability_metrics.py").read_text(encoding="utf-8")
-    assert "_metatrack_n_over_l_improves_v668" in source
+    assert "_metatrack_n_over_l_improves_v669" in source
     assert "metatrack_adaptive_window_producer" in source
+    assert "metatrack_nl_window_v669" in source
     assert "metatrack_consensus_window_n_over_l_stop_count" in source
-    assert "durable_signed_adaptive_n_over_l_consensus_window_reconstruction_v668" in source
+    assert "durable_signed_dependency_closed_adaptive_n_over_l_consensus_window_reconstruction_v669" in source
+
+
+def test_v669_producer_specific_truth_scope_survives_metric_extractor():
+    extractor=(ROOT / "backend/app/services/v5_metric_extractor.py").read_text(encoding="utf-8")
+    assert 'payload.get("metatrack_consensus_window_truth_scope")' in extractor
+    assert 'summary.get("truth_scope")' in extractor

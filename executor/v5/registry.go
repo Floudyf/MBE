@@ -118,7 +118,8 @@ func crossShardFinalityMode(r RoutingPlugin) string {
 
 func usesDirectCommitFinality(r RoutingPlugin) bool {
 	mode := crossShardFinalityMode(r)
-	return mode == CrossShardFinalityStatelessDirect || mode == CrossShardFinalityPorygonGlobalCommit || mode == CrossShardFinalityCalvinGlobalCommit
+	// MBE_OPTME_V22_GLOBAL_FINALITY
+	return mode == CrossShardFinalityStatelessDirect || mode == CrossShardFinalityPorygonGlobalCommit || mode == CrossShardFinalityCalvinGlobalCommit || mode == CrossShardFinalityOptMEGlobalCommit
 }
 func routingBindsExecutionMetadata(r RoutingPlugin) bool {
 	c, ok := routingRuntimeCapabilitiesOf(r)
@@ -191,7 +192,8 @@ func PlanCrossShardFinalityMode(plan Plan) string {
 
 func PlanUsesDirectCommitFinality(plan Plan) bool {
 	mode := PlanCrossShardFinalityMode(plan)
-	return mode == CrossShardFinalityStatelessDirect || mode == CrossShardFinalityPorygonGlobalCommit || mode == CrossShardFinalityCalvinGlobalCommit
+	// MBE_OPTME_V22_GLOBAL_FINALITY
+	return mode == CrossShardFinalityStatelessDirect || mode == CrossShardFinalityPorygonGlobalCommit || mode == CrossShardFinalityCalvinGlobalCommit || mode == CrossShardFinalityOptMEGlobalCommit
 }
 
 type BlockProducerPlugin interface {
@@ -549,13 +551,13 @@ type WorkloadRecord struct {
 	ConsensusOrderingPredecessorOrdinals  []uint64
 	ConsensusExecutionDepth               int
 	ConsensusExecutionRound               int
-	ConsensusWindowSequence uint64
-	ConsensusWindowStartBatchSequence uint64
-	ConsensusWindowEndBatchSequence uint64
-	ConsensusWindowRouteBatchCount int
-	ConsensusWindowTransactionCount int
-	ConsensusWindowShardTransactionCount int
-	ConsensusWindowCriticalPath int
+	ConsensusWindowSequence               uint64
+	ConsensusWindowStartBatchSequence     uint64
+	ConsensusWindowEndBatchSequence       uint64
+	ConsensusWindowRouteBatchCount        int
+	ConsensusWindowTransactionCount       int
+	ConsensusWindowShardTransactionCount  int
+	ConsensusWindowCriticalPath           int
 	PredictedRemoteReads                  int
 	PredictedRemoteWrites                 int
 	StateVersions                         []tx.StateVersionDependency
@@ -1103,6 +1105,9 @@ func (p *metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 }
 
 func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
+	if p != nil && boolFromAny(p.config["ablation_no_coaccess_sharding_v675"]) {
+		return p.planNoCoaccessShardingV675(input)
+	}
 	if p != nil && boolFromAny(p.config[metaTrackAblationHashRoutingV662]) {
 		return p.planHashBaselineAblationV662(input)
 	}
@@ -1283,6 +1288,167 @@ func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 		plan.PlanDigest = routingPlanDigest(plan)
 	}
 	return plan
+}
+
+// planNoCoaccessShardingV675 reproduces the historical pre-coaccess
+// execution-sharding path (commit 4cc9a17 semantics) under the current signed
+// routing/version carrier. It deliberately does not build or consult a pair
+// co-occurrence matrix. State placement uses only per-key frequency, deterministic
+// home placement for ordered nonce state, and current shard load.
+func (p *metaTrackRouting) planNoCoaccessShardingV675(input BatchRoutingInput) BatchRoutingPlan {
+	plan := BatchRoutingPlan{
+		BatchIndex:            input.BatchIndex,
+		ShardingPluginID:      shardingPluginID(input.Sharding),
+		StateStorageUnitCount: p.StateStorageUnitCount(input.ShardIDs),
+		PlacementPolicy:       "historical_frequency_load_only_no_coaccess_v675",
+		TransactionPolicy:     "historical_frequency_majority_queue_tie_v675",
+		PlacementMinBudget:    1,
+		PlacementMu:           "0.0",
+		ShardLoadBefore:       map[string]int{},
+		ShardLoadAfter:        map[string]int{},
+	}
+	if len(input.ShardIDs) == 0 {
+		return plan
+	}
+	for _, shard := range input.ShardIDs {
+		plan.ShardLoadBefore[shard] = 0
+		plan.ShardLoadAfter[shard] = 0
+	}
+	frequency := map[string]*StateFrequencyRow{}
+	for _, record := range input.Records {
+		logicalID := firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index))
+		for _, access := range normalizedAccessItems(record) {
+			if access.Key == "" {
+				continue
+			}
+			plan.AccessMatrix = append(plan.AccessMatrix, AccessMatrixRow{LogicalID: logicalID, TxIndex: record.Index, Key: access.Key, Mode: access.Mode})
+			row := frequency[access.Key]
+			if row == nil {
+				row = &StateFrequencyRow{Key: access.Key}
+				frequency[access.Key] = row
+			}
+			row.Frequency++
+			if isReadMode(access.Mode) {
+				row.ReadCount++
+			}
+			if isWriteMode(access.Mode) {
+				row.WriteCount++
+			}
+		}
+	}
+	for _, row := range frequency {
+		plan.StateFrequency = append(plan.StateFrequency, *row)
+		plan.PlacementTotalFrequency += row.Frequency
+		if row.Frequency > plan.PlacementMaxFrequency {
+			plan.PlacementMaxFrequency = row.Frequency
+		}
+	}
+	// The historical incomplete coaccess path used deterministic independent-key
+	// placement; no pair edge, neighbor expansion, or accumulated pair affinity.
+	sort.Slice(plan.StateFrequency, func(i, j int) bool { return plan.StateFrequency[i].Key < plan.StateFrequency[j].Key })
+	placementByKey := map[string]StatePlacement{}
+	for _, row := range plan.StateFrequency {
+		home := p.LogicalStateHome(row.Key, input.Sharding, input.ShardIDs)
+		executionShard := home.ServingShard
+		reason := "historical_home_shard_no_coaccess_v675"
+		if strings.HasPrefix(row.Key, "nonce:") && row.WriteCount > 0 {
+			reason = "historical_ordered_nonce_home_no_coaccess_v675"
+		} else if row.Frequency > 1 {
+			executionShard = leastLoadedShard(input.ShardIDs, plan.ShardLoadAfter, row.Key)
+			reason = "historical_frequency_load_balance_no_coaccess_v675"
+		}
+		plan.ShardLoadAfter[executionShard] += row.Frequency
+		placement := StatePlacement{Key: row.Key, HomeStateUnit: home.StateUnitID, HomeShard: home.ServingShard, ExecutionShard: executionShard, Frequency: row.Frequency, Reason: reason}
+		placementByKey[row.Key] = placement
+		plan.StatePlacements = append(plan.StatePlacements, placement)
+	}
+	sort.Slice(plan.StatePlacements, func(i, j int) bool { return plan.StatePlacements[i].Key < plan.StatePlacements[j].Key })
+	plan.PlacementBudget = len(plan.StatePlacements)
+	transactionLoad := map[string]int{}
+	routingEpoch := uint64(maxInt(0, intValue(p.config["routing_epoch"])))
+	for _, record := range input.Records {
+		accesses := normalizedAccessItems(record)
+		homeShard := firstNonEmpty(record.SourceShard, shardFor(input.Sharding, record.StateKeys, input.ShardIDs))
+		targetShard := record.TargetShard
+		if targetShard == "" && record.CrossShard && len(input.ShardIDs) > 1 {
+			targetShard = nextShardAfter(homeShard, input.ShardIDs)
+		}
+		executionShard, group, coverage, tied, queueBefore := metaTrackNoCoaccessExecutionShardV675(input.ShardIDs, placementByKey, accesses, homeShard, transactionLoad)
+		transactionLoad[executionShard]++
+		remoteReads, remoteWrites := metaTrackPredictedRemoteAccessCounts(p, input.Sharding, input.ShardIDs, accesses, executionShard)
+		remote := remoteReads + remoteWrites
+		plan.RemoteAccessEstimate += remote
+		reason := fmt.Sprintf("historical_no_coaccess_majority:coverage=%d", coverage)
+		if tied {
+			reason += fmt.Sprintf(":queue_tie_load=%d", queueBefore)
+		}
+		if remote == 0 {
+			reason += ":local"
+		}
+		plan.TransactionPlacements = append(plan.TransactionPlacements, TransactionPlacement{
+			LogicalID: firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)), TxIndex: record.Index,
+			SenderGroupID: metaTrackSenderGroupID(record), RoutingEpoch: routingEpoch, HomeShard: homeShard, ExecutionShard: executionShard, TargetShard: targetShard,
+			CoaccessGroup: group, Reason: reason, PredictedRemoteReads: remoteReads, PredictedRemoteWrites: remoteWrites, RemoteAccessCount: remote,
+			MajorityCoverage: coverage, MajorityTie: tied, QueueLoadBefore: queueBefore,
+		})
+	}
+	sort.Slice(plan.TransactionPlacements, func(i, j int) bool {
+		return plan.TransactionPlacements[i].TxIndex < plan.TransactionPlacements[j].TxIndex
+	})
+	plan.RoutingOverhead = plan.RemoteAccessEstimate
+	if !input.DeferFinalSeal {
+		if metaTrackDeclaredAccessFrontierPolicyEnabled(p.config) {
+			applyMetaTrackDeclaredAccessFrontierV2(&plan, input.Records)
+		}
+		plan.PlanDigest = routingPlanDigest(plan)
+	}
+	return plan
+}
+
+func metaTrackNoCoaccessExecutionShardV675(shardIDs []string, placementByKey map[string]StatePlacement, accesses []tx.AccessItem, homeShard string, currentLoad map[string]int) (string, string, int, bool, int) {
+	if len(shardIDs) == 0 {
+		return "", "", 0, false, 0
+	}
+	score := map[string]int{}
+	groupKeys := []string{}
+	orderedShard := ""
+	for _, access := range accesses {
+		placement, ok := placementByKey[access.Key]
+		if !ok {
+			continue
+		}
+		score[placement.ExecutionShard] += placement.Frequency
+		groupKeys = append(groupKeys, access.Key)
+		if orderedShard == "" && strings.HasPrefix(access.Key, "nonce:") && isWriteMode(access.Mode) {
+			orderedShard = placement.ExecutionShard
+		}
+	}
+	sort.Strings(groupKeys)
+	if orderedShard != "" {
+		return orderedShard, strings.Join(groupKeys, "+"), score[orderedShard], false, currentLoad[orderedShard]
+	}
+	bestScore := -1
+	for _, shard := range shardIDs {
+		if score[shard] > bestScore {
+			bestScore = score[shard]
+		}
+	}
+	candidates := []string{}
+	for _, shard := range shardIDs {
+		if score[shard] == bestScore {
+			candidates = append(candidates, shard)
+		}
+	}
+	best := firstNonEmpty(homeShard, shardIDs[0])
+	if len(candidates) > 0 {
+		best = candidates[0]
+		for _, shard := range candidates[1:] {
+			if currentLoad[shard] < currentLoad[best] || (currentLoad[shard] == currentLoad[best] && shard < best) {
+				best = shard
+			}
+		}
+	}
+	return best, strings.Join(groupKeys, "+"), bestScore, len(candidates) > 1, currentLoad[best]
 }
 
 func chooseAdmissibleStatePlacement(row StateFrequencyRow, shards []string, load map[string]int, capacity int, edges []CoaccessEdge, placed map[string]StatePlacement) (string, []PlacementScore) {
@@ -1737,7 +1903,9 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 			// Inspect the complete currently-ready pool without changing the physical
 			// block limit.  Deferred rows are released after selection.
 			reserveLimit = input.Pool.Len()
-			if reserveLimit < limit { reserveLimit = limit }
+			if reserveLimit < limit {
+				reserveLimit = limit
+			}
 		}
 		reserved := input.Pool.ReserveReady(reserveLimit)
 		if len(reserved) == 0 {
@@ -3383,14 +3551,15 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		localExactVersionHandoff = false
 	}
 	batchEntryStatePrefetch, _ := p.config["batch_entry_state_prefetch"].(bool)
-	singleReadyQueueV661 := metaTrackExecutionUsesUnifiedReadyV667(executionPlugin) || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) // legacy flag fallback only
+	singleConservativeSerialV675 := executionPlugin.ID() == metaTrackSingleExecutionID
+	singleReadyQueueV661 := singleConservativeSerialV675 || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) // legacy flag fallback only
 	onDemandStateFetchV661 := boolFromAny(p.config[metaTrackAblationOnDemandStateFetchV661])
 	var batchFetch RemoteStateBatchFetchFunc
 	if batchEntryStatePrefetch && !onDemandStateFetchV661 {
 		batchFetch = input.RemoteStateBatchFetch
 	}
 	executionStarted := time.Now()
-	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, onDemandStateFetchV661)
+	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, onDemandStateFetchV661)
 	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -3403,10 +3572,11 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	actualMetrics["metatrack_actual_dual_track_runtime"] = dualTrackRuntimeV663
 	actualMetrics["metatrack_single_conservative_runtime_v663"] = executionPlugin.ID() == metaTrackSingleConservativeExecutionID
 	actualMetrics["metatrack_unified_ready_runtime_v667"] = unifiedReadyRuntimeV667
+	actualMetrics["metatrack_single_track_fifo_runtime_v674"] = singleConservativeSerialV675
 	if dualTrackRuntimeV663 {
 		actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_dual_track_runtime"
 	} else if unifiedReadyRuntimeV667 {
-		actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_unified_ready_runtime_v667"
+		actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_single_conservative_serial_runtime_v675"
 	} else {
 		actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_single_conservative_runtime_v663"
 	}
@@ -3594,10 +3764,10 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 }
 
 func executeMetaTrackScheduleWithOptions(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
-	return executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, nil, versionPublish, strictFrontier, localExactVersionHandoff, false, false)
+	return executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, nil, versionPublish, strictFrontier, localExactVersionHandoff, false, false, false)
 }
 
-func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, onDemandStateFetchV661 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, onDemandStateFetchV661 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
 	ordered := append([]tx.SignedTransaction(nil), schedule.Ordered...)
 	if singleReadyQueueV661 {
 		ordered = append([]tx.SignedTransaction(nil), block.TxList...)
@@ -3708,6 +3878,17 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	localVersionTokensByProducer := map[string][]string{}
 	readyRoundByTx := map[string]uint64{}
 	openReadyRound := uint64(1)
+	singleFIFOOrder := make([]string, 0, len(ordered))
+	for _, item := range ordered {
+		singleFIFOOrder = append(singleFIFOOrder, txIdentifier(item))
+	}
+	singleFIFOReady := map[string]bool{}
+	singleFIFOReleased := map[string]bool{}
+	singleFIFOBlockedReady := map[string]bool{}
+	singleFIFOBlockedHead := map[string]bool{}
+	singleFIFOCursor := 0
+	singleFIFOBypassPreventedCount := 0
+	singleFIFOHeadBlockCount := 0
 	for _, item := range ordered {
 		txID := txIdentifier(item)
 		for _, token := range classification.StateWaitKeys[txID] {
@@ -3800,11 +3981,52 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		return true
 	}
 	enqueueReady := func(txID, reason string, wakeup bool) {
-		readyQueueStarted[txID] = time.Now()
-		if readyRoundArbitration {
-			readyRoundByTx[txID] = openReadyRound
-		}
 		decision := decisionByID[txID]
+		if singleConservativeSerialV675 {
+			if _, exists := readyQueueStarted[txID]; !exists {
+				readyQueueStarted[txID] = time.Now()
+			}
+			singleFIFOReady[txID] = true
+			for singleFIFOCursor < len(singleFIFOOrder) {
+				head := singleFIFOOrder[singleFIFOCursor]
+				if singleFIFOReleased[head] {
+					singleFIFOCursor++
+					continue
+				}
+				if !singleFIFOReady[head] {
+					break
+				}
+				singleFIFOReleased[head] = true
+				conservativeReady = append(conservativeReady, head)
+				recordDepths()
+				headDecision := decisionByID[head]
+				headReason := reason
+				headWakeup := wakeup
+				if head != txID {
+					headReason = "single_fifo_prefix_release_after:" + txID
+					headWakeup = true
+				}
+				events = append(events, ScheduleEvent{TxID: head, Track: headDecision.Track, QueueName: "single_conservative_serial_v675", DecisionReason: headReason, LocalExecution: true, Wakeup: headWakeup, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+				singleFIFOCursor++
+			}
+			if !singleFIFOReleased[txID] {
+				head := ""
+				if singleFIFOCursor < len(singleFIFOOrder) {
+					head = singleFIFOOrder[singleFIFOCursor]
+				}
+				if !singleFIFOBlockedReady[txID] {
+					singleFIFOBlockedReady[txID] = true
+					singleFIFOBypassPreventedCount++
+				}
+				if head != "" && !singleFIFOBlockedHead[head] {
+					singleFIFOBlockedHead[head] = true
+					singleFIFOHeadBlockCount++
+				}
+				events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "single_conservative_serial_wait_v675", DecisionReason: "hol_wait_for:" + head + ":" + reason, LocalExecution: true, Blocked: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+			}
+			return
+		}
+		readyQueueStarted[txID] = time.Now()
 		queueName := queueNameForTrack(decision.Track)
 		if singleReadyQueueV661 {
 			conservativeReady = append(conservativeReady, txID)
@@ -3908,12 +4130,20 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		}
 	}
 	startOnDemandStateForTxV661 := func(txID string) {
-		if !onDemandStateFetchV661 { return }
+		if !onDemandStateFetchV661 {
+			return
+		}
 		for _, token := range classification.StateWaitKeys[txID] {
-			if stateReady[token] || onDemandStartedV661[token] { continue }
-			if _, local := localVersionHandoffByToken[token]; local { continue }
+			if stateReady[token] || onDemandStartedV661[token] {
+				continue
+			}
+			if _, local := localVersionHandoffByToken[token]; local {
+				continue
+			}
 			candidate, ok := onDemandCandidatesV661[token]
-			if !ok { continue }
+			if !ok {
+				continue
+			}
 			onDemandStartedV661[token] = true
 			onDemandStartedAtV661[token] = time.Now()
 			onDemandFetchStartedCountV661++
@@ -4113,12 +4343,19 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			// has priority; stealing is always performed from the same lane type.
 			// MBE_ABLATION_V661_SINGLE_READY_WORKER_LOOP
 			if singleReadyQueueV661 {
-				if item, ok := tryLocal("conservative"); ok { return item, true }
-				if item, ok := trySteal("conservative"); ok { return item, true }
+				if item, ok := tryLocal("conservative"); ok {
+					return item, true
+				}
+				if item, ok := trySteal("conservative"); ok {
+					return item, true
+				}
 				select {
-				case <-ctx.Done(): return job{}, false
-				case <-workerDone: return job{}, false
-				case item, ok := <-workerQueues[workerID].conservative: return item, ok
+				case <-ctx.Done():
+					return job{}, false
+				case <-workerDone:
+					return job{}, false
+				case item, ok := <-workerQueues[workerID].conservative:
+					return item, ok
 				case <-time.After(time.Millisecond):
 				}
 				continue
@@ -4276,8 +4513,10 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		}
 		if singleReadyQueueV661 {
 			select {
-			case <-ctx.Done(): return ctx.Err()
-			case workerQueues[assignedWorker].conservative <- nextJob: return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			case workerQueues[assignedWorker].conservative <- nextJob:
+				return nil
 			}
 		}
 		if readyRoundArbitration {
@@ -4376,7 +4615,9 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	seenMultiCandidateReadyRounds := map[uint64]bool{}
 	nextReady := func(useInfluence bool) string {
 		if singleReadyQueueV661 {
-			if len(conservativeReady) == 0 { return "" }
+			if len(conservativeReady) == 0 {
+				return ""
+			}
 			txID := conservativeReady[0]
 			conservativeReady = conservativeReady[1:]
 			return txID
@@ -4395,6 +4636,10 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			return txID
 		}
 		return ""
+	}
+	singleSerialDispatchLimit := workerCount
+	if singleConservativeSerialV675 {
+		singleSerialDispatchLimit = 1
 	}
 	dispatchCapacity := func() error {
 		// Do not sleep or wait for future work. If completion/StateReady events are
@@ -4416,7 +4661,7 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				seenMultiCandidateReadyRounds[round] = true
 				multiCandidateReadyRoundCount++
 			}
-			capacity := workerCount - inFlight
+			capacity := singleSerialDispatchLimit - inFlight
 			if candidates > capacity && capacity > 0 {
 				competitionArbitrationCount++
 				priorityCandidateSetSum += candidates
@@ -4426,11 +4671,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				}
 			}
 		}
-		for inFlight < workerCount {
+		for inFlight < singleSerialDispatchLimit {
 			influenceApplied := false
 			if readyRoundArbitration {
 				candidates := metaTrackReadyRoundCandidateCount(fastReady, conservativeReady, readyRoundByTx)
-				capacity := workerCount - inFlight
+				capacity := singleSerialDispatchLimit - inFlight
 				influenceApplied = dependencyInfluencePriority && candidates > capacity && capacity > 0
 				if influenceApplied {
 					influenceArbitrationDecisionCount++
@@ -4459,7 +4704,9 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				}
 			}
 			dispatchQueueName := queueNameForTrack(decision.Track)
-			if singleReadyQueueV661 { dispatchQueueName = "unified_ready_queue_v667" }
+			if singleReadyQueueV661 {
+				dispatchQueueName = "unified_ready_queue_v667"
+			}
 			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: dispatchQueueName, DecisionReason: dispatchReason, LocalExecution: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
 			if err := dispatch(txID); err != nil {
 				return err
@@ -4768,6 +5015,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		workerQueueModel = "per_worker_single_ready_lane_v661"
 		stealPolicy = "same_shard_single_ready_lane_v661"
 	}
+	if singleConservativeSerialV675 {
+		readyPriorityPolicy = "single_conservative_serial_v675"
+		workerQueueModel = "canonical_single_serial_dispatch_v675"
+		stealPolicy = "serial_dispatch_one_inflight_v675"
+	}
 	if readyRoundControl {
 		readyPriorityPolicy = metaTrackReadyRoundControlPriorityPolicy
 		workerQueueModel = "per_worker_unified_ready_round_lane"
@@ -4820,6 +5072,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		"completion_processing_policy":                          "dependency_ready_completion_order_deterministic_final_merge",
 		"worker_queue_model":                                    workerQueueModel,
 		"metatrack_ready_priority_policy":                       readyPriorityPolicy,
+		"metatrack_single_fifo_hol_enabled":                     singleConservativeSerialV675,
+		"metatrack_single_fifo_bypass_prevented_count":          singleFIFOBypassPreventedCount,
+		"metatrack_single_fifo_head_block_count":                singleFIFOHeadBlockCount,
+		"metatrack_single_serial_execution_enabled":             singleConservativeSerialV675,
+		"metatrack_single_serial_dispatch_limit":                singleSerialDispatchLimit,
 		"metatrack_dependency_influence_scheduler_enabled":      dependencyInfluencePriority,
 		"metatrack_ready_round_scheduler_enabled":               readyRoundArbitration,
 		"metatrack_ready_round_control_enabled":                 readyRoundControl,
@@ -4867,11 +5124,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		"metatrack_local_version_handoff_ready_count":           localVersionHandoffReadyCount,
 		"metatrack_local_version_handoff_fallback_fetch_count":  localVersionHandoffFallbackFetchCount,
 		"metatrack_local_exact_version_handoff_enabled":         localExactVersionHandoff,
-		"metatrack_single_ready_queue_ablation_v661": singleReadyQueueV661,
-		"metatrack_on_demand_state_fetch_ablation_v661": onDemandStateFetchV661,
-		"metatrack_on_demand_state_fetch_started_count_v661": onDemandFetchStartedCountV661,
-		"metatrack_on_demand_state_fetch_wait_ms_v661": onDemandFetchWaitMSV661,
-		"metatrack_critical_path_state_wait_ms_v661": criticalStateWaitMSV661,
+		"metatrack_single_ready_queue_ablation_v661":            singleReadyQueueV661,
+		"metatrack_on_demand_state_fetch_ablation_v661":         onDemandStateFetchV661,
+		"metatrack_on_demand_state_fetch_started_count_v661":    onDemandFetchStartedCountV661,
+		"metatrack_on_demand_state_fetch_wait_ms_v661":          onDemandFetchWaitMSV661,
+		"metatrack_critical_path_state_wait_ms_v661":            criticalStateWaitMSV661,
 		"metatrack_batch_entry_batch_request_count":             batchEntryRequestCount,
 		"metatrack_batch_entry_item_count":                      batchEntryItemCount,
 		"metatrack_batch_entry_ready_count":                     batchEntryReadyCount,
@@ -5598,14 +5855,14 @@ func makeBasic(category, id string, config map[string]any) basicPlugin {
 	return basicPlugin{category: category, id: id, config: config}
 }
 
-
 const metaTrackHashRoutingID = "metatrack_hash_routing"
 const metaTrackSingleConservativeExecutionID = "metatrack_single_conservative_execution"
 const metaTrackSingleExecutionID = "metatrack_single_execution"
-const metaTrackUnifiedReadyPolicyV667 = "unified_fifo_ready_v667"
+const metaTrackUnifiedReadyPolicyV667 = "single_conservative_serial_v675"
 const metaTrackDependencyWindowProducerID = "metatrack_dependency_window_producer"
 const metaTrackRouteBatchProducerID = "metatrack_route_batch_producer"
 const metaTrackAdaptiveWindowProducerID = "metatrack_adaptive_window_producer"
+const metaTrackNLWindowProducerV669ID = "metatrack_nl_window_v669"
 const metaTrackLocalExactAccessID = "metatrack_local_exact_access"
 const metaTrackHomeExactAccessID = "metatrack_home_exact_access"
 const metaTrackExactAccessLocalPolicyV663 = "local_exact_first_v663"
@@ -5630,14 +5887,19 @@ func isMetaTrackRoutingID(id string) bool {
 func metaTrackRoutingConfig(r RoutingPlugin) map[string]any {
 	switch p := r.(type) {
 	case *metaTrackRouting:
-		if p != nil { return p.config }
+		if p != nil {
+			return p.config
+		}
 	case *metaTrackHashRouting:
-		if p != nil && p.metaTrackRouting != nil { return p.metaTrackRouting.config }
+		if p != nil && p.metaTrackRouting != nil {
+			return p.metaTrackRouting.config
+		}
 	}
 	return nil
 }
 
-type metaTrackHashRouting struct { *metaTrackRouting }
+type metaTrackHashRouting struct{ *metaTrackRouting }
+
 func (p *metaTrackHashRouting) MetaTrackRoutingFamily() bool { return true }
 func (p *metaTrackHashRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 	base := statelessHashRouting{basicPlugin: makeBasic("routing", "stateless_hash_routing", nil)}.PlanBatch(input)
@@ -5653,157 +5915,297 @@ func (p *metaTrackHashRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPl
 	return base
 }
 func (p *metaTrackHashRouting) Route(input RoutingInput) RoutingDecision {
-	if len(input.ShardIDs)==0 { return RoutingDecision{} }
-	record:=WorkloadRecord{Index:input.Index,LogicalID:fmt.Sprintf("tx-%d",input.Index),StateKeys:input.StateKeys,AccessList:input.AccessList,SourceShard:input.SourceShard,CrossShard:input.CrossShard}
-	plan:=p.PlanBatch(BatchRoutingInput{BatchIndex:input.Index,Records:[]WorkloadRecord{record},ShardIDs:input.ShardIDs,Sharding:input.Sharding})
-	if len(plan.TransactionPlacements)>0 { pl:=plan.TransactionPlacements[0]; return RoutingDecision{ShardID:pl.ExecutionShard,Reason:pl.Reason} }
-	return hashRouting{makeBasic("routing",metaTrackHashRoutingID,nil)}.Route(input)
+	if len(input.ShardIDs) == 0 {
+		return RoutingDecision{}
+	}
+	record := WorkloadRecord{Index: input.Index, LogicalID: fmt.Sprintf("tx-%d", input.Index), StateKeys: input.StateKeys, AccessList: input.AccessList, SourceShard: input.SourceShard, CrossShard: input.CrossShard}
+	plan := p.PlanBatch(BatchRoutingInput{BatchIndex: input.Index, Records: []WorkloadRecord{record}, ShardIDs: input.ShardIDs, Sharding: input.Sharding})
+	if len(plan.TransactionPlacements) > 0 {
+		pl := plan.TransactionPlacements[0]
+		return RoutingDecision{ShardID: pl.ExecutionShard, Reason: pl.Reason}
+	}
+	return hashRouting{makeBasic("routing", metaTrackHashRoutingID, nil)}.Route(input)
 }
 
 type metaTrackSingleConservativeExecution struct{ basicPlugin }
+
 func (p metaTrackSingleConservativeExecution) Classify(item tx.SignedTransaction) ExecutionDecision {
-	d:=dualTrackExecution{basicPlugin:p.basicPlugin}.Classify(item); d.Track="conservative"; d.Reason="single_conservative_track_v663"; return d
+	d := dualTrackExecution{basicPlugin: p.basicPlugin}.Classify(item)
+	d.Track = "conservative"
+	d.Reason = "single_conservative_track_v663"
+	return d
 }
 func (p metaTrackSingleConservativeExecution) ClassifyBatch(input BatchClassificationInput) BatchClassificationResult {
-	return dualTrackExecution{basicPlugin:p.basicPlugin}.ClassifyBatch(input)
+	return dualTrackExecution{basicPlugin: p.basicPlugin}.ClassifyBatch(input)
 }
 
 // V667 formal A2: real single-track execution. The shared dependency DAG and
 // StateReady contract remain, while all dual-track classification work is absent.
 type metaTrackSingleExecution struct{ basicPlugin }
+
 func (p metaTrackSingleExecution) Classify(item tx.SignedTransaction) ExecutionDecision {
-	return ExecutionDecision{Track:"conservative", Reason:"unified_ready_single_track_v667"}
+	return ExecutionDecision{Track: "conservative", Reason: "single_conservative_serial_v675"}
 }
-func (p metaTrackSingleExecution) MetaTrackReadyQueuePolicy() string { return metaTrackUnifiedReadyPolicyV667 }
+func (p metaTrackSingleExecution) MetaTrackReadyQueuePolicy() string {
+	return metaTrackUnifiedReadyPolicyV667
+}
 func (p metaTrackSingleExecution) ClassifyBatch(input BatchClassificationInput) BatchClassificationResult {
-	result:=BatchClassificationResult{Decisions:map[string]ExecutionDecision{},Dependencies:map[string][]string{},ReasonCodes:map[string][]string{},StateWaitKeys:map[string][]string{}}
-	accessSizes:=make([]int,0,len(input.Transactions))
-	lastWriter:=map[string]string{}
-	commutativeWriters:=map[string][]string{}
-	readers:=map[string][]string{}
-	lastSenderTx:=map[string]string{}
-	edges:=map[string]bool{}
-	orderingOnlyEdges:=map[string]bool{}
-	graph:=map[string][]string{}
-	addDependency:=func(from,to,key,kind string){
-		if from=="" || to=="" || from==to { return }
-		edgeKey:=from+"->"+to+":"+key+":"+kind
-		if edges[edgeKey] { return }
-		edges[edgeKey]=true
-		result.Dependencies[to]=append(result.Dependencies[to],from)
-		graph[from]=append(graph[from],to)
-		if kind=="raw" || kind=="raw_commutative" { result.RAWDependencyEdges++ }
+	result := BatchClassificationResult{Decisions: map[string]ExecutionDecision{}, Dependencies: map[string][]string{}, ReasonCodes: map[string][]string{}, StateWaitKeys: map[string][]string{}}
+	accessSizes := make([]int, 0, len(input.Transactions))
+	lastWriter := map[string]string{}
+	commutativeWriters := map[string][]string{}
+	readers := map[string][]string{}
+	lastSenderTx := map[string]string{}
+	edges := map[string]bool{}
+	orderingOnlyEdges := map[string]bool{}
+	graph := map[string][]string{}
+	addDependency := func(from, to, key, kind string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		edgeKey := from + "->" + to + ":" + key + ":" + kind
+		if edges[edgeKey] {
+			return
+		}
+		edges[edgeKey] = true
+		result.Dependencies[to] = append(result.Dependencies[to], from)
+		graph[from] = append(graph[from], to)
+		if kind == "raw" || kind == "raw_commutative" {
+			result.RAWDependencyEdges++
+		}
 	}
-	addOrderingOnly:=func(from,to,key,kind string){
-		if from=="" || to=="" || from==to { return }
-		edgeKey:=from+"->"+to+":"+key+":"+kind
-		if orderingOnlyEdges[edgeKey] { return }
-		orderingOnlyEdges[edgeKey]=true
+	addOrderingOnly := func(from, to, key, kind string) {
+		if from == "" || to == "" || from == to {
+			return
+		}
+		edgeKey := from + "->" + to + ":" + key + ":" + kind
+		if orderingOnlyEdges[edgeKey] {
+			return
+		}
+		orderingOnlyEdges[edgeKey] = true
 		result.OrderingOnlyEdgeCount++
 	}
-	for index,item:=range input.Transactions {
-		txID:=firstNonEmpty(item.TxID,fmt.Sprintf("tx-%d",index))
-		graph[txID]=append([]string(nil),graph[txID]...)
-		result.Decisions[txID]=ExecutionDecision{Track:"conservative",Reason:"unified_ready_single_track_v667"}
-		result.ReasonCodes[txID]=[]string{"unified_ready_single_track_v667"}
-		if item.Sender!="" {
-			if previous:=lastSenderTx[item.Sender]; previous!="" { addDependency(previous,txID,"nonce:"+item.Sender,"nonce") }
-			lastSenderTx[item.Sender]=txID
+	for index, item := range input.Transactions {
+		txID := firstNonEmpty(item.TxID, fmt.Sprintf("tx-%d", index))
+		graph[txID] = append([]string(nil), graph[txID]...)
+		result.Decisions[txID] = ExecutionDecision{Track: "conservative", Reason: "single_conservative_serial_v675"}
+		result.ReasonCodes[txID] = []string{"single_conservative_serial_v675"}
+		if item.Sender != "" {
+			if previous := lastSenderTx[item.Sender]; previous != "" {
+				addDependency(previous, txID, "nonce:"+item.Sender, "nonce")
+			}
+			lastSenderTx[item.Sender] = txID
 		}
-		size:=structuredAccessSize(item)
-		accessSizes=append(accessSizes,size); result.AccessSizeTotal+=size
-		if len(accessSizes)==1 || size<result.AccessSizeMin { result.AccessSizeMin=size }
-		if size>result.AccessSizeMax { result.AccessSizeMax=size }
-		for _,access:=range classificationAccessItems(item) {
-			if access.Key=="" { continue }
-			if input.RemoteStateReadiness!=nil {
-				token:=stateReadinessToken(item,access)
-				if ready,ok:=input.RemoteStateReadiness[token]; ok && !ready { result.StateWaitKeys[txID]=append(result.StateWaitKeys[txID],token) }
+		size := structuredAccessSize(item)
+		accessSizes = append(accessSizes, size)
+		result.AccessSizeTotal += size
+		if len(accessSizes) == 1 || size < result.AccessSizeMin {
+			result.AccessSizeMin = size
+		}
+		if size > result.AccessSizeMax {
+			result.AccessSizeMax = size
+		}
+		for _, access := range classificationAccessItems(item) {
+			if access.Key == "" {
+				continue
+			}
+			if input.RemoteStateReadiness != nil {
+				token := stateReadinessToken(item, access)
+				if ready, ok := input.RemoteStateReadiness[token]; ok && !ready {
+					result.StateWaitKeys[txID] = append(result.StateWaitKeys[txID], token)
+				}
 			}
 			switch access.Mode {
 			case tx.AccessCommutativeDelta:
-				if writer:=lastWriter[access.Key]; writer!="" { addOrderingOnly(writer,txID,access.Key,"waw") }
-				for _,reader:=range readers[access.Key] { addOrderingOnly(reader,txID,access.Key,"war") }
-				result.CommutativeDependencySuppressedCount+=len(commutativeWriters[access.Key])
-				commutativeWriters[access.Key]=append(commutativeWriters[access.Key],txID)
+				if writer := lastWriter[access.Key]; writer != "" {
+					addOrderingOnly(writer, txID, access.Key, "waw")
+				}
+				for _, reader := range readers[access.Key] {
+					addOrderingOnly(reader, txID, access.Key, "war")
+				}
+				result.CommutativeDependencySuppressedCount += len(commutativeWriters[access.Key])
+				commutativeWriters[access.Key] = append(commutativeWriters[access.Key], txID)
 			case tx.AccessRead:
-				if writer:=lastWriter[access.Key]; writer!="" { addDependency(writer,txID,access.Key,"raw") }
-				for _,writer:=range commutativeWriters[access.Key] { addDependency(writer,txID,access.Key,"raw_commutative") }
-				readers[access.Key]=append(readers[access.Key],txID)
+				if writer := lastWriter[access.Key]; writer != "" {
+					addDependency(writer, txID, access.Key, "raw")
+				}
+				for _, writer := range commutativeWriters[access.Key] {
+					addDependency(writer, txID, access.Key, "raw_commutative")
+				}
+				readers[access.Key] = append(readers[access.Key], txID)
 			case tx.AccessWrite:
-				if writer:=lastWriter[access.Key]; writer!="" { addOrderingOnly(writer,txID,access.Key,"waw") }
-				for _,writer:=range commutativeWriters[access.Key] { addOrderingOnly(writer,txID,access.Key,"waw_commutative") }
-				for _,reader:=range readers[access.Key] { addOrderingOnly(reader,txID,access.Key,"war") }
-				readers[access.Key]=nil; commutativeWriters[access.Key]=nil; lastWriter[access.Key]=txID
+				if writer := lastWriter[access.Key]; writer != "" {
+					addOrderingOnly(writer, txID, access.Key, "waw")
+				}
+				for _, writer := range commutativeWriters[access.Key] {
+					addOrderingOnly(writer, txID, access.Key, "waw_commutative")
+				}
+				for _, reader := range readers[access.Key] {
+					addOrderingOnly(reader, txID, access.Key, "war")
+				}
+				readers[access.Key] = nil
+				commutativeWriters[access.Key] = nil
+				lastWriter[access.Key] = txID
 			case tx.AccessReadWrite:
-				if writer:=lastWriter[access.Key]; writer!="" { addDependency(writer,txID,access.Key,"raw") }
-				for _,writer:=range commutativeWriters[access.Key] { addDependency(writer,txID,access.Key,"raw_commutative") }
-				for _,reader:=range readers[access.Key] { addOrderingOnly(reader,txID,access.Key,"war") }
-				readers[access.Key]=nil; commutativeWriters[access.Key]=nil; lastWriter[access.Key]=txID
+				if writer := lastWriter[access.Key]; writer != "" {
+					addDependency(writer, txID, access.Key, "raw")
+				}
+				for _, writer := range commutativeWriters[access.Key] {
+					addDependency(writer, txID, access.Key, "raw_commutative")
+				}
+				for _, reader := range readers[access.Key] {
+					addOrderingOnly(reader, txID, access.Key, "war")
+				}
+				readers[access.Key] = nil
+				commutativeWriters[access.Key] = nil
+				lastWriter[access.Key] = txID
 			}
 		}
-		_,local,bridge,ok:=metaTrackLogicalDomainBinding(item)
+		_, local, bridge, ok := metaTrackLogicalDomainBinding(item)
 		if ok {
-			if local { result.LocalTransactionCount++; result.ConservativeLocalCount++ }
-			if bridge { result.BridgeTransactionCount++; result.ConservativeBridgeCount++ }
+			if local {
+				result.LocalTransactionCount++
+				result.ConservativeLocalCount++
+			}
+			if bridge {
+				result.BridgeTransactionCount++
+				result.ConservativeBridgeCount++
+			}
 		}
 	}
-	result.DeduplicatedEdgeCount=len(edges)
-	result.DependencyChainMax=dependencyChainMax(graph)
-	for txID,deps:=range result.Dependencies { sort.Strings(deps); result.Dependencies[txID]=uniqueStrings(deps) }
-	for txID,keys:=range result.StateWaitKeys { sort.Strings(keys); result.StateWaitKeys[txID]=uniqueStrings(keys) }
-	if len(accessSizes)>0 {
-		sort.Ints(accessSizes); p95Index:=(95*len(accessSizes)+99)/100-1
-		if p95Index<0 { p95Index=0 }; if p95Index>=len(accessSizes) { p95Index=len(accessSizes)-1 }
-		result.AccessSizeP95=accessSizes[p95Index]
+	result.DeduplicatedEdgeCount = len(edges)
+	result.DependencyChainMax = dependencyChainMax(graph)
+	for txID, deps := range result.Dependencies {
+		sort.Strings(deps)
+		result.Dependencies[txID] = uniqueStrings(deps)
+	}
+	for txID, keys := range result.StateWaitKeys {
+		sort.Strings(keys)
+		result.StateWaitKeys[txID] = uniqueStrings(keys)
+	}
+	if len(accessSizes) > 0 {
+		sort.Ints(accessSizes)
+		p95Index := (95*len(accessSizes)+99)/100 - 1
+		if p95Index < 0 {
+			p95Index = 0
+		}
+		if p95Index >= len(accessSizes) {
+			p95Index = len(accessSizes) - 1
+		}
+		result.AccessSizeP95 = accessSizes[p95Index]
 	}
 	return result
 }
 
-type metaTrackReadyQueuePolicyCapability interface { ExecutionPlugin; MetaTrackReadyQueuePolicy() string }
+type metaTrackReadyQueuePolicyCapability interface {
+	ExecutionPlugin
+	MetaTrackReadyQueuePolicy() string
+}
+
 func metaTrackExecutionUsesUnifiedReadyV667(execution ExecutionPlugin) bool {
-	if execution==nil { return false }
-	p,ok:=execution.(metaTrackReadyQueuePolicyCapability)
-	return ok && p.MetaTrackReadyQueuePolicy()==metaTrackUnifiedReadyPolicyV667
+	if execution == nil {
+		return false
+	}
+	p, ok := execution.(metaTrackReadyQueuePolicyCapability)
+	return ok && p.MetaTrackReadyQueuePolicy() == metaTrackUnifiedReadyPolicyV667
 }
 func isMetaTrackExecutionPlugin(execution ExecutionPlugin) bool {
-	if execution==nil { return false }
-	return execution.ID()=="dual_track_execution" || execution.ID()==metaTrackSingleConservativeExecutionID || execution.ID()==metaTrackSingleExecutionID
+	if execution == nil {
+		return false
+	}
+	return execution.ID() == "dual_track_execution" || execution.ID() == metaTrackSingleConservativeExecutionID || execution.ID() == metaTrackSingleExecutionID
 }
 func isMetaTrackDualClassificationExecutionV667(execution ExecutionPlugin) bool {
-	if execution==nil { return false }
-	return execution.ID()=="dual_track_execution" || execution.ID()==metaTrackSingleConservativeExecutionID
+	if execution == nil {
+		return false
+	}
+	return execution.ID() == "dual_track_execution" || execution.ID() == metaTrackSingleConservativeExecutionID
 }
 
 type metaTrackConsensusWindowProducer interface {
 	BlockProducerPlugin
 	MetaTrackWindowPolicyID() string
-	PushMetaTrackRouteBatch(*metaTrackCriticalWidthWindowPlannerV6568, []metaTrackPreparedRecordV6568, int) ([]metaTrackPreparedRecordV6568,error)
+	PushMetaTrackRouteBatch(*metaTrackCriticalWidthWindowPlannerV6568, []metaTrackPreparedRecordV6568, int) ([]metaTrackPreparedRecordV6568, error)
 	FlushMetaTrackWindow(*metaTrackCriticalWidthWindowPlannerV6568) []metaTrackPreparedRecordV6568
 }
 type metaTrackDependencyWindowProducer struct{ builtinBlockProducer }
 type metaTrackRouteBatchProducer struct{ builtinBlockProducer }
 type metaTrackAdaptiveWindowProducer struct{ builtinBlockProducer }
-func (p metaTrackDependencyWindowProducer) MetaTrackWindowPolicyID() string { return "critical_path_preserving_dependency_window_v661" }
-func (p metaTrackRouteBatchProducer) MetaTrackWindowPolicyID() string { return "fixed_route_batch_window_v663" }
-func (p metaTrackAdaptiveWindowProducer) MetaTrackWindowPolicyID() string { return "adaptive_n_over_l_consensus_window_v6568_experimental" }
-func (p metaTrackDependencyWindowProducer) PushMetaTrackRouteBatch(planner *metaTrackCriticalWidthWindowPlannerV6568,batch []metaTrackPreparedRecordV6568,limit int)([]metaTrackPreparedRecordV6568,error){ return planner.PushBatch(batch,limit) }
-func (p metaTrackRouteBatchProducer) PushMetaTrackRouteBatch(planner *metaTrackCriticalWidthWindowPlannerV6568,batch []metaTrackPreparedRecordV6568,limit int)([]metaTrackPreparedRecordV6568,error){ return planner.PushBatchFixedRouteBatchV663(batch,limit) }
-func (p metaTrackAdaptiveWindowProducer) PushMetaTrackRouteBatch(planner *metaTrackCriticalWidthWindowPlannerV6568,batch []metaTrackPreparedRecordV6568,limit int)([]metaTrackPreparedRecordV6568,error){ return planner.PushBatchAdaptiveNLV668(batch,limit) }
-func (p metaTrackDependencyWindowProducer) FlushMetaTrackWindow(planner *metaTrackCriticalWidthWindowPlannerV6568) []metaTrackPreparedRecordV6568 { return planner.Flush() }
-func (p metaTrackRouteBatchProducer) FlushMetaTrackWindow(planner *metaTrackCriticalWidthWindowPlannerV6568) []metaTrackPreparedRecordV6568 { return planner.Flush() }
-func (p metaTrackAdaptiveWindowProducer) FlushMetaTrackWindow(planner *metaTrackCriticalWidthWindowPlannerV6568) []metaTrackPreparedRecordV6568 { return planner.Flush() }
-func metaTrackProducerConfigV663(in map[string]any) map[string]any { out:=map[string]any{}; for k,v:=range in { out[k]=v }; out["dependency_closed_consensus"]=true; return out }
+type metaTrackNLWindowProducerV669 struct{ builtinBlockProducer }
 
-type metaTrackExactAccessPolicy interface { StateAccessPlugin; MetaTrackExactAccessPolicyID() string; ForceHomeExactPublication() bool }
+func (p metaTrackDependencyWindowProducer) MetaTrackWindowPolicyID() string {
+	return "critical_path_preserving_dependency_window_v661"
+}
+func (p metaTrackRouteBatchProducer) MetaTrackWindowPolicyID() string {
+	return "fixed_route_batch_window_v663"
+}
+func (p metaTrackAdaptiveWindowProducer) MetaTrackWindowPolicyID() string {
+	return "adaptive_n_over_l_consensus_window_v6568_experimental"
+}
+func (p metaTrackDependencyWindowProducer) PushMetaTrackRouteBatch(planner *metaTrackCriticalWidthWindowPlannerV6568, batch []metaTrackPreparedRecordV6568, limit int) ([]metaTrackPreparedRecordV6568, error) {
+	return planner.PushBatch(batch, limit)
+}
+func (p metaTrackRouteBatchProducer) PushMetaTrackRouteBatch(planner *metaTrackCriticalWidthWindowPlannerV6568, batch []metaTrackPreparedRecordV6568, limit int) ([]metaTrackPreparedRecordV6568, error) {
+	return planner.PushBatchFixedRouteBatchV663(batch, limit)
+}
+func (p metaTrackAdaptiveWindowProducer) PushMetaTrackRouteBatch(planner *metaTrackCriticalWidthWindowPlannerV6568, batch []metaTrackPreparedRecordV6568, limit int) ([]metaTrackPreparedRecordV6568, error) {
+	return planner.PushBatchAdaptiveNLV668(batch, limit)
+}
+func (p metaTrackDependencyWindowProducer) FlushMetaTrackWindow(planner *metaTrackCriticalWidthWindowPlannerV6568) []metaTrackPreparedRecordV6568 {
+	return planner.Flush()
+}
+func (p metaTrackRouteBatchProducer) FlushMetaTrackWindow(planner *metaTrackCriticalWidthWindowPlannerV6568) []metaTrackPreparedRecordV6568 {
+	return planner.Flush()
+}
+func (p metaTrackAdaptiveWindowProducer) FlushMetaTrackWindow(planner *metaTrackCriticalWidthWindowPlannerV6568) []metaTrackPreparedRecordV6568 {
+	return planner.Flush()
+}
+func (p metaTrackNLWindowProducerV669) MetaTrackWindowPolicyID() string {
+	return "dependency_closed_adaptive_n_over_l_consensus_window_v669"
+}
+func (p metaTrackNLWindowProducerV669) PushMetaTrackRouteBatch(planner *metaTrackCriticalWidthWindowPlannerV6568, batch []metaTrackPreparedRecordV6568, limit int) ([]metaTrackPreparedRecordV6568, error) {
+	return planner.PushBatchAdaptiveNLV669(batch, limit)
+}
+func (p metaTrackNLWindowProducerV669) FlushMetaTrackWindow(planner *metaTrackCriticalWidthWindowPlannerV6568) []metaTrackPreparedRecordV6568 {
+	return planner.Flush()
+}
+func metaTrackProducerConfigV663(in map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range in {
+		out[k] = v
+	}
+	out["dependency_closed_consensus"] = true
+	return out
+}
+
+type metaTrackExactAccessPolicy interface {
+	StateAccessPlugin
+	MetaTrackExactAccessPolicyID() string
+	ForceHomeExactPublication() bool
+}
 type metaTrackLocalExactAccess struct{ builtinStateAccess }
 type metaTrackHomeExactAccess struct{ builtinStateAccess }
-func (p metaTrackLocalExactAccess) MetaTrackExactAccessPolicyID() string { return metaTrackExactAccessLocalPolicyV663 }
+
+func (p metaTrackLocalExactAccess) MetaTrackExactAccessPolicyID() string {
+	return metaTrackExactAccessLocalPolicyV663
+}
 func (p metaTrackLocalExactAccess) ForceHomeExactPublication() bool { return false }
-func (p metaTrackHomeExactAccess) MetaTrackExactAccessPolicyID() string { return metaTrackExactAccessHomePolicyV663 }
+func (p metaTrackHomeExactAccess) MetaTrackExactAccessPolicyID() string {
+	return metaTrackExactAccessHomePolicyV663
+}
 func (p metaTrackHomeExactAccess) ForceHomeExactPublication() bool { return true }
-func metaTrackExactAccessPolicyID(access StateAccessPlugin) string { if p,ok:=access.(metaTrackExactAccessPolicy); ok { return p.MetaTrackExactAccessPolicyID() }; return "" }
-func metaTrackForceHomeExactAccess(access StateAccessPlugin) bool { if p,ok:=access.(metaTrackExactAccessPolicy); ok { return p.ForceHomeExactPublication() }; return false }
+func metaTrackExactAccessPolicyID(access StateAccessPlugin) string {
+	if p, ok := access.(metaTrackExactAccessPolicy); ok {
+		return p.MetaTrackExactAccessPolicyID()
+	}
+	return ""
+}
+func metaTrackForceHomeExactAccess(access StateAccessPlugin) bool {
+	if p, ok := access.(metaTrackExactAccessPolicy); ok {
+		return p.ForceHomeExactPublication()
+	}
+	return false
+}
 
 func BuiltinRegistry() *Registry {
 	r := NewRegistry()
@@ -5853,6 +6255,9 @@ func BuiltinRegistry() *Registry {
 	})
 	register("block_producer", metaTrackAdaptiveWindowProducerID, func(c map[string]any) (Plugin, error) {
 		return metaTrackAdaptiveWindowProducer{builtinBlockProducer{makeBasic("block_producer", metaTrackAdaptiveWindowProducerID, metaTrackProducerConfigV663(c))}}, nil
+	})
+	register("block_producer", metaTrackNLWindowProducerV669ID, func(c map[string]any) (Plugin, error) {
+		return metaTrackNLWindowProducerV669{builtinBlockProducer{makeBasic("block_producer", metaTrackNLWindowProducerV669ID, metaTrackProducerConfigV663(c))}}, nil
 	})
 	register("consensus", "pbft_style_consensus", func(c map[string]any) (Plugin, error) {
 		return builtinConsensus{makeBasic("consensus", "pbft_style_consensus", c)}, nil
@@ -5905,6 +6310,7 @@ func BuiltinRegistry() *Registry {
 	registerGroundhogPlugins(register)
 	// MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR: additive paper-driven Porygon plugins.
 	registerPorygonPlugins(register)
+	registerPorygonTruthPlugins(register)
 	// MBE_OPTME_TXALLO_BASELINES_20260928: additive paper-faithful/adaptation plugin families.
 	registerOptMEPlugins(register)
 	registerTxAlloPlugins(register)
@@ -6056,6 +6462,9 @@ func InstantiatePlugins(profile map[string]PluginConfig) (RuntimePlugins, error)
 		return p, err
 	}
 	if err := validatePorygonPluginCombination(p); err != nil {
+		return p, err
+	}
+	if err := validatePorygonTruthPluginCombination(p); err != nil {
 		return p, err
 	}
 	if err := validateOptMEPluginCombination(p); err != nil {

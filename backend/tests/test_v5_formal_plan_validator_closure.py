@@ -59,7 +59,7 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     current = checked.plan.methods[-2]
     latest = checked.plan.methods[-1]
     assert initial.plugin_overrides == current.plugin_overrides
-    assert latest.plugin_overrides["block_producer"] == "metatrack_dependency_window_producer"
+    assert latest.plugin_overrides["block_producer"] == "metatrack_nl_window_v669"
     assert latest.plugin_overrides["state_access"] == "metatrack_local_exact_access"
     assert current.plugin_overrides["block_executor"] == "metatrack_block_executor"
     routing_flag = "incremental_exact_continuity_routing_v65"
@@ -69,6 +69,7 @@ def test_builtin_methods_are_registry_locked_and_carry_config_overrides():
     latest_routing = dict(latest.plugin_config_overrides["routing"])
     assert latest_routing.pop(routing_flag, None) is True
     assert latest_routing == current.plugin_config_overrides["routing"]
+    assert latest_routing["micro_batch_size"] == 100
     assert current.plugin_config_overrides["routing"]["control_policy"] == "declared_access_frontier_v2"
     assert current.plugin_config_overrides["block_executor"]["control_policy"] == "declared_access_frontier_v2"
     assert latest.plugin_config_overrides["block_executor"]["control_policy"] == "declared_access_frontier_v2"

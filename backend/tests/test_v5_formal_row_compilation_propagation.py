@@ -261,7 +261,7 @@ def test_builtin_method_comparison_preserves_fairness_conditions(tmp_path: Path)
     assert plugin(latest, "block_executor")["config"]["dependency_closed_consensus"] is True
     assert plugin(latest, "block_executor")["config"]["version_liveness_indexed"] is True
     assert plugin(latest, "block_executor")["config"]["single_final_seal"] is True
-    assert plugin(latest, "block_producer")["plugin_id"] == "metatrack_dependency_window_producer"
+    assert plugin(latest, "block_producer")["plugin_id"] == "metatrack_nl_window_v669"
 
 
 def test_formal_scheduler_start_records_in_process_worker_thread(monkeypatch) -> None:

@@ -20,3 +20,11 @@ Topology boundary: both cards accept the common MBE physical-shard setting. `Opt
 ## 2026-09-28 v8 multi-shard/version contract closure
 
 MBE now emits standard `placement_plan.csv` state-home evidence for this method family. The Stateless adaptation binds an algorithm-agnostic exact predecessor/producer version chain to remote state transport, while the method-specific scheduler/executor remains authoritative. The generic MetaTrack/Stateless-Hash versioned-wave executor is explicitly not used for these methods. This is an MBE stateless/multi-shard integration boundary, not a claim about the original paper.
+
+## 2026-10-02 v22 global-order projection closure
+
+The formal `OptME` and `Stateless-OptME` cards now use one `optme-global` PBFT ordering domain. `topology.shards` denotes logical state partitions. The author-source OptME core is unchanged.
+
+For Stateless-OptME, client/workload source order is no longer encoded as transaction-level `RequiredVersion` / `ProducedVersion`; OptME-specific pre-consensus version admission and the v8/v10/v14/v21 transaction-version publication path are superseded. Every block executes from the unique H-1 state: each Home partition serves one immutable block-start snapshot/root and every signed AccessList key in that block is projected exactly once. After OptME produces the deterministic final block delta, every validator materializes only keys owned by its logical Home partition; there is no second transaction-level remote writeback protocol.
+
+The older v8/v10/v14/v21 sections below/above remain historical documentation for the superseded MBE multi-PBFT adaptation and for the still-frozen TxAllo transport where applicable. They are not the v22 OptME execution contract.

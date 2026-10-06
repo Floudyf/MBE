@@ -8,37 +8,35 @@ import (
 	"metaverse-chainlab/executor/realism/tx"
 )
 
-func TestMethodPreservingAdmissionUsesSourceLocalExactVersion(t *testing.T) {
-	cases := []struct {
-		name    string
-		routing RoutingPlugin
-	}{
-		{name: "optme", routing: statelessOptmeRouting{basicPlugin: makeBasic("routing", optmeStatelessRoutingID, nil)}},
-		{name: "txallo", routing: txalloRouting{basicPlugin: makeBasic("routing", txalloStatelessRoutingID, nil), stateless: true}},
+// MBE_OPTME_V22_4_LEGACY_TEST_RETIREMENT
+func TestOptMEV22ExitsMethodPreservingExactVersionTransport(t *testing.T) {
+	r := &NodeRuntime{plugins: RuntimePlugins{Routing: statelessOptmeRouting{basicPlugin: makeBasic("routing", optmeStatelessRoutingID, nil)}}}
+	if r.methodPreservingExactVersionTransportEnabled() {
+		t.Fatal("Stateless-OptME v22 must not use the legacy method-preserving exact-version transport")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			r := &NodeRuntime{
-				plugins: RuntimePlugins{Routing: tc.routing},
-				stateVersionValues: map[string]map[uint64]string{
-					"k": {17: "v17"},
-				},
-				runtimeMetricCounts: map[string]int64{},
-			}
-			if !r.methodPreservingExactVersionTransportEnabled() {
-				t.Fatalf("test fixture did not construct a real stateless method routing plugin: id=%q", tc.routing.ID())
-			}
-			ready, err := r.probeStatelessVersionAdmissionOnce(context.Background(), realBlockForWriteBehindTest(), statelessVersionAdmissionRequirement{key: "k", version: 17, homeShard: "s1"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !ready {
-				t.Fatal("source-local exact predecessor must satisfy method-preserving admission")
-			}
-			if got := r.runtimeMetricCounts["method_preserving_source_local_version_admission_hit_count"]; got != 1 {
-				t.Fatalf("source-local admission metric=%d want 1", got)
-			}
-		})
+}
+
+func TestTxAlloMethodPreservingAdmissionUsesSourceLocalExactVersion(t *testing.T) {
+	routing := txalloRouting{basicPlugin: makeBasic("routing", txalloStatelessRoutingID, nil), stateless: true}
+	r := &NodeRuntime{
+		plugins: RuntimePlugins{Routing: routing},
+		stateVersionValues: map[string]map[uint64]string{
+			"k": {17: "v17"},
+		},
+		runtimeMetricCounts: map[string]int64{},
+	}
+	if !r.methodPreservingExactVersionTransportEnabled() {
+		t.Fatalf("Stateless-TxAllo exact-version transport unexpectedly disabled: id=%q", routing.ID())
+	}
+	ready, err := r.probeStatelessVersionAdmissionOnce(context.Background(), realBlockForWriteBehindTest(), statelessVersionAdmissionRequirement{key: "k", version: 17, homeShard: "s1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready {
+		t.Fatal("TxAllo source-local exact predecessor must satisfy method-preserving admission")
+	}
+	if got := r.runtimeMetricCounts["method_preserving_source_local_version_admission_hit_count"]; got != 1 {
+		t.Fatalf("source-local admission metric=%d want 1", got)
 	}
 }
 

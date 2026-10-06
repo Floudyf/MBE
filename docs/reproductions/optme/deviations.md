@@ -23,3 +23,11 @@ This does **not** remove cross-execution-shard Home readiness, does not change O
 v13 still imposed one MBE-specific barrier on Stateless-OptME: a remote Home replica could receive a valid immutable exact version but withheld that version from exact-version readers until a later Home PBFT block durably materialized it. The original OptME algorithm does not define this extra Home durability barrier. v14 therefore separates **exact-version visibility** from **persistent Home materialization**.
 
 For the OptME/TxAllo-specific stateless transport only, Home now publishes a received version as soon as its declared `PreviousVersion` is already the contiguous visible predecessor. A future version remains queued and invisible until the missing predecessor is received. Home PBFT materialization is unchanged and still requires the `PreviousVersion -> ProducedVersion` chain to be continuous against the durable materialized frontier. Thus v14 removes only the MBE-added durable-before-visible delay; it does not relax exact-version identity, does not read `latest`, and does not change OptME pre-execution/KDG/early-abort/reordering.
+
+## 2026-10-02 v22 global-order projection closure
+
+The formal `OptME` and `Stateless-OptME` cards now use one `optme-global` PBFT ordering domain. `topology.shards` denotes logical state partitions. The author-source OptME core is unchanged.
+
+For Stateless-OptME, client/workload source order is no longer encoded as transaction-level `RequiredVersion` / `ProducedVersion`; OptME-specific pre-consensus version admission and the v8/v10/v14/v21 transaction-version publication path are superseded. Every block executes from the unique H-1 state: each Home partition serves one immutable block-start snapshot/root and every signed AccessList key in that block is projected exactly once. After OptME produces the deterministic final block delta, every validator materializes only keys owned by its logical Home partition; there is no second transaction-level remote writeback protocol.
+
+The older v8/v10/v14/v21 sections below/above remain historical documentation for the superseded MBE multi-PBFT adaptation and for the still-frozen TxAllo transport where applicable. They are not the v22 OptME execution contract.

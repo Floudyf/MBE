@@ -25,29 +25,33 @@ const (
 // *logical* target partition to compute the prospective root from Proposal.T
 // plus the canonical U/ITx update set and accepts only a strict-majority root.
 type PorygonPaperPartitionRootRequest struct {
-	RequestID      string               `json:"request_id"`
-	RequesterNode  string               `json:"requester_node"`
-	BlockHash      string               `json:"block_hash"`
-	Height         uint64               `json:"height"`
-	TStateHeight   uint64               `json:"t_state_height"`
-	PartitionID    string               `json:"partition_id"`
-	TPartitionRoot string               `json:"t_partition_root"`
-	Updates        []PorygonStateUpdate `json:"updates"`
-	UpdateDigest   string               `json:"update_digest"`
+	RequestID           string               `json:"request_id"`
+	RequesterNode       string               `json:"requester_node"`
+	BlockHash           string               `json:"block_hash"`
+	Height              uint64               `json:"height"`
+	TStateHeight        uint64               `json:"t_state_height"`
+	PartitionID         string               `json:"partition_id"`
+	TPartitionRoot      string               `json:"t_partition_root"`
+	CanonicalBaseHeight uint64               `json:"canonical_base_height"`
+	CanonicalBaseRoot   string               `json:"canonical_base_root"`
+	Updates             []PorygonStateUpdate `json:"updates"`
+	UpdateDigest        string               `json:"update_digest"`
 }
 
 type PorygonPaperPartitionRootAck struct {
-	RequestID       string `json:"request_id"`
-	RequesterNode   string `json:"requester_node"`
-	BlockHash       string `json:"block_hash"`
-	Height          uint64 `json:"height"`
-	TStateHeight    uint64 `json:"t_state_height"`
-	PartitionID     string `json:"partition_id"`
-	TPartitionRoot  string `json:"t_partition_root"`
-	UpdateDigest    string `json:"update_digest"`
-	ProspectiveRoot string `json:"prospective_root"`
-	NodeID          string `json:"node_id"`
-	Signature       string `json:"signature"`
+	RequestID           string `json:"request_id"`
+	RequesterNode       string `json:"requester_node"`
+	BlockHash           string `json:"block_hash"`
+	Height              uint64 `json:"height"`
+	TStateHeight        uint64 `json:"t_state_height"`
+	PartitionID         string `json:"partition_id"`
+	TPartitionRoot      string `json:"t_partition_root"`
+	CanonicalBaseHeight uint64 `json:"canonical_base_height"`
+	CanonicalBaseRoot   string `json:"canonical_base_root"`
+	UpdateDigest        string `json:"update_digest"`
+	ProspectiveRoot     string `json:"prospective_root"`
+	NodeID              string `json:"node_id"`
+	Signature           string `json:"signature"`
 }
 
 type porygonPaperPartitionRootWaitState struct {
@@ -133,14 +137,25 @@ func (r *NodeRuntime) buildPorygonPaperPartitionRootAck(request PorygonPaperPart
 	if request.PartitionID != r.stateAccessPartitionID() {
 		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon Paper2 partition-root request sent to wrong Storage Role")
 	}
-	if request.RequestID == "" || request.BlockHash == "" || request.Height == 0 || request.TPartitionRoot == "" {
+	if request.RequestID == "" || request.BlockHash == "" || request.Height == 0 || request.TPartitionRoot == "" || request.CanonicalBaseRoot == "" {
 		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon Paper2 partition-root request identity incomplete")
 	}
 	updates := porygonCanonicalStateUpdates(request.Updates)
+	if err := porygonPaperValidateCollapsedStateUpdates(updates); err != nil {
+		return PorygonPaperPartitionRootAck{}, err
+	}
 	if request.UpdateDigest == "" || request.UpdateDigest != porygonUpdateDigest(updates) {
 		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon Paper2 partition-root update digest mismatch")
 	}
-	snapshot, err := r.porygonPaperPartitionSnapshot(request.TStateHeight, request.PartitionID, request.TPartitionRoot)
+	// T(h-2) remains the execution-read anchor and must be locally provable.
+	if _, err := r.porygonPaperPartitionSnapshot(request.TStateHeight, request.PartitionID, request.TPartitionRoot); err != nil {
+		return PorygonPaperPartitionRootAck{}, err
+	}
+	baseHeight, baseRoot, ok := r.porygonPaperCanonicalPartitionBase(request.Height, request.PartitionID)
+	if !ok || request.CanonicalBaseHeight != baseHeight || request.CanonicalBaseRoot != baseRoot {
+		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon Paper2 canonical partition base mismatch for %s at height %d", request.PartitionID, request.Height)
+	}
+	snapshot, err := r.porygonPaperPartitionSnapshot(baseHeight, request.PartitionID, baseRoot)
 	if err != nil {
 		return PorygonPaperPartitionRootAck{}, err
 	}
@@ -149,6 +164,7 @@ func (r *NodeRuntime) buildPorygonPaperPartitionRootAck(request PorygonPaperPart
 		RequestID: request.RequestID, RequesterNode: request.RequesterNode,
 		BlockHash: request.BlockHash, Height: request.Height, TStateHeight: request.TStateHeight,
 		PartitionID: request.PartitionID, TPartitionRoot: request.TPartitionRoot,
+		CanonicalBaseHeight: baseHeight, CanonicalBaseRoot: baseRoot,
 		UpdateDigest: request.UpdateDigest, ProspectiveRoot: root,
 	})
 }
@@ -206,11 +222,19 @@ func (r *NodeRuntime) porygonPaperCertifiedPartitionRoot(ctx context.Context, pr
 		return "", fmt.Errorf("Porygon Proposal T missing partition root for %s", partitionID)
 	}
 	updates = porygonCanonicalStateUpdates(updates)
+	if err := porygonPaperValidateCollapsedStateUpdates(updates); err != nil {
+		return "", err
+	}
 	updateDigest := porygonUpdateDigest(updates)
-	requestID := stableTextDigest(fmt.Sprintf("paper2-partition-root|%s|%d|%s|%s|%s|%s", blockHash, height, r.node.NodeID, partitionID, partitionRoot, updateDigest))
+	baseHeight, baseRoot, ok := r.porygonPaperCanonicalPartitionBase(height, partitionID)
+	if !ok {
+		return "", fmt.Errorf("Porygon Paper2 canonical partition base not ready for %s at height %d", partitionID, height)
+	}
+	requestID := stableTextDigest(fmt.Sprintf("paper2-partition-root|%s|%d|%s|%s|%s|%d|%s|%s", blockHash, height, r.node.NodeID, partitionID, partitionRoot, baseHeight, baseRoot, updateDigest))
 	request := PorygonPaperPartitionRootRequest{
 		RequestID: requestID, RequesterNode: r.node.NodeID, BlockHash: blockHash, Height: height,
 		TStateHeight: proposal.TStateHeight, PartitionID: partitionID, TPartitionRoot: partitionRoot,
+		CanonicalBaseHeight: baseHeight, CanonicalBaseRoot: baseRoot,
 		Updates: updates, UpdateDigest: updateDigest,
 	}
 	members := r.porygonStoragePartitionMembers(partitionID)
@@ -261,7 +285,7 @@ func (r *NodeRuntime) porygonPaperCertifiedPartitionRoot(ctx context.Context, pr
 			if seen[ack.NodeID] {
 				continue
 			}
-			if ack.RequestID != requestID || ack.BlockHash != blockHash || ack.Height != height || ack.TStateHeight != proposal.TStateHeight || ack.PartitionID != partitionID || ack.TPartitionRoot != partitionRoot || ack.UpdateDigest != updateDigest {
+			if ack.RequestID != requestID || ack.BlockHash != blockHash || ack.Height != height || ack.TStateHeight != proposal.TStateHeight || ack.PartitionID != partitionID || ack.TPartitionRoot != partitionRoot || ack.CanonicalBaseHeight != baseHeight || ack.CanonicalBaseRoot != baseRoot || ack.UpdateDigest != updateDigest {
 				return "", fmt.Errorf("Porygon Paper2 partition-root ACK binding mismatch from %s", ack.NodeID)
 			}
 			if err := r.verifyPorygonPaperPartitionRootAck(ack); err != nil {
@@ -305,6 +329,9 @@ func (r *NodeRuntime) porygonPaperPartitionRootProjection(ctx context.Context, b
 	cert := PorygonMultiShardUpdateCertificate{BlockHash: blockHash, Height: height, Attempt: 0, HandoffEnforced: false}
 	for _, shard := range shards {
 		items := porygonCanonicalStateUpdates(updates[shard])
+		if err := porygonPaperValidateCollapsedStateUpdates(items); err != nil {
+			return PorygonMultiShardUpdateCertificate{}, err
+		}
 		root, err := r.porygonPaperCertifiedPartitionRoot(ctx, proposal, blockHash, height, shard, items)
 		if err != nil {
 			return PorygonMultiShardUpdateCertificate{}, err

@@ -11,26 +11,25 @@ func TestOptMEPluginsRegisterThroughBuiltinRegistry(t *testing.T) {
 	}
 }
 
-func TestStatelessOptMERoutingBindsOnlyExactVersionTransportMetadata(t *testing.T) {
+// MBE_OPTME_V22_4_LEGACY_TEST_RETIREMENT
+func TestStatelessOptMERoutingUsesBlockProjectionWithoutVersionAdmission(t *testing.T) {
 	p := statelessOptmeRouting{}
 	if !p.StatelessDirectExecution() {
 		t.Fatal("stateless direct execution capability missing")
 	}
-	// The MBE stateless substrate must bind exact predecessor/producer versions
-	// so cross-block remote state reads/writes do not reuse stale base digests.
-	// This metadata is transport/admission evidence only; OptME still derives its
-	// observed R/W sets by post-consensus simulation and builds its own KDG.
+	// Routing metadata still carries placement/projection identity, but v22 must
+	// never encode workload/source order as transaction Required/ProducedVersion.
 	if !p.BindExecutionRoutingMetadata() {
-		t.Fatal("Stateless-OptME must bind exact-version transport metadata")
+		t.Fatal("Stateless-OptME must retain projection routing metadata")
 	}
-	if !p.StatelessVersionAdmission() {
-		t.Fatal("Stateless-OptME must validate exact predecessor availability")
+	if p.StatelessVersionAdmission() {
+		t.Fatal("Stateless-OptME v22 must not perform transaction exact-version admission")
 	}
 	if p.NativeVersionedStateReady() {
 		t.Fatal("Stateless-OptME must not import MetaTrack StateReady")
 	}
 	if p.SignedBatchExecutionPlan() {
-		t.Fatal("Stateless-OptME exact-version transport must not become a signed OptME execution schedule")
+		t.Fatal("Stateless-OptME block projection must not become a signed OptME execution schedule")
 	}
 	if got := p.BatchExecutionPlanAlgorithmID(); got != "stateless_optme_projection_v1" {
 		t.Fatalf("unexpected Stateless-OptME projection algorithm id: %q", got)

@@ -6,7 +6,7 @@ from backend.app.services.v5_plugin_manifest_store import STORE
 def test_metatrack_latest_is_modular_and_historical_versions_remain_separate():
     latest=BUILTIN_METHODS["metatrack_latest"]
     assert latest.plugin_overrides["routing"]=="metatrack_coaccess_routing"
-    assert latest.plugin_overrides["block_producer"]=="metatrack_dependency_window_producer"
+    assert latest.plugin_overrides["block_producer"]=="metatrack_nl_window_v669"
     assert latest.plugin_overrides["execution"]=="dual_track_execution"
     assert latest.plugin_overrides["scheduler"]=="fast_first_scheduler"
     assert latest.plugin_overrides["block_executor"]=="metatrack_block_executor"
@@ -19,7 +19,7 @@ def test_metatrack_latest_is_modular_and_historical_versions_remain_separate():
 
 
 def test_modular_plugins_are_registered_in_manifest_store():
-    for pid in ("metatrack_hash_routing","metatrack_single_conservative_execution","metatrack_dependency_window_producer","metatrack_route_batch_producer","metatrack_local_exact_access","metatrack_home_exact_access"):
+    for pid in ("metatrack_hash_routing","metatrack_single_conservative_execution","metatrack_single_execution","metatrack_dependency_window_producer","metatrack_adaptive_window_producer","metatrack_nl_window_v669","metatrack_route_batch_producer","metatrack_local_exact_access","metatrack_home_exact_access"):
         assert STORE.get(pid).plugin_id==pid
 
 

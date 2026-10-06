@@ -123,6 +123,40 @@ func porygonValidateTransactionBlockRef(ref PorygonTransactionBlockRef, body Por
 	return nil
 }
 
+func porygonTransactionBlockStoragePartition(body PorygonTransactionBlock, shardCount int) string {
+	if shardCount < 1 {
+		shardCount = 1
+	}
+	return porygonExecutionShardID(stableKey([]string{body.TransactionBlockID}) % shardCount)
+}
+
+func (r *NodeRuntime) porygonTransactionBlockStorageNodeIDs(body PorygonTransactionBlock) []string {
+	if r == nil {
+		return nil
+	}
+	partitionID := porygonTransactionBlockStoragePartition(body, r.porygonExecutionShardCount())
+	members := uniqueStrings(r.porygonStoragePartitionMembers(partitionID))
+	sort.Strings(members)
+	return members
+}
+
+// Witness/Execution roles keep a transient cache; only the fixed co-located
+// Storage Role selected from the existing MBE topology persists the full body.
+// This preserves the platform's node/resource budget while restoring Porygon's
+// storage/committee separation.
+func (r *NodeRuntime) porygonStoreTransactionBlockForRole(body PorygonTransactionBlock) error {
+	storageNodes := r.porygonTransactionBlockStorageNodeIDs(body)
+	if len(storageNodes) == 0 {
+		return fmt.Errorf("Porygon transaction block %s has no fixed Storage Role replicas", body.TransactionBlockID)
+	}
+	if containsString(storageNodes, r.node.NodeID) {
+		r.addPorygonRuntimeMetric("porygon_transaction_block_storage_persist_count", 1)
+		return r.porygonPersistTransactionBlock(body)
+	}
+	r.addPorygonRuntimeMetric("porygon_transaction_block_cache_only_count", 1)
+	return r.porygonCacheTransactionBlock(body)
+}
+
 func (r *NodeRuntime) porygonTransactionBlockPath(id string) string {
 	if r == nil || r.node.DataDir == "" || id == "" {
 		return ""

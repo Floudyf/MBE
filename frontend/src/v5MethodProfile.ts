@@ -52,14 +52,16 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   { method_id: "hash_batch_si_no_ofas", display_name: "Batch-SI w/o OFAS", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "dependency_graph", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "dependency_graph", priority_mode: "paper", execution_mode: "snapshot_parallel" } } },
   { method_id: "hash_batch_si_serial_batch", display_name: "Batch-SI w/o Snapshot Parallelism", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "paper", execution_mode: "snapshot_serial" } } },
   { method_id: "hash_batch_si_txid_priority", display_name: "Batch-SI w/o OFAS Priority", role: "ablation", plugin_overrides: { routing: "hash_routing_baseline", execution: "batch_si_execution", scheduler: "batch_si_scheduler", block_executor: "batch_si_block_executor", commit: "normal_commit" }, plugin_config_overrides: { scheduler: { partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "txid" }, block_executor: { worker_count: 4, partition_mode: "wrbp", ordering_mode: "ofas", priority_mode: "txid", execution_mode: "snapshot_parallel" } } },
-  { method_id: "stateful_optme", display_name: "OptME", role: "baseline", plugin_overrides: { routing: "hash_routing_baseline", execution: "optme_execution", scheduler: "optme_scheduler", block_executor: "optme_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
-  { method_id: "stateless_optme", display_name: "Stateless-OptME", role: "baseline", plugin_overrides: { routing: "stateless_optme_routing", execution: "optme_execution", scheduler: "optme_scheduler", block_executor: "stateless_optme_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
-  { method_id: "stateful_txallo", display_name: "TxAllo", role: "baseline", plugin_overrides: { sharding: "txallo_account_sharding", routing: "txallo_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { sharding: { eta: 2.0, lambda: 0.0, epsilon: 0.0, history_records: 5000, adaptive_chunk_records: 500 }, block_executor: { worker_count: 1 } } },
-  { method_id: "stateless_txallo", display_name: "Stateless-TxAllo", role: "baseline", plugin_overrides: { sharding: "txallo_account_sharding", routing: "stateless_txallo_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { sharding: { eta: 2.0, lambda: 0.0, epsilon: 0.0, history_records: 5000, adaptive_chunk_records: 500 }, block_executor: { worker_count: 1 } } },
+  // MBE_OPTME_V20_PLUGIN_PROFILE
+  // MBE_OPTME_V22_GLOBAL_ORDER_PROFILE
+  { method_id: "stateful_optme", display_name: "OptME", role: "baseline", plugin_overrides: { transaction_admission: "signature_nonce_admission", txpool: "fifo_per_node_mempool", sharding: "deterministic_state_key_sharding", routing: "optme_global_routing", block_producer: "time_or_count_block_producer", consensus: "pbft_style_consensus", network: "localhost_tcp_typed_network", execution: "optme_execution", scheduler: "optme_scheduler", block_executor: "optme_block_executor", state_access: "direct_state_access", state_storage: "persistent_local_state_store", cross_shard: "optme_global_no_relay", commit: "normal_commit", metrics: "runtime_core_metrics", observability: "node_network_consensus_observer" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
+  { method_id: "stateless_optme", display_name: "Stateless-OptME", role: "baseline", plugin_overrides: { transaction_admission: "signature_nonce_admission", txpool: "fifo_per_node_mempool", sharding: "deterministic_state_key_sharding", routing: "stateless_optme_routing", block_producer: "time_or_count_block_producer", consensus: "pbft_style_consensus", network: "localhost_tcp_typed_network", execution: "optme_execution", scheduler: "optme_scheduler", block_executor: "stateless_optme_block_executor", state_access: "direct_state_access", state_storage: "optme_partition_state_store", cross_shard: "optme_global_no_relay", commit: "normal_commit", metrics: "runtime_core_metrics", observability: "node_network_consensus_observer" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
+  { method_id: "stateful_txallo", display_name: "TxAllo", role: "baseline", plugin_overrides: { sharding: "txallo_account_sharding", routing: "txallo_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { sharding: { eta: 2.0, lambda: 0.0, epsilon: 0.0, history_ratio: 0.10, allocation_mode: "paper_g_ratio_snapshot", g_cache_enabled: true }, block_executor: { worker_count: 1 } } },
+  { method_id: "stateless_txallo", display_name: "Stateless-TxAllo", role: "baseline", plugin_overrides: { sharding: "txallo_account_sharding", routing: "stateless_txallo_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit", cross_shard: "txallo_no_relay" }, plugin_config_overrides: { sharding: { eta: 2.0, lambda: 0.0, epsilon: 0.0, history_ratio: 0.10, allocation_mode: "paper_g_ratio_snapshot", g_cache_enabled: true }, block_executor: { worker_count: 1 } } },
   { method_id: "stateless_calvin", display_name: "Stateless Calvin", role: "compatibility", plugin_overrides: { transaction_admission: "calvin_declared_access_admission", routing: "stateless_calvin_global_routing", execution: "calvin_execution", scheduler: "stateless_calvin_deterministic_scheduler", block_executor: "stateless_calvin_block_executor", state_access: "stateless_calvin_state_access", state_storage: "calvin_partition_state_store", cross_shard: "calvin_no_2pc_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, read_result_timeout_ms: 0, outcome_timeout_ms: 0 } } },
   { method_id: "stateless_hash_serial", display_name: "Stateless Hash + Serial", role: "baseline", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1, versioned_wave_policy: "strict_single_tx_block_order_v1" } } },
   // MBE_PORYGON_PAPER_REPRO_20260921_V8_REFACTOR
-  { method_id: "stateless_porygon", display_name: "Porygon", role: "baseline", plugin_overrides: { routing: "porygon_stateless_routing", block_producer: "porygon_transaction_block_producer", execution: "porygon_execution", scheduler: "porygon_pipeline_scheduler", block_executor: "porygon_block_executor", state_access: "porygon_remote_state_access", state_storage: "porygon_partition_state_store", cross_shard: "porygon_cross_shard_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { witness_threshold: 1 }, scheduler: { execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true }, block_executor: { worker_count: 4, execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true, require_distributed_esc: true } } },
+  { method_id: "stateless_porygon", display_name: "Porygon", role: "baseline", plugin_overrides: { transaction_admission: "porygon_access_admission", sharding: "porygon_object_sharding", routing: "porygon_stateless_routing", block_producer: "porygon_transaction_block_producer", execution: "porygon_execution", scheduler: "porygon_pipeline_scheduler", block_executor: "porygon_block_executor", state_access: "porygon_remote_state_access", state_storage: "porygon_partition_state_store", cross_shard: "porygon_cross_shard_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_producer: { witness_threshold: 1 }, scheduler: { execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true }, block_executor: { worker_count: 4, execution_committee_count: 3, pipeline_enabled: true, cross_batch_witness: true, require_distributed_esc: true } } },
   { method_id: "stateless_hash_block_stm", display_name: "Stateless Hash + Block-STM", role: "compatibility", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "block_stm_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, execution_mode: "performance", oracle_mode: "off", maximum_incarnations: 0, incarnation_limit_action: "fail", scheduler_mode: "priority_heap_v1", dependency_wait_mode: "suspend_same_incarnation_v1", versioned_wave_policy: "maximal_compatible_exact_version_v2" } } },
   // MBE_META_TRACK_RAPID_FIX_V3
   {
@@ -103,7 +105,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
       routing: "metatrack_coaccess_routing",
-      block_producer: "metatrack_dependency_window_producer",
+      block_producer: "metatrack_nl_window_v669",
       execution: "dual_track_execution",
       scheduler: "fast_first_scheduler",
       block_executor: "metatrack_block_executor",
@@ -136,12 +138,12 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   },
   {
     method_id: "metatrack_ab_route",
-    display_name: "消融-哈希分片",
+    display_name: "去掉共现矩阵分片",
     role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
-      routing: "metatrack_hash_routing",
-      block_producer: "metatrack_dependency_window_producer",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
       execution: "dual_track_execution",
       scheduler: "fast_first_scheduler",
       block_executor: "metatrack_block_executor",
@@ -149,18 +151,18 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true, ablation_no_coaccess_sharding_v675: true },
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
   {
     method_id: "metatrack_ab_track",
-    display_name: "消融-无双轨统一就绪",
+    display_name: "去掉双轨",
     role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
       routing: "metatrack_coaccess_routing",
-      block_producer: "metatrack_dependency_window_producer",
+      block_producer: "metatrack_nl_window_v669",
       execution: "metatrack_single_execution",
       scheduler: "fast_first_scheduler",
       block_executor: "metatrack_block_executor",
@@ -174,7 +176,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   },
   {
     method_id: "metatrack_ab_cons",
-    display_name: "消融-固定批次共识",
+    display_name: "去掉共识聚合",
     role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -193,12 +195,12 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   },
   {
     method_id: "metatrack_ab_state",
-    display_name: "消融-Home状态访问",
+    display_name: "去掉状态预取",
     role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
       routing: "metatrack_coaccess_routing",
-      block_producer: "metatrack_dependency_window_producer",
+      block_producer: "metatrack_nl_window_v669",
       execution: "dual_track_execution",
       scheduler: "fast_first_scheduler",
       block_executor: "metatrack_block_executor",

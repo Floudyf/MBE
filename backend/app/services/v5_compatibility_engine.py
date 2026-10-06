@@ -292,6 +292,8 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
     )
     if porygon_selected:
         required = {
+            "transaction_admission": "porygon_access_admission",
+            "sharding": "porygon_object_sharding",
             "routing": "porygon_stateless_routing",
             "block_producer": "porygon_transaction_block_producer",
             "consensus": "pbft_style_consensus",
@@ -346,40 +348,42 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         for selected in by_category.values()
     )
     if optme_selected:
+        # MBE_OPTME_V22_GLOBAL_ORDER_PROFILE: the paper baseline has one OptME
+        # ordering domain. topology.shards denotes logical state partitions.
         stateful_optme = bool(block_executor and block_executor.plugin_id == "optme_block_executor")
         stateless_optme = bool(block_executor and block_executor.plugin_id == "stateless_optme_block_executor")
         if stateful_optme == stateless_optme:
             blockers.append("OptME profile must select exactly one of optme_block_executor or stateless_optme_block_executor")
         required = {
+            "transaction_admission": "signature_nonce_admission",
+            "txpool": "fifo_per_node_mempool",
+            "sharding": "deterministic_state_key_sharding",
             "block_producer": "time_or_count_block_producer",
             "consensus": "pbft_style_consensus",
             "network": "localhost_tcp_typed_network",
             "execution": "optme_execution",
             "scheduler": "optme_scheduler",
             "state_access": "direct_state_access",
-            "state_storage": "persistent_local_state_store",
+            "cross_shard": "optme_global_no_relay",
             "commit": "normal_commit",
+            "metrics": "runtime_core_metrics",
+            "observability": "node_network_consensus_observer",
         }
         if stateless_optme:
-            required.update({
-                "routing": "stateless_optme_routing",
-                "block_executor": "stateless_optme_block_executor",
-            })
+            required.update({"routing": "stateless_optme_routing", "block_executor": "stateless_optme_block_executor", "state_storage": "optme_partition_state_store"})
         else:
-            required.update({
-                "routing": "hash_routing_baseline",
-                "block_executor": "optme_block_executor",
-            })
+            required.update({"routing": "optme_global_routing", "block_executor": "optme_block_executor", "state_storage": "persistent_local_state_store"})
         for category, plugin_id in required.items():
             selected = by_category.get(category)
             if not selected or selected.plugin_id != plugin_id:
                 blockers.append(f"OptME requires {category}:{plugin_id}")
+        warnings.append("OptME v22 uses one optme-global PBFT ordering domain. topology.shards is the logical state-partition count; PBFT messages/quorum are unchanged.")
         if stateless_optme:
-            warnings.append("Stateless-OptME is an explicit MBE multi-shard state-substrate adaptation: each PBFT shard consumes its own consensus output, signed AccessList bounds remote block-start projection/writeback, and OptME still derives scheduling conflicts from post-consensus observed read/write sets; it is not claimed as a sharding mechanism from the original OptME paper")
+            warnings.append("Stateless-OptME v22 uses one H-1 block-start projection per Home partition and partition-owned final materialization; client source order is not signed as StateVersions and no OptME-specific pre-consensus version admission is used.")
         else:
-            warnings.append("OptME preserves the SC 2024 post-consensus simulate -> AddressBasedConflictGraph -> hierarchical schedule -> reorder/reschedule core inside each MBE physical PBFT shard. Multiple shards are an MBE topology integration, not an OptME paper contribution; state remains persistent/local and legacy MBE cross-shard lifecycle is retained.")
+            warnings.append("Stateful OptME v22 keeps a full local state replica and the unchanged author-source post-consensus OptME core over the same optme-global order.")
 
-    txallo_ids = {"txallo_account_sharding", "txallo_routing", "stateless_txallo_routing"}
+    txallo_ids = {"txallo_account_sharding", "txallo_routing", "stateless_txallo_routing", "txallo_no_relay"}  # MBE_TXALLO_REPRO_V202
     txallo_selected = any(
         selected and selected.plugin_id in txallo_ids
         for selected in by_category.values()
@@ -398,6 +402,7 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
             "block_executor": "serial_block_executor",
             "state_access": "direct_state_access",
             "state_storage": "persistent_local_state_store",
+            "cross_shard": "txallo_no_relay" if txallo_routing_id == "stateless_txallo_routing" else "relay_certificate_protocol",
             "commit": "normal_commit",
         }
         for category, plugin_id in required.items():

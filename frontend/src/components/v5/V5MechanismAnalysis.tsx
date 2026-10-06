@@ -75,7 +75,7 @@ const METATRACK_INCREMENTAL_ROUTING_V650: MetricDef[] = [
 ];
 
 const METATRACK_NATURAL_WINDOW_V657: MetricDef[] = [
-  { key: "metatrack_natural_window_fixed_micro_batch_enabled", label: "固定100笔路由批次", help: "实验版应为否：不再使用 MetaTrack 独立 micro_batch_size=100 作为路由/封签边界。" },
+  { key: "metatrack_natural_window_fixed_micro_batch_enabled", label: "固定100笔路由批次", help: "正式 Full 与四个正式消融统一保持 micro_batch_size=100；这是前序规模敏感性实验确定并固定的实验工作点，不作为算法阈值参与 N/L 判定。" },
   { key: "metatrack_natural_window_block_size", label: "复用块容量", help: "直接复用本次实验已有 block_size，不引入新的 MetaTrack 容量阈值。" },
   { key: "metatrack_natural_window_block_interval_ms", label: "复用出块间隔", unit: "ms", help: "直接复用本次实验已有 block_interval_ms；固定速率回放按确定性的逻辑释放时间形成自然时间边界。" },
   { key: "metatrack_natural_window_window_count", label: "自然路由窗口数", help: "本次实验最终形成的自然 RouteBatch/封签窗口数量。" },
@@ -103,11 +103,12 @@ const METATRACK_CONSENSUS_WINDOW_V656813: MetricDef[] = [
   { key: "metatrack_consensus_window_average_critical_path", label: "平均最长依赖链", help: "根据持久化签名前驱元数据重新计算的平均最长执行链 L。" },
   { key: "metatrack_consensus_window_max_critical_path", label: "最大最长依赖链", help: "所有窗口中重新计算得到的最大最长执行链 L。" },
   { key: "metatrack_consensus_window_average_structural_width", label: "平均结构并行宽度 N/L", help: "窗口交易数 N 与重建最长执行链 L 的比值，仅做运行后观测。" },
-  { key: "metatrack_consensus_window_critical_width_stop_count", label: "关键路径延长切窗次数", help: "运行后重建确认加入下一 RouteBatch 会延长当前/新批次已有执行关键路径，因此按原始 V661 规则在该边界收窗的次数。" },
-  { key: "metatrack_consensus_window_n_over_l_stop_count", label: "N/L 不再提高切窗次数", help: "实验版重建确认：加入下一完整 RouteBatch 后窗口交易数 N 与真实执行前驱最长链 L 的比值不再严格提高，因此在该边界收窗。" },
+  { key: "metatrack_consensus_window_critical_width_stop_count", label: "严格V661关键路径切窗次数", help: "仅用于严格临界路径机制对照：加入下一 RouteBatch 会延长已有最大执行关键路径，因此按历史 V661 规则收窗。正式 Full 使用依赖闭包 + N/L。" },
+  { key: "metatrack_consensus_window_n_over_l_stop_count", label: "N/L 不再提高切窗次数", help: "正式 Full 重建确认：候选依赖闭包安全且容量允许，但加入下一完整 RouteBatch 后 N/L 不再严格提高，因此在该边界收窗。" },
   { key: "metatrack_consensus_window_block_size_stop_count", label: "block_size 切窗次数", help: "重建确认候选窗口会超过配置 block_size 硬上限的次数。" },
   { key: "metatrack_consensus_window_input_end_stop_count", label: "输入结束收窗次数", help: "没有下一个 RouteBatch、由输入结束形成的最后窗口数量。" },
   { key: "metatrack_consensus_window_pbft_blocks_saved", label: "相对单 RouteBatch 省掉的 PBFT 块", help: "按每个 RouteBatch 实际活跃分片重建的基准块数，减去窗口聚合后的实际分片窗口块数。" },
+  { key: "metatrack_consensus_window_aggregation_active", label: "去掉共识聚合处理变量已激活", help: "正式 Full 实际聚合至少两个完整 RouteBatch 且确实减少 PBFT 块；只有为真且去掉共识聚合保持单 RouteBatch 窗口时，其 TPS 差才可归因于去掉共识聚合。" },
   { key: "metatrack_consensus_window_signed_reconstruction_match", label: "签名窗口重建一致", help: "窗口签名元数据、实际分片投影、重算关键路径和 N/L 边界规则是否全部一致。" },
 ];
 
@@ -270,23 +271,32 @@ const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; met
     metrics: [
       { key: "optme_simulation_ms", label: "PBFT 后模拟耗时", unit: "ms", help: "OptME 在共识输出后对统一块起始快照做第一次真实模拟的累计时间。" },
       { key: "optme_graph_scheduling_ms", label: "冲突图与调度耗时", unit: "ms", help: "作者 AddressBasedConflictGraph 构建、层次排序、First-Updater-Wins、重排与分组耗时。" },
-      { key: "optme_early_abort_count", label: "Early Abort 数", help: "OptME 第一阶段因反依赖/First-Updater-Wins 进入 aborted/reschedule 路径的交易数。" },
+      // MBE_OPTME_V20_METRICS
+      { key: "optme_early_detection_count", label: "提前中止检测数", help: "地址冲突图构造及并行子图归并阶段，由 First-Updater-Wins 提前检测出的交易数。" },
+      { key: "optme_hierarchical_abort_count", label: "层次排序中止数", help: "层次排序阶段因反向读写约束等产生的中止交易数；其中一部分随后可被乐观重排救回。" },
+      { key: "optme_rescheduled_transaction_count", label: "进入二次执行交易数", help: "完成乐观重排后仍未回到主计划、实际进入作者二次执行路径的交易数。" },
+      { key: "optme_early_abort_count", label: "旧版中止计数（兼容）", help: "兼容旧结果字段；v20 起等同最终进入 reschedule 路径的交易数，不再冒充论文 Early Detection。" },
+      { key: "optme_simulation_failed_count", label: "首次模拟失败数", help: "第一次业务模拟失败、按作者 filter_map 语义不进入 OptME 冲突图但仍由 MBE 产生终态失败回执的交易数。" },
       { key: "optme_reordered_transaction_count", label: "成功重排交易数", help: "满足作者源码 write-only + 多写单元条件后被重新插回主 schedule 的交易数。" },
       { key: "optme_sequence_count", label: "主 Schedule 序列数", help: "OptME 主执行计划的 sequence 数。" },
       { key: "optme_maximum_sequence_width", label: "最大 Sequence 宽度", help: "同一 OptME sequence 可并行提交的最大交易数。" },
       { key: "optme_rescheduled_epoch_count", label: "二次执行 Epoch 数", help: "剩余 aborted 交易按作者源码冲突规则形成的 re-execution epoch 数。" },
       { key: "optme_reexecution_count", label: "二次执行交易数", help: "进入作者源码第二次执行阶段的交易数。" },
-      { key: "optme_reexecution_invalid_count", label: "二次执行仍失效数", help: "第二次执行后 optimistic assumption 仍不成立的交易数；不私自加入作者源码中已注释掉的第三次 fallback。" },
+      { key: "optme_reexecution_simulation_failed_count", label: "二次模拟失败数", help: "进入二次执行后业务模拟本身失败的交易数；这些交易不再参加 optimistic write-set 验证。" },
+      { key: "optme_reexecution_invalid_count", label: "二次验证失效数", help: "二次执行本身成功，但 optimistic assumption 的写集合互斥验证失败；不私自加入作者源码中已注释掉的第三次 fallback。" },
     ],
   },
   {
     match: (id) => id.includes("txallo"), title: "TxAllo",
     metrics: [
-      { key: "txallo_history_transaction_count", label: "历史交易数", help: "只来自正式评测窗口之前、用于 G/A-TxAllo 的历史交易数量。" },
+      { key: "txallo_allocation_mode", label: "分配模式", help: "paper_g_snapshot 表示正式评测窗口只使用此前已提交历史运行一次完整 G-TxAllo，然后冻结映射。" },
+      { key: "txallo_history_transaction_count", label: "历史交易数", help: "只来自正式评测窗口之前、用于本次 G-TxAllo 快照的历史交易数量。" },
       { key: "txallo_graph_account_count", label: "账户图节点数", help: "TxAllo 历史账户交易图中的账户数量；不是 MetaTrack 状态键数量。" },
       { key: "txallo_graph_edge_count", label: "账户图边数", help: "历史账户对加权边数量。多账户交易按论文 1/C(m,2) 归一化。" },
-      { key: "txallo_g_txallo_run_count", label: "G-TxAllo 次数", help: "全局分配初始化次数。" },
-      { key: "txallo_a_txallo_run_count", label: "A-TxAllo 次数", help: "只处理历史增量段的自适应更新次数。" },
+      { key: "txallo_louvain_level_count", label: "Louvain 层数", help: "完整层次 Louvain 实际执行的层级数；不再只做第一层局部移动。" },
+      { key: "txallo_g_txallo_run_count", label: "G-TxAllo 次数", help: "当前评测快照应为 1（有历史时）。" },
+      { key: "txallo_a_txallo_run_count", label: "A-TxAllo 次数", help: "当前 G-snapshot 评测模式应为 0；只有真实 committed-block epoch 动态模式才允许增加。" },
+      { key: "txallo_mapping_complete", label: "账户映射完整", help: "历史图中的每个账户都必须唯一落到一个合法分片；否则 bootstrap 直接失败。" },
       { key: "txallo_modeled_throughput", label: "论文模型吞吐 Λ", help: "TxAllo 目标函数中的模型值，不等同于 MBE 实测 end-to-end TPS。" },
       { key: "txallo_modeled_cross_shard_ratio", label: "历史模型跨片率 γ", help: "用于冻结映射的历史图上论文定义的跨片边权比例。" },
       { key: "txallo_evaluation_cross_shard_ratio", label: "正式评测跨片率", help: "冻结映射应用到正式评测交易后实际 sender/receiver 跨片比例。" },
@@ -481,10 +491,10 @@ function formatMetric(value: number, unit?: string): string { if (unit === "B") 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();
   if (id === "metatrack_latest") return "Metatrack";
-  if (id === "metatrack_ab_route") return "消融-哈希分片";
-  if (id === "metatrack_ab_track") return "消融-无双轨统一就绪";
-  if (id === "metatrack_ab_cons") return "消融-固定批次共识";
-  if (id === "metatrack_ab_state") return "消融-Home状态访问";
+  if (id === "metatrack_ab_route") return "去掉共现矩阵分片";
+  if (id === "metatrack_ab_track") return "去掉双轨";
+  if (id === "metatrack_ab_cons") return "去掉共识聚合";
+  if (id === "metatrack_ab_state") return "去掉状态预取";
   if (id === "metatrack_ab_handoff") return "历史子消融-无本地版本交接";
   if (id === "metatrack_exp") return "实验版（旧）";
   if (id === "metatrack_full_locality") return "MetaTrack（当前版）";

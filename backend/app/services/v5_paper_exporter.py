@@ -42,6 +42,7 @@ def _stable_raw_fields(rows: list[dict]) -> list[str]:
 
 
 def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
+    children = _with_metatrack_consensus_treatment_gate(children)
     raw_rows = [_raw_row(child) for child in children]
     raw_fields = _stable_raw_fields(raw_rows)
     grouped = _group_rows(group, children)
@@ -106,6 +107,42 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
 
 
 
+def _metatrack_consensus_treatment_key(child: dict) -> tuple:
+    topology = child.get("topology_point") or {}
+    workload = child.get("workload_point") or {}
+    fault = child.get("fault_point") or {}
+    block_size, block_interval_ms = _block_settings(child)
+    return (
+        child.get("seed"), child.get("repeat_index"), child.get("scan_variable"), child.get("scan_value"),
+        child.get("estimated_transactions"),
+        json.dumps(topology, sort_keys=True, default=str),
+        json.dumps(workload, sort_keys=True, default=str),
+        json.dumps(fault, sort_keys=True, default=str),
+        block_size, block_interval_ms,
+    )
+
+
+def _with_metatrack_consensus_treatment_gate(children: list[dict]) -> list[dict]:
+    full_active: dict[tuple, bool] = {}
+    for child in children:
+        if child.get("suite_type") != "ablation_experiment" or child.get("method_config_id") != "metatrack_latest":
+            continue
+        key = _metatrack_consensus_treatment_key(child)
+        active = _effective_metrics(child).get("metatrack_consensus_window_aggregation_active") is True
+        full_active[key] = bool(full_active.get(key, False) or active)
+    out: list[dict] = []
+    for child in children:
+        cloned = dict(child)
+        if child.get("suite_type") == "ablation_experiment" and child.get("method_config_id") == "metatrack_ab_cons":
+            metrics = _effective_metrics(child)
+            fixed_active = metrics.get("metatrack_consensus_window_max_route_batch_count") == 1
+            cloned["_metatrack_consensus_ablation_treatment_active"] = bool(
+                full_active.get(_metatrack_consensus_treatment_key(child), False) and fixed_active
+            )
+        out.append(cloned)
+    return out
+
+
 def _paper_comparison_export_allowed(group: dict, children: list[dict], paper: dict) -> bool:
     """Fail closed for multi-method paper-ready figure/table exports.
 
@@ -123,11 +160,13 @@ def _paper_comparison_export_allowed(group: dict, children: list[dict], paper: d
     return paper.get("performance_comparison_valid") is True
 
 def analysis(group: dict, children: list[dict]) -> dict:
+    children = _with_metatrack_consensus_treatment_gate(children)
     rows = _group_rows(group, children)
     return {"run_group_id": group.get("run_group_id"), "groups": rows, "charts": _charts(rows), "paper_result_analysis": paper_result_analysis(group, children)}
 
 
 def paper_result_analysis(group: dict, children: list[dict]) -> dict:
+    children = _with_metatrack_consensus_treatment_gate(children)
     fairness = _fairness_status(group)
     accepted: list[dict] = []
     excluded: list[dict] = []
@@ -352,6 +391,12 @@ def _paper_exclusion_reasons(child: dict, individual_reasons: list[str] | None =
     if child.get("paper_candidate") is False:
         status = str(child.get("comparison_eligibility_status") or "false").strip() or "false"
         reasons.append(f"paper_candidate_false:{status}")
+    if (
+        child.get("suite_type") == "ablation_experiment"
+        and child.get("method_config_id") == "metatrack_ab_cons"
+        and child.get("_metatrack_consensus_ablation_treatment_active") is False
+    ):
+        reasons.append("metatrack_consensus_ablation_treatment_inactive")
     return list(dict.fromkeys(reasons))
 
 
