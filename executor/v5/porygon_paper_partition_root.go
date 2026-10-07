@@ -3,6 +3,7 @@ package v5
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -133,6 +134,29 @@ func porygonPaperProspectivePartitionRoot(snapshot map[string]string, partitionI
 	return statepkg.RootOfSnapshot(next)
 }
 
+var errPorygonPaperPartitionRootNotReady = errors.New("Porygon Paper2 partition-root local state not ready")
+
+// porygonPaperPartitionSnapshotReadiness distinguishes normal asynchronous
+// pipeline lag from an already-present but contradictory certified state. A
+// missing local snapshot/root is retryable; a present disagreement is fatal.
+func (r *NodeRuntime) porygonPaperPartitionSnapshotReadiness(height uint64, partitionID, partitionRoot string) (map[string]string, bool, error) {
+	state := r.porygonPaperRuntimeState()
+	state.mu.Lock()
+	snapshot := copyRegistryStringMap(state.certifiedSnapshots[height])
+	expected := state.certifiedPartitionRoots[height][partitionID]
+	state.mu.Unlock()
+	if snapshot == nil || expected == "" {
+		return nil, false, nil
+	}
+	if expected != partitionRoot {
+		return nil, true, fmt.Errorf("Porygon agreed partition root mismatch at height %d partition %s: local=%s requested=%s", height, partitionID, expected, partitionRoot)
+	}
+	if actual := statepkg.RootOfSnapshot(snapshot); actual != partitionRoot {
+		return nil, true, fmt.Errorf("Porygon agreed partition snapshot/root mismatch at height %d partition %s: snapshot=%s certified=%s", height, partitionID, actual, partitionRoot)
+	}
+	return snapshot, true, nil
+}
+
 func (r *NodeRuntime) buildPorygonPaperPartitionRootAck(request PorygonPaperPartitionRootRequest) (PorygonPaperPartitionRootAck, error) {
 	if request.PartitionID != r.stateAccessPartitionID() {
 		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon Paper2 partition-root request sent to wrong Storage Role")
@@ -147,17 +171,27 @@ func (r *NodeRuntime) buildPorygonPaperPartitionRootAck(request PorygonPaperPart
 	if request.UpdateDigest == "" || request.UpdateDigest != porygonUpdateDigest(updates) {
 		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon Paper2 partition-root update digest mismatch")
 	}
-	// T(h-2) remains the execution-read anchor and must be locally provable.
-	if _, err := r.porygonPaperPartitionSnapshot(request.TStateHeight, request.PartitionID, request.TPartitionRoot); err != nil {
+	// T(h-2) remains the execution-read anchor. A replica that has not yet
+	// certified that historical T state is merely slow; a replica that has it
+	// under a different root has observed a deterministic contradiction.
+	if _, ready, err := r.porygonPaperPartitionSnapshotReadiness(request.TStateHeight, request.PartitionID, request.TPartitionRoot); err != nil {
 		return PorygonPaperPartitionRootAck{}, err
+	} else if !ready {
+		return PorygonPaperPartitionRootAck{}, fmt.Errorf("%w: T state height=%d partition=%s", errPorygonPaperPartitionRootNotReady, request.TStateHeight, request.PartitionID)
 	}
 	baseHeight, baseRoot, ok := r.porygonPaperCanonicalPartitionBase(request.Height, request.PartitionID)
-	if !ok || request.CanonicalBaseHeight != baseHeight || request.CanonicalBaseRoot != baseRoot {
-		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon Paper2 canonical partition base mismatch for %s at height %d", request.PartitionID, request.Height)
+	if !ok {
+		return PorygonPaperPartitionRootAck{}, fmt.Errorf("%w: canonical base height=%d partition=%s", errPorygonPaperPartitionRootNotReady, request.Height-1, request.PartitionID)
 	}
-	snapshot, err := r.porygonPaperPartitionSnapshot(baseHeight, request.PartitionID, baseRoot)
+	if request.CanonicalBaseHeight != baseHeight || request.CanonicalBaseRoot != baseRoot {
+		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon Paper2 canonical partition base mismatch for %s at height %d: local=%d/%s requested=%d/%s", request.PartitionID, request.Height, baseHeight, baseRoot, request.CanonicalBaseHeight, request.CanonicalBaseRoot)
+	}
+	snapshot, ready, err := r.porygonPaperPartitionSnapshotReadiness(baseHeight, request.PartitionID, baseRoot)
 	if err != nil {
 		return PorygonPaperPartitionRootAck{}, err
+	}
+	if !ready {
+		return PorygonPaperPartitionRootAck{}, fmt.Errorf("%w: canonical snapshot height=%d partition=%s", errPorygonPaperPartitionRootNotReady, baseHeight, request.PartitionID)
 	}
 	root := porygonPaperProspectivePartitionRoot(snapshot, request.PartitionID, updates)
 	return r.signPorygonPaperPartitionRootAck(PorygonPaperPartitionRootAck{
@@ -180,8 +214,16 @@ func (r *NodeRuntime) handlePorygonPaperPartitionRootRequest(ctx context.Context
 	if request.PartitionID != r.stateAccessPartitionID() {
 		return nil
 	}
+	r.addPorygonRuntimeMetric("porygon_partition_root_request_received_count", 1)
 	ack, err := r.buildPorygonPaperPartitionRootAck(request)
 	if err != nil {
+		if errors.Is(err, errPorygonPaperPartitionRootNotReady) {
+			// Normal asynchronous pipeline lag: do not poison the connection and do
+			// not manufacture a negative certificate. The requester retransmits the
+			// exact immutable request to missing Storage replicas.
+			r.addPorygonRuntimeMetric("porygon_partition_root_not_ready_count", 1)
+			return nil
+		}
 		return err
 	}
 	env, err := p2p.NewEnvelope(porygonPaperPartitionRootAckMessage, r.node.NodeID, request.RequesterNode, r.node.ShardID, request.Height, r.currentPBFTView(), request.Height, ack)
@@ -226,21 +268,52 @@ func (r *NodeRuntime) porygonPaperCertifiedPartitionRoot(ctx context.Context, pr
 		return "", err
 	}
 	updateDigest := porygonUpdateDigest(updates)
-	baseHeight, baseRoot, ok := r.porygonPaperCanonicalPartitionBase(height, partitionID)
-	if !ok {
-		return "", fmt.Errorf("Porygon Paper2 canonical partition base not ready for %s at height %d", partitionID, height)
+	members := r.porygonStoragePartitionMembers(partitionID)
+	threshold := porygonMultiShardUpdateThreshold(len(members))
+	if len(members) == 0 {
+		return "", fmt.Errorf("Porygon Paper2 Storage Role %s has no replicas", partitionID)
 	}
+
+	started := time.Now()
+	timeout := r.proposalTimeout()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	// This cadence is transport recovery only. It never changes quorum,
+	// acceptance, state selection, or any Porygon algorithmic decision.
+	recovery := time.NewTicker(50 * time.Millisecond)
+	defer recovery.Stop()
+
+	// B_h can execute from T(h-2) before this replica has finished certifying
+	// canonical state h-1. Wait locally for the immutable h-1 base instead of
+	// turning normal pipeline skew into a deterministic execution failure.
+	var baseHeight uint64
+	var baseRoot string
+	for {
+		var ok bool
+		baseHeight, baseRoot, ok = r.porygonPaperCanonicalPartitionBase(height, partitionID)
+		if ok {
+			break
+		}
+		r.addPorygonRuntimeMetric("porygon_partition_root_local_base_not_ready_count", 1)
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-timer.C:
+			r.addPorygonRuntimeMetric("porygon_partition_root_timeout_count", 1)
+			return "", fmt.Errorf("Porygon Paper2 partition-root local base timeout: height=%d partition=%s requester=%s required_base=%d", height, partitionID, r.node.NodeID, height-1)
+		case <-recovery.C:
+		}
+	}
+
 	requestID := stableTextDigest(fmt.Sprintf("paper2-partition-root|%s|%d|%s|%s|%s|%d|%s|%s", blockHash, height, r.node.NodeID, partitionID, partitionRoot, baseHeight, baseRoot, updateDigest))
 	request := PorygonPaperPartitionRootRequest{
 		RequestID: requestID, RequesterNode: r.node.NodeID, BlockHash: blockHash, Height: height,
 		TStateHeight: proposal.TStateHeight, PartitionID: partitionID, TPartitionRoot: partitionRoot,
 		CanonicalBaseHeight: baseHeight, CanonicalBaseRoot: baseRoot,
 		Updates: updates, UpdateDigest: updateDigest,
-	}
-	members := r.porygonStoragePartitionMembers(partitionID)
-	threshold := porygonMultiShardUpdateThreshold(len(members))
-	if len(members) == 0 {
-		return "", fmt.Errorf("Porygon Paper2 Storage Role %s has no replicas", partitionID)
 	}
 	waiter := make(chan PorygonPaperPartitionRootAck, len(members)+1)
 	state := r.porygonPaperPartitionRootState()
@@ -253,34 +326,69 @@ func (r *NodeRuntime) porygonPaperCertifiedPartitionRoot(ctx context.Context, pr
 		state.mu.Unlock()
 	}()
 
-	for _, nodeID := range members {
+	byRoot := map[string]map[string]bool{}
+	seen := map[string]bool{}
+	r.addPorygonRuntimeMetric("porygon_partition_root_request_count", 1)
+	sendToMember := func(nodeID string, retry bool) error {
+		if seen[nodeID] {
+			return nil
+		}
+		if retry {
+			r.addPorygonRuntimeMetric("porygon_partition_root_retry_send_count", 1)
+		}
 		if nodeID == r.node.NodeID {
 			ack, err := r.buildPorygonPaperPartitionRootAck(request)
 			if err != nil {
-				return "", err
+				if errors.Is(err, errPorygonPaperPartitionRootNotReady) {
+					r.addPorygonRuntimeMetric("porygon_partition_root_not_ready_count", 1)
+					return nil
+				}
+				return err
 			}
-			waiter <- ack
-			continue
+			select {
+			case waiter <- ack:
+			default:
+			}
+			return nil
 		}
 		env, err := p2p.NewEnvelope(porygonPaperPartitionRootRequestMessage, r.node.NodeID, nodeID, r.node.ShardID, height, r.currentPBFTView(), height, request)
 		if err != nil {
-			return "", err
+			return err
 		}
 		if err := r.sendToNode(ctx, nodeID, env); err != nil {
-			continue
+			r.addPorygonRuntimeMetric("porygon_partition_root_send_error_count", 1)
+			return nil
+		}
+		return nil
+	}
+	for _, nodeID := range members {
+		if err := sendToMember(nodeID, false); err != nil {
+			return "", err
 		}
 	}
 
-	byRoot := map[string]map[string]bool{}
-	seen := map[string]bool{}
-	timer := time.NewTimer(r.proposalTimeout())
-	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
 		case <-timer.C:
-			return "", fmt.Errorf("Porygon Paper2 partition-root quorum timeout for %s", partitionID)
+			r.addPorygonRuntimeMetric("porygon_partition_root_timeout_count", 1)
+			voters := sortedBoolKeys(seen)
+			missing := make([]string, 0, len(members))
+			for _, nodeID := range members {
+				if !seen[nodeID] {
+					missing = append(missing, nodeID)
+				}
+			}
+			sort.Strings(missing)
+			return "", fmt.Errorf("Porygon Paper2 partition-root quorum timeout: height=%d partition=%s requester=%s threshold=%d received=%d voters=%v missing=%v base_height=%d", height, partitionID, r.node.NodeID, threshold, len(seen), voters, missing, baseHeight)
+		case <-recovery.C:
+			r.addPorygonRuntimeMetric("porygon_partition_root_retry_round_count", 1)
+			for _, nodeID := range members {
+				if err := sendToMember(nodeID, true); err != nil {
+					return "", err
+				}
+			}
 		case ack := <-waiter:
 			if seen[ack.NodeID] {
 				continue
@@ -292,6 +400,7 @@ func (r *NodeRuntime) porygonPaperCertifiedPartitionRoot(ctx context.Context, pr
 				return "", err
 			}
 			seen[ack.NodeID] = true
+			r.addPorygonRuntimeMetric("porygon_partition_root_ack_count", 1)
 			if byRoot[ack.ProspectiveRoot] == nil {
 				byRoot[ack.ProspectiveRoot] = map[string]bool{}
 			}
@@ -307,6 +416,7 @@ func (r *NodeRuntime) porygonPaperCertifiedPartitionRoot(ctx context.Context, pr
 			}
 			if selected != "" {
 				r.addPorygonRuntimeMetric("porygon_paper_storage_root_quorum_count", 1)
+				r.addPorygonRuntimeMetric("porygon_partition_root_quorum_wait_us", time.Since(started).Microseconds())
 				return selected, nil
 			}
 		}
@@ -332,17 +442,30 @@ func (r *NodeRuntime) porygonPaperPartitionRootProjection(ctx context.Context, b
 		if err := porygonPaperValidateCollapsedStateUpdates(items); err != nil {
 			return PorygonMultiShardUpdateCertificate{}, err
 		}
-		root, err := r.porygonPaperCertifiedPartitionRoot(ctx, proposal, blockHash, height, shard, items)
-		if err != nil {
-			return PorygonMultiShardUpdateCertificate{}, err
+		root, rootErr := r.porygonPaperCertifiedPartitionRoot(ctx, proposal, blockHash, height, shard, items)
+		if rootErr != nil && porygonV50RetryablePaperRootFailure(rootErr) {
+			fallback, changed := porygonV50RemoveProposalUFromPartition(proposal, shard, r.porygonExecutionShardCount(), items)
+			if changed {
+				root, rootErr = r.porygonPaperCertifiedPartitionRoot(ctx, proposal, blockHash, height, shard, fallback)
+				if rootErr == nil {
+					items = fallback
+					cert.DeferredPartitions = append(cert.DeferredPartitions, shard)
+					r.addPorygonRuntimeMetric("porygon_v50_partition_update_deferred_count", 1)
+				}
+			}
+		}
+		if rootErr != nil {
+			return PorygonMultiShardUpdateCertificate{}, rootErr
 		}
 		cert.Partitions = append(cert.Partitions, PorygonPartitionRootCertificate{PartitionID: shard, UpdateDigest: porygonUpdateDigest(items), ProspectiveRoot: root})
 	}
+	sort.Strings(cert.DeferredPartitions)
 	cert.GlobalStateRoot = porygonGlobalRootFromPartitions(cert.Partitions)
 	cert.CertificateDigest = stableJSONDigest(struct {
-		BlockHash  string
-		Height     uint64
-		Partitions []PorygonPartitionRootCertificate
-	}{cert.BlockHash, cert.Height, cert.Partitions})
+		BlockHash          string
+		Height             uint64
+		DeferredPartitions []string
+		Partitions         []PorygonPartitionRootCertificate
+	}{cert.BlockHash, cert.Height, cert.DeferredPartitions, cert.Partitions})
 	return cert, nil
 }

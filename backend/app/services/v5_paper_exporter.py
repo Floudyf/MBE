@@ -122,23 +122,78 @@ def _metatrack_consensus_treatment_key(child: dict) -> tuple:
     )
 
 
+# MBE_METATRACK_MECHPACK_V26_CONSENSUS_EXPORT_GATE
+
+def _metatrack_consensus_ablation_configured(child: dict) -> bool:
+    method = child.get("method") or {}
+    overrides = method.get("plugin_overrides") or {}
+    configs = method.get("plugin_config_overrides") or {}
+    block_cfg = configs.get("block_producer") or {}
+    return (
+        overrides.get("block_producer") == "time_or_count_block_producer"
+        and block_cfg.get("dependency_closed_consensus") is False
+    )
+
+
+def _metatrack_metric_number_v26(metrics: dict, name: str) -> float | None:
+    value = metrics.get(name)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 def _with_metatrack_consensus_treatment_gate(children: list[dict]) -> list[dict]:
-    full_active: dict[tuple, bool] = {}
+    # Full must actually aggregate while w/o Consensus must run the historical
+    # non-aggregating producer and produce strictly more PBFT work under the
+    # same condition. This replaces the obsolete max_route_batch_count == 1 gate.
+    full_evidence: dict[tuple, dict[str, float | None]] = {}
     for child in children:
         if child.get("suite_type") != "ablation_experiment" or child.get("method_config_id") != "metatrack_latest":
             continue
+        metrics = _effective_metrics(child)
+        if metrics.get("metatrack_consensus_window_aggregation_active") is not True:
+            continue
         key = _metatrack_consensus_treatment_key(child)
-        active = _effective_metrics(child).get("metatrack_consensus_window_aggregation_active") is True
-        full_active[key] = bool(full_active.get(key, False) or active)
+        full_evidence[key] = {
+            "blocks": _metatrack_metric_number_v26(metrics, "actual_committed_block_count"),
+            "preprepare": _metatrack_metric_number_v26(metrics, "pbft_preprepare_count"),
+            "messages": _metatrack_metric_number_v26(metrics, "pbft_message_count"),
+        }
     out: list[dict] = []
     for child in children:
         cloned = dict(child)
         if child.get("suite_type") == "ablation_experiment" and child.get("method_config_id") == "metatrack_ab_cons":
             metrics = _effective_metrics(child)
-            fixed_active = metrics.get("metatrack_consensus_window_max_route_batch_count") == 1
-            cloned["_metatrack_consensus_ablation_treatment_active"] = bool(
-                full_active.get(_metatrack_consensus_treatment_key(child), False) and fixed_active
+            full = full_evidence.get(_metatrack_consensus_treatment_key(child))
+            configured = _metatrack_consensus_ablation_configured(child)
+            ab_blocks = _metatrack_metric_number_v26(metrics, "actual_committed_block_count")
+            ab_preprepare = _metatrack_metric_number_v26(metrics, "pbft_preprepare_count")
+            ab_messages = _metatrack_metric_number_v26(metrics, "pbft_message_count")
+            block_separation = bool(full and full.get("blocks") is not None and ab_blocks is not None and ab_blocks > float(full["blocks"]))
+            pbft_separation = bool(
+                full
+                and (
+                    (full.get("preprepare") is not None and ab_preprepare is not None and ab_preprepare > float(full["preprepare"]))
+                    or (full.get("messages") is not None and ab_messages is not None and ab_messages > float(full["messages"]))
+                )
             )
+            active = bool(full and configured and block_separation and pbft_separation)
+            cloned["_metatrack_consensus_ablation_treatment_active"] = active
+            cloned["_metatrack_consensus_ablation_treatment_mode"] = "one_signed_projection_per_pbft"
+            cloned["_metatrack_consensus_ablation_treatment_evidence"] = {
+                "configured_nonaggregating_producer": configured,
+                "full_aggregation_active": bool(full),
+                "full_committed_blocks": None if not full else full.get("blocks"),
+                "ablation_committed_blocks": ab_blocks,
+                "full_pbft_preprepare_count": None if not full else full.get("preprepare"),
+                "ablation_pbft_preprepare_count": ab_preprepare,
+                "full_pbft_message_count": None if not full else full.get("messages"),
+                "ablation_pbft_message_count": ab_messages,
+                "observed_more_blocks": block_separation,
+                "observed_more_pbft_work": pbft_separation,
+            }
         out.append(cloned)
     return out
 

@@ -266,7 +266,8 @@ _MANIFESTS = [
     _manifest(
         "block_executor", "metatrack_block_executor", "MetaTrack Block Executor",
         "Executes MetaTrack fast/conservative ready queues with dependency and transaction-level remote StateReady suspend/resume callbacks over MBE transfer semantics.",
-        config={"worker_count": 4, "batch_entry_state_prefetch": False, "batch_remote_writeback": False, "safe_state_fold": False, "version_liveness": False, "final_version_batch_writeback": False, "dependency_closed_consensus": False, "version_liveness_indexed": False, "single_final_seal": False},
+        # MBE_METATRACK_DIAG_V28_MANIFEST
+        config={"worker_count": 4, "batch_entry_state_prefetch": False, "batch_remote_writeback": False, "safe_state_fold": False, "version_liveness": False, "final_version_batch_writeback": False, "dependency_closed_consensus": False, "version_liveness_indexed": False, "single_final_seal": False, "diagnostic_single_business_execution_v28": False},
         schema=_schema({
             "worker_count": {"type": "integer", "minimum": 1, "maximum": 8, "default": 4},
             "control_policy": {"type": "string", "enum": ["logical_domain_frontier_v1", "declared_access_frontier_v2"]},
@@ -282,6 +283,7 @@ _MANIFESTS = [
             "dependency_closed_consensus": {"type": "boolean", "default": False},
             "version_liveness_indexed": {"type": "boolean", "default": False},
             "single_final_seal": {"type": "boolean", "default": False},
+            "diagnostic_single_business_execution_v28": {"type": "boolean", "default": False},
         }),
         capabilities=["metatrack_ready_queues", "dependency_release", "transaction_level_remote_state_ready", "state_wait_suspend_resume", "batch_local_exact_version_handoff", "batch_entry_state_prefetch", "batch_remote_writeback", "safe_state_fold", "version_dependency_liveness", "final_version_batch_writeback", "dependency_closed_consensus", "indexed_version_dependency_liveness", "single_final_seal", "deterministic_state_delta", "execution_plan_digest"],
         metrics=[
@@ -523,24 +525,24 @@ _manifest("block_executor", "cg_block_executor", "CG / Nezha MBE Worker Block Ex
     ),
     _manifest(
         "sharding", "txallo_account_sharding", "TxAllo Account Allocation",
-        "TxAllo ICDE'23 account allocation. The measured MBE window uses a deterministic multi-level Louvain + Algorithm-1 G-TxAllo snapshot trained only on committed pre-evaluation history. Algorithm-2 A-TxAllo remains implemented but is not faked from arbitrary record chunks; online A updates require explicit committed-block epochs.",
-        config={"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": True},
-        schema=_schema({"eta": {"type": "number", "minimum": 1.000001, "maximum": 100, "default": 2.0}, "lambda": {"type": "number", "minimum": 0, "default": 0.0}, "epsilon": {"type": "number", "minimum": 0, "default": 0.0}, "history_records": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 5000}, "history_ratio": {"type": "number", "minimum": 0.000001, "maximum": 1.0, "default": 0.10}, "allocation_mode": {"type": "string", "default": "paper_g_ratio_snapshot"}, "g_cache_enabled": {"type": "boolean", "default": True}, "allocation_mode": {"type": "string", "enum": ["paper_g_ratio_snapshot"], "default": "paper_g_ratio_snapshot"}}),
-        capabilities=["txallo_account_graph", "g_txallo", "a_txallo_core", "deterministic_multilevel_louvain", "paper_eq6_eq8_gain", "pre_evaluation_history_only", "frozen_evaluation_mapping"], supported_backends=["real_cluster"],
-        truth_boundary="txallo_icde2023_algorithm1_2_deterministic_multilevel_louvain_g_snapshot_v2",
+        "TxAllo ICDE'23 account allocation. The MBE reproduction bootstraps deterministic multi-level Louvain + Algorithm-1 G-TxAllo from committed pre-evaluation history, then runs Algorithm-2 A-TxAllo on committed-only 15-source-block MBE-adapted epochs; paper-reference tau1=300 is evidence-only; the paper case-study tau2/tau1=20 ratio is preserved.",
+        config={"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": True, "dynamic_a_txallo_runtime": True, "a_epoch_blocks": 15, "g_epoch_multiple": 20},
+        schema=_schema({"eta": {"type": "number", "minimum": 1.000001, "maximum": 100, "default": 2.0}, "lambda": {"type": "number", "minimum": 0, "default": 0.0}, "epsilon": {"type": "number", "minimum": 0, "default": 0.0}, "history_records": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 5000}, "history_ratio": {"type": "number", "minimum": 0.000001, "maximum": 1.0, "default": 0.10}, "allocation_mode": {"type": "string", "default": "paper_g_ratio_snapshot"}, "g_cache_enabled": {"type": "boolean", "default": True}, "dynamic_a_txallo_runtime": {"type": "boolean", "default": True}, "a_epoch_blocks": {"type": "integer", "minimum": 15, "maximum": 15, "default": 15}, "g_epoch_multiple": {"type": "integer", "minimum": 20, "maximum": 20, "default": 20}, "allocation_mode": {"type": "string", "enum": ["paper_g_ratio_snapshot"], "default": "paper_g_ratio_snapshot"}}),
+        capabilities=["txallo_account_graph", "g_txallo", "a_txallo_core", "deterministic_multilevel_louvain", "paper_eq6_eq8_gain", "pre_evaluation_history_only", "committed_only_source_block_dynamic_a", "paper_hybrid_tau2_tau1_20"], supported_backends=["real_cluster"],
+        truth_boundary="txallo_icde2023_g_a_source_block_dynamic_adapted_v5",
         source={"source_type": "paper_reimplementation", "source_name": "TxAllo: Dynamic Transaction Allocation in Sharded Blockchain Systems", "venue": "ICDE 2023", "arxiv": "2212.11584", "repository": "https://github.com/zhangyuanzhe1996/TxAllo", "repository_note": "public repository reviewed but no usable algorithm implementation was present; paper formulas and Algorithms 1/2 are the source of truth", "reproduction_dossier": "docs/reproductions/txallo/source_lock.md"},
     ),
     _manifest(
         "routing", "txallo_routing", "TxAllo Transaction Routing",
-        "Routes each transaction according to the frozen TxAllo sender/receiver account allocation. It consumes the sharding plugin mapping and never updates that mapping from the same pending evaluation batch.",
-        capabilities=["txallo_frozen_mapping_routing", "stateful_local_execution", "no_future_batch_training"], requirements=["sharding:txallo_account_sharding"], supported_backends=["real_cluster"],
-        truth_boundary="txallo_frozen_mapping_stateful_route_v1", source={"source_type": "paper_reimplementation", "reproduction_dossier": "docs/reproductions/txallo/mbe_mapping.md"},
+        "Routes each transaction according to the TxAllo sender/receiver account allocation active for its committed-history epoch. Mapping updates are published only after the prior epoch reaches terminal commit; pending evaluation records never train the mapping.",
+        capabilities=["txallo_source_block_epoch_mapping_routing", "stateful_local_execution", "no_future_batch_training", "committed_only_mapping_updates", "stateful_migration_fail_closed"], requirements=["sharding:txallo_account_sharding"], supported_backends=["real_cluster"],
+        truth_boundary="txallo_source_block_dynamic_stateful_route_migration_guard_v4", source={"source_type": "paper_reimplementation", "reproduction_dossier": "docs/reproductions/txallo/mbe_mapping.md"},
     ),
     _manifest(
         "routing", "stateless_txallo_routing", "Stateless-TxAllo Transaction Routing",
-        "Uses exactly the same frozen TxAllo account allocation as TxAllo while opting into MBE's generic stateless direct execution and remote state projection/writeback infrastructure.",
-        capabilities=["txallo_frozen_mapping_routing", "stateless_direct_execution", "batch_routing_control_plane", "exact_state_version_transport", "preserve_txallo_fifo_scheduler", "no_metatrack_frontier"], requirements=["sharding:txallo_account_sharding", "cross_shard:txallo_no_relay"], supported_backends=["real_cluster"],
-        truth_boundary="stateless_txallo_same_mapping_exact_version_state_substrate_v3_no_legacy_business_relay", source={"source_type": "compatibility_adaptation", "reproduction_dossier": "docs/reproductions/txallo/mbe_mapping.md"},
+        "Uses exactly the same committed-history TxAllo mapping epoch as TxAllo while opting into MBE's generic stateless direct execution and remote state projection/writeback infrastructure.",
+        capabilities=["txallo_source_block_epoch_mapping_routing", "stateless_direct_execution", "batch_routing_control_plane", "exact_state_version_transport", "preserve_txallo_fifo_scheduler", "no_metatrack_frontier", "committed_only_mapping_updates"], requirements=["sharding:txallo_account_sharding", "cross_shard:txallo_no_relay"], supported_backends=["real_cluster"],
+        truth_boundary="stateless_txallo_source_block_dynamic_mapping_exact_version_state_substrate_v6", source={"source_type": "compatibility_adaptation", "reproduction_dossier": "docs/reproductions/txallo/mbe_mapping.md"},
     ),
     _manifest(
         "cross_shard", "txallo_no_relay", "Stateless-TxAllo No-Legacy-Relay",

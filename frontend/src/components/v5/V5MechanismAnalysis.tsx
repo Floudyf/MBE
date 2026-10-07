@@ -294,8 +294,8 @@ const METHOD_METRICS: Array<{ match: (id: string) => boolean; title: string; met
       { key: "txallo_graph_account_count", label: "账户图节点数", help: "TxAllo 历史账户交易图中的账户数量；不是 MetaTrack 状态键数量。" },
       { key: "txallo_graph_edge_count", label: "账户图边数", help: "历史账户对加权边数量。多账户交易按论文 1/C(m,2) 归一化。" },
       { key: "txallo_louvain_level_count", label: "Louvain 层数", help: "完整层次 Louvain 实际执行的层级数；不再只做第一层局部移动。" },
-      { key: "txallo_g_txallo_run_count", label: "G-TxAllo 次数", help: "当前评测快照应为 1（有历史时）。" },
-      { key: "txallo_a_txallo_run_count", label: "A-TxAllo 次数", help: "当前 G-snapshot 评测模式应为 0；只有真实 committed-block epoch 动态模式才允许增加。" },
+      { key: "txallo_g_txallo_run_count", label: "G-TxAllo 次数", help: "动态复现中初始 G 为 1，并按论文案例每 20 个 300-source-block 时间步执行一次全量 G。" },
+      { key: "txallo_a_txallo_run_count", label: "A-TxAllo 次数", help: "仅统计真实成功提交的上一 300-source-block 区间触发的 A-TxAllo；空区间不伪造 A。" },
       { key: "txallo_mapping_complete", label: "账户映射完整", help: "历史图中的每个账户都必须唯一落到一个合法分片；否则 bootstrap 直接失败。" },
       { key: "txallo_modeled_throughput", label: "论文模型吞吐 Λ", help: "TxAllo 目标函数中的模型值，不等同于 MBE 实测 end-to-end TPS。" },
       { key: "txallo_modeled_cross_shard_ratio", label: "历史模型跨片率 γ", help: "用于冻结映射的历史图上论文定义的跨片边权比例。" },
@@ -491,10 +491,10 @@ function formatMetric(value: number, unit?: string): string { if (unit === "B") 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();
   if (id === "metatrack_latest") return "Metatrack";
-  if (id === "metatrack_ab_route") return "去掉共现矩阵分片";
+  if (id === "metatrack_ab_route") return "历史子消融-无局部性放置";
   if (id === "metatrack_ab_track") return "去掉双轨";
   if (id === "metatrack_ab_cons") return "去掉共识聚合";
-  if (id === "metatrack_ab_state") return "去掉状态预取";
+  if (id === "metatrack_ab_state") return "去掉状态局部化";
   if (id === "metatrack_ab_handoff") return "历史子消融-无本地版本交接";
   if (id === "metatrack_exp") return "实验版（旧）";
   if (id === "metatrack_full_locality") return "MetaTrack（当前版）";

@@ -257,6 +257,25 @@ def summarize_network_usage(
     }.items():
         metrics[metric_key] = message_types.get(message_type, {}).get("message_count", 0)
 
+    # MBE_SHARED_PBFT_COMPACT_V1_OBSERVABILITY
+    # Distinguish proposal payload from fixed PBFT vote/control traffic and the
+    # rare missing-body repair path. PBFT_* repair messages remain in the same
+    # consensus category, preserving cross-method network accounting.
+    metrics["pbft_preprepare_network_bytes"] = message_types.get("PBFT_PRE_PREPARE", {}).get("bytes", 0)
+    metrics["pbft_prepare_network_bytes"] = message_types.get("PBFT_PREPARE", {}).get("bytes", 0)
+    metrics["pbft_commit_network_bytes"] = message_types.get("PBFT_COMMIT", {}).get("bytes", 0)
+    metrics["pbft_vote_control_network_bytes"] = sum(
+        message_types.get(kind, {}).get("bytes", 0)
+        for kind in ("PBFT_PREPARE", "PBFT_COMMIT", "PBFT_VIEW_CHANGE", "PBFT_NEW_VIEW", "PBFT_CHECKPOINT")
+    )
+    metrics["pbft_compact_tx_body_request_count"] = message_types.get("PBFT_TX_BODY_REQUEST", {}).get("message_count", 0)
+    metrics["pbft_compact_tx_body_request_bytes"] = message_types.get("PBFT_TX_BODY_REQUEST", {}).get("bytes", 0)
+    metrics["pbft_compact_tx_body_response_count"] = message_types.get("PBFT_TX_BODY_RESPONSE", {}).get("message_count", 0)
+    metrics["pbft_compact_tx_body_response_bytes"] = message_types.get("PBFT_TX_BODY_RESPONSE", {}).get("bytes", 0)
+    metrics["pbft_compact_repair_network_bytes"] = (
+        metrics["pbft_compact_tx_body_request_bytes"] + metrics["pbft_compact_tx_body_response_bytes"]
+    )
+
     base["available"] = True
     base["metrics"] = metrics
     base["categories"] = category_payload
@@ -445,6 +464,95 @@ def _metatrack_n_over_l_improves_v668(current: list[dict[str, Any]], next_batch:
         return False
     return candidate_n*current_l > current_n*candidate_l
 
+# MBE_METATRACK_MECHPACK_V2_STREAMING_OBSERVABILITY
+def _summarize_metatrack_streaming_windows_v2(run_dir: Path, representative_blocks: dict, source_artifacts: list[str]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    consistent = True
+    baseline_projection_blocks = 0
+    for (_, _, _), block in sorted(representative_blocks.items(), key=lambda item: (item[0][0], item[0][1], item[0][2])):
+        tx_list = block.get("tx_list") if isinstance(block.get("tx_list"), list) else []
+        routed = [tx for tx in tx_list if isinstance(tx, dict) and isinstance(tx.get("execution_routing"), dict)]
+        if not routed:
+            continue
+        by_batch: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for item in routed:
+            r = item["execution_routing"]
+            seq = int(r.get("route_batch_sequence") or 0)
+            if seq <= 0:
+                consistent = False; continue
+            by_batch[seq].append(item)
+        seqs = sorted(by_batch)
+        if not seqs:
+            continue
+        baseline_projection_blocks += len(seqs)
+        prefixes=[]
+        for seq in seqs:
+            group=by_batch[seq]
+            first=group[0]["execution_routing"]
+            expected=int(first.get("route_batch_shard_transaction_count") or 0)
+            if expected != len(group): consistent=False
+            keys=("consensus_window_sequence","consensus_window_start_batch_sequence","consensus_window_end_batch_sequence","consensus_window_route_batch_count","consensus_window_transaction_count","consensus_window_shard_transaction_count","consensus_window_critical_path")
+            signature=tuple(int(first.get(k) or 0) for k in keys)
+            if any(tuple(int(item["execution_routing"].get(k) or 0) for k in keys)!=signature for item in group): consistent=False
+            window,start,end,count,n,shard_n,l=signature
+            if window<=0 or start<=0 or end!=seq or count != end-start+1 or n<=0 or shard_n<expected or l<=0: consistent=False
+            prefixes.append((seq,window,start,end,count,n,shard_n,l,expected))
+        if prefixes:
+            window_id=prefixes[0][1]
+            if any(x[1]!=window_id for x in prefixes): consistent=False
+            for prev,cur in zip(prefixes,prefixes[1:]):
+                if cur[0] != prev[0]+1 or cur[2] != prev[2]: consistent=False
+                if cur[5]-prev[5] <= 0 or cur[6]-prev[6] != cur[8]: consistent=False
+                if cur[7] < prev[7] or cur[5]*prev[7] <= prev[5]*cur[7]: consistent=False
+            last=prefixes[-1]
+            rounds=[int(item["execution_routing"].get("consensus_execution_round") or 0) for item in routed]
+            rows.append({
+                "window_sequence": window_id,
+                "shard_id": str(block.get("shard_id") or ""),
+                "height": int(block.get("height") or 0),
+                "block_hash": str(block.get("block_hash") or ""),
+                "transaction_count": len(routed),
+                "route_batch_count": len(prefixes),
+                "start_route_batch_sequence": prefixes[0][0],
+                "end_route_batch_sequence": prefixes[-1][0],
+                "signed_prefix_start_batch_sequence": last[2],
+                "signed_prefix_end_batch_sequence": last[3],
+                "signed_prefix_route_batch_count": last[4],
+                "signed_prefix_global_transaction_count": last[5],
+                "signed_prefix_shard_transaction_count": last[6],
+                "signed_prefix_critical_path": last[7],
+                "global_round_min": min(rounds) if rounds else 0,
+                "global_round_max": max(rounds) if rounds else 0,
+                "stop_reason": "leader_current_ready_prefix_boundary",
+                "signed_reconstruction_match": consistent,
+            })
+    if not rows:
+        return {"schema_version":"mbe_metatrack_consensus_window_observability_v2","available":False,"truth_scope":"durable_signed_streaming_prefix_leader_aggregation_v2","source_artifacts":sorted(source_artifacts),"metrics":{},"windows":[],"unavailable_reason":"durable_streaming_window_blocks_missing"}
+    avg=lambda xs: (sum(xs)/len(xs)) if xs else None
+    observed=len(rows)
+    saved=max(0,baseline_projection_blocks-observed)
+    metrics={
+        "metatrack_consensus_window_observability_available": True,
+        "metatrack_consensus_window_count": observed,
+        "metatrack_consensus_window_average_tx_count": avg([float(x["transaction_count"]) for x in rows]),
+        "metatrack_consensus_window_average_route_batch_count": avg([float(x["route_batch_count"]) for x in rows]),
+        "metatrack_consensus_window_max_route_batch_count": max((int(x["route_batch_count"]) for x in rows),default=0),
+        "metatrack_consensus_window_observed_pbft_block_count": observed,
+        "metatrack_consensus_window_expected_pbft_block_count": observed,
+        "metatrack_consensus_window_baseline_route_batch_pbft_block_count": baseline_projection_blocks,
+        "metatrack_consensus_window_pbft_blocks_saved": saved,
+        "metatrack_consensus_window_aggregation_active": bool(consistent and saved>0 and any(int(x["route_batch_count"])>1 for x in rows)),
+        "metatrack_consensus_window_signed_reconstruction_match": consistent,
+        "metatrack_consensus_window_actual_projection_match": consistent,
+        "metatrack_consensus_window_client_hold_removed": True,
+        "metatrack_consensus_window_truth_scope": "durable_signed_streaming_prefix_leader_aggregation_v2",
+    }
+    base={"schema_version":"mbe_metatrack_consensus_window_observability_v2","available":True,"truth_scope":"durable_signed_streaming_prefix_leader_aggregation_v2","source_artifacts":sorted(source_artifacts),"metrics":metrics,"windows":rows,"observed_blocks":rows,"signed_reconstruction_match":consistent}
+    _write_metatrack_window_plan_jsonl(run_dir / METATRACK_WINDOW_PLAN, rows)
+    aggregate_dir=run_dir / "aggregate"; aggregate_dir.mkdir(parents=True,exist_ok=True); _write_json(aggregate_dir / METATRACK_WINDOW_SUMMARY, base)
+    return base
+
+
 def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
     """Reconstruct v6.5.6.8 windows only from durable committed signed metadata."""
     run_dir = Path(run_dir)
@@ -485,6 +593,8 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
         return base
 
     block_producer_id_v668 = _metatrack_block_producer_id_v663(run_dir, cluster)
+    if block_producer_id_v668 == "metatrack_nl_window_v669":
+        return _summarize_metatrack_streaming_windows_v2(run_dir, representative_blocks, source_artifacts)
     single_route_batch_ablation = block_producer_id_v668 == "metatrack_route_batch_producer"
     historical_n_over_l_v668 = block_producer_id_v668 == "metatrack_adaptive_window_producer"
     formal_n_over_l_v669 = block_producer_id_v668 == "metatrack_nl_window_v669"

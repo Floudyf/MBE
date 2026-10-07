@@ -25,7 +25,9 @@ import (
 // across many RouteBatches. A deterministic global capacity is still derived
 // only from the declared workload transaction count and execution-shard count.
 
-const metaTrackIncrementalExactContinuityPolicyV650 = "incremental_ready_balanced_coaccess_v651"
+// MBE_METATRACK_MECHPACK_V1_ROUTING
+// Superseded by v2 below: v1 exact-first priority could over-concentrate chains.
+const metaTrackIncrementalExactContinuityPolicyV650 = "incremental_exact_ready_balanced_coaccess_v2"
 
 type metaTrackIncrementalVersionSlotV650 struct {
 	Key     string
@@ -71,48 +73,73 @@ type metaTrackResolvedExactDependencyV669 struct {
 }
 
 type metaTrackRoutingRecordContextV669 struct {
-	Accesses       []tx.AccessItem
-	Keys           []string
-	Pairs          []string
-	ExactDeps      []metaTrackResolvedExactDependencyV669
-	ReadHomeCount  map[string]int
-	WriteHomeCount map[string]int
-	TotalHomeReads int
+	Accesses        []tx.AccessItem
+	Keys            []string
+	Pairs           []string
+	ExactDeps       []metaTrackResolvedExactDependencyV669
+	ReadHomeCount   map[string]int
+	WriteHomeCount  map[string]int
+	TotalHomeReads  int
 	TotalHomeWrites int
 }
 
 func metaTrackBuildRoutingRecordContextV669(p *metaTrackRouting, record WorkloadRecord, sharding ShardingPlugin, shardIDs []string, state *metaTrackIncrementalRoutingStateV650) metaTrackRoutingRecordContextV669 {
-	if state.HomeShardByKey == nil { state.HomeShardByKey = map[string]string{} }
+	if state.HomeShardByKey == nil {
+		state.HomeShardByKey = map[string]string{}
+	}
 	ctx := metaTrackRoutingRecordContextV669{
-		Accesses: normalizedAccessItems(record),
-		ReadHomeCount: map[string]int{},
+		Accesses:       normalizedAccessItems(record),
+		ReadHomeCount:  map[string]int{},
 		WriteHomeCount: map[string]int{},
 	}
 	accessByKey := map[string]tx.AccessItem{}
 	seenKey := map[string]bool{}
 	for _, access := range ctx.Accesses {
-		if access.Key == "" { continue }
-		if _, ok := accessByKey[access.Key]; !ok { accessByKey[access.Key] = access }
-		if !seenKey[access.Key] { seenKey[access.Key] = true; ctx.Keys = append(ctx.Keys, access.Key) }
+		if access.Key == "" {
+			continue
+		}
+		if _, ok := accessByKey[access.Key]; !ok {
+			accessByKey[access.Key] = access
+		}
+		if !seenKey[access.Key] {
+			seenKey[access.Key] = true
+			ctx.Keys = append(ctx.Keys, access.Key)
+		}
 		home, cached := state.HomeShardByKey[access.Key]
 		if !cached {
 			home = p.LogicalStateHome(access.Key, sharding, shardIDs).ServingShard
 			state.HomeShardByKey[access.Key] = home
 		}
-		if home == "" { continue }
-		if isReadMode(access.Mode) { ctx.ReadHomeCount[home]++; ctx.TotalHomeReads++ }
-		if isWriteMode(access.Mode) { ctx.WriteHomeCount[home]++; ctx.TotalHomeWrites++ }
+		if home == "" {
+			continue
+		}
+		if isReadMode(access.Mode) {
+			ctx.ReadHomeCount[home]++
+			ctx.TotalHomeReads++
+		}
+		if isWriteMode(access.Mode) {
+			ctx.WriteHomeCount[home]++
+			ctx.TotalHomeWrites++
+		}
 	}
 	sort.Strings(ctx.Keys)
 	for left := 0; left < len(ctx.Keys); left++ {
-		for right := left + 1; right < len(ctx.Keys); right++ { ctx.Pairs = append(ctx.Pairs, keyPair(ctx.Keys[left], ctx.Keys[right])) }
+		for right := left + 1; right < len(ctx.Keys); right++ {
+			ctx.Pairs = append(ctx.Pairs, keyPair(ctx.Keys[left], ctx.Keys[right]))
+		}
 	}
 	for _, dep := range record.StateVersions {
-		if dep.Key == "" || dep.RequiredVersion == 0 { continue }
+		if dep.Key == "" || dep.RequiredVersion == 0 {
+			continue
+		}
 		access, ok := accessByKey[dep.Key]
-		if !ok || !requiresExactStateValue(access) { continue }
+		if !ok || !requiresExactStateValue(access) {
+			continue
+		}
 		producer, ok := state.ProducerByVersion[metaTrackIncrementalVersionSlotV650{Key: dep.Key, Version: dep.RequiredVersion}]
-		if !ok || strings.TrimSpace(producer.Shard) == "" { continue }
+		if !ok || strings.TrimSpace(producer.Shard) == "" {
+			continue
+		}
 		ctx.ExactDeps = append(ctx.ExactDeps, metaTrackResolvedExactDependencyV669{Key: dep.Key, Producer: producer})
 	}
 	return ctx
@@ -127,26 +154,42 @@ func metaTrackReadyRankFromContextV669(ctx metaTrackRoutingRecordContextV669, sh
 	seenProducer := map[uint64]bool{}
 	for _, dep := range ctx.ExactDeps {
 		producer := dep.Producer
-		if seenProducer[producer.Ordinal] { continue }
+		if seenProducer[producer.Ordinal] {
+			continue
+		}
 		seenProducer[producer.Ordinal] = true
 		candidateRank := producer.FinishRank
-		if producer.Shard != shard { candidateRank++ }
-		if candidateRank > readyRank { readyRank = candidateRank }
+		if producer.Shard != shard {
+			candidateRank++
+		}
+		if candidateRank > readyRank {
+			readyRank = candidateRank
+		}
 	}
 	return readyRank
 }
 
 func metaTrackExactCrossFromContextV669(ctx metaTrackRoutingRecordContextV669, shard string) int {
 	cross := 0
-	for _, dep := range ctx.ExactDeps { if dep.Producer.Shard != shard { cross++ } }
+	for _, dep := range ctx.ExactDeps {
+		if dep.Producer.Shard != shard {
+			cross++
+		}
+	}
 	return cross
 }
 
 func metaTrackCoaccessFromContextV669(ignoreCoaccess bool, ctx metaTrackRoutingRecordContextV669, shard string, state *metaTrackIncrementalRoutingStateV650) int {
-	if ignoreCoaccess { return 0 }
+	if ignoreCoaccess {
+		return 0
+	}
 	score := 0
-	for _, pair := range ctx.Pairs { score += state.PairShardSupport[pair][shard] }
-	if len(ctx.Keys) == 1 { score += state.KeyShardSupport[ctx.Keys[0]][shard] }
+	for _, pair := range ctx.Pairs {
+		score += state.PairShardSupport[pair][shard]
+	}
+	if len(ctx.Keys) == 1 {
+		score += state.KeyShardSupport[ctx.Keys[0]][shard]
+	}
 	return score
 }
 
@@ -308,8 +351,15 @@ func metaTrackIncrementalCriterionRankV651(candidates []metaTrackIncrementalCand
 func metaTrackIncrementalRankCandidatesV651(candidates []metaTrackIncrementalCandidateV650) []metaTrackIncrementalCandidateV650 {
 	ranked := append([]metaTrackIncrementalCandidateV650(nil), candidates...)
 	for index := range ranked {
+		// MBE_METATRACK_MECHPACK_V2_ROUTING
+		// Five structural criteria share one threshold-free minimax objective.
+		// Exact continuity remains visible, but no one criterion has absolute
+		// priority or an empirically tuned weight.
 		readyRank := metaTrackIncrementalCriterionRankV651(ranked, index, func(left, right metaTrackIncrementalCandidateV650) bool {
 			return left.ReadyRank < right.ReadyRank
+		})
+		exactRank := metaTrackIncrementalCriterionRankV651(ranked, index, func(left, right metaTrackIncrementalCandidateV650) bool {
+			return left.ExactCross < right.ExactCross
 		})
 		remoteRank := metaTrackIncrementalCriterionRankV651(ranked, index, func(left, right metaTrackIncrementalCandidateV650) bool {
 			return left.RemoteCost < right.RemoteCost
@@ -320,8 +370,8 @@ func metaTrackIncrementalRankCandidatesV651(candidates []metaTrackIncrementalCan
 		loadRank := metaTrackIncrementalCriterionRankV651(ranked, index, func(left, right metaTrackIncrementalCandidateV650) bool {
 			return left.Load < right.Load
 		})
-		ranked[index].WorstRank = maxInt(maxInt(readyRank, remoteRank), maxInt(coaccessRank, loadRank))
-		ranked[index].RankSum = readyRank + remoteRank + coaccessRank + loadRank
+		ranked[index].WorstRank = maxInt(maxInt(maxInt(readyRank, exactRank), remoteRank), maxInt(coaccessRank, loadRank))
+		ranked[index].RankSum = readyRank + exactRank + remoteRank + coaccessRank + loadRank
 	}
 	return ranked
 }
@@ -505,7 +555,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 			ExecutionShard:        selected.Shard,
 			TargetShard:           targetShard,
 			CoaccessGroup:         strings.Join(keys, "+"),
-			Reason:                fmt.Sprintf("incremental_ready_balanced:ready_rank=%d:exact_cross=%d:coaccess=%d:remote=%d:load=%d:worst_rank=%d:rank_sum=%d", selected.ReadyRank, selected.ExactCross, selected.CoaccessLocality, selected.RemoteCost, selected.Load, selected.WorstRank, selected.RankSum),
+			Reason:                fmt.Sprintf("incremental_exact_ready_balanced:ready_rank=%d:exact_cross=%d:coaccess=%d:remote=%d:load=%d:worst_rank=%d:rank_sum=%d", selected.ReadyRank, selected.ExactCross, selected.CoaccessLocality, selected.RemoteCost, selected.Load, selected.WorstRank, selected.RankSum),
 			PredictedRemoteReads:  remoteReads,
 			PredictedRemoteWrites: remoteWrites,
 			RemoteAccessCount:     remoteReads + remoteWrites,

@@ -130,6 +130,11 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	txalloPlacementRows := [][]string{}
 	var txalloBootstrapEvidence map[string]any
 	var txalloBootstrapMapping map[string]string
+	txalloCrossByLogical := map[string]bool{}
+	var txalloDynamic txalloDynamicAllocationRuntime
+	var txalloDynamicEnabled bool
+	var txalloFeedReader *txalloEpochFeedReaderV22
+	var txalloBlockIndex *txalloDynamicBlockIndexV222
 	resolvedAccessRows := []resolvedAccessEntry{}
 	connections := map[string]net.Conn{}
 	generatedCrossShardCount := 0
@@ -168,6 +173,22 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			txalloBootstrapMapping = mapping.TxAlloMappingSnapshot()
 		}
 	}
+	if dynamic, ok := plugins.Sharding.(txalloDynamicAllocationRuntime); ok && dynamic.TxAlloDynamicEnabled() {
+		if plan.WorkloadPlan.SourceType != "dataset" {
+			return fmt.Errorf("TxAllo dynamic G/A lifecycle requires a dataset source-block sidecar")
+		}
+		txalloDynamic = dynamic
+		txalloDynamicEnabled = true
+		txalloFeedReader = newTxAlloEpochFeedReaderV22()
+		var blockErr error
+		txalloBlockIndex, blockErr = txalloLoadDynamicBlockIndexV222(outDir, plan.WorkloadPlan)
+		if blockErr != nil {
+			return blockErr
+		}
+		if err := txalloWaitMappingAcks(ctx, plan.NodeConfigs, txalloDynamic.TxAlloMappingEpoch(), txalloDynamic.TxAlloMappingStateDigest()); err != nil {
+			return err
+		}
+	}
 	iterator, err := plugins.Workload.NewIterator(plan.WorkloadPlan, shards, outDir, plugins.Sharding)
 	if err != nil {
 		return err
@@ -199,16 +220,14 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	finalityMode := crossShardFinalityMode(plugins.Routing)
 	bindExecutionRouting := routingBindsExecutionMetadata(plugins.Routing)
 	bindBatchProjectionMetadata := routingBindsBatchProjectionMetadata(plugins.Routing)
-	transactionFrontierV656Enabled := false
+	// MBE_METATRACK_MECHPACK_V2_CLIENT_STREAMING
+	// Signed predecessor/global-round truth is shared correctness and therefore
+	// remains enabled even for the w/o-consensus-aggregation profile. Whether a
+	// client buffers future RouteBatches is a separate concern.
 	windowProducerV663, modularWindowV663 := plugins.BlockProducer.(metaTrackConsensusWindowProducer)
-	if isMetaTrackRoutingPlugin(plugins.Routing) && modularWindowV663 {
-		transactionFrontierV656Enabled = true
-	} else if isMetaTrackRoutingPlugin(plugins.Routing) && len(plan.NodeConfigs) > 0 {
-		// Historical hidden MetaTrack profiles keep their legacy config contract.
-		if cfg, ok := plan.NodeConfigs[0].PluginProfile["block_producer"]; ok {
-			transactionFrontierV656Enabled = boolFromAny(cfg.Config["dependency_closed_consensus"])
-		}
-	}
+	transactionFrontierV656Enabled := isMetaTrackRoutingPlugin(plugins.Routing) && bindBatchProjectionMetadata
+	leaderStreamingWindowV2 := transactionFrontierV656Enabled && plugins.BlockProducer != nil && plugins.BlockProducer.ID() == metaTrackNLWindowProducerV669ID
+	clientWindowBufferingV6568 := transactionFrontierV656Enabled && modularWindowV663 && !leaderStreamingWindowV2 && !streamPartitionInvariantV658
 	consensusPredecessorsV656 := newMetaTrackConsensusPredecessorTrackerV656()
 	criticalWidthWindowV6568 := newMetaTrackCriticalWidthWindowPlannerV6568()
 
@@ -418,7 +437,14 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					metatrackBatchRows[len(metatrackBatchRows)-1]["incremental_routing_plan_us"] = routePlanUS
 				}
 			} else if artifactFamily == "txallo" {
-				// MBE_TXALLO_REPRO_V202: export canonical logical accounts and causal history_mapping/fallback_hash provenance.
+				// MBE_TXALLO_DYNAMIC_V222: placement evidence is bound to the mapping
+				// snapshot active for this source-time epoch, never to a later epoch.
+				if bootstrapper, ok := plugins.Sharding.(HistoricalAllocationBootstrapper); ok {
+					txalloBootstrapEvidence = bootstrapper.HistoricalAllocationEvidence()
+				}
+				if mapping, ok := plugins.Sharding.(txalloAccountMappingProvider); ok {
+					txalloBootstrapMapping = mapping.TxAlloMappingSnapshot()
+				}
 				recordByIndex := map[int]WorkloadRecord{}
 				for _, rr := range routingRecords {
 					recordByIndex[rr.Index] = rr
@@ -446,6 +472,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					if placement.TargetShard != "" && placement.TargetShard != placement.HomeShard {
 						involved = append(involved, placement.TargetShard)
 					}
+					txalloCrossByLogical[placement.LogicalID] = placement.TargetShard != "" && placement.TargetShard != placement.HomeShard
 					sort.Strings(involved)
 					txalloPlacementRows = append(txalloPlacementRows, []string{fmt.Sprint(routePlan.BatchIndex), placement.LogicalID, fmt.Sprint(placement.TxIndex), sender, receiver, senderSource, receiverSource, placement.HomeShard, placement.TargetShard, strings.Join(involved, "|"), placement.HomeShard, placement.ExecutionShard, placement.TargetShard, fmt.Sprint(placement.TargetShard != "" && placement.TargetShard != placement.HomeShard), fmt.Sprint(placement.RemoteAccessCount), mappingDigest, placement.Reason, routePlan.PlanDigest})
 				}
@@ -513,20 +540,28 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			}
 		}
 		if transactionFrontierV656Enabled {
-			if streamPartitionInvariantV658 {
+			if leaderStreamingWindowV2 {
+				// Evaluate V669 on the just-completed global RouteBatch, sign only
+				// its cumulative-prefix certificate, then submit it immediately.
+				streamed, err := criticalWidthWindowV6568.PushBatchAdaptiveNLV669StreamingV2(preparedV6568, plugins.BlockProducer.BlockSize())
+				if err != nil {
+					return err
+				}
+				for _, prepared := range streamed {
+					if err := submitRecord(prepared.Record, prepared.Route); err != nil {
+						return err
+					}
+				}
+			} else if !clientWindowBufferingV6568 {
+				// Partition-invariant mode and the formal w/o-consensus profile keep
+				// signed predecessor/round metadata but do not wait for a future batch.
 				for _, prepared := range preparedV6568 {
 					if err := submitRecord(prepared.Record, prepared.Route); err != nil {
 						return err
 					}
 				}
 			} else {
-				var closed []metaTrackPreparedRecordV6568
-				var err error
-				if modularWindowV663 {
-					closed, err = windowProducerV663.PushMetaTrackRouteBatch(criticalWidthWindowV6568, preparedV6568, plugins.BlockProducer.BlockSize())
-				} else {
-					closed, err = criticalWidthWindowV6568.PushBatch(preparedV6568, plugins.BlockProducer.BlockSize())
-				}
+				closed, err := windowProducerV663.PushMetaTrackRouteBatch(criticalWidthWindowV6568, preparedV6568, plugins.BlockProducer.BlockSize())
 				if err != nil {
 					return err
 				}
@@ -540,6 +575,34 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		batchIndex++
 		return nil
 	}
+	// MBE_TXALLO_DYNAMIC_V222: block-height epoch barrier. A source epoch is
+	// exactly 300 source blocks relative to the first evaluation block. The
+	// prior epoch must be terminally committed before its A/G update can affect
+	// the next epoch. The final partial epoch is never used as future training.
+	txalloEpochBucket := int64(-1)
+	txalloEpochRecords := []WorkloadRecord{}
+	closeTxAlloSourceEpoch := func(epoch int64, records []WorkloadRecord) error {
+		if !txalloDynamicEnabled {
+			return nil
+		}
+		if len(records) > 0 {
+			if err := txalloWaitCommittedEpoch(ctx, plan.NodeConfigs, records, txalloCrossByLogical, statelessDirect, txalloFeedReader); err != nil {
+				return err
+			}
+		}
+		beforeEpoch := txalloDynamic.TxAlloMappingEpoch()
+		if err := txalloDynamic.ApplyCommittedTxAlloEpoch(records, uint64(epoch), statelessDirect); err != nil {
+			return err
+		}
+		txalloBootstrapEvidence = txalloDynamic.HistoricalAllocationEvidence()
+		txalloBootstrapMapping = txalloDynamic.TxAlloMappingSnapshot()
+		if txalloDynamic.TxAlloMappingEpoch() != beforeEpoch {
+			if err := txalloWaitMappingAcks(ctx, plan.NodeConfigs, txalloDynamic.TxAlloMappingEpoch(), txalloDynamic.TxAlloMappingStateDigest()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for {
 		record, err := iterator.Next(ctx)
 		if err != nil {
@@ -547,6 +610,37 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				break
 			}
 			return err
+		}
+		if txalloDynamicEnabled {
+			blockNum, err := txalloBlockIndex.BlockForRecord(record)
+			if err != nil {
+				return err
+			}
+			bucket, err := txalloSourceBlockEpoch(blockNum, txalloBlockIndex.AnchorBlock, txalloDynamic.TxAlloAEpochBlocks())
+			if err != nil {
+				return err
+			}
+			if txalloEpochBucket >= 0 && bucket < txalloEpochBucket {
+				return fmt.Errorf("TxAllo dynamic source block epoch regressed: %d < %d", bucket, txalloEpochBucket)
+			}
+			if txalloEpochBucket >= 0 && bucket != txalloEpochBucket {
+				if err := submitBatch(batch); err != nil {
+					return err
+				}
+				batch = batch[:0]
+				for closed := txalloEpochBucket; closed < bucket; closed++ {
+					records := []WorkloadRecord(nil)
+					if closed == txalloEpochBucket {
+						records = txalloEpochRecords
+					}
+					if err := closeTxAlloSourceEpoch(closed, records); err != nil {
+						return err
+					}
+				}
+				txalloEpochRecords = nil
+			}
+			txalloEpochBucket = bucket
+			txalloEpochRecords = append(txalloEpochRecords, record)
 		}
 		batch = append(batch, record)
 		if len(batch) >= batchSize {
@@ -559,13 +653,10 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if err := submitBatch(batch); err != nil {
 		return err
 	}
-	if transactionFrontierV656Enabled && !streamPartitionInvariantV658 {
-		var closed []metaTrackPreparedRecordV6568
-		if modularWindowV663 {
-			closed = windowProducerV663.FlushMetaTrackWindow(criticalWidthWindowV6568)
-		} else {
-			closed = criticalWidthWindowV6568.Flush()
-		}
+	// Do not feed the final partial source-block epoch back into TxAllo: no
+	// later evaluation transaction is allowed to learn from it.
+	if clientWindowBufferingV6568 {
+		closed := windowProducerV663.FlushMetaTrackWindow(criticalWidthWindowV6568)
 		for _, prepared := range closed {
 			if err := submitRecord(prepared.Record, prepared.Route); err != nil {
 				return err
@@ -635,8 +726,12 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 	}
 	if txalloBootstrapEvidence != nil {
-		if bootstrapper, ok := plugins.Sharding.(HistoricalAllocationBootstrapper); ok { txalloBootstrapEvidence = bootstrapper.HistoricalAllocationEvidence() }
-		if mapping, ok := plugins.Sharding.(txalloAccountMappingProvider); ok { txalloBootstrapMapping = mapping.TxAlloMappingSnapshot() }
+		if bootstrapper, ok := plugins.Sharding.(HistoricalAllocationBootstrapper); ok {
+			txalloBootstrapEvidence = bootstrapper.HistoricalAllocationEvidence()
+		}
+		if mapping, ok := plugins.Sharding.(txalloAccountMappingProvider); ok {
+			txalloBootstrapMapping = mapping.TxAlloMappingSnapshot()
+		}
 		if err := SaveJSON(filepath.Join(outDir, "txallo_allocation_summary.json"), txalloBootstrapEvidence); err != nil {
 			return err
 		}

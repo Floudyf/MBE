@@ -131,6 +131,17 @@ func (r *NodeRuntime) handlePBFTPrePrepare(ctx context.Context, msg p2p.MessageE
 	if err := r.verifyPBFTPrePrepareAuthentication(pre); err != nil {
 		return fmt.Errorf("pbft pre-prepare authentication: %w", err)
 	}
+	// MBE_SHARED_PBFT_COMPACT_V1_WIRE: network PRE-PREPARE carries ordered
+	// TxIDs/TxRoot and block metadata; recover immutable signed bodies locally
+	// (or fetch only missing bodies) before the original consensus validation.
+	hydratedPre, waitingForBodies, err := r.hydratePBFTCompactPrePrepare(ctx, msg.FromNode, pre)
+	if err != nil {
+		return fmt.Errorf("pbft compact pre-prepare: %w", err)
+	}
+	if waitingForBodies {
+		return nil
+	}
+	pre = hydratedPre
 	if err := r.validateConsensusBlockBody(pre.Block); err != nil {
 		return fmt.Errorf("pbft pre-prepare block body: %w", err)
 	}
@@ -157,6 +168,23 @@ func (r *NodeRuntime) handlePBFTPrePrepare(ctx context.Context, msg p2p.MessageE
 		}
 		r.logConsensus("PBFT_PRE_PREPARE_RETRANSMIT_ACCEPTED", msg.FromNode, pre.BlockHash, pre.Height)
 		return r.broadcastPBFTPrepare(ctx, prepare)
+	}
+
+	// Porygon permits O(B_h) to overlap E(B_(h-1)), while validation of B_h
+	// depends only on the certified result of E(B_(h-2)).  A correct backup can
+	// therefore receive the current-height PRE-PREPARE before that local result
+	// is ready.  This is not PBFT height lag: retain the authenticated proposal
+	// locally and replay it when the Porygon execution frontier advances.
+	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID && pre.Block.Height == r.porygonConsensusNextHeight() {
+		ready, reason := r.porygonPaperProposalValidationReady(pre.Block.Height)
+		if !ready {
+			if err := r.deferPorygonSemanticPrePrepare(pre); err != nil {
+				r.setLastProposalError(err)
+				return err
+			}
+			r.setLastProposalError(fmt.Errorf("porygon pre-prepare local execution not ready at height %d: %s", pre.Block.Height, reason))
+			return nil
+		}
 	}
 
 	accepted, requestCatchup, err := r.validatePrePrepare(msg.FromNode, pre.Block)
@@ -454,15 +482,18 @@ func (r *NodeRuntime) beginPBFTProposal(ctx context.Context, block realblock.Blo
 }
 
 func (r *NodeRuntime) broadcastPBFTPrePrepare(ctx context.Context, pre pbft.PrePrepare) error {
+	// Only the network copy is compacted. The leader already validated and
+	// locked the complete block locally, preserving the PBFT state machine.
+	wirePre := r.compactPBFTPrePrepareForWire(pre)
 	envelope, err := p2p.NewEnvelope(
 		p2p.MessagePBFTPrePrepare,
 		r.node.NodeID,
 		"",
 		r.node.ShardID,
-		pre.Height,
-		pre.View,
-		pre.Sequence,
-		pre,
+		wirePre.Height,
+		wirePre.View,
+		wirePre.Sequence,
+		wirePre,
 	)
 	if err != nil {
 		return err
@@ -834,8 +865,16 @@ func (r *NodeRuntime) onPBFTNewViewAccepted(ctx context.Context, nv pbft.NewView
 	r.mu.Unlock()
 
 	if oldBlock.BlockHash != "" && (!hasSelected || oldBlock.BlockHash != selected.BlockHash) {
-		r.pool.ReleaseReserved(oldBlock.TxList)
+		if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+			r.porygonReleaseProposalReservation(oldHash, oldBlock.TxList)
+		} else {
+			r.pool.ReleaseReserved(oldBlock.TxList)
+		}
 	}
+	// Any next-height Witness reservation created by the old leader/view is local
+	// liveness state, not consensus evidence. Release it unless it still belongs
+	// to the installed leader and exact next height.
+	r.porygonReleaseStalePrewitnessedBatch()
 
 	if !r.isCurrentLeader() {
 		return nil

@@ -11,6 +11,7 @@ from backend.app.services.v5_plugin_manifest_store import STORE
 from backend.app.services import v5_workload_data_plane as workload_plane
 from backend.app.services.v5_workload_data_plane import WorkloadPreviewRequest
 from backend.app.services.v5_txallo_history_ratio_v21 import compile_txallo_history
+from backend.app.services.v5_txallo_dynamic_blocks_v222 import compile_txallo_dynamic_blocks
 
 
 EXPECTED_ARTIFACTS = [
@@ -230,6 +231,18 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
             for artifact in TXALLO_CLIENT_ARTIFACTS
         ]
         expected_artifacts += ["workload/txallo_history.jsonl.gz", "workload/txallo_history_summary.json"]
+        txallo_dynamic = bool((profile.get("sharding", {}).get("config") or {}).get("dynamic_a_txallo_runtime"))
+        if txallo_dynamic:
+            expected_artifacts += [
+                "workload/txallo_dynamic_blocks.jsonl.gz",
+                "workload/txallo_dynamic_blocks_summary.json",
+                "workload/txallo_mapping_snapshot.json",
+            ]
+            expected_artifacts += [
+                f"nodes/{node.node_id}/{artifact}"
+                for node in nodes
+                for artifact in ("txallo_epoch_lifecycle.jsonl", "txallo_mapping_ack.json")
+            ]
 
     if (
         profile.get("block_executor", {}).get("plugin_id") in {"optme_block_executor", "stateless_optme_block_executor"}
@@ -373,9 +386,13 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         "no_fallback": True,
     }
     txallo_history = compile_txallo_history(run_dir=run_dir, manifest=manifest, workload_plan=plan, profile=profile)
-    if txallo_history is not None:
+    txallo_dynamic_blocks = compile_txallo_dynamic_blocks(run_dir=run_dir, manifest=manifest, workload_plan=plan, profile=profile)
+    if txallo_history is not None or txallo_dynamic_blocks is not None:
         audit_metadata = dict(plan.get("audit_metadata") or {})
-        audit_metadata["txallo_history"] = txallo_history
+        if txallo_history is not None:
+            audit_metadata["txallo_history"] = txallo_history
+        if txallo_dynamic_blocks is not None:
+            audit_metadata["txallo_dynamic_blocks"] = txallo_dynamic_blocks
         plan["audit_metadata"] = audit_metadata
     (run_dir / "compiled_workload_plan.json").write_text(json.dumps(plan, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return plan

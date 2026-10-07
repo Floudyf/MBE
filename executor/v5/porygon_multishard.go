@@ -68,6 +68,7 @@ type PorygonMultiShardUpdateCertificate struct {
 	Height              uint64                            `json:"height"`
 	Attempt             int                               `json:"attempt"`
 	HandoffEnforced     bool                              `json:"handoff_enforced,omitempty"`
+	DeferredPartitions  []string                          `json:"deferred_partitions,omitempty"`
 	Partitions          []PorygonPartitionRootCertificate `json:"partitions"`
 	GlobalStateRoot     string                            `json:"global_state_root"`
 	CertificateDigest   string                            `json:"certificate_digest"`
@@ -338,7 +339,12 @@ func porygonGlobalRootFromPartitions(partitions []PorygonPartitionRootCertificat
 func porygonMultiShardCertDigest(cert PorygonMultiShardUpdateCertificate) string {
 	copyCert := cert
 	copyCert.CertificateDigest = ""
-	for i := range copyCert.Partitions {
+	copyCert.Partitions = make([]PorygonPartitionRootCertificate, len(cert.Partitions))
+	for i, part := range cert.Partitions {
+		copyPart := part
+		copyPart.Voters = append([]string(nil), part.Voters...)
+		copyPart.Acks = append([]PorygonPartitionUpdateAck(nil), part.Acks...)
+		copyCert.Partitions[i] = copyPart
 		sort.Strings(copyCert.Partitions[i].Voters)
 		sort.Slice(copyCert.Partitions[i].Acks, func(a, b int) bool {
 			return copyCert.Partitions[i].Acks[a].NodeID < copyCert.Partitions[i].Acks[b].NodeID

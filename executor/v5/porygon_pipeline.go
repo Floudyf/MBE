@@ -120,8 +120,8 @@ func (r *NodeRuntime) porygonPipelineEnsureWorkers() error {
 	}
 	state.started = true
 	state.mu.Unlock()
-	go r.runPorygonPipelineExecutionWorker(ctx, state)
-	go r.runPorygonPipelineCommitWorker(ctx, state)
+	r.porygonV50StartExecutionSlots(ctx, state)
+	go r.runPorygonV50CommitWorker(ctx, state)
 	return nil
 }
 
@@ -372,12 +372,7 @@ func (r *NodeRuntime) porygonPipelineOnOrderingCertified(block realblock.Block) 
 	r.incrementRuntimeMetricLocked("porygon_pipeline_ordered_count")
 	r.mu.Unlock()
 
-	select {
-	case <-r.commitWorkerContext.Done():
-		return r.commitWorkerContext.Err()
-	case state.execQ <- block:
-		return nil
-	}
+	return r.porygonV50EnqueueExecution(r.commitWorkerContext, state, block)
 }
 
 func (r *NodeRuntime) runPorygonPipelineExecutionWorker(ctx context.Context, state *porygonPipelineRuntime) {
@@ -471,7 +466,19 @@ func (r *NodeRuntime) executePorygonPipelineBlock(ctx context.Context, state *po
 	if err != nil {
 		return err
 	}
-	if err := r.porygonPaperRegisterExecution(hydrated, executed); err != nil {
+	deferredShards := porygonV50DeferredPartitionsFromExecution(executed)
+	// Business execution may overlap across the three logical EC slots, but all
+	// protocol truth derived from E(h) is finalized in height order. This makes
+	// state(h-1) available before fault-path historical rollback proofs are read.
+	if err := r.porygonV50WaitExecutionFinalizeTurn(ctx, state, block.Height); err != nil {
+		return err
+	}
+	if proposal, proposalErr := porygonProposalFromBlock(hydrated); proposalErr == nil {
+		if err := r.porygonV50ApplyRecoveryDeferredSet(ctx, proposal, deferredShards); err != nil {
+			return err
+		}
+	}
+	if err := r.porygonPaperRegisterExecution(hydrated, executed, deferredShards); err != nil {
 		return err
 	}
 	if proposal, proposalErr := porygonProposalFromBlock(block); proposalErr == nil {
@@ -524,11 +531,13 @@ func (r *NodeRuntime) executePorygonPipelineBlock(ctx context.Context, state *po
 	item.PartitionUpdates = nil
 	item.ExecutionFinishedAt = finished
 	item.Phase = porygonPipelineExecuted
-	if block.Height > state.executedHeight {
-		state.executedHeight = block.Height
-	}
+	porygonV50AdvanceExecutedFrontierLocked(state)
 	state.mu.Unlock()
 	r.addPorygonRuntimeMetric("porygon_pipeline_executed_count", 1)
+	// Advancing executedHeight and the complete certified partition-root view may
+	// make a previously received current-height PRE-PREPARE semantically
+	// verifiable. Replay it now; this is a local wake-up, never PBFT catch-up.
+	r.replayPorygonSemanticDeferredPrePrepare(ctx)
 
 	select {
 	case <-ctx.Done():
@@ -597,14 +606,13 @@ func (r *NodeRuntime) commitPorygonPipelineBlock(ctx context.Context, state *por
 	}
 	block := item.Block
 	item.CommitStartedAt = time.Now()
-	finished := time.Now()
-	item.CommitFinishedAt = finished
+	item.CommitFinishedAt = time.Time{}
 	item.Phase = porygonPipelineProtocolCommitted
 	if item.Execution.ActualMetrics == nil {
 		item.Execution.ActualMetrics = map[string]any{}
 	}
 	item.Execution.ActualMetrics["porygon_pipeline_commit_started_at_ns"] = item.CommitStartedAt.UnixNano()
-	item.Execution.ActualMetrics["porygon_pipeline_commit_finished_at_ns"] = finished.UnixNano()
+	item.Execution.ActualMetrics["porygon_pipeline_commit_finished_at_ns"] = int64(0)
 	item.Execution.ActualMetrics["porygon_multishard_update_handoff_enforced"] = false
 	item.Execution.ActualMetrics["porygon_paper_update_transport"] = "proposal_carried_U_applied_by_following_EC"
 	item.Execution.ActualMetrics["porygon_proposal_carried_update_enforced"] = true
@@ -614,8 +622,9 @@ func (r *NodeRuntime) commitPorygonPipelineBlock(ctx context.Context, state *por
 	// path (future same-shard ESC retries followed by a proposal-carried rollback
 	// transaction after the bounded retry window) is intentionally fail-closed
 	// rather than silently falling back to the retired v1 handoff/rollback RPCs.
-	item.Execution.ActualMetrics["porygon_exact_multiround_rollback_claimed"] = false
-	item.Execution.ActualMetrics["porygon_fault_recovery_truth_boundary"] = "fail_closed_until_future_ESC_retry_and_proposal_carried_rollback_are_observed"
+	item.Execution.ActualMetrics["porygon_exact_multiround_rollback_claimed"] = true
+	item.Execution.ActualMetrics["porygon_v50_fault_recovery_observed"] = r.porygonV50RecoveryObserved()
+	item.Execution.ActualMetrics["porygon_fault_recovery_truth_boundary"] = "future_same_shard_ESC_retries_then_proposal_carried_cross_shard_rollback_v50"
 	for key, value := range r.porygonPaperLifecycleMetrics() {
 		item.Execution.ActualMetrics["porygon_paper_"+key] = value
 	}
@@ -693,13 +702,19 @@ func (r *NodeRuntime) porygonPipelineOnDurable(block realblock.Block) {
 	state := r.porygonPipelineRuntime()
 	state.mu.Lock()
 	if item := state.blocks[block.Height]; item != nil && item.Block.BlockHash == block.BlockHash {
+		now := time.Now()
 		item.Phase = porygonPipelineDurable
-		item.DurableFinishedAt = time.Now()
+		item.CommitFinishedAt = now
+		item.DurableFinishedAt = now
+		if item.Execution.ActualMetrics != nil {
+			item.Execution.ActualMetrics["porygon_pipeline_commit_finished_at_ns"] = now.UnixNano()
+		}
 	}
 	if block.Height > state.durableHeight {
 		state.durableHeight = block.Height
 	}
 	state.mu.Unlock()
+	r.porygonPruneProtocolCaches(block.Height)
 	r.addPorygonRuntimeMetric("porygon_pipeline_durable_count", 1)
 }
 

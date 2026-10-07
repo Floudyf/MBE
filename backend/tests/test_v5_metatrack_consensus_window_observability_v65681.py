@@ -9,42 +9,49 @@ def w(path: Path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(''.join(json.dumps(x)+'\n' for x in rows), encoding='utf-8')
 
-def routing(o,sh,b,wseq,start,end,wn,sn,cp,rnd,preds=None,req=0,rr=0):
+# MBE_METATRACK_MECHPACK_V23_STREAMING_OBS_TEST
+def routing(o,sh,b,wseq,start,end,wn,sn,cp,rnd,preds=None,req=0,rr=0,batch_n=2,batch_sn=1):
     sv=[]
-    if req: sv=[{'key':f'k{req}','required_version':req,'required_execution_round':rr}]
-    return {'routing_ordinal':o,'execution_shard':sh,'route_batch_sequence':b,
-      'consensus_execution_predecessor_ordinals':preds or [],'consensus_execution_round':rnd,'state_versions':sv,
-      'consensus_window_sequence':wseq,'consensus_window_start_batch_sequence':start,'consensus_window_end_batch_sequence':end,
-      'consensus_window_route_batch_count':end-start+1,'consensus_window_transaction_count':wn,
-      'consensus_window_shard_transaction_count':sn,'consensus_window_critical_path':cp}
+    if req: sv=[{"key":f"k{req}","required_version":req,"required_execution_round":rr}]
+    return {"routing_ordinal":o,"execution_shard":sh,"route_batch_sequence":b,
+      "route_batch_transaction_count":batch_n,"route_batch_shard_transaction_count":batch_sn,
+      "consensus_execution_predecessor_ordinals":preds or [],"consensus_execution_round":rnd,"state_versions":sv,
+      "consensus_window_sequence":wseq,"consensus_window_start_batch_sequence":start,"consensus_window_end_batch_sequence":end,
+      "consensus_window_route_batch_count":end-start+1,"consensus_window_transaction_count":wn,
+      "consensus_window_shard_transaction_count":sn,"consensus_window_critical_path":cp}
 
-def tx(t,r): return {'tx_id':t,'execution_routing':r}
-def block(h,sh,height,txs): return {'block_hash':h,'shard_id':sh,'height':height,'tx_list':txs}
+def tx(t,r): return {"tx_id":t,"execution_routing":r}
+def block(h,sh,height,txs): return {"block_hash":h,"shard_id":sh,"height":height,"tx_list":txs}
 
 def test_postrun_durable_reconstruction(tmp_path: Path):
-    t1=tx('t1',routing(1,'s0',1,1,1,2,4,2,2,1)); t2=tx('t2',routing(2,'s1',1,1,1,2,4,2,2,2,[1]))
-    t3=tx('t3',routing(3,'s0',2,1,1,2,4,2,2,3)); t4=tx('t4',routing(4,'s1',2,1,1,2,4,2,2,4,[3]))
-    t5=tx('t5',routing(5,'s0',3,2,3,3,2,1,2,5,[4])); t6=tx('t6',routing(6,'s1',3,2,3,3,2,1,2,6,[5]))
-    bs={'s0':[block('a','s0',1,[t1,t3]),block('b','s0',2,[t5])], 's1':[block('c','s1',1,[t2,t4]),block('d','s1',2,[t6])]}
-    for sh,nodes in [('s0',['n0','n1']),('s1',['n4','n5'])]:
+    # Streaming V669 signs an immutable cumulative prefix on each RouteBatch.
+    # Batch 1 is prefix [1]; batch 2 extends the same window to [1,2];
+    # batch 3 starts window 2 because extending [1,2] would not improve N/L.
+    t1=tx("t1",routing(1,"s0",1,1,1,1,2,1,2,1)); t2=tx("t2",routing(2,"s1",1,1,1,1,2,1,2,2,[1]))
+    t3=tx("t3",routing(3,"s0",2,1,1,2,4,2,2,3)); t4=tx("t4",routing(4,"s1",2,1,1,2,4,2,2,4,[3]))
+    t5=tx("t5",routing(5,"s0",3,2,3,3,2,1,2,5,[4])); t6=tx("t6",routing(6,"s1",3,2,3,3,2,1,2,6,[5]))
+    bs={"s0":[block("a","s0",1,[t1,t3]),block("b","s0",2,[t5])], "s1":[block("c","s1",1,[t2,t4]),block("d","s1",2,[t6])]}
+    for sh,nodes in [("s0",["n0","n1"]),("s1",["n4","n5"])]:
         for n in nodes:
-            w(tmp_path/'nodes'/n/'blocks.jsonl',bs[sh]); w(tmp_path/'nodes'/n/'commit_markers.jsonl',[{'block_hash':x['block_hash'],'committed':True} for x in bs[sh]])
-    (tmp_path/'real_cluster_summary.json').write_text(json.dumps({'configured_block_size':2,'method_config_id':'metatrack_latest','plugin_profile':{'block_producer':{'plugin_id':'metatrack_nl_window_v669'}}}),encoding='utf-8')
+            w(tmp_path/"nodes"/n/"blocks.jsonl",bs[sh]); w(tmp_path/"nodes"/n/"commit_markers.jsonl",[{"block_hash":x["block_hash"],"committed":True} for x in bs[sh]])
+    (tmp_path/"real_cluster_summary.json").write_text(json.dumps({"configured_block_size":2,"method_config_id":"metatrack_latest","plugin_profile":{"block_producer":{"plugin_id":"metatrack_nl_window_v669"}}}),encoding="utf-8")
     s=summarize_metatrack_consensus_windows(tmp_path)
-    assert s['available'] is True
-    assert s['truth_scope']=='durable_signed_dependency_closed_adaptive_n_over_l_consensus_window_reconstruction_v669'
-    assert [x['window_sequence'] for x in s['windows']]==[1,2]
-    assert s['windows'][0]['recomputed_critical_path']==2
-    assert s['windows'][0]['candidate_critical_path']==4
-    assert s['windows'][0]['stop_reason']=='block_size_limit'
-    assert s['metrics']['metatrack_consensus_window_signed_reconstruction_match'] is True
-    assert s['metrics']['metatrack_consensus_window_observed_pbft_block_count']==4
-    assert s['metrics']['metatrack_consensus_window_baseline_route_batch_pbft_block_count']==6
-    assert s['metrics']['metatrack_consensus_window_pbft_blocks_saved']==2
-    assert s['metrics']['metatrack_consensus_window_aggregation_active'] is True
-    assert s['metrics']['metatrack_consensus_window_internal_admission_mismatch_count']==0
-    assert (tmp_path/'metatrack_consensus_window_plan.jsonl').is_file()
-    assert (tmp_path/'aggregate/metatrack_consensus_window_summary.json').is_file()
+    assert s["available"] is True
+    assert s["schema_version"]=="mbe_metatrack_consensus_window_observability_v2"
+    assert s["truth_scope"]=="durable_signed_streaming_prefix_leader_aggregation_v2"
+    assert len(s["windows"])==4
+    assert sorted({x["window_sequence"] for x in s["windows"]})==[1,2]
+    assert sum(1 for x in s["windows"] if x["route_batch_count"]==2)==2
+    assert all(x["signed_reconstruction_match"] for x in s["windows"])
+    assert s["metrics"]["metatrack_consensus_window_signed_reconstruction_match"] is True
+    assert s["metrics"]["metatrack_consensus_window_observed_pbft_block_count"]==4
+    assert s["metrics"]["metatrack_consensus_window_baseline_route_batch_pbft_block_count"]==6
+    assert s["metrics"]["metatrack_consensus_window_pbft_blocks_saved"]==2
+    assert s["metrics"]["metatrack_consensus_window_aggregation_active"] is True
+    assert s["metrics"]["metatrack_consensus_window_client_hold_removed"] is True
+    assert (tmp_path/"metatrack_consensus_window_plan.jsonl").is_file()
+    assert (tmp_path/"aggregate/metatrack_consensus_window_summary.json").is_file()
+
 
 def test_asymmetric_shard_projection_counts_are_valid_window_metadata(tmp_path: Path):
     # Global window metadata must agree across shards, while the signed shard-local
@@ -98,6 +105,9 @@ def test_v669_observability_contract_tokens():
     assert "metatrack_nl_window_v669" in source
     assert "metatrack_consensus_window_n_over_l_stop_count" in source
     assert "durable_signed_dependency_closed_adaptive_n_over_l_consensus_window_reconstruction_v669" in source
+    assert "_summarize_metatrack_streaming_windows_v2" in source
+    assert "durable_signed_streaming_prefix_leader_aggregation_v2" in source
+    assert "metatrack_consensus_window_client_hold_removed" in source
 
 
 def test_v669_producer_specific_truth_scope_survives_metric_extractor():

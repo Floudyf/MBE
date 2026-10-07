@@ -240,9 +240,11 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
+# MBE_METATRACK_MECHPACK_V1_PROFILE
+# MBE_METATRACK_MECHPACK_V2_PROFILE
     "metatrack_ab_route": V5FormalMethod(
         method_id="metatrack_ab_route",
-        display_name="去掉共现矩阵分片",
+        display_name="历史子消融-无局部性放置",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -285,7 +287,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
             "routing": "metatrack_coaccess_routing",
-            "block_producer": "metatrack_route_batch_producer",
+            "block_producer": "time_or_count_block_producer",
             "execution": "dual_track_execution",
             "scheduler": "fast_first_scheduler",
             "block_executor": "metatrack_block_executor",
@@ -294,12 +296,13 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         },
         plugin_config_overrides={
             "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
+            "block_producer": {"dependency_closed_consensus": False},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
     "metatrack_ab_state": V5FormalMethod(
         method_id="metatrack_ab_state",
-        display_name="去掉状态预取",
+        display_name="去掉状态局部化",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -312,8 +315,8 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
-            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "ablation_no_coaccess_sharding_v675": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": False, "ablation_on_demand_state_fetch_v661": True, "batch_remote_writeback": False, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": False, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
     "metatrack_ab_handoff": V5FormalMethod(
@@ -332,6 +335,46 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
             "block_producer": {"dependency_closed_consensus": True},
             "block_executor": {"worker_count": 4, "control_policy": "declared_access_frontier_v2", "local_exact_version_handoff": False, "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "ablation_force_home_exact_v660": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
+    # MBE_METATRACK_DIAG_V27_PROFILE
+    "metatrack_diag_parallel": V5FormalMethod(
+        method_id="metatrack_diag_parallel",
+        display_name="诊断：统一单轨并行",
+        role="custom",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "metatrack_single_conservative_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
+    # MBE_METATRACK_DIAG_V28_PROFILE
+    "metatrack_diag_serial": V5FormalMethod(
+        method_id="metatrack_diag_serial",
+        display_name="诊断：双轨单业务执行",
+        role="custom",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True, "diagnostic_single_business_execution_v28": True},
         },
     ),
 }
@@ -501,7 +544,7 @@ OPTME_TXALLO_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "normal_commit",
         },
         plugin_config_overrides={
-            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": True},
+            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": True, "dynamic_a_txallo_runtime": True, "a_epoch_blocks": 15, "g_epoch_multiple": 20},
             "block_executor": {"worker_count": 1},
         },
     ),
@@ -517,7 +560,7 @@ OPTME_TXALLO_BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "cross_shard": "txallo_no_relay",
         },
         plugin_config_overrides={
-            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": True},
+            "sharding": {"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": True, "dynamic_a_txallo_runtime": True, "a_epoch_blocks": 15, "g_epoch_multiple": 20},
             "block_executor": {"worker_count": 1},
         },
     ),
@@ -683,6 +726,25 @@ def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:
         if suite == "comparison_experiment" and len(plan.methods) < 2:
             raise FormalPlanValidationError("comparison_experiment requires at least two methods")
         if suite == "ablation_experiment":
+            # MBE_METATRACK_MECHPACK_V24_FORMAL_MATRIX
+            # The public MetaTrack paper matrix has exactly three primary
+            # mechanism ablations. Historical placement/handoff sub-ablations
+            # remain registered for diagnostics but are forbidden in a formal
+            # MetaTrack ablation suite even if a stale frontend sends them.
+            if "metatrack_latest" in method_ids:
+                official_metatrack_ids = {
+                    "metatrack_latest",
+                    "metatrack_ab_track",
+                    "metatrack_ab_cons",
+                    "metatrack_ab_state",
+                }
+                unexpected_metatrack_methods = sorted(set(method_ids) - official_metatrack_ids)
+                if unexpected_metatrack_methods:
+                    raise FormalPlanValidationError(
+                        "formal MetaTrack ablation_experiment accepts only Full + "
+                        "w/o Dual Track + w/o Consensus Aggregation + w/o State Locality; "
+                        f"unexpected methods: {unexpected_metatrack_methods}"
+                    )
             mains = [method for method in plan.methods if method.role == "main"]
             controls = [method for method in plan.methods if method.role in {"ablation", "baseline"}]
             if len(plan.methods) < 2 or len(mains) != 1 or not controls:

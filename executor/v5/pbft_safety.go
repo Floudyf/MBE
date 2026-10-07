@@ -422,6 +422,18 @@ func (r *NodeRuntime) validateConsensusBlockBody(block realblock.Block) error {
 		if _, err := r.validateMetaTrackPartitionInvariantFrontierV658(block); err != nil {
 			return fmt.Errorf("consensus block MetaTrack v6.5.8 partition-invariant frontier validation: %w", err)
 		}
+		// MBE_METATRACK_MECHPACK_V2_PBFT_ADMISSION
+	} else if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == metaTrackNLWindowProducerV669ID && metaTrackStreamingWindowMetadataV2(block) {
+		if _, err := r.validateMetaTrackStreamingWindowV2(block); err != nil {
+			return fmt.Errorf("consensus block MetaTrack v2 leader-streaming window validation: %w", err)
+		}
+	} else if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == "time_or_count_block_producer" && metaTrackTransactionFrontierMetadataV656(block) {
+		// Formal w/o-consensus-aggregation still signs predecessor/global-round
+		// truth, but it deliberately does not opt into the historical v6.5.6.7
+		// round-band batching policy. Validate the shared dependency frontier only.
+		if _, err := r.validateMetaTrackTransactionFrontierV656(block); err != nil {
+			return fmt.Errorf("consensus block MetaTrack v2 single-projection frontier validation: %w", err)
+		}
 	} else if metaTrackCriticalWidthWindowMetadataV6568(block) {
 		if _, err := r.validateMetaTrackCriticalWidthWindowV6568(block); err != nil {
 			return fmt.Errorf("consensus block MetaTrack v6.5.6.8 critical-width window validation: %w", err)

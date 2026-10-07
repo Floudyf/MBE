@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,8 @@ type optmeSimulationResult struct {
 type optmeExecutionMetrics struct {
 	Mode                             string `json:"mode"`
 	WorkerCount                      int    `json:"worker_count"`
+	ProjectedUnknownAccessCount      int    `json:"projected_unknown_access_count"`
+	InputAccessFidelity              string `json:"input_access_fidelity"`
 	SimulationMS                     int64  `json:"simulation_ms"`
 	GraphSchedulingMS                int64  `json:"graph_scheduling_ms"`
 	CommitMS                         int64  `json:"commit_ms"`
@@ -63,6 +66,25 @@ type optmeTxEvidence struct {
 	ReexecutionSuccess    bool   `json:"reexecution_success"`
 	SecondPassInvalidated bool   `json:"second_pass_invalidated"`
 	TerminalSuccess       bool   `json:"terminal_success"`
+}
+
+// MBE_OPTME_V24_INPUT_FIDELITY: historical Alien Worlds UNKNOWN declarations
+// are conservatively projected as read_write by the workload adapter. Do not
+// alter that replay semantics here; expose it so projected evidence is not
+// mislabeled as native runtime-RW truth.
+func optmeInputAccessFidelity(block realblock.Block) (string, int) {
+	projectedUnknown := 0
+	for _, item := range block.TxList {
+		for _, access := range item.AccessList {
+			if strings.TrimSpace(access.UpdateSemantics) == "layered_v2_replay_projection_unknown" {
+				projectedUnknown++
+			}
+		}
+	}
+	if projectedUnknown > 0 {
+		return "historical_static_unknown_promoted_to_rmw_projection", projectedUnknown
+	}
+	return "declared_runtime_rw_no_unknown_projection", 0
 }
 
 func optmeObservedFromDeltas(deltas []execution.TxDelta) []optmeObservedTx {
@@ -158,6 +180,7 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 	if workers < 1 {
 		workers = 1
 	}
+	inputAccessFidelity, projectedUnknownAccessCount := optmeInputAccessFidelity(input.Block)
 	base := input.BaseStateSnapshot
 	working := literatureCopyStringMap(base)
 	commitmentStarted := time.Now()
@@ -450,7 +473,7 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 	result.DeterministicMaterializationMS = commitMS.Milliseconds()
 	result.StateCommitmentMS = commitmentMS.Milliseconds()
 	metrics := optmeExecutionMetrics{
-		Mode: p.mode, WorkerCount: workers,
+		Mode: p.mode, WorkerCount: workers, ProjectedUnknownAccessCount: projectedUnknownAccessCount, InputAccessFidelity: inputAccessFidelity,
 		SimulationMS: simulationMS.Milliseconds(), GraphSchedulingMS: schedulingMS.Milliseconds(), CommitMS: commitMS.Milliseconds(), ReexecutionMS: reexecutionMS.Milliseconds(), ValidationMS: validationMS.Milliseconds(),
 		ObservedReadCount: observedReads, ObservedWriteCount: observedWrites, AddressCount: plan.AddressCount, UnitCount: plan.UnitCount, SequenceCount: len(plan.Sequences), MaximumSequenceWidth: plan.MaxWidth,
 		EarlyAbortCount: len(plan.Rescheduled), EarlyDetectionCount: len(plan.EarlyDetected), HierarchicalAbortCount: len(plan.HierarchicalAborted), ReorderedCount: len(plan.Reordered), RescheduledTransactionCount: len(plan.Rescheduled), RescheduledEpochCount: len(plan.RescheduleEpochs),
@@ -461,6 +484,10 @@ func (p optmeBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExecuti
 		"optme_mode":                                p.mode,
 		"optme_source_commit":                       "4cac103bd98440670d71219dfa185b8516ea6512",
 		"optme_parallel_acg":                        true,
+		"optme_projected_unknown_access_count":      projectedUnknownAccessCount,
+		"optme_input_access_fidelity":               inputAccessFidelity,
+		"optme_execution_window_mapping":            "one_mbe_pbft_block_to_one_optme_execution_window",
+		"optme_commit_materialization_model":        "mbe_deterministic_index_order_platform_adapter",
 		"optme_simulation_ms":                       metrics.SimulationMS,
 		"optme_graph_scheduling_ms":                 metrics.GraphSchedulingMS,
 		"optme_commit_ms":                           metrics.CommitMS,

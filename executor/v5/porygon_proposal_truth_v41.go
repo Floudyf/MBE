@@ -38,6 +38,20 @@ func (r *NodeRuntime) porygonPaperCertifiedUpdatesForProposal(height uint64) ([]
 	if executed.ExecutionResult.Height != originHeight || executed.ExecutionResult.BlockHash != block.BlockHash {
 		return nil, fmt.Errorf("Porygon Proposal.U certified source execution identity mismatch at height %d", originHeight)
 	}
+	if executed.PorygonCertifiedExecution != nil {
+		truth := porygonCloneCertifiedExecutionTruth(*executed.PorygonCertifiedExecution)
+		if err := porygonValidateCertifiedExecutionTruth(truth, block.BlockHash, originHeight, height); err != nil {
+			return nil, err
+		}
+		return porygonCloneProposalUpdates(truth.ProposalU), nil
+	}
+	// Focused legacy unit harnesses created before v4.5 install synthetic
+	// execution records without a real Porygon block executor. Keep that isolated
+	// compatibility path, but production Porygon must fail closed if the frozen
+	// ESC/OC certified truth is absent.
+	if r.plugins.BlockExecutor != nil && r.plugins.BlockExecutor.ID() == porygonBlockExecutorID {
+		return nil, fmt.Errorf("Porygon Proposal.U frozen certified execution truth missing at height %d for proposal %d", originHeight, height)
+	}
 	plan, err := porygonPipelinePlan(block)
 	if err != nil {
 		return nil, err
@@ -102,12 +116,26 @@ func (r *NodeRuntime) porygonPaperCertifiedUpdatesForProposal(height uint64) ([]
 // porygonPaperVerifyCertifiedProposalU makes leader construction and backup
 // verification consume exactly the same execution-derived Proposal.U truth.
 func (r *NodeRuntime) porygonPaperVerifyCertifiedProposalU(height uint64, actual []PorygonProposalUpdate) error {
-	expected, err := r.porygonPaperCertifiedUpdatesForProposal(height)
+	actualNormal, actualRecovery := porygonV50SplitProposalUpdates(actual)
+	expectedNormal, err := r.porygonPaperCertifiedUpdatesForProposal(height)
 	if err != nil {
 		return err
 	}
-	if stableJSONDigest(actual) != stableJSONDigest(expected) {
-		return fmt.Errorf("porygon L/U/T proposal U set mismatch at height %d", height)
+	expectedNormal = porygonV50MergeProposalUpdates(expectedNormal, nil)
+	expectedDigest := porygonProposalUSemanticDigest(expectedNormal)
+	actualDigest := porygonProposalUSemanticDigest(actualNormal)
+	if actualDigest != expectedDigest {
+		r.addPorygonRuntimeMetric("porygon_proposal_u_mismatch_count", 1)
+		r.addPorygonRuntimeMetric("porygon_proposal_u_mismatch_actual_count", int64(len(actualNormal)))
+		r.addPorygonRuntimeMetric("porygon_proposal_u_mismatch_expected_count", int64(len(expectedNormal)))
+		return fmt.Errorf("porygon L/U/T normal proposal U set mismatch at height %d: origin_height=%d actual_count=%d expected_count=%d actual_digest=%s expected_digest=%s first_diff={%s}", height, height-2, len(actualNormal), len(expectedNormal), actualDigest, expectedDigest, porygonProposalUDiffSummary(expectedNormal, actualNormal))
+	}
+	expectedRecovery := r.porygonV50RecoveryProposalUpdates(height)
+	if porygonProposalUSemanticDigest(actualRecovery) != porygonProposalUSemanticDigest(expectedRecovery) {
+		return fmt.Errorf("porygon L/U/T recovery U set mismatch at height %d: actual=%s expected=%s", height, porygonProposalUSemanticDigest(actualRecovery), porygonProposalUSemanticDigest(expectedRecovery))
+	}
+	if err := r.porygonV50ValidateRecoveryProposalUpdates(height, actualRecovery); err != nil {
+		return err
 	}
 	return nil
 }

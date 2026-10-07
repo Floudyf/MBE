@@ -158,11 +158,13 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 	multiShardUpdateCertificateDigest := ""
 	protocolGlobalStateRoot := ""
 	certifiedPartitionRoots := map[string]string{}
+	deferredPartitions := map[string]bool{}
 	multiShardUpdateAttempt := 0
 	partitionMaterializationUpdateCount := 0
 	distributedOwnership := strings.TrimSpace(executionShardID) != "" && (batchExchange != nil || waveExchange != nil)
 	localExecutedAll := map[string]bool{}
 	distributedCertified := map[string]porygonWaveResult{}
+	certifiedESCResultDigests := map[string]string{}
 	distributedObservedByWave := map[int]int{}
 	finalAssignments := append([]porygonTxAssignment(nil), plan.Assignments...)
 	finalAssignmentByID := map[string]porygonTxAssignment{}
@@ -239,6 +241,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 			// the current validator.  Storage replicas authenticate the prospective
 			// Proposal.T + U + current-ITx root; current CTx remain S candidates.
 			certifiedLogicalRoot := ""
+			localDeferredPartitions := map[string]bool{}
 			if paperProposalMode {
 				if multiShardUpdate == nil {
 					return BlockExecutionResult{}, fmt.Errorf("Porygon Paper2 logical partition-root projection unavailable")
@@ -250,6 +253,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 				if err != nil {
 					return BlockExecutionResult{}, err
 				}
+				localDeferredPartitions = porygonV50DeferredPartitionSet(rootCert)
 				for _, part := range rootCert.Partitions {
 					if part.PartitionID == executionShardID {
 						certifiedLogicalRoot = part.ProspectiveRoot
@@ -279,7 +283,8 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 			}
 			localPayload := PorygonESCBatchResult{
 				BlockHash: block.BlockHash, Height: block.Height, ExecutionShardID: executionShardID,
-				Results: make([]PorygonBatchTxResult, 0, len(localBatchResults)), StateRoot: certifiedLogicalRoot, BusinessExecutionUS: localExecutionUS,
+				Results: make([]PorygonBatchTxResult, 0, len(localBatchResults)), StateRoot: certifiedLogicalRoot,
+				DeferredPartitions: sortedBoolKeys(localDeferredPartitions), BusinessExecutionUS: localExecutionUS,
 			}
 			for _, item := range localBatchResults {
 				localPayload.Results = append(localPayload.Results, PorygonBatchTxResult{TxID: item.Item.TxID, Receipt: item.Receipt, Delta: item.Delta})
@@ -292,8 +297,12 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 			if certificate.BlockHash != block.BlockHash || certificate.Height != block.Height {
 				return BlockExecutionResult{}, fmt.Errorf("porygon ESC batch certificate block identity mismatch")
 			}
+			for partitionID := range porygonV50DeferredPartitionsFromBatchCertificate(certificate) {
+				deferredPartitions[partitionID] = true
+			}
 			escCertificateCount = 1
 			for _, entry := range certificate.Entries {
+				certifiedESCResultDigests[entry.ExecutionShardID] = entry.ResultDigest
 				if entry.Result.StateRoot == "" {
 					return BlockExecutionResult{}, fmt.Errorf("porygon ESC batch certificate missing partition state root for %s", entry.ExecutionShardID)
 				}
@@ -329,6 +338,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 			}
 			escCertificateCount = 1
 			for _, entry := range certificate.Entries {
+				certifiedESCResultDigests[entry.ExecutionShardID] = entry.ResultDigest
 				for _, certified := range entry.Result.Results {
 					item, ok := byID[certified.TxID]
 					if !ok || seen[certified.TxID] {
@@ -343,6 +353,16 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 					}
 					seen[certified.TxID] = true
 					distributedCertified[certified.TxID] = porygonWaveResult{Item: item, Receipt: certified.Receipt, Delta: certified.Delta}
+				}
+			}
+		}
+		if paperProposalMode && len(deferredPartitions) > 0 {
+			if err := porygonV50ValidateDeferredCertifiedDisjoint(paperProposal, deferredPartitions, plan.ExecutionShardCount, distributedCertified); err != nil {
+				return BlockExecutionResult{}, err
+			}
+			if strings.TrimSpace(storageShardID) != "" && deferredPartitions[storageShardID] {
+				if err := porygonV50RestoreDeferredProposalU(base, working, commitment, paperProposal, storageShardID, plan.ExecutionShardCount); err != nil {
+					return BlockExecutionResult{}, err
 				}
 			}
 		}
@@ -564,7 +584,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		result.StateUpdates[key] = value
 	}
 	if paperProposalMode {
-		materializedDelta, materializationErr := porygonPaperDurableStateDelta(paperProposal, allDeltas, finalAssignments, block.ShardID, storageShardID, plan.ExecutionShardCount)
+		materializedDelta, materializationErr := porygonPaperDurableStateDeltaV50(paperProposal, allDeltas, finalAssignments, block.ShardID, storageShardID, plan.ExecutionShardCount, deferredPartitions)
 		if materializationErr != nil {
 			return BlockExecutionResult{}, materializationErr
 		}
@@ -598,6 +618,14 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		result.Plan.OriginalTransactionIdxs = append(result.Plan.OriginalTransactionIdxs, indexByID[id])
 	}
 	result.PlanDigest = plan.PlanDigest
+	var certifiedExecutionTruth *PorygonCertifiedExecutionTruth
+	if distributedOwnership {
+		truth, truthErr := porygonBuildCertifiedExecutionTruth(block.BlockHash, block.Height, plan, finalAssignments, distributedCertified, certifiedESCResultDigests)
+		if truthErr != nil {
+			return BlockExecutionResult{}, truthErr
+		}
+		certifiedExecutionTruth = &truth
+	}
 	result.TransactionExecutionMS = executionDuration.Milliseconds()
 	result.DeterministicMaterializationMS = applyDuration.Milliseconds()
 	result.StateCommitmentMS = stateCommitmentDuration.Milliseconds()
@@ -666,7 +694,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_vrf_exact_claimed":                           false,
 		"porygon_state_owner_policy":                          "signed_access_account_object_owner_partition_no_metatrack_signal",
 		"porygon_cross_shard_conflict_policy":                 porygonCrossESCConflictPolicy,
-		"porygon_execution_result_threshold_policy":           "f_plus_one_above_byzantine_bound",
+		"porygon_execution_result_threshold_policy":           "strict_majority_more_than_half_for_sharded_execution_results",
 		"porygon_multi_shard_update_threshold_policy":         "strict_majority",
 		"porygon_real_cross_execution_shard_network":          distributedOwnership,
 		"porygon_generic_relay_finalize_used":                 false,
@@ -720,9 +748,21 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_wall_clock_pipeline_overlap_claimed":         wallClockPipelineOverlapClaimed,
 		"porygon_full_woec_pipeline_overlap_claimed":          false,
 		"porygon_cross_shard_atomicity_truth_boundary":        "single_esc_preexecution_S_then_OC_U_then_following_EC_application_then_later_proposal_commit",
+		"porygon_paper_fidelity_version":                       porygonPaperFidelityV50Version,
+		"porygon_sharded_execution_result_threshold_rule":      "strict_majority_more_than_half",
+		"porygon_v50_ec_slot":                                 porygonV50ECSlotForHeight(block.Height),
+		"porygon_v50_deferred_partitions":                     sortedBoolKeys(deferredPartitions),
+		"porygon_v50_deferred_partition_count":                len(deferredPartitions),
+	}
+	if certifiedExecutionTruth != nil {
+		metrics["porygon_certified_execution_truth_version"] = certifiedExecutionTruth.Version
+		metrics["porygon_certified_execution_semantic_digest"] = certifiedExecutionTruth.SemanticDigest
+		metrics["porygon_certified_execution_future_u_height"] = certifiedExecutionTruth.FutureProposalHeight
+		metrics["porygon_certified_execution_future_u_count"] = len(certifiedExecutionTruth.ProposalU)
+		metrics["porygon_certified_execution_future_u_digest"] = certifiedExecutionTruth.ProposalUDigest
 	}
 	return BlockExecutionResult{
-		ExecutionResult: result, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: plan.PlanDigest,
+		ExecutionResult: result, PorygonCertifiedExecution: certifiedExecutionTruth, StateDelta: stateKVsFromExecutionDelta(result.StateDelta), PlanDigest: plan.PlanDigest,
 		WorkerCount: workerCount, BlockExecutionMS: (poolSetupDuration + criticalPathDuration + applyDuration + stateCommitmentDuration).Milliseconds(),
 		TransactionExecutionMS: result.TransactionExecutionMS, DeterministicApplyMS: result.DeterministicMaterializationMS,
 		StateCommitmentMS: result.StateCommitmentMS, StateRootVersion: state.CommitmentVersion,

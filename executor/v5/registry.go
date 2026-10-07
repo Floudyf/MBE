@@ -478,20 +478,21 @@ type BlockExecutionInput struct {
 	MetaTrackExactAccessPolicy       string
 }
 type BlockExecutionResult struct {
-	ExecutionResult        execution.Result `json:"execution_result"`
-	StateDelta             []state.StateKV  `json:"state_delta"`
-	PlanDigest             string           `json:"execution_plan_digest"`
-	WorkerCount            int              `json:"worker_count"`
-	BlockExecutionMS       int64            `json:"block_execution_ms"`
-	TransactionExecutionMS int64            `json:"transaction_execution_ms"`
-	DeterministicApplyMS   int64            `json:"deterministic_apply_ms"`
-	StateDBApplyMS         int64            `json:"state_db_apply_ms"`
-	StateCommitmentMS      int64            `json:"state_commitment_ms"`
-	StateRootVersion       string           `json:"state_root_version"`
-	PersistenceMetrics     map[string]any   `json:"persistence_metrics,omitempty"`
-	ScheduleEvents         []ScheduleEvent  `json:"schedule_events,omitempty"`
-	ActualMetrics          map[string]any   `json:"actual_metrics,omitempty"`
-	BusinessAttempts       []BusinessExecutionAttempt
+	ExecutionResult           execution.Result                `json:"execution_result"`
+	PorygonCertifiedExecution *PorygonCertifiedExecutionTruth `json:"porygon_certified_execution,omitempty"`
+	StateDelta                []state.StateKV                 `json:"state_delta"`
+	PlanDigest                string                          `json:"execution_plan_digest"`
+	WorkerCount               int                             `json:"worker_count"`
+	BlockExecutionMS          int64                           `json:"block_execution_ms"`
+	TransactionExecutionMS    int64                           `json:"transaction_execution_ms"`
+	DeterministicApplyMS      int64                           `json:"deterministic_apply_ms"`
+	StateDBApplyMS            int64                           `json:"state_db_apply_ms"`
+	StateCommitmentMS         int64                           `json:"state_commitment_ms"`
+	StateRootVersion          string                          `json:"state_root_version"`
+	PersistenceMetrics        map[string]any                  `json:"persistence_metrics,omitempty"`
+	ScheduleEvents            []ScheduleEvent                 `json:"schedule_events,omitempty"`
+	ActualMetrics             map[string]any                  `json:"actual_metrics,omitempty"`
+	BusinessAttempts          []BusinessExecutionAttempt
 }
 type BusinessExecutionAttempt struct {
 	BlockHeight          uint64
@@ -1898,8 +1899,10 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 	}
 	if isMetaTrackRoutingID(input.RoutingPluginID) {
 		partitionInvariantV658 := boolFromAny(p.config["partition_invariant_consensus_v658"])
+		// MBE_METATRACK_MECHPACK_V2_LEADER_STREAMING
+		leaderStreamingWindowV2 := p.ID() == metaTrackNLWindowProducerV669ID
 		reserveLimit := limit
-		if partitionInvariantV658 {
+		if partitionInvariantV658 || leaderStreamingWindowV2 {
 			// Inspect the complete currently-ready pool without changing the physical
 			// block limit.  Deferred rows are released after selection.
 			reserveLimit = input.Pool.Len()
@@ -1915,6 +1918,8 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 		var err error
 		if partitionInvariantV658 {
 			selected, deferred, _, err = selectMetaTrackPartitionInvariantFrontierV658(reserved, limit, input.Proposer.ShardID, input.Pool)
+		} else if leaderStreamingWindowV2 && boolFromAny(p.config["dependency_closed_consensus"]) {
+			selected, deferred, _, err = selectMetaTrackStreamingWindowV2(reserved, limit, input.Proposer.ShardID)
 		} else if boolFromAny(p.config["dependency_closed_consensus"]) {
 			selected, deferred, _, err = selectMetaTrackCriticalWidthWindowV6568(reserved, limit, input.Proposer.ShardID, input.Pool)
 		} else {
@@ -3552,6 +3557,12 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	}
 	batchEntryStatePrefetch, _ := p.config["batch_entry_state_prefetch"].(bool)
 	singleConservativeSerialV675 := executionPlugin.ID() == metaTrackSingleExecutionID
+	// MBE_METATRACK_DIAG_V28_SINGLE_BUSINESS
+	// Diagnostic only: preserve Full dual-track classification/fast-first ready
+	// policy and configured worker pool, but allow at most one business execution
+	// to be in flight. This is intentionally independent from the strict FIFO
+	// no-dual-track ablation.
+	diagnosticSingleBusinessV28 := boolFromAny(p.config[metaTrackDiagnosticSingleBusinessExecutionV28])
 	singleReadyQueueV661 := singleConservativeSerialV675 || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) // legacy flag fallback only
 	onDemandStateFetchV661 := boolFromAny(p.config[metaTrackAblationOnDemandStateFetchV661])
 	var batchFetch RemoteStateBatchFetchFunc
@@ -3559,7 +3570,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		batchFetch = input.RemoteStateBatchFetch
 	}
 	executionStarted := time.Now()
-	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, onDemandStateFetchV661)
+	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661)
 	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -3764,10 +3775,10 @@ func executeMetaTrackScheduleWithPolicy(ctx context.Context, schedule ScheduleRe
 }
 
 func executeMetaTrackScheduleWithOptions(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
-	return executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, nil, versionPublish, strictFrontier, localExactVersionHandoff, false, false, false)
+	return executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, nil, versionPublish, strictFrontier, localExactVersionHandoff, false, false, false, false)
 }
 
-func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, onDemandStateFetchV661 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
 	ordered := append([]tx.SignedTransaction(nil), schedule.Ordered...)
 	if singleReadyQueueV661 {
 		ordered = append([]tx.SignedTransaction(nil), block.TxList...)
@@ -3882,13 +3893,18 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	for _, item := range ordered {
 		singleFIFOOrder = append(singleFIFOOrder, txIdentifier(item))
 	}
+	// MBE_METATRACK_MECHPACK_V1_HOL
 	singleFIFOReady := map[string]bool{}
 	singleFIFOReleased := map[string]bool{}
 	singleFIFOBlockedReady := map[string]bool{}
 	singleFIFOBlockedHead := map[string]bool{}
+	singleFIFOReadyAt := map[string]time.Time{}
 	singleFIFOCursor := 0
 	singleFIFOBypassPreventedCount := 0
 	singleFIFOHeadBlockCount := 0
+	singleFIFOReadyBlockedDurationCount := 0
+	singleFIFOReadyBlockedSumNS := int64(0)
+	singleFIFOReadyBlockedMaxNS := int64(0)
 	for _, item := range ordered {
 		txID := txIdentifier(item)
 		for _, token := range classification.StateWaitKeys[txID] {
@@ -3987,6 +4003,9 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				readyQueueStarted[txID] = time.Now()
 			}
 			singleFIFOReady[txID] = true
+			if _, exists := singleFIFOReadyAt[txID]; !exists {
+				singleFIFOReadyAt[txID] = time.Now()
+			}
 			for singleFIFOCursor < len(singleFIFOOrder) {
 				head := singleFIFOOrder[singleFIFOCursor]
 				if singleFIFOReleased[head] {
@@ -3997,6 +4016,16 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 					break
 				}
 				singleFIFOReleased[head] = true
+				if singleFIFOBlockedReady[head] {
+					if readyAt, ok := singleFIFOReadyAt[head]; ok {
+						waitNS := time.Since(readyAt).Nanoseconds()
+						singleFIFOReadyBlockedDurationCount++
+						singleFIFOReadyBlockedSumNS += waitNS
+						if waitNS > singleFIFOReadyBlockedMaxNS {
+							singleFIFOReadyBlockedMaxNS = waitNS
+						}
+					}
+				}
 				conservativeReady = append(conservativeReady, head)
 				recordDepths()
 				headDecision := decisionByID[head]
@@ -4638,7 +4667,7 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		return ""
 	}
 	singleSerialDispatchLimit := workerCount
-	if singleConservativeSerialV675 {
+	if singleConservativeSerialV675 || diagnosticSingleBusinessV28 {
 		singleSerialDispatchLimit = 1
 	}
 	dispatchCapacity := func() error {
@@ -5075,7 +5104,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		"metatrack_single_fifo_hol_enabled":                     singleConservativeSerialV675,
 		"metatrack_single_fifo_bypass_prevented_count":          singleFIFOBypassPreventedCount,
 		"metatrack_single_fifo_head_block_count":                singleFIFOHeadBlockCount,
+		"metatrack_single_fifo_ready_blocked_duration_count":    singleFIFOReadyBlockedDurationCount,
+		"metatrack_single_fifo_ready_blocked_sum_ms":            float64(singleFIFOReadyBlockedSumNS) / float64(time.Millisecond),
+		"metatrack_single_fifo_ready_blocked_max_ms":            float64(singleFIFOReadyBlockedMaxNS) / float64(time.Millisecond),
 		"metatrack_single_serial_execution_enabled":             singleConservativeSerialV675,
+		"metatrack_diag_single_business_execution_v28":          diagnosticSingleBusinessV28,
 		"metatrack_single_serial_dispatch_limit":                singleSerialDispatchLimit,
 		"metatrack_dependency_influence_scheduler_enabled":      dependencyInfluencePriority,
 		"metatrack_ready_round_scheduler_enabled":               readyRoundArbitration,
@@ -5856,6 +5889,7 @@ func makeBasic(category, id string, config map[string]any) basicPlugin {
 }
 
 const metaTrackHashRoutingID = "metatrack_hash_routing"
+const metaTrackDiagnosticSingleBusinessExecutionV28 = "diagnostic_single_business_execution_v28"
 const metaTrackSingleConservativeExecutionID = "metatrack_single_conservative_execution"
 const metaTrackSingleExecutionID = "metatrack_single_execution"
 const metaTrackUnifiedReadyPolicyV667 = "single_conservative_serial_v675"

@@ -609,6 +609,17 @@ def _txallo_diagnostics(metrics: dict[str, Any]) -> dict[str, Any]:
     lambda_source = _first(metrics, ("txallo_lambda_source",))
     epsilon_source = _first(metrics, ("txallo_epsilon_source",))
     dynamic_a_enabled = _first(metrics, ("txallo_dynamic_a_txallo_runtime_enabled",))
+    a_epoch_blocks = _as_int(_first(metrics, ("txallo_a_epoch_blocks",)))
+    g_epoch_multiple = _as_int(_first(metrics, ("txallo_g_epoch_multiple",)))
+    committed_dynamic = _as_int(_first(metrics, ("txallo_committed_dynamic_transaction_count",)))
+    a_tx_count = _as_int(_first(metrics, ("txallo_a_txallo_transaction_count",)))
+    periodic_g_runs = _as_int(_first(metrics, ("txallo_periodic_g_txallo_run_count",)))
+    total_allocator_history = _as_int(_first(metrics, ("txallo_total_allocator_history_transaction_count",)))
+    mapping_epoch = _as_int(_first(metrics, ("txallo_mapping_epoch",)))
+    closed_source_epochs = _as_int(_first(metrics, ("txallo_closed_source_epoch_count",)))
+    pending_used = _as_int(_first(metrics, ("txallo_pending_or_uncommitted_transactions_used",)))
+    initial_g_lambda = _as_float(_first(metrics, ("txallo_initial_g_lambda",)))
+    initial_g_epsilon = _as_float(_first(metrics, ("txallo_initial_g_epsilon",)))
 
     epsilon_implied_reference_count = None
     if eps is not None and eps >= 0:
@@ -639,6 +650,17 @@ def _txallo_diagnostics(metrics: dict[str, Any]) -> dict[str, Any]:
         "lambda_source": lambda_source,
         "epsilon_source": epsilon_source,
         "dynamic_a_txallo_runtime_enabled": dynamic_a_enabled,
+        "a_epoch_blocks": a_epoch_blocks,
+        "g_epoch_multiple": g_epoch_multiple,
+        "committed_dynamic_transaction_count": committed_dynamic,
+        "a_txallo_transaction_count": a_tx_count,
+        "periodic_g_txallo_run_count": periodic_g_runs,
+        "total_allocator_history_transaction_count": total_allocator_history,
+        "mapping_epoch": mapping_epoch,
+        "closed_source_epoch_count": closed_source_epochs,
+        "pending_or_uncommitted_transactions_used": pending_used,
+        "initial_g_lambda": initial_g_lambda,
+        "initial_g_epsilon": initial_g_epsilon,
         "history_transaction_count": history,
         "mapped_account_count": accounts,
         "graph_edge_count": edges,
@@ -865,6 +887,18 @@ def _txallo_topology_diagnostics(item: dict[str, Any], metrics: dict[str, Any]) 
     modeled_cross = _as_float(d.get("modeled_cross_shard_ratio"))
     stddev = _as_float(d.get("modeled_workload_stddev"))
     modeled_lambda = _as_float(d.get("modeled_throughput_Lambda"))
+    dynamic_a_enabled = d.get("dynamic_a_txallo_runtime_enabled") is True
+    a_epoch_blocks = _as_int(d.get("a_epoch_blocks"))
+    g_epoch_multiple = _as_int(d.get("g_epoch_multiple"))
+    committed_dynamic = _as_int(d.get("committed_dynamic_transaction_count"))
+    a_tx_count = _as_int(d.get("a_txallo_transaction_count"))
+    periodic_g_runs = _as_int(d.get("periodic_g_txallo_run_count"))
+    total_allocator_history = _as_int(d.get("total_allocator_history_transaction_count"))
+    mapping_epoch = _as_int(d.get("mapping_epoch"))
+    closed_source_epochs = _as_int(d.get("closed_source_epoch_count"))
+    pending_used = _as_int(d.get("pending_or_uncommitted_transactions_used"))
+    initial_g_lambda = _as_float(d.get("initial_g_lambda"))
+    initial_g_epsilon = _as_float(d.get("initial_g_epsilon"))
 
     method = item.get("method") if isinstance(item.get("method"), dict) else {}
     configs = method.get("plugin_config_overrides") if isinstance(method, dict) else {}
@@ -873,26 +907,49 @@ def _txallo_topology_diagnostics(item: dict[str, Any], metrics: dict[str, Any]) 
     auto_epsilon = _as_float(sharding_cfg.get("epsilon")) == 0 if sharding_cfg else False
 
     initial_window_from_lambda = None
-    if k and k > 0 and lam is not None and lam > 0:
-        initial_window_from_lambda = int(round(lam * k))
-    initial_window_from_epsilon = d.get("epsilon_paper_experiment_implied_reference_transaction_count")
+    lambda_for_initial = initial_g_lambda if dynamic_a_enabled and initial_g_lambda is not None else lam
+    epsilon_for_initial = initial_g_epsilon if dynamic_a_enabled and initial_g_epsilon is not None else eps
+    if k and k > 0 and lambda_for_initial is not None and lambda_for_initial > 0:
+        initial_window_from_lambda = int(round(lambda_for_initial * k))
+    initial_window_from_epsilon = None
+    if epsilon_for_initial is not None and epsilon_for_initial >= 0:
+        guess = int(round(epsilon_for_initial / 1e-5))
+        if abs(epsilon_for_initial - guess * 1e-5) <= max(1e-12, abs(epsilon_for_initial) * 1e-9):
+            initial_window_from_epsilon = guess
 
     cadence_consistent = None
     reconstructed_history = None
     if allocation_mode in {"paper_g_snapshot", "paper_g_ratio_snapshot"}:
-        # snapshot-family mode: one G run over the complete selected pre-evaluation
-        # history and no synthetic A updates. With paper auto-calibration, both
-        # lambda*k and epsilon/1e-5 refer to this same history window.
         epsilon_ok = initial_window_from_epsilon is None or history is None or int(initial_window_from_epsilon) == history
         lambda_ok = initial_window_from_lambda is None or history is None or initial_window_from_lambda == history
-        cadence_consistent = bool(
-            history is not None
-            and (history == 0 or gruns == 1)
-            and (aruns in (None, 0))
-            and lambda_ok
-            and epsilon_ok
-        )
-        reconstructed_history = history
+        if dynamic_a_enabled:
+            committed_ok = committed_dynamic is not None and committed_dynamic >= 0
+            total_ok = (
+                history is not None and committed_dynamic is not None and total_allocator_history is not None
+                and total_allocator_history == history + committed_dynamic
+            )
+            cadence_ok = (
+                a_epoch_blocks == 15 and g_epoch_multiple == 20
+                and closed_source_epochs is not None and closed_source_epochs >= 0
+                and periodic_g_runs is not None and periodic_g_runs == closed_source_epochs // 20
+                and gruns is not None and gruns == 1 + periodic_g_runs
+                and aruns is not None and aruns >= 0
+                and mapping_epoch is not None and mapping_epoch == aruns + periodic_g_runs
+                and a_tx_count is not None and a_tx_count <= (committed_dynamic or 0)
+                and pending_used in (None, 0)
+            )
+            cadence_consistent = bool(committed_ok and total_ok and cadence_ok and lambda_ok and epsilon_ok)
+            reconstructed_history = total_allocator_history
+        else:
+            cadence_consistent = bool(
+                history is not None
+                and (history == 0 or gruns == 1)
+                and (aruns in (None, 0))
+                and lambda_ok
+                and epsilon_ok
+            )
+            reconstructed_history = history
+
     elif history is not None and initial_window_from_lambda is not None and chunk is not None and aruns is not None:
         # Backward-compatible interpretation of archived pre-v20 runs.
         reconstructed_history = initial_window_from_lambda + chunk * aruns

@@ -15,7 +15,7 @@ const porygonCompactProposalVersion = "porygon_compact_proposal_lut_v1"
 type PorygonProposalUpdate struct {
 	TxID           string               `json:"tx_id"`
 	OriginHeight   uint64               `json:"origin_height"`
-	Kind           string               `json:"kind"` // commit or rollback
+	Kind           string               `json:"kind"` // commit, retry, or rollback
 	InvolvedShards []int                `json:"involved_shards"`
 	Updates        []PorygonStateUpdate `json:"updates"`
 	UpdateDigest   string               `json:"update_digest"`
@@ -53,15 +53,22 @@ type PorygonProposalBody struct {
 }
 
 func porygonProposalBodyDigest(body PorygonProposalBody) string {
+	// Proposal.L and Proposal.U order are part of the consensus object. In
+	// particular, Proposal.U preserves the certified OC/original-transaction
+	// order consumed by ordered materialization. Never normalize those slices
+	// while hashing. A struct assignment copies only slice headers, so sorting a
+	// shallow copy here would mutate the live proposal and make the leader send a
+	// different U sequence from the one backups deterministically reconstruct.
 	copyBody := body
 	copyBody.ProposalDigest = ""
-	sort.Slice(copyBody.L, func(i, j int) bool { return copyBody.L[i].TransactionBlockID < copyBody.L[j].TransactionBlockID })
-	sort.Slice(copyBody.U, func(i, j int) bool {
-		if copyBody.U[i].OriginHeight != copyBody.U[j].OriginHeight {
-			return copyBody.U[i].OriginHeight < copyBody.U[j].OriginHeight
-		}
-		return copyBody.U[i].TxID < copyBody.U[j].TxID
-	})
+	copyBody.L = append([]PorygonTransactionBlockRef(nil), body.L...)
+	copyBody.U = make([]PorygonProposalUpdate, len(body.U))
+	for i, update := range body.U {
+		copyUpdate := update
+		copyUpdate.InvolvedShards = append([]int(nil), update.InvolvedShards...)
+		copyUpdate.Updates = append([]PorygonStateUpdate(nil), update.Updates...)
+		copyBody.U[i] = copyUpdate
+	}
 	return stableJSONDigest(copyBody)
 }
 
@@ -185,10 +192,12 @@ func (r *NodeRuntime) porygonBindCompactProposalContext(block realblock.Block) (
 	if stateRoot == "" {
 		return block, fmt.Errorf("Porygon compact proposal agreed T state unavailable")
 	}
-	updates, updatesErr := r.porygonPaperCertifiedUpdatesForProposal(block.Height)
+	normalUpdates, updatesErr := r.porygonPaperCertifiedUpdatesForProposal(block.Height)
 	if updatesErr != nil {
 		return block, updatesErr
 	}
+	recoveryUpdates := r.porygonV50RecoveryProposalUpdates(block.Height)
+	updates := porygonV50MergeProposalUpdates(normalUpdates, recoveryUpdates)
 	ec := porygonECDescriptorForHeight(r.plan.NodeConfigs, block.Height, block.ShardID, r.porygonExecutionShardCount(), r.porygonExecutionCommitteeCount())
 	proposal := PorygonProposalBody{
 		Version: porygonCompactProposalVersion, Height: block.Height, OrderingDomain: block.ShardID,

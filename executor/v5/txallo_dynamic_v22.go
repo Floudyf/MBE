@@ -1,0 +1,906 @@
+package v5
+
+import (
+	"bufio"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+)
+
+// MBE_TXALLO_DYNAMIC_V222
+// MBE lifecycle/control-plane adaptation around the frozen paper core.
+// Algorithm 1/2, Louvain, Eq. (6)/(8), eta/lambda/epsilon and PBFT are unchanged.
+const (
+	txalloDynamicEpochFeedName       = "txallo_epoch_lifecycle.jsonl"
+	txalloDynamicMappingSnapshotName = "txallo_mapping_snapshot.json"
+	txalloDynamicMappingAckName      = "txallo_mapping_ack.json"
+	txalloDynamicBlockSidecarName    = "txallo_dynamic_blocks.jsonl.gz"
+	txalloDynamicMappingSchema       = "mbe_txallo_mapping_snapshot_v2"
+	txalloDynamicMappingAckSchema    = "mbe_txallo_mapping_ack_v1"
+	txalloDynamicEpochFeedSchema     = "mbe_txallo_epoch_lifecycle_v1"
+	txalloDynamicBlockRowSchema      = "mbe_txallo_dynamic_block_v1"
+)
+
+type txalloDynamicAllocationRuntime interface {
+	HistoricalAllocationBootstrapper
+	txalloAccountMappingProvider
+	TxAlloDynamicEnabled() bool
+	TxAlloAEpochBlocks() int
+	TxAlloGlobalEpochMultiple() int
+	TxAlloMappingEpoch() uint64
+	TxAlloMappingStateDigest() string
+	ApplyCommittedTxAlloEpoch([]WorkloadRecord, uint64, bool) error
+}
+
+type txalloMappingRefresher interface {
+	TxAlloDynamicEnabled() bool
+	TxAlloMappingEpoch() uint64
+	TxAlloMappingStateDigest() string
+	RefreshTxAlloMapping() error
+}
+
+type txalloMappingSnapshotV22 struct {
+	SchemaVersion string            `json:"schema_version"`
+	Epoch         uint64            `json:"epoch"`
+	Mapping       map[string]string `json:"mapping"`
+	Aliases       map[string]string `json:"aliases"`
+	MappingDigest string            `json:"mapping_digest"`
+	AliasesDigest string            `json:"aliases_digest"`
+	StateDigest   string            `json:"state_digest"`
+}
+
+type txalloMappingAckV222 struct {
+	SchemaVersion string `json:"schema_version"`
+	NodeID        string `json:"node_id"`
+	Epoch         uint64 `json:"epoch"`
+	StateDigest   string `json:"state_digest"`
+	Status        string `json:"status"`
+	Error         string `json:"error,omitempty"`
+	TimestampMS   int64  `json:"timestamp_ms"`
+}
+
+type txalloDynamicBlockRowV222 struct {
+	SchemaVersion     string `json:"schema_version"`
+	MaterializedIndex int    `json:"materialized_index"`
+	RawSourceRowIndex int    `json:"raw_source_row_index"`
+	TransactionID     string `json:"transaction_id"`
+	BlockNum          int64  `json:"block_num"`
+	GlobalSequence    int64  `json:"global_sequence"`
+	SenderID          string `json:"sender_id"`
+	ReceiverID        string `json:"receiver_id"`
+}
+
+type txalloDynamicBlockIndexV222 struct {
+	Blocks      []int64
+	Senders     []string
+	Receivers   []string
+	AnchorBlock int64
+	LastBlock   int64
+}
+
+type txalloEpochLifecycleRowV22 struct {
+	SchemaVersion string `json:"schema_version"`
+	LogicalTxID   string `json:"logical_tx_id"`
+	Stage         string `json:"stage"`
+	Success       bool   `json:"success"`
+	BlockHeight   uint64 `json:"block_height,omitempty"`
+}
+
+func (p *txalloAccountSharding) TxAlloDynamicEnabled() bool {
+	if p == nil {
+		return false
+	}
+	if raw, exists := p.config["dynamic_a_txallo_runtime"]; exists {
+		return boolFromAny(raw)
+	}
+	return false
+}
+
+func (p *txalloAccountSharding) TxAlloAEpochBlocks() int {
+	if p == nil {
+		return 15
+	}
+	blocks := intValue(p.config["a_epoch_blocks"])
+	if blocks <= 0 {
+		return 15
+	}
+	return blocks
+}
+
+func (p *txalloAccountSharding) TxAlloGlobalEpochMultiple() int {
+	if p == nil {
+		return 20
+	}
+	multiple := intValue(p.config["g_epoch_multiple"])
+	if multiple <= 1 {
+		return 20
+	}
+	return multiple
+}
+
+func (p *txalloAccountSharding) TxAlloMappingEpoch() uint64 {
+	if p == nil {
+		return 0
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.mappingEpoch
+}
+
+func txalloStateDigest(mapping, aliases map[string]string) string {
+	return stableJSONDigest(map[string]any{"mapping": mapping, "aliases": aliases})
+}
+
+func (p *txalloAccountSharding) TxAlloMappingStateDigest() string {
+	if p == nil {
+		return ""
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.allocator == nil {
+		return ""
+	}
+	return txalloStateDigest(p.allocator.Mapping, p.aliases)
+}
+
+func txalloSourceBlockEpoch(blockNum, anchorBlock int64, epochBlocks int) (int64, error) {
+	if blockNum <= 0 || anchorBlock <= 0 {
+		return 0, fmt.Errorf("TxAllo dynamic A requires positive source block numbers")
+	}
+	if blockNum < anchorBlock {
+		return 0, fmt.Errorf("TxAllo dynamic source block precedes evaluation anchor")
+	}
+	if epochBlocks <= 0 {
+		return 0, fmt.Errorf("TxAllo dynamic A requires a positive block epoch")
+	}
+	return (blockNum - anchorBlock) / int64(epochBlocks), nil
+}
+
+func txalloLoadDynamicBlockIndexV222(dataDir string, plan WorkloadPlan) (*txalloDynamicBlockIndexV222, error) {
+	rawMeta, ok := plan.AuditMetadata["txallo_dynamic_blocks"]
+	if !ok {
+		return nil, fmt.Errorf("TxAllo dynamic block sidecar metadata missing")
+	}
+	meta, ok := rawMeta.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("TxAllo dynamic block sidecar metadata invalid")
+	}
+	rel := strings.TrimSpace(fmt.Sprint(meta["relative_path"]))
+	expectedSHA := strings.ToLower(strings.TrimSpace(fmt.Sprint(meta["sha256"])))
+	expectedCount := intValue(meta["selected_count"])
+	anchorRaw := intValue(meta["evaluation_anchor_raw_row_index"])
+	if rel == "" || len(expectedSHA) != 64 || expectedCount <= 0 || expectedCount != plan.ActualTxCount {
+		return nil, fmt.Errorf("TxAllo dynamic block sidecar metadata incomplete")
+	}
+	path, err := txalloRunHistoryPath(dataDir, rel)
+	if err != nil {
+		return nil, fmt.Errorf("TxAllo dynamic block sidecar path: %w", err)
+	}
+	actualSHA, err := txalloFileSHA256(path)
+	if err != nil {
+		return nil, fmt.Errorf("TxAllo dynamic block sidecar SHA-256: %w", err)
+	}
+	if !strings.EqualFold(actualSHA, expectedSHA) {
+		return nil, fmt.Errorf("TxAllo dynamic block sidecar SHA-256 mismatch")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+	sc := bufio.NewScanner(gz)
+	sc.Buffer(make([]byte, 64*1024), maxWorkloadRecordBytes)
+	blocks := make([]int64, 0, expectedCount)
+	senders := make([]string, 0, expectedCount)
+	receivers := make([]string, 0, expectedCount)
+	lastBlock := int64(-1)
+	lastSeq := int64(-1)
+	for sc.Scan() {
+		var row txalloDynamicBlockRowV222
+		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
+			return nil, fmt.Errorf("TxAllo dynamic block sidecar decode: %w", err)
+		}
+		index := len(blocks)
+		if row.SchemaVersion != txalloDynamicBlockRowSchema || row.MaterializedIndex != index {
+			return nil, fmt.Errorf("TxAllo dynamic block sidecar index/schema mismatch")
+		}
+		if row.RawSourceRowIndex != anchorRaw+index {
+			return nil, fmt.Errorf("TxAllo dynamic block sidecar raw-source alignment mismatch")
+		}
+		if row.BlockNum <= 0 || (lastBlock > 0 && row.BlockNum < lastBlock) {
+			return nil, fmt.Errorf("TxAllo dynamic block sidecar block order invalid")
+		}
+		if row.GlobalSequence <= lastSeq {
+			return nil, fmt.Errorf("TxAllo dynamic block sidecar global sequence invalid")
+		}
+		if strings.TrimSpace(row.TransactionID) == "" || strings.TrimSpace(row.SenderID) == "" || strings.TrimSpace(row.ReceiverID) == "" {
+			return nil, fmt.Errorf("TxAllo dynamic block sidecar identity incomplete")
+		}
+		lastBlock = row.BlockNum
+		lastSeq = row.GlobalSequence
+		blocks = append(blocks, row.BlockNum)
+		senders = append(senders, strings.ToLower(strings.TrimSpace(row.SenderID)))
+		receivers = append(receivers, strings.ToLower(strings.TrimSpace(row.ReceiverID)))
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if len(blocks) != expectedCount {
+		return nil, fmt.Errorf("TxAllo dynamic block sidecar count=%d want=%d", len(blocks), expectedCount)
+	}
+	return &txalloDynamicBlockIndexV222{
+		Blocks: blocks, Senders: senders, Receivers: receivers,
+		AnchorBlock: blocks[0], LastBlock: blocks[len(blocks)-1],
+	}, nil
+}
+
+func (index *txalloDynamicBlockIndexV222) BlockForRecord(record WorkloadRecord) (int64, error) {
+	if index == nil || record.Index < 0 || record.Index >= len(index.Blocks) {
+		return 0, fmt.Errorf("TxAllo dynamic block lookup out of range")
+	}
+	sender := strings.ToLower(strings.TrimSpace(record.SenderID))
+	receiver := strings.ToLower(strings.TrimSpace(record.ReceiverID))
+	if sender == "" || receiver == "" || sender != index.Senders[record.Index] || receiver != index.Receivers[record.Index] {
+		return 0, fmt.Errorf("TxAllo dynamic block sidecar account alignment mismatch at materialized index %d", record.Index)
+	}
+	return index.Blocks[record.Index], nil
+}
+
+func txalloHistoryFromWorkloadRecords(records []WorkloadRecord) []txalloHistoryTx {
+	out := make([]txalloHistoryTx, 0, len(records))
+	for _, record := range records {
+		accounts := txalloUniqueSortedStrings([]string{
+			strings.ToLower(strings.TrimSpace(record.SenderID)),
+			strings.ToLower(strings.TrimSpace(record.ReceiverID)),
+		})
+		if len(accounts) > 0 {
+			out = append(out, txalloHistoryTx{Accounts: accounts})
+		}
+	}
+	return out
+}
+
+func txalloCloneAllocator(input *txalloAllocator) *txalloAllocator {
+	if input == nil {
+		return nil
+	}
+	out := &txalloAllocator{
+		Graph:   newTxAlloGraph(),
+		Mapping: copyMapping(input.Mapping),
+		Shards:  append([]string(nil), input.Shards...),
+		Eta:     input.Eta,
+		Lambda:  input.Lambda,
+		Epsilon: input.Epsilon,
+		Stats:   map[string]txalloCommunityStat{},
+		Metrics: input.Metrics,
+	}
+	for node := range input.Graph.Nodes {
+		out.Graph.Nodes[node] = true
+	}
+	for edge, weight := range input.Graph.Edges {
+		out.Graph.Edges[edge] = weight
+	}
+	for shard, stat := range input.Stats {
+		out.Stats[shard] = stat
+	}
+	if input.Metrics.Objective.Workloads != nil {
+		out.Metrics.Objective.Workloads = map[string]float64{}
+		for shard, value := range input.Metrics.Objective.Workloads {
+			out.Metrics.Objective.Workloads[shard] = value
+		}
+	}
+	return out
+}
+
+func txalloMovedExistingAccounts(before, after map[string]string) []string {
+	moved := []string{}
+	for account, oldShard := range before {
+		if newShard := after[account]; newShard != "" && newShard != oldShard {
+			moved = append(moved, account)
+		}
+	}
+	sort.Strings(moved)
+	return moved
+}
+
+// txalloStatefulMigrationAccounts also covers accounts that were not part of
+// the previous learned mapping but have already executed in the just-closed
+// epoch under their deterministic fallback placement. Once those transactions
+// are committed, changing such an account from fallback shard -> learned shard
+// is a real state-home change in MBE's local-state Stateful-TxAllo substrate.
+// The paper core is untouched; this is an MBE correctness guard until a real
+// state migration / globally replicated state substrate is installed.
+func txalloStatefulMigrationAccounts(p *txalloAccountSharding, before, after map[string]string, records []WorkloadRecord) []string {
+	required := map[string]bool{}
+	for _, account := range txalloMovedExistingAccounts(before, after) {
+		required[account] = true
+	}
+	if p != nil {
+		for _, record := range records {
+			for _, account := range txalloUniqueSortedStrings([]string{
+				strings.ToLower(strings.TrimSpace(record.SenderID)),
+				strings.ToLower(strings.TrimSpace(record.ReceiverID)),
+			}) {
+				newShard := after[account]
+				if newShard == "" {
+					continue
+				}
+				oldShard := before[account]
+				if oldShard == "" {
+					oldShard = p.fallbackShard(account, p.shards)
+				}
+				if oldShard != "" && oldShard != newShard {
+					required[account] = true
+				}
+			}
+		}
+	}
+	out := make([]string, 0, len(required))
+	for account := range required {
+		out = append(out, account)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (p *txalloAccountSharding) txalloMappingSnapshotLocked() txalloMappingSnapshotV22 {
+	mapping := copyMapping(p.allocator.Mapping)
+	aliases := copyMapping(p.aliases)
+	return txalloMappingSnapshotV22{
+		SchemaVersion: txalloDynamicMappingSchema,
+		Epoch:         p.mappingEpoch,
+		Mapping:       mapping,
+		Aliases:       aliases,
+		MappingDigest: stableJSONDigest(mapping),
+		AliasesDigest: stableJSONDigest(aliases),
+		StateDigest:   txalloStateDigest(mapping, aliases),
+	}
+}
+
+func txalloWriteAtomicJSON(path string, value any) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("TxAllo mapping snapshot path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), time.Now().UnixNano())
+	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
+		return err
+	}
+	if err := txalloAtomicReplace(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func (p *txalloAccountSharding) writeTxAlloMappingSnapshot() error {
+	p.mu.RLock()
+	if p.allocator == nil || strings.TrimSpace(p.mappingSnapshotPath) == "" {
+		p.mu.RUnlock()
+		return nil
+	}
+	path := p.mappingSnapshotPath
+	snapshot := p.txalloMappingSnapshotLocked()
+	p.mu.RUnlock()
+	return txalloWriteAtomicJSON(path, snapshot)
+}
+
+// ApplyCommittedTxAlloEpoch closes one source-block epoch. Empty source epochs
+// advance the paper time-step clock without fabricating A-TxAllo input.
+// Every 20th source epoch executes the paper case-study full G refresh.
+func (p *txalloAccountSharding) ApplyCommittedTxAlloEpoch(records []WorkloadRecord, sourceEpoch uint64, statelessDirect bool) error {
+	if !p.TxAlloDynamicEnabled() {
+		return nil
+	}
+	history := txalloHistoryFromWorkloadRecords(records)
+	if len(history) != len(records) {
+		return fmt.Errorf("TxAllo dynamic epoch contains a transaction without an account projection")
+	}
+
+	p.mu.Lock()
+	if p.allocator == nil || p.allocator.Graph == nil || len(p.allocator.Mapping) == 0 {
+		p.mu.Unlock()
+		return fmt.Errorf("TxAllo dynamic epoch requires a bootstrapped G allocator")
+	}
+	expectedEpoch := uint64(intValue(p.evidence["closed_source_epoch_count"]))
+	if sourceEpoch != expectedEpoch {
+		p.mu.Unlock()
+		return fmt.Errorf("TxAllo source epoch closure out of order: got=%d want=%d", sourceEpoch, expectedEpoch)
+	}
+	beforeMapping := copyMapping(p.allocator.Mapping)
+	nextHistory := append(append([]txalloHistoryTx(nil), p.dynamicHistory...), history...)
+	candidate := txalloCloneAllocator(p.allocator)
+	globalMultiple := p.TxAlloGlobalEpochMultiple()
+	periodicG := globalMultiple > 1 && (sourceEpoch+1)%uint64(globalMultiple) == 0
+	didUpdate := false
+	updateAlgorithm := "none"
+	if periodicG {
+		candidate = newTxAlloAllocator(
+			append([]string(nil), p.shards...),
+			p.configuredFloat("eta", 2),
+			p.configuredFloat("lambda", 0),
+			p.configuredFloat("epsilon", 0),
+		)
+		candidate.RunG(nextHistory)
+		didUpdate = true
+		updateAlgorithm = "G-TxAllo"
+	} else if len(history) > 0 {
+		candidate.RunA(history)
+		didUpdate = true
+		updateAlgorithm = "A-TxAllo"
+	}
+	if didUpdate && len(candidate.Mapping) != len(candidate.Graph.Nodes) {
+		p.mu.Unlock()
+		return fmt.Errorf("TxAllo dynamic mapping incomplete")
+	}
+	moved := []string{}
+	if didUpdate {
+		if statelessDirect {
+			moved = txalloMovedExistingAccounts(beforeMapping, candidate.Mapping)
+		} else {
+			moved = txalloStatefulMigrationAccounts(p, beforeMapping, candidate.Mapping, records)
+		}
+	}
+	if !statelessDirect && len(moved) > 0 {
+		p.evidence["stateful_migration_guard_triggered"] = true
+		p.evidence["stateful_migration_required_account_count"] = len(moved)
+		p.evidence["stateful_migration_required_accounts_digest"] = stableJSONDigest(moved)
+		p.evidence["stateful_migration_rejected_source_epoch"] = sourceEpoch
+		p.mu.Unlock()
+		return fmt.Errorf("TxAllo stateful dynamic mapping requires state migration for %d committed accounts; migration/replicated-state adaptation is not installed", len(moved))
+	}
+
+	nextAliases := copyMapping(p.aliases)
+	for _, record := range records {
+		logicalSender := strings.ToLower(strings.TrimSpace(record.SenderID))
+		if logicalSender != "" {
+			nextAliases[strings.ToLower(canonicalRuntimeSenderAddress(p.plan, logicalSender))] = logicalSender
+		}
+		logicalReceiver := strings.ToLower(strings.TrimSpace(record.ReceiverID))
+		if logicalReceiver != "" {
+			nextAliases["receiver_"+logicalReceiver] = logicalReceiver
+		}
+	}
+
+	p.dynamicHistory = nextHistory
+	p.aliases = nextAliases
+	committed := intValue(p.evidence["committed_dynamic_transaction_count"]) + len(history)
+	p.evidence["committed_dynamic_transaction_count"] = committed
+	p.evidence["closed_source_epoch_count"] = int(sourceEpoch + 1)
+	p.evidence["last_closed_source_epoch"] = int(sourceEpoch)
+	p.evidence["last_closed_source_epoch_transaction_count"] = len(history)
+	p.evidence["pending_or_uncommitted_transactions_used"] = 0
+	p.evidence["future_evaluation_transactions_used"] = 0
+	p.evidence["last_update_algorithm"] = updateAlgorithm
+	p.evidence["stateful_migration_guard_triggered"] = false
+	p.evidence["stateful_migration_required_account_count"] = 0
+
+	initial := intValue(p.evidence["initial_g_history_transaction_count"])
+	if initial <= 0 {
+		initial = intValue(p.evidence["history_transaction_count"])
+	}
+	p.evidence["total_allocator_history_transaction_count"] = initial + committed
+
+	var path string
+	var snapshot txalloMappingSnapshotV22
+	if didUpdate {
+		p.allocator = candidate
+		p.mappingEpoch++
+		if periodicG {
+			p.evidence["g_txallo_run_count"] = intValue(p.evidence["g_txallo_run_count"]) + 1
+			p.evidence["periodic_g_txallo_run_count"] = intValue(p.evidence["periodic_g_txallo_run_count"]) + 1
+		} else {
+			p.evidence["a_txallo_run_count"] = intValue(p.evidence["a_txallo_run_count"]) + 1
+			p.evidence["a_txallo_transaction_count"] = intValue(p.evidence["a_txallo_transaction_count"]) + len(history)
+		}
+		objective := p.allocator.Metrics.Objective
+		p.evidence["mapping_epoch"] = p.mappingEpoch
+		p.evidence["graph_account_count"] = len(p.allocator.Graph.Nodes)
+		p.evidence["graph_edge_count"] = len(p.allocator.Graph.Edges)
+		p.evidence["mapped_account_count"] = len(p.allocator.Mapping)
+		p.evidence["mapping_digest"] = stableJSONDigest(p.allocator.Mapping)
+		p.evidence["eta"] = p.allocator.Eta
+		p.evidence["lambda"] = p.allocator.Lambda
+		p.evidence["epsilon"] = p.allocator.Epsilon
+		p.evidence["modeled_throughput"] = objective.Throughput
+		p.evidence["modeled_cross_shard_ratio"] = objective.CrossShardRatio
+		p.evidence["modeled_workload_stddev"] = objective.WorkloadStdDev
+		p.evidence["mapping_nonempty"] = len(p.allocator.Mapping) > 0
+		p.evidence["mapping_structurally_complete"] = len(p.allocator.Mapping) == len(p.allocator.Graph.Nodes)
+		p.evidence["mapping_operationally_valid"] = len(p.allocator.Mapping) > 0 && len(p.allocator.Mapping) == len(p.allocator.Graph.Nodes)
+		path = p.mappingSnapshotPath
+		snapshot = p.txalloMappingSnapshotLocked()
+	}
+	p.mu.Unlock()
+
+	if didUpdate && strings.TrimSpace(path) != "" {
+		if err := txalloWriteAtomicJSON(path, snapshot); err != nil {
+			return fmt.Errorf("TxAllo mapping epoch publish: %w", err)
+		}
+	}
+	return nil
+}
+
+func txalloValidSnapshot(snapshot txalloMappingSnapshotV22, shards []string) error {
+	if snapshot.SchemaVersion != txalloDynamicMappingSchema || len(snapshot.Mapping) == 0 {
+		return fmt.Errorf("TxAllo mapping snapshot schema/mapping invalid")
+	}
+	if snapshot.MappingDigest == "" || snapshot.MappingDigest != stableJSONDigest(snapshot.Mapping) {
+		return fmt.Errorf("TxAllo mapping snapshot digest mismatch")
+	}
+	if snapshot.AliasesDigest == "" || snapshot.AliasesDigest != stableJSONDigest(snapshot.Aliases) {
+		return fmt.Errorf("TxAllo mapping snapshot aliases digest mismatch")
+	}
+	if snapshot.StateDigest == "" || snapshot.StateDigest != txalloStateDigest(snapshot.Mapping, snapshot.Aliases) {
+		return fmt.Errorf("TxAllo mapping snapshot state digest mismatch")
+	}
+	validShard := map[string]bool{}
+	for _, shard := range shards {
+		validShard[shard] = true
+	}
+	for _, shard := range snapshot.Mapping {
+		if !validShard[shard] {
+			return fmt.Errorf("TxAllo mapping snapshot contains unknown shard %q", shard)
+		}
+	}
+	return nil
+}
+
+func (p *txalloAccountSharding) RefreshTxAlloMapping() error {
+	if !p.TxAlloDynamicEnabled() {
+		return nil
+	}
+	p.mu.RLock()
+	path := p.mappingSnapshotPath
+	lastMod := p.mappingSnapshotModTime
+	currentEpoch := p.mappingEpoch
+	shards := append([]string(nil), p.shards...)
+	p.mu.RUnlock()
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	mod := info.ModTime().UnixNano()
+	if mod <= lastMod {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var snapshot txalloMappingSnapshotV22
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return fmt.Errorf("TxAllo mapping snapshot decode: %w", err)
+	}
+	if err := txalloValidSnapshot(snapshot, shards); err != nil {
+		return err
+	}
+	if snapshot.Epoch < currentEpoch {
+		return fmt.Errorf("TxAllo mapping snapshot epoch regressed")
+	}
+	if snapshot.Epoch == currentEpoch {
+		p.mu.RLock()
+		currentStateDigest := txalloStateDigest(p.allocator.Mapping, p.aliases)
+		p.mu.RUnlock()
+		if currentStateDigest != snapshot.StateDigest {
+			return fmt.Errorf("TxAllo mapping snapshot conflicts with local epoch %d", currentEpoch)
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if snapshot.Epoch > p.mappingEpoch {
+		p.allocator.Mapping = copyMapping(snapshot.Mapping)
+		p.aliases = copyMapping(snapshot.Aliases)
+		p.mappingEpoch = snapshot.Epoch
+		p.evidence["mapping_epoch"] = snapshot.Epoch
+		p.evidence["mapping_digest"] = snapshot.MappingDigest
+		p.evidence["mapped_account_count"] = len(snapshot.Mapping)
+	}
+	p.mappingSnapshotModTime = mod
+	return nil
+}
+
+func (r *NodeRuntime) writeTxAlloMappingAck(refreshErr error) {
+	if r == nil || r.plugins.Sharding == nil {
+		return
+	}
+	dynamic, ok := r.plugins.Sharding.(txalloMappingRefresher)
+	if !ok || !dynamic.TxAlloDynamicEnabled() {
+		return
+	}
+	status := "ok"
+	errText := ""
+	if refreshErr != nil {
+		status = "error"
+		errText = refreshErr.Error()
+	}
+	ack := txalloMappingAckV222{
+		SchemaVersion: txalloDynamicMappingAckSchema,
+		NodeID:        r.node.NodeID,
+		Epoch:         dynamic.TxAlloMappingEpoch(),
+		StateDigest:   dynamic.TxAlloMappingStateDigest(),
+		Status:        status,
+		Error:         errText,
+		TimestampMS:   time.Now().UnixMilli(),
+	}
+	_ = txalloWriteAtomicJSON(filepath.Join(r.node.DataDir, txalloDynamicMappingAckName), ack)
+}
+
+func (r *NodeRuntime) startTxAlloMappingWatcher(ctx context.Context) {
+	if r == nil || r.plugins.Sharding == nil {
+		return
+	}
+	refresher, ok := r.plugins.Sharding.(txalloMappingRefresher)
+	if !ok || !refresher.TxAlloDynamicEnabled() {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		lastAckSignature := ""
+		for {
+			err := refresher.RefreshTxAlloMapping()
+			errText := ""
+			if err != nil {
+				errText = err.Error()
+			}
+			signature := fmt.Sprintf("%d|%s|%s", refresher.TxAlloMappingEpoch(), refresher.TxAlloMappingStateDigest(), errText)
+			if signature != lastAckSignature {
+				r.writeTxAlloMappingAck(err)
+				lastAckSignature = signature
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func txalloWaitMappingAcks(ctx context.Context, nodes []NodePlan, epoch uint64, stateDigest string) error {
+	if len(nodes) == 0 {
+		return fmt.Errorf("TxAllo mapping ACK barrier has no nodes")
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		complete := true
+		for _, node := range nodes {
+			raw, err := os.ReadFile(filepath.Join(node.DataDir, txalloDynamicMappingAckName))
+			if os.IsNotExist(err) {
+				complete = false
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			var ack txalloMappingAckV222
+			if err := json.Unmarshal(raw, &ack); err != nil {
+				return fmt.Errorf("TxAllo mapping ACK decode: %w", err)
+			}
+			if ack.SchemaVersion != txalloDynamicMappingAckSchema || ack.NodeID != node.NodeID {
+				return fmt.Errorf("TxAllo mapping ACK schema/node mismatch")
+			}
+			if ack.Epoch < epoch {
+				complete = false
+				continue
+			}
+			if ack.Epoch > epoch {
+				return fmt.Errorf("TxAllo mapping ACK advanced past requested epoch")
+			}
+			if ack.Status == "error" {
+				return fmt.Errorf("TxAllo node %s rejected mapping epoch %d: %s", node.NodeID, epoch, ack.Error)
+			}
+			if ack.Status != "ok" || ack.StateDigest != stateDigest {
+				return fmt.Errorf("TxAllo node %s mapping ACK digest mismatch at epoch %d", node.NodeID, epoch)
+			}
+		}
+		if complete {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("TxAllo mapping ACK barrier: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+var txalloEpochFeedMu sync.Mutex
+
+func (r *NodeRuntime) appendTxAlloEpochLifecycle(event LifecycleEvent) {
+	if r == nil || r.plugins.Sharding == nil {
+		return
+	}
+	dynamic, ok := r.plugins.Sharding.(interface{ TxAlloDynamicEnabled() bool })
+	if !ok || !dynamic.TxAlloDynamicEnabled() {
+		return
+	}
+	stage := strings.ToLower(strings.TrimSpace(event.Stage))
+	if stage != "durable_committed" && stage != "sourcefinalize" && stage != "refund" && !(stage == "failed" && event.BlockHeight > 0) {
+		return
+	}
+	logicalID := strings.TrimSpace(event.LogicalTxID)
+	if logicalID == "" {
+		logicalID = strings.TrimSpace(event.TxID)
+	}
+	if logicalID == "" {
+		return
+	}
+	row := txalloEpochLifecycleRowV22{SchemaVersion: txalloDynamicEpochFeedSchema, LogicalTxID: logicalID, Stage: stage, Success: event.Success, BlockHeight: event.BlockHeight}
+	raw, err := json.Marshal(row)
+	if err != nil {
+		return
+	}
+	txalloEpochFeedMu.Lock()
+	defer txalloEpochFeedMu.Unlock()
+	path := filepath.Join(r.node.DataDir, txalloDynamicEpochFeedName)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = f.Write(append(raw, '\n'))
+	_ = f.Close()
+}
+
+type txalloEpochFeedReaderV22 struct {
+	offsets map[string]int64
+	partial map[string][]byte
+	stages  map[string]map[string]bool
+}
+
+func newTxAlloEpochFeedReaderV22() *txalloEpochFeedReaderV22 {
+	return &txalloEpochFeedReaderV22{offsets: map[string]int64{}, partial: map[string][]byte{}, stages: map[string]map[string]bool{}}
+}
+
+func (reader *txalloEpochFeedReaderV22) poll(nodes []NodePlan) error {
+	for _, node := range nodes {
+		path := filepath.Join(node.DataDir, txalloDynamicEpochFeedName)
+		f, err := os.Open(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		info, err := f.Stat()
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		offset := reader.offsets[path]
+		if info.Size() < offset {
+			offset = 0
+			reader.partial[path] = nil
+		}
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			_ = f.Close()
+			return err
+		}
+		chunk, err := io.ReadAll(f)
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+		reader.offsets[path] = offset + int64(len(chunk))
+		buf := append(append([]byte(nil), reader.partial[path]...), chunk...)
+		lastNewline := -1
+		for i := len(buf) - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				lastNewline = i
+				break
+			}
+		}
+		if lastNewline < 0 {
+			reader.partial[path] = buf
+			continue
+		}
+		complete := buf[:lastNewline]
+		reader.partial[path] = append([]byte(nil), buf[lastNewline+1:]...)
+		for _, line := range strings.Split(string(complete), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var row txalloEpochLifecycleRowV22
+			if err := json.Unmarshal([]byte(line), &row); err != nil {
+				return fmt.Errorf("TxAllo epoch lifecycle feed decode: %w", err)
+			}
+			if row.SchemaVersion != txalloDynamicEpochFeedSchema || row.LogicalTxID == "" || row.Stage == "" {
+				return fmt.Errorf("TxAllo epoch lifecycle feed schema invalid")
+			}
+			if reader.stages[row.LogicalTxID] == nil {
+				reader.stages[row.LogicalTxID] = map[string]bool{}
+			}
+			stage := strings.ToLower(strings.TrimSpace(row.Stage))
+			if stage == "refund" || stage == "failed" {
+				reader.stages[row.LogicalTxID][stage] = true
+				continue
+			}
+			if !row.Success {
+				// A nominal success-stage record with Success=false must never
+				// satisfy the committed-only barrier.
+				reader.stages[row.LogicalTxID]["failed"] = true
+				continue
+			}
+			reader.stages[row.LogicalTxID][stage] = true
+		}
+	}
+	return nil
+}
+
+func txalloWaitCommittedEpoch(ctx context.Context, nodes []NodePlan, records []WorkloadRecord, crossByLogical map[string]bool, statelessDirect bool, reader *txalloEpochFeedReaderV22) error {
+	if len(records) == 0 {
+		return nil
+	}
+	wanted := make([]string, 0, len(records))
+	seen := map[string]bool{}
+	for _, record := range records {
+		logicalID := strings.TrimSpace(firstNonEmpty(record.LogicalID, record.SourceEventID))
+		if logicalID == "" || seen[logicalID] {
+			continue
+		}
+		seen[logicalID] = true
+		wanted = append(wanted, logicalID)
+	}
+	sort.Strings(wanted)
+	if len(wanted) != len(records) {
+		return fmt.Errorf("TxAllo A epoch logical identity is empty or duplicated")
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if err := reader.poll(nodes); err != nil {
+			return err
+		}
+		complete := true
+		for _, logicalID := range wanted {
+			stages := reader.stages[logicalID]
+			if stages["refund"] || stages["failed"] {
+				return fmt.Errorf("TxAllo A epoch transaction %s reached a failed/refunded terminal state", logicalID)
+			}
+			required := "durable_committed"
+			if !statelessDirect && crossByLogical[logicalID] {
+				required = "sourcefinalize"
+			}
+			if !stages[required] {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("TxAllo A epoch commit barrier: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}

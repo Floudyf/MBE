@@ -31,7 +31,10 @@ type PorygonTransactionBlock struct {
 	TransactionRoot          string                 `json:"transaction_root"`
 	AccessRoot               string                 `json:"access_root"`
 	FullBodyDigest           string                 `json:"full_body_digest"`
-	WitnessCertificateDigest string                 `json:"witness_certificate_digest,omitempty"`
+	// WitnessCertificateDigest is proposal/reference evidence, not immutable
+	// TransactionBlock content. Keep it in memory for ref construction but never
+	// persist it into the content-addressed body bytes.
+	WitnessCertificateDigest string                 `json:"-"`
 }
 
 type PorygonTransactionBlockRef struct {

@@ -67,8 +67,10 @@ type porygonWitnessState struct {
 var porygonWitnessStates sync.Map // map[*NodeRuntime]*porygonWitnessState
 
 type porygonPrewitnessedBatch struct {
-	Items       []tx.SignedTransaction
-	Certificate PorygonWitnessCertificate
+	TargetHeight uint64
+	LeaderID     string
+	Items        []tx.SignedTransaction
+	Certificate  PorygonWitnessCertificate
 }
 
 var porygonPrewitnessedBatches sync.Map // map[*mempool.Mempool]porygonPrewitnessedBatch
@@ -111,6 +113,8 @@ func porygonWitnessVoteSigningBytes(vote PorygonWitnessVote) []byte {
 func porygonWitnessCertificateDigest(cert PorygonWitnessCertificate) string {
 	copyCert := cert
 	copyCert.CertificateDigest = ""
+	copyCert.CommitteeMembers = append([]string(nil), cert.CommitteeMembers...)
+	copyCert.Votes = append([]PorygonWitnessVote(nil), cert.Votes...)
 	sort.Strings(copyCert.CommitteeMembers)
 	sort.Slice(copyCert.Votes, func(i, j int) bool { return copyCert.Votes[i].NodeID < copyCert.Votes[j].NodeID })
 	raw, _ := json.Marshal(copyCert)
@@ -394,7 +398,7 @@ func porygonStorePrewitnessedBatch(pool *mempool.Mempool, batch porygonPrewitnes
 	porygonPrewitnessedBatches.Store(pool, batch)
 }
 
-func porygonTakePrewitnessedBatch(pool *mempool.Mempool) (porygonPrewitnessedBatch, bool) {
+func porygonTakePrewitnessedBatch(pool *mempool.Mempool, targetHeight uint64, leaderID string) (porygonPrewitnessedBatch, bool) {
 	if pool == nil {
 		return porygonPrewitnessedBatch{}, false
 	}
@@ -402,7 +406,12 @@ func porygonTakePrewitnessedBatch(pool *mempool.Mempool) (porygonPrewitnessedBat
 	if !ok {
 		return porygonPrewitnessedBatch{}, false
 	}
-	return value.(porygonPrewitnessedBatch), true
+	batch := value.(porygonPrewitnessedBatch)
+	if batch.TargetHeight != targetHeight || batch.LeaderID == "" || batch.LeaderID != leaderID || batch.Certificate.Height != targetHeight {
+		pool.ReleaseReserved(batch.Items)
+		return porygonPrewitnessedBatch{}, false
+	}
+	return batch, true
 }
 
 func (r *NodeRuntime) startPorygonCrossBatchWitness(ctx context.Context, currentHeight uint64) {
@@ -430,7 +439,15 @@ func (r *NodeRuntime) startPorygonCrossBatchWitness(ctx context.Context, current
 			r.addPorygonRuntimeMetric("porygon_cross_batch_witness_failure_count", 1)
 			return
 		}
-		porygonStorePrewitnessedBatch(r.pool, porygonPrewitnessedBatch{Items: items, Certificate: cert})
+		// A witness result belongs only to the exact next height and the leader that
+		// initiated it. If PBFT changed view/leader while Witness was in flight, do
+		// not strand the reservation in a stale cache.
+		if !r.isCurrentLeader() || r.porygonConsensusNextHeight() != target.Height {
+			r.pool.ReleaseReserved(items)
+			r.addPorygonRuntimeMetric("porygon_cross_batch_witness_stale_release_count", 1)
+			return
+		}
+		porygonStorePrewitnessedBatch(r.pool, porygonPrewitnessedBatch{TargetHeight: target.Height, LeaderID: r.node.NodeID, Items: items, Certificate: cert})
 		r.addPorygonRuntimeMetric("porygon_cross_batch_witness_completed_count", 1)
 		r.addPorygonRuntimeMetric("porygon_cross_batch_witness_overlap_us", time.Since(started).Microseconds())
 	}()

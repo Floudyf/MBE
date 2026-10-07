@@ -24,7 +24,7 @@ const (
 	txalloRoutingID           = "txallo_routing"
 	txalloStatelessRoutingID  = "stateless_txallo_routing"
 	txalloNoRelayCrossShardID = "txallo_no_relay"
-	txalloTruthBoundary       = "txallo_icde2023_algorithm1_2_deterministic_multilevel_louvain_g_snapshot_v2"
+	txalloTruthBoundary       = "txallo_icde2023_g_a_hybrid_dynamic_v3"
 )
 
 type HistoricalAllocationBootstrapInput struct {
@@ -63,6 +63,12 @@ type txalloAccountSharding struct {
 	evidence               map[string]any
 	provisionalAccounts    map[string]bool
 	provisionalLookupCount int
+	// MBE_TXALLO_DYNAMIC_V222: runtime lifecycle state only. Algorithm 1/2 stay in txallo_core.go.
+	plan                   WorkloadPlan
+	mappingEpoch           uint64
+	mappingSnapshotPath    string
+	mappingSnapshotModTime int64
+	dynamicHistory         []txalloHistoryTx
 }
 
 func (p *txalloAccountSharding) configuredFloat(key string, fallback float64) float64 {
@@ -253,25 +259,52 @@ type txalloGCachePayload struct {
 	Evidence      map[string]any    `json:"evidence"`
 }
 
+// MBE_TXALLO_ADAPTER_V213
+// Adapter-only run-layout closure. TxAllo paper allocation semantics are unchanged.
 func txalloRunHistoryPath(dataDir, relative string) (string, error) {
 	relative = filepath.ToSlash(strings.TrimSpace(relative))
 	if relative == "" || filepath.IsAbs(relative) || strings.Contains(relative, "../") || strings.HasPrefix(relative, "/") {
 		return "", fmt.Errorf("unsafe TxAllo history relative path")
 	}
-	// mbe-client receives outDir=<child>/client. The compiler stores reviewed
-	// TxAllo history under <child>/workload. Also accept dataDir itself for
-	// focused tests/older launchers.
+	rel := filepath.FromSlash(relative)
+	cleanDataDir := filepath.Clean(dataDir)
+	parent := filepath.Dir(cleanDataDir)
+	// MBE has two legitimate bootstrap callers:
+	//   <child>/client          -> <child>/workload
+	//   <child>/nodes/<node-id> -> <child>/workload
+	// Do not search arbitrary ancestors; preserve fail-closed path semantics.
 	candidates := []string{
-		filepath.Join(dataDir, filepath.FromSlash(relative)),
-		filepath.Join(dataDir, "..", filepath.FromSlash(relative)),
+		filepath.Join(cleanDataDir, rel),
+		filepath.Join(parent, rel),
 	}
+	if strings.EqualFold(filepath.Base(parent), "nodes") {
+		candidates = append(candidates, filepath.Join(filepath.Dir(parent), rel))
+	}
+	seen := map[string]bool{}
 	for _, candidate := range candidates {
 		clean := filepath.Clean(candidate)
+		if seen[clean] {
+			continue
+		}
+		seen[clean] = true
 		if info, err := os.Stat(clean); err == nil && !info.IsDir() {
 			return clean, nil
 		}
 	}
 	return "", fmt.Errorf("TxAllo history sidecar is not available")
+}
+
+func txalloFileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 func readTxAlloHistorySidecar(path string, expected int) ([]txalloHistoryTx, []txalloHistorySidecarRow, error) {
 	f, e := os.Open(path)
@@ -406,6 +439,17 @@ func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Contex
 	if err != nil {
 		return err
 	}
+	hsha := strings.ToLower(strings.TrimSpace(fmt.Sprint(meta["selected_history_sha256"])))
+	if len(hsha) != 64 {
+		return fmt.Errorf("TxAllo selected history SHA-256 is missing or invalid")
+	}
+	actualHistorySHA, err := txalloFileSHA256(path)
+	if err != nil {
+		return fmt.Errorf("TxAllo history sidecar SHA-256: %w", err)
+	}
+	if !strings.EqualFold(actualHistorySHA, hsha) {
+		return fmt.Errorf("TxAllo history sidecar SHA-256 mismatch")
+	}
 	history, rows, err := readTxAlloHistorySidecar(path, count)
 	if err != nil {
 		return fmt.Errorf("TxAllo history sidecar: %w", err)
@@ -416,7 +460,6 @@ func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Contex
 	eta := p.configuredFloat("eta", 2)
 	lambda := p.configuredFloat("lambda", 0)
 	epsilon := p.configuredFloat("epsilon", 0)
-	hsha := strings.TrimSpace(fmt.Sprint(meta["selected_history_sha256"]))
 	key := txalloGCacheKey(hsha, shards, eta, lambda, epsilon)
 	cdir := strings.TrimSpace(fmt.Sprint(meta["g_cache_dir"]))
 	cpath := ""
@@ -447,6 +490,12 @@ func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Contex
 			for k, v := range cached.Evidence {
 				ev[k] = v
 			}
+			// MBE_TXALLO_DYNAMIC_V220: G cache stores mapping/evidence only. Rebuild
+			// the verified historical graph so A-TxAllo sees the exact same state.
+			alloc.Graph = newTxAlloGraph()
+			alloc.Graph.addAll(history)
+			alloc.rebuildStats()
+			alloc.Metrics.Objective = txalloEvaluate(alloc.Graph, alloc.Mapping, alloc.Shards, alloc.Eta, alloc.Lambda)
 		}
 	}
 	if !hit {
@@ -467,7 +516,16 @@ func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Contex
 	if graphCount <= 0 || len(alloc.Mapping) <= 0 || len(alloc.Mapping) != graphCount {
 		return fmt.Errorf("TxAllo mapping is not operationally valid")
 	}
-	for k, v := range map[string]any{"truth_boundary": txalloTruthBoundary, "allocation_mode": mode, "history_source": "manifest_preanchor_ratio_sidecar", "history_policy": "preceding_ratio_v1", "history_ratio": floatValue(meta["history_ratio"]), "history_pool_count": intValue(meta["history_pool_count"]), "history_transaction_count": len(history), "history_window_start_source_order": intValue(meta["history_window_start_source_order"]), "history_window_end_source_order": intValue(meta["history_window_end_source_order"]), "history_selected_sha256": hsha, "g_cache_hit": hit, "g_cache_key": key, "g_txallo_run_count": 1, "g_txallo_executed_this_run": !hit, "a_txallo_run_count": 0, "dynamic_a_txallo_runtime_enabled": false, "mapping_nonempty": len(alloc.Mapping) > 0, "mapping_structurally_complete": len(alloc.Mapping) == graphCount, "mapping_operationally_valid": len(alloc.Mapping) > 0 && len(alloc.Mapping) == graphCount, "future_evaluation_transactions_used": 0, "bootstrap_ms": time.Since(started).Milliseconds()} {
+	dynamicA := boolFromAny(p.config["dynamic_a_txallo_runtime"])
+	aEpochBlocks := p.configuredInt("a_epoch_blocks", 15)
+	gEpochMultiple := p.configuredInt("g_epoch_multiple", 20)
+	if dynamicA && aEpochBlocks != 15 {
+		return fmt.Errorf("formal MBE-adapted TxAllo dynamic A requires a_epoch_blocks=15")
+	}
+	if dynamicA && gEpochMultiple != 20 {
+		return fmt.Errorf("formal TxAllo dynamic hybrid requires g_epoch_multiple=20")
+	}
+	for k, v := range map[string]any{"truth_boundary": txalloTruthBoundary, "allocation_mode": mode, "history_source": "manifest_preanchor_ratio_sidecar", "history_policy": "preceding_ratio_v1", "history_ratio": floatValue(meta["history_ratio"]), "history_pool_count": intValue(meta["history_pool_count"]), "history_transaction_count": len(history), "history_window_start_source_order": intValue(meta["history_window_start_source_order"]), "history_window_end_source_order": intValue(meta["history_window_end_source_order"]), "history_selected_sha256": hsha, "history_sidecar_sha256_verified": true, "g_cache_hit": hit, "g_cache_key": key, "g_txallo_run_count": 1, "g_txallo_executed_this_run": !hit, "a_txallo_run_count": 0, "periodic_g_txallo_run_count": 0, "dynamic_a_txallo_runtime_enabled": dynamicA, "a_epoch_blocks": aEpochBlocks, "paper_reference_a_epoch_blocks": 300, "a_epoch_parameterization": "mbe_adapted_fixed_15_source_blocks", "g_epoch_multiple": gEpochMultiple, "a_epoch_policy": "source_block_height_15_committed_only_mbe_adapted", "global_epoch_policy": "mbe_adapted_tau1_15_paper_case_study_tau2_over_tau1_20", "mapping_ack_policy": "all_nodes_before_next_epoch", "stateful_migration_policy": "fail_closed_on_committed_account_home_move_without_migration_or_replication", "initial_g_history_transaction_count": len(history), "initial_g_lambda": alloc.Lambda, "initial_g_epsilon": alloc.Epsilon, "committed_dynamic_transaction_count": 0, "a_txallo_transaction_count": 0, "total_allocator_history_transaction_count": len(history), "closed_source_epoch_count": 0, "last_closed_source_epoch": -1, "mapping_epoch": uint64(0), "pending_or_uncommitted_transactions_used": 0, "mapping_nonempty": len(alloc.Mapping) > 0, "mapping_structurally_complete": len(alloc.Mapping) == graphCount, "mapping_operationally_valid": len(alloc.Mapping) > 0 && len(alloc.Mapping) == graphCount, "future_evaluation_transactions_used": 0, "bootstrap_ms": time.Since(started).Milliseconds()} {
 		ev[k] = v
 	}
 	p.mu.Lock()
@@ -475,10 +533,33 @@ func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Contex
 	p.shards = shards
 	p.aliases = aliases
 	p.evidence = ev
+	p.plan = input.Plan
+	p.mappingEpoch = 0
+	p.mappingSnapshotPath = filepath.Join(filepath.Dir(path), txalloDynamicMappingSnapshotName)
+	p.mappingSnapshotModTime = 0
+	p.dynamicHistory = append([]txalloHistoryTx(nil), history...)
 	if p.provisionalAccounts == nil {
 		p.provisionalAccounts = map[string]bool{}
 	}
 	p.mu.Unlock()
+	// Dynamic lifecycle evidence is a formal per-node artifact. Create the file at
+	// bootstrap even for a node that receives no transaction in a particular run.
+	if dynamicA && strings.EqualFold(filepath.Base(filepath.Dir(filepath.Clean(input.DataDir))), "nodes") {
+		f, err := os.OpenFile(filepath.Join(input.DataDir, txalloDynamicEpochFeedName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return fmt.Errorf("TxAllo dynamic epoch feed init: %w", err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("TxAllo dynamic epoch feed init close: %w", err)
+		}
+	}
+	// Only the client is the deterministic mapping publisher. Nodes reconstruct
+	// the same initial G and then consume monotonically increasing epoch snapshots.
+	if dynamicA && strings.EqualFold(filepath.Base(filepath.Clean(input.DataDir)), "client") {
+		if err := p.writeTxAlloMappingSnapshot(); err != nil {
+			return fmt.Errorf("TxAllo initial mapping publish: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -522,7 +603,18 @@ func (p txalloRouting) mapping(input BatchRoutingInput) (txalloAccountMappingPro
 	return m, ok
 }
 func (p txalloRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
-	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardingPluginID: shardingPluginID(input.Sharding), PlacementPolicy: "txallo_account_mapping_from_committed_history_v1", TransactionPolicy: "sender_account_home_execution_v1", ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
+	placementPolicy := "txallo_account_mapping_from_committed_history_v1"
+	reason := "txallo_frozen_account_mapping"
+	routingEpoch := uint64(0)
+	if dynamic, ok := input.Sharding.(interface {
+		TxAlloDynamicEnabled() bool
+		TxAlloMappingEpoch() uint64
+	}); ok && dynamic.TxAlloDynamicEnabled() {
+		placementPolicy = "txallo_account_mapping_from_committed_history_dynamic_v1"
+		reason = "txallo_committed_history_mapping"
+		routingEpoch = dynamic.TxAlloMappingEpoch()
+	}
+	plan := BatchRoutingPlan{BatchIndex: input.BatchIndex, ShardingPluginID: shardingPluginID(input.Sharding), PlacementPolicy: placementPolicy, TransactionPolicy: "sender_account_home_execution_v1", ShardLoadBefore: map[string]int{}, ShardLoadAfter: map[string]int{}}
 	for _, s := range input.ShardIDs {
 		plan.ShardLoadBefore[s] = 0
 		plan.ShardLoadAfter[s] = 0
@@ -548,7 +640,7 @@ func (p txalloRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 		if target != home {
 			remote = 1
 		}
-		plan.TransactionPlacements = append(plan.TransactionPlacements, TransactionPlacement{LogicalID: firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)), TxIndex: record.Index, HomeShard: home, ExecutionShard: home, TargetShard: target, Reason: "txallo_frozen_account_mapping", RemoteAccessCount: remote})
+		plan.TransactionPlacements = append(plan.TransactionPlacements, TransactionPlacement{LogicalID: firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index)), TxIndex: record.Index, RoutingEpoch: routingEpoch, HomeShard: home, ExecutionShard: home, TargetShard: target, Reason: reason, RemoteAccessCount: remote})
 		plan.ShardLoadAfter[home]++
 		plan.RemoteAccessEstimate += remote
 	}

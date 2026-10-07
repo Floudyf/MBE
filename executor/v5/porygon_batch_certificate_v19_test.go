@@ -27,7 +27,7 @@ func TestPorygonV19BatchCertificateAcceptsMultipleReplicaAttestations(t *testing
 	const executionShard = "s0"
 
 	members := runtime.porygonExecutionRoleMembers(height, executionShard)
-	threshold := porygonExecutionThreshold(len(members))
+	threshold := porygonShardedExecutionResultThreshold(len(members))
 	if len(members) < 2 || threshold < 2 {
 		t.Fatalf("fixture must expose a multi-replica ESC threshold: members=%v threshold=%d", members, threshold)
 	}
@@ -57,6 +57,7 @@ func TestPorygonV19BatchCertificateAcceptsMultipleReplicaAttestations(t *testing
 		Entries: []PorygonESCBatchCertificateEntry{{
 			ExecutionShardID: executionShard,
 			ResultDigest:     result.ResultDigest,
+			Threshold:        threshold,
 			Voters:           voters,
 			Attestations:     atts,
 			Result:           result,
@@ -80,7 +81,7 @@ func TestPorygonV19BatchCertificateRecomputesRepresentativeDigest(t *testing.T) 
 	const executionShard = "s0"
 
 	members := runtime.porygonExecutionRoleMembers(height, executionShard)
-	threshold := porygonExecutionThreshold(len(members))
+	threshold := porygonShardedExecutionResultThreshold(len(members))
 	result := porygonSealBatchResult(PorygonESCBatchResult{
 		BlockHash:            "porygon-v19-tamper",
 		Height:               height,
@@ -101,6 +102,7 @@ func TestPorygonV19BatchCertificateRecomputesRepresentativeDigest(t *testing.T) 
 		Entries: []PorygonESCBatchCertificateEntry{{
 			ExecutionShardID: executionShard,
 			ResultDigest:     result.ResultDigest,
+			Threshold:        threshold,
 			Voters:           voters,
 			Attestations:     atts,
 			Result:           result,

@@ -172,6 +172,22 @@ func (m *Mempool) ReleaseReserved(items []tx.SignedTransaction) {
 	}
 }
 
+// MBE_PBFT_COMPACT_TRANSPORT_V1
+// LookupMany returns the exact immutable signed transaction bodies already held
+// by this node. One lock covers the complete lookup so compact PBFT proposal
+// reconstruction does not turn a large block into O(n) mutex round-trips.
+func (m *Mempool) LookupMany(txIDs []string) map[string]tx.SignedTransaction {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]tx.SignedTransaction, len(txIDs))
+	for _, id := range txIDs {
+		if e, ok := m.byID[id]; ok {
+			out[id] = e.tx
+		}
+	}
+	return out
+}
+
 func (m *Mempool) Len() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

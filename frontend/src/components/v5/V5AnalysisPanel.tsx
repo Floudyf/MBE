@@ -47,10 +47,10 @@ const methodLabels: Record<string, string[]> = {
   metatrack_serial: ["MetaTrack", "初始版"],
   metatrack_full_locality: ["MetaTrack", "当前版"],
   metatrack_latest: ["Metatrack"],
-  metatrack_ab_route: ["去掉共现矩阵分片"],
+  metatrack_ab_route: ["历史子消融", "无局部性放置"],
   metatrack_ab_track: ["去掉双轨"],
   metatrack_ab_cons: ["去掉共识聚合"],
-  metatrack_ab_state: ["去掉状态预取"],
+  metatrack_ab_state: ["去掉状态局部化"],
   metatrack_ab_handoff: ["历史子消融", "无本地版本交接"],
   metatrack_block_stm: ["MetaTrack", "Block-STM（历史）"],
 };

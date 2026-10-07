@@ -15,7 +15,7 @@ func TestPorygonFixV34StateProjectionPreservesGenesisTAnchor(t *testing.T) {
 	}
 }
 
-func TestPorygonFixV34PendingEvidenceIsProposalHeightDeterministicAndCTxOnly(t *testing.T) {
+func TestPorygonFixV503PendingEvidenceProtectsAllUncommittedPriorTransactions(t *testing.T) {
 	runtime := &NodeRuntime{}
 	state := &porygonPaperRuntimeState{txs: map[string]*PorygonTxRoundLifecycle{
 		"ctx": {TxID: "ctx", OriginHeight: 10, CrossShard: true, Status: porygonPaperTxOrdered, Accesses: []tx.AccessItem{{Key: "asset:a", Mode: tx.AccessWrite}}, LockedKeys: []string{"asset:a"}},
@@ -23,21 +23,27 @@ func TestPorygonFixV34PendingEvidenceIsProposalHeightDeterministicAndCTxOnly(t *
 	}}
 	porygonPaperRuntimeStates.Store(runtime, state)
 	defer porygonPaperRuntimeStates.Delete(runtime)
+	defer porygonV50RecoveryStates.Delete(runtime)
 
 	first := runtime.porygonPaperPendingEvidenceForProposal(11)
-	if len(first) != 1 || first[0].TxID != "ctx" {
-		t.Fatalf("proposal B11 pending set=%#v want CTx only", first)
+	if len(first) != 2 || first[0].TxID != "ctx" || first[1].TxID != "itx" {
+		t.Fatalf("proposal B11 pending set=%#v want uncommitted CTx+ITx", first)
 	}
 	firstDigest := stableJSONDigest(first)
 	state.mu.Lock()
 	state.txs["ctx"].Status = porygonPaperTxUpdateApplied
+	state.txs["itx"].Status = porygonPaperTxITxExecuted
 	state.mu.Unlock()
 	second := runtime.porygonPaperPendingEvidenceForProposal(11)
 	if stableJSONDigest(second) != firstDigest {
-		t.Fatalf("local execution timing changed consensus pending evidence: first=%#v second=%#v", first, second)
+		t.Fatalf("local execution timing changed B(h+1) consensus pending evidence: first=%#v second=%#v", first, second)
+	}
+	atITxCommit := runtime.porygonPaperPendingEvidenceForProposal(12)
+	if len(atITxCommit) != 1 || atITxCommit[0].TxID != "ctx" {
+		t.Fatalf("B12 pending set=%#v want only still-uncommitted CTx", atITxCommit)
 	}
 	if later := runtime.porygonPaperPendingEvidenceForProposal(14); len(later) != 0 {
-		t.Fatalf("B14 retained CTx beyond deterministic h+4 release: %#v", later)
+		t.Fatalf("B14 retained normal CTx beyond deterministic h+4 release: %#v", later)
 	}
 }
 

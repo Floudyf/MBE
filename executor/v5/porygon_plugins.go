@@ -197,7 +197,7 @@ func (p porygonBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 	}
 	var reserved []tx.SignedTransaction
 	var prewitness *PorygonWitnessCertificate
-	if cached, ok := porygonTakePrewitnessedBatch(input.Pool); ok {
+	if cached, ok := porygonTakePrewitnessedBatch(input.Pool, input.Proposer.NextHeight, input.Proposer.NodeID); ok {
 		reserved = append([]tx.SignedTransaction(nil), cached.Items...)
 		cert := cached.Certificate
 		prewitness = &cert

@@ -349,6 +349,7 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
     _apply_metatrack_liveness_safe_boundary_batch_v621_metrics(metrics, run_dir)
     _apply_metatrack_async_version_writeback_v640_metrics(metrics, run_dir)
     _apply_metatrack_incremental_routing_v650_metrics(metrics, run_dir)
+    _apply_metatrack_routed_cross_state_metrics(metrics, run_dir)
     _apply_metatrack_natural_window_v657_metrics(metrics, run_dir)
     _apply_metatrack_partition_invariant_v658_metrics(metrics, run_dir)
     _apply_metatrack_track_observability(metrics, run_dir)
@@ -627,16 +628,14 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
         metrics["worker_count"] = effective_worker_count
 
     executor_ids = sorted({str(summary.get("block_executor_id")) for summary in summaries if summary.get("block_executor_id")})
-    observed_parallel_width = max(
-        (
-            max(
-                _int(block.get("maximum_parallel_width")),
-                _int(block.get("max_inflight_business_executions")),
-            )
-            for block in blocks
-        ),
-        default=0,
-    )
+    # MBE_METATRACK_MECHPACK_V1_METRICS
+    if executor_ids == ["metatrack_block_executor"]:
+        observed_parallel_width = max((_int(block.get("max_inflight_business_executions")) for block in blocks), default=0)
+    else:
+        observed_parallel_width = max(
+            (max(_int(block.get("maximum_parallel_width")), _int(block.get("max_inflight_business_executions"))) for block in blocks),
+            default=0,
+        )
     if executor_ids == ["serial_block_executor"] and blocks:
         observed_parallel_width = max(observed_parallel_width, 1)
     if observed_parallel_width > 0:
@@ -722,7 +721,8 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "porygon_planned_logical_cross_shard_ratio": ((total("porygon_logical_state_cross_shard_transaction_count") or total("porygon_cross_shard_transaction_count")) / max(1, total("porygon_intra_shard_transaction_count") + total("porygon_cross_shard_transaction_count"))),
         "porygon_executed_cross_shard_ratio": (total("porygon_single_shard_execution_count") / max(1, total("porygon_single_shard_execution_count") + total("porygon_intra_shard_transaction_count"))),
         "porygon_cross_esc_abandon_ratio": (total("porygon_cross_shard_conflict_abandoned_count") / max(1, total("porygon_intra_shard_transaction_count") + total("porygon_cross_shard_transaction_count"))),
-        "porygon_protocol_abandoned_unique_tx_count": total("porygon_protocol_abandoned_transaction_count"),
+        "porygon_paper_ctx_rolled_back_count": maximum("porygon_paper_ctx_rolled_back_count"),
+        "porygon_protocol_abandoned_unique_tx_count": total("porygon_protocol_abandoned_transaction_count") + maximum("porygon_paper_ctx_rolled_back_count"),
         "porygon_post_execution_candidate_quarantine_count": total("porygon_post_execution_candidate_quarantine_count"),
         "porygon_abandoned_ctx_itx_conflict_count": total("porygon_abandoned_ctx_itx_conflict_count"),
         "porygon_abandoned_ctx_ctx_conflict_count": total("porygon_abandoned_ctx_ctx_conflict_count"),
@@ -760,8 +760,28 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "porygon_paper_itx_committed_count": maximum("porygon_paper_itx_committed_count"),
         "porygon_paper_ctx_committed_count": maximum("porygon_paper_ctx_committed_count"),
         "porygon_mbe_consensus_adaptation": next((block.get("porygon_mbe_consensus_adaptation") for block in blocks if block.get("porygon_mbe_consensus_adaptation")), None),
+        "porygon_paper_fidelity_version": next((block.get("porygon_paper_fidelity_version") for block in blocks if block.get("porygon_paper_fidelity_version")), None),
+        "porygon_sharded_execution_result_threshold_rule": next((block.get("porygon_sharded_execution_result_threshold_rule") for block in blocks if block.get("porygon_sharded_execution_result_threshold_rule")), None),
+        "porygon_v50_ec_slots_observed": sorted({_int(block.get("porygon_v50_ec_slot")) for block in blocks if block.get("porygon_v50_ec_slot") is not None}),
+        "porygon_v50_deferred_partition_count": total("porygon_v50_deferred_partition_count"),
+        "porygon_v50_fault_recovery_observed": any(bool(block.get("porygon_v50_fault_recovery_observed")) for block in blocks),
         "porygon_storage_node_adaptation": next((block.get("porygon_storage_node_adaptation") for block in blocks if block.get("porygon_storage_node_adaptation")), None),
     })
+    # Porygon v5 paper-fidelity terminal truth: a successfully proposal-carried
+    # rollback is a terminal protocol abort, not an incomplete transaction and
+    # not a finalized business transaction.  Derive these counts from the
+    # replica-consistent paper lifecycle instead of the original execution
+    # receipt, which necessarily predates the future-ESC retry/rollback rounds.
+    paper_finalized = int(metrics.get("porygon_paper_itx_committed_count") or 0) + int(metrics.get("porygon_paper_ctx_committed_count") or 0)
+    paper_abandoned = int(metrics.get("porygon_protocol_abandoned_unique_tx_count") or 0)
+    submitted = metrics.get("submitted_unique_tx_count")
+    if isinstance(submitted, (int, float)) and not isinstance(submitted, bool):
+        submitted_int = int(submitted)
+        terminal = min(submitted_int, paper_finalized + paper_abandoned)
+        metrics["finalized_unique_logical_tx_count"] = paper_finalized
+        metrics["terminal_unique_tx_count"] = terminal
+        metrics["incomplete_unique_tx_count"] = max(0, submitted_int - terminal)
+        metrics["porygon_terminal_truth_scope"] = "paper_lifecycle_committed_plus_ordering_postexecution_abandoned_plus_proposal_carried_rollback"
     for path in _batch_si_leader_summary_paths(run_dir):
         if path.is_file():
             rel = str(path.relative_to(run_dir)).replace("\\", "/")
@@ -1246,6 +1266,36 @@ def _apply_metatrack_incremental_routing_v650_metrics(metrics: dict[str, Any], r
     if artifact_name not in metrics["source_artifacts"]:
         metrics["source_artifacts"].append(artifact_name)
 
+def _apply_metatrack_routed_cross_state_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
+    path = run_dir / "transaction_placement.csv"
+    if not path.is_file():
+        path = run_dir / "client" / "transaction_placement.csv"
+    if not path.is_file():
+        return
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except OSError:
+        return
+    if not rows:
+        return
+    cross = 0; remote = 0; reads = 0; writes = 0
+    for row in rows:
+        r = _int(row.get("remote_access_count")); rr = _int(row.get("predicted_remote_reads")); rw = _int(row.get("predicted_remote_writes"))
+        if r > 0: cross += 1
+        remote += r; reads += rr; writes += rw
+    metrics["metatrack_routed_transaction_count"] = len(rows)
+    metrics["metatrack_routed_cross_state_tx_count"] = cross
+    metrics["metatrack_routed_cross_state_tx_ratio"] = cross / len(rows)
+    metrics["metatrack_routed_remote_access_count"] = remote
+    metrics["metatrack_routed_remote_access_per_tx"] = remote / len(rows)
+    metrics["metatrack_routed_predicted_remote_read_count"] = reads
+    metrics["metatrack_routed_predicted_remote_write_count"] = writes
+    metrics["metatrack_routed_cross_state_truth_scope"] = "post_routing_execution_shard_vs_state_home_transaction_placement"
+    rel = str(path.relative_to(run_dir)).replace("\\", "/")
+    if rel not in metrics["source_artifacts"]: metrics["source_artifacts"].append(rel)
+
+
 def _apply_metatrack_track_observability(metrics: dict[str, Any], run_dir: Path) -> None:
     summaries = [_read_json(path) for path in _batch_si_leader_summary_paths(run_dir)]
     summaries = [item for item in summaries if item.get("block_executor_id") == "metatrack_block_executor"]
@@ -1268,6 +1318,7 @@ def _apply_metatrack_track_observability(metrics: dict[str, Any], run_dir: Path)
         "metatrack_fast_fallback_count",
         "metatrack_fast_discarded_tentative_count",
         "metatrack_conservative_reexecution_count",
+        "metatrack_single_fifo_ready_blocked_duration_count",
     )
     float_keys = (
         "metatrack_fast_business_execution_sum_ms",
@@ -1281,11 +1332,13 @@ def _apply_metatrack_track_observability(metrics: dict[str, Any], run_dir: Path)
         "metatrack_conservative_dependency_wait_sum_ms",
         "metatrack_fast_queue_wait_sum_ms",
         "metatrack_conservative_queue_wait_sum_ms",
+        "metatrack_single_fifo_ready_blocked_sum_ms",
     )
     totals: dict[str, Any] = {key: sum(_int(block.get(key)) for block in blocks) for key in count_keys}
     for key in float_keys:
         totals[key] = sum(float(block.get(key) or 0.0) for block in blocks)
     metrics.update(totals)
+    metrics["metatrack_single_fifo_ready_blocked_max_ms"] = max((float(block.get("metatrack_single_fifo_ready_blocked_max_ms") or 0.0) for block in blocks), default=0.0)
     fast_initial = totals["metatrack_fast_initial_tx_count"]
     fast_attempts = totals["metatrack_fast_business_execution_attempt_count"]
     conservative_attempts = totals["metatrack_conservative_business_execution_attempt_count"]
@@ -1390,7 +1443,11 @@ def _apply_metatrack_track_observability(metrics: dict[str, Any], run_dir: Path)
 
 
 def _apply_optme_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
-    blocks: list[dict[str, Any]] = []
+    # MBE_OPTME_V24_REFERENCE_REPLICA_METRICS: OptME v22 uses one global PBFT
+    # domain and every validator deterministically re-executes the same block.
+    # Algorithm/event metrics therefore use one compiled leader replica; the
+    # all-replica sum is retained under an explicit physical-observation key.
+    per_node_blocks: dict[str, list[dict[str, Any]]] = {}
     mode = None
     for path in sorted((run_dir / "nodes").glob("*/block_execution_summary.json")):
         payload = _read_json(path)
@@ -1399,12 +1456,20 @@ def _apply_optme_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         rel = str(path.relative_to(run_dir)).replace("\\", "/")
         if rel not in metrics["source_artifacts"]:
             metrics["source_artifacts"].append(rel)
-        for block in payload.get("blocks") if isinstance(payload.get("blocks"), list) else []:
-            if isinstance(block, dict):
-                blocks.append(block)
-                mode = mode or block.get("optme_mode")
-    if not blocks:
+        node_blocks = [block for block in (payload.get("blocks") if isinstance(payload.get("blocks"), list) else []) if isinstance(block, dict)]
+        if not node_blocks:
+            continue
+        per_node_blocks[path.parent.name] = node_blocks
+        for block in node_blocks:
+            mode = mode or block.get("optme_mode")
+    if not per_node_blocks:
         return
+    leader_ids = _leader_node_ids(run_dir)
+    reference_node = next((node_id for node_id in leader_ids if node_id in per_node_blocks), None)
+    if reference_node is None:
+        reference_node = sorted(per_node_blocks)[0]
+    blocks = per_node_blocks[reference_node]
+    physical_blocks = [block for node_id in sorted(per_node_blocks) for block in per_node_blocks[node_id]]
     # MBE_OPTME_V20_METRICS: keep legacy early_abort while exposing source-stage truth.
     total_keys = (
         "optme_simulation_ms", "optme_graph_scheduling_ms", "optme_commit_ms", "optme_reexecution_ms", "optme_validation_ms",
@@ -1415,13 +1480,73 @@ def _apply_optme_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     )
     metrics["optme_metrics_available"] = True
     metrics["optme_mode"] = mode
+    metrics["optme_replica_metric_reference_node"] = reference_node
+    metrics["optme_replica_metric_replica_count"] = len(per_node_blocks)
+    metrics["optme_replica_metric_scope"] = "compiled_global_pbft_leader_reference_for_algorithm_metrics;all_replica_sums_preserved_as_physical_observations"
+    # MBE_OPTME_V241_RUNTIME_FIDELITY_EXPORT: v24 executor records these fields
+    # in every raw block summary. Export them at run scope and fail closed when
+    # they are missing, so a stale/mixed Go runtime cannot silently look valid.
+    runtime_required = (
+        "optme_projected_unknown_access_count",
+        "optme_input_access_fidelity",
+        "optme_execution_window_mapping",
+        "optme_commit_materialization_model",
+    )
+    missing_runtime = sorted({key for block in physical_blocks for key in runtime_required if key not in block})
+    window_values = {str(block.get("optme_execution_window_mapping") or "") for block in physical_blocks if block.get("optme_execution_window_mapping") is not None}
+    materialization_values = {str(block.get("optme_commit_materialization_model") or "") for block in physical_blocks if block.get("optme_commit_materialization_model") is not None}
+    access_values = {str(block.get("optme_input_access_fidelity") or "") for block in blocks if block.get("optme_input_access_fidelity") is not None}
+    expected_window = "one_mbe_pbft_block_to_one_optme_execution_window"
+    expected_materialization = "mbe_deterministic_index_order_platform_adapter"
+    runtime_status = "available"
+    runtime_failures = []
+    if missing_runtime:
+        runtime_status = "missing_runtime_fidelity_fields"
+        runtime_failures.append("missing:" + ",".join(missing_runtime))
+    if window_values and window_values != {expected_window}:
+        runtime_status = "inconsistent_runtime_fidelity_fields"
+        runtime_failures.append("execution_window_mapping_inconsistent")
+    if materialization_values and materialization_values != {expected_materialization}:
+        runtime_status = "inconsistent_runtime_fidelity_fields"
+        runtime_failures.append("commit_materialization_model_inconsistent")
+    allowed_access = {"historical_static_unknown_promoted_to_rmw_projection", "declared_runtime_rw_no_unknown_projection"}
+    if access_values and not access_values.issubset(allowed_access):
+        runtime_status = "inconsistent_runtime_fidelity_fields"
+        runtime_failures.append("input_access_fidelity_unknown_value")
+    metrics["optme_runtime_fidelity_evidence_status"] = runtime_status
+    metrics["optme_runtime_fidelity_evidence_passed"] = runtime_status == "available"
+    metrics["optme_runtime_fidelity_required_fields"] = list(runtime_required)
+    metrics["optme_runtime_fidelity_missing_fields"] = missing_runtime
+    metrics["optme_runtime_fidelity_failures"] = runtime_failures
+    metrics["optme_runtime_fidelity_reference_block_count"] = len(blocks)
+    if runtime_status == "available":
+        logical_unknown = sum(_int(block.get("optme_projected_unknown_access_count")) for block in blocks)
+        physical_unknown = sum(_int(block.get("optme_projected_unknown_access_count")) for block in physical_blocks)
+        metrics["optme_projected_unknown_access_count"] = logical_unknown
+        metrics["optme_replica_physical_projected_unknown_access_count_sum"] = physical_unknown
+        metrics["optme_input_access_fidelity"] = (
+            "historical_static_unknown_promoted_to_rmw_projection"
+            if logical_unknown > 0 or "historical_static_unknown_promoted_to_rmw_projection" in access_values
+            else "declared_runtime_rw_no_unknown_projection"
+        )
+        metrics["optme_execution_window_mapping"] = expected_window
+        metrics["optme_commit_materialization_model"] = expected_materialization
+        metrics["optme_input_access_truth_scope"] = (
+            "projected_static_declaration_runtime_semantics"
+            if metrics["optme_input_access_fidelity"] == "historical_static_unknown_promoted_to_rmw_projection"
+            else "declared_runtime_rw_without_unknown_projection"
+        )
     for key in total_keys:
         metrics[key] = sum(_int(block.get(key)) for block in blocks)
+        suffix = key[len("optme_"):] if key.startswith("optme_") else key
+        metrics[f"optme_replica_physical_{suffix}_sum"] = sum(_int(block.get(key)) for block in physical_blocks)
     metrics["optme_sequence_count"] = sum(_int(block.get("optme_sequence_count")) for block in blocks)
+    metrics["optme_replica_physical_sequence_count_sum"] = sum(_int(block.get("optme_sequence_count")) for block in physical_blocks)
     metrics["optme_rescheduled_epoch_count"] = sum(_int(block.get("optme_rescheduled_epoch_count")) for block in blocks)
+    metrics["optme_replica_physical_rescheduled_epoch_count_sum"] = sum(_int(block.get("optme_rescheduled_epoch_count")) for block in physical_blocks)
     metrics["optme_maximum_sequence_width"] = max((_int(block.get("optme_maximum_sequence_width")) for block in blocks), default=0)
     metrics["optme_source_commit"] = next((block.get("optme_source_commit") for block in blocks if block.get("optme_source_commit")), None)
-    metrics["optme_truth_scope"] = "post_consensus_successful_simulation_actual_rw_author_parallel_acg_schedule;failed_simulations_terminalized_outside_acg;accesslist_only_bounds_stateless_projection"
+    metrics["optme_truth_scope"] = "reference_replica_post_consensus_successful_simulation_actual_rw_author_parallel_acg_schedule;all_replica_physical_sums_explicit;failed_simulations_terminalized_outside_acg;accesslist_only_bounds_stateless_projection"
 
 
 def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
@@ -1453,6 +1578,32 @@ def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "g_cache_hit",
         "g_cache_key",
         "g_txallo_executed_this_run",
+        "history_sidecar_sha256_verified",
+        "a_epoch_blocks",
+        "paper_reference_a_epoch_blocks",
+        "a_epoch_parameterization",
+        "g_epoch_multiple",
+        "a_epoch_policy",
+        "global_epoch_policy",
+        "initial_g_history_transaction_count",
+        "initial_g_lambda",
+        "initial_g_epsilon",
+        "committed_dynamic_transaction_count",
+        "a_txallo_transaction_count",
+        "total_allocator_history_transaction_count",
+        "periodic_g_txallo_run_count",
+        "closed_source_epoch_count",
+        "last_closed_source_epoch",
+        "last_closed_source_epoch_transaction_count",
+        "mapping_epoch",
+        "last_update_algorithm",
+        "pending_or_uncommitted_transactions_used",
+        "mapping_ack_policy",
+        "stateful_migration_policy",
+        "stateful_migration_guard_triggered",
+        "stateful_migration_required_account_count",
+        "stateful_migration_required_accounts_digest",
+        "stateful_migration_rejected_source_epoch",
         "mapping_nonempty",
         "mapping_structurally_complete",
         "mapping_operationally_valid",
@@ -1476,7 +1627,7 @@ def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             rel = str(path.relative_to(run_dir)).replace("\\", "/")
             if rel not in metrics["source_artifacts"]:
                 metrics["source_artifacts"].append(rel)
-    metrics["txallo_truth_scope"] = "pre_evaluation_history_only_frozen_mapping;modeled_throughput_is_paper_objective_not_measured_end_to_end_tps"
+    metrics["txallo_truth_scope"] = "initial_g_uses_pre_evaluation_history;dynamic_updates_use_successfully_committed_prior_300_source_block_epochs_only;all_nodes_ack_mapping_before_next_epoch;stateful_committed_account_home_moves_fail_closed_without_migration_or_replication;paper_case_study_g_every_20_source_epochs;modeled_throughput_is_paper_objective_not_measured_end_to_end_tps"
 
 
 def _apply_calvin_metrics(metrics: dict[str, Any], run_dir: Path) -> None:

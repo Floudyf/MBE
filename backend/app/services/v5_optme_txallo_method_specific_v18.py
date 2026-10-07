@@ -453,6 +453,42 @@ def _method_config_worker_count(item: dict[str, Any]) -> int | None:
     return _as_int(block.get("worker_count")) if isinstance(block, dict) else None
 
 
+# MBE_OPTME_V24_LOGICAL_COUNTS: canonical paper/mechanism event counts are
+# logical/deduplicated from tx-level evidence. Reference-replica extractor
+# metrics remain the primary stage/timing scope; all-replica sums stay explicit.
+def _apply_optme_logical_counts_v24(out: dict[str, Any]) -> dict[str, Any]:
+    evidence = out.get("v17_optme_transaction_fidelity") or out.get("v18_optme_transaction_fidelity") or {}
+    if not isinstance(evidence, dict) or evidence.get("status") != "available":
+        return out
+    mapping = {
+        "early_abort": "logical_early_abort_count",
+        "early_detection": "logical_early_detection_count",
+        "hierarchical_abort": "logical_hierarchical_abort_count",
+        "rescheduled_transaction": "logical_rescheduled_count",
+        "reexecution": "logical_reexecution_count",
+        "reordered_transaction": "logical_reordered_count",
+        "simulation_failed": "logical_simulation_failed_count",
+        "reexecution_simulation_failed": "logical_reexecution_simulation_failed_count",
+        "reexecution_invalid": "logical_second_pass_invalidated_count",
+    }
+    for stem, source in mapping.items():
+        physical_key = f"optme_{stem}_count"
+        logical_key = f"optme_logical_{stem}_count"
+        observation_key = f"optme_replica_physical_{stem}_observation_count"
+        physical_sum_key = f"optme_replica_physical_{stem}_count_sum"
+        if observation_key not in out:
+            if physical_sum_key in out:
+                out[observation_key] = out.get(physical_sum_key)
+            elif physical_key in out:
+                out[observation_key] = out.get(physical_key)
+        if evidence.get(source) is not None:
+            out[logical_key] = evidence.get(source)
+            out[physical_key] = evidence.get(source)
+    out["optme_logical_transaction_count"] = evidence.get("logical_transaction_count")
+    out["optme_algorithm_event_count_scope"] = "logical_tx_deduplicated_from_optme_transaction_evidence"
+    return out
+
+
 def enrich_metrics(run_dir: Path | str, method_id: str | None, result: dict[str, Any]) -> dict[str, Any]:
     out = v17.enrich_metrics(run_dir, method_id, result)
     method = _method_id(method_id, out)
@@ -497,6 +533,21 @@ def enrich_metrics(run_dir: Path | str, method_id: str | None, result: dict[str,
     if _is_optme(method):
         # V17 already refuses to infer per-transaction behavior from aggregate counts.
         out["v18_optme_transaction_fidelity"] = out.get("v17_optme_transaction_fidelity") or v17.compute_optme_transaction_evidence_v17(run_dir, out)
+        _apply_optme_logical_counts_v24(out)
+        # MBE_OPTME_V241_RUNTIME_FIDELITY_GATE: promote raw executor evidence into
+        # method truth. Missing fields mean the active Go runtime cannot be
+        # proven to contain the fidelity instrumentation, so fail closed later.
+        out["v18_optme_runtime_fidelity"] = {
+            "status": out.get("optme_runtime_fidelity_evidence_status"),
+            "passed": out.get("optme_runtime_fidelity_evidence_passed"),
+            "input_access_fidelity": out.get("optme_input_access_fidelity"),
+            "projected_unknown_access_count": out.get("optme_projected_unknown_access_count"),
+            "execution_window_mapping": out.get("optme_execution_window_mapping"),
+            "commit_materialization_model": out.get("optme_commit_materialization_model"),
+            "input_access_truth_scope": out.get("optme_input_access_truth_scope"),
+            "missing_fields": out.get("optme_runtime_fidelity_missing_fields") or [],
+            "failures": out.get("optme_runtime_fidelity_failures") or [],
+        }
 
     return out
 
@@ -508,6 +559,7 @@ def _canonical_child(item: dict[str, Any]) -> dict[str, Any]:
     metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
     method = _method_id(item.get("method"), item)
     out["v18_method_id"] = method
+    out["v18_optme_runtime_fidelity"] = metrics.get("v18_optme_runtime_fidelity")
     for key in (
         "v18_method_correctness", "v18_method_correctness_oracle_status", "v18_method_correctness_oracle_valid",
         "v18_method_correctness_oracle_blockers", "v18_stateful_serial_partition_equivalent",
@@ -571,6 +623,35 @@ def _canonical_child(item: dict[str, Any]) -> dict[str, Any]:
     if metrics.get("v17_logical_business_state_digest"):
         diagnostics.append("cross_method_final_business_digest_is_diagnostic_not_correctness_oracle")
 
+    # MBE_OPTME_V241_RUNTIME_FIDELITY_GATE: require proof that the active Go
+    # runtime emitted the v24 fidelity fields. Historical UNKNOWN->RMW evidence
+    # is diagnostic, not an OptME algorithm failure.
+    if _is_optme(method):
+        runtime_fidelity = metrics.get("v18_optme_runtime_fidelity") or {}
+        if runtime_fidelity.get("status") != "available" or runtime_fidelity.get("passed") is not True:
+            blockers.append("optme_runtime_fidelity_evidence_unproven")
+        elif runtime_fidelity.get("input_access_fidelity") == "historical_static_unknown_promoted_to_rmw_projection":
+            diagnostics.append("optme_historical_unknown_access_is_projected_rmw_not_native_runtime_rw_truth")
+
+    # MBE_OPTME_V24_V23_SUPERSESSION: v17 predates the OptME-specific apply-order
+    # replay oracle. Retire only its obsolete stateless-global-projection blocker
+    # when current method correctness and tx-level OptME evidence both pass.
+    if _is_optme(method) and corr.get("status") == "passed":
+        oe = metrics.get("v18_optme_transaction_fidelity") or metrics.get("v17_optme_transaction_fidelity") or {}
+        if isinstance(oe, dict) and oe.get("status") == "available":
+            stale = {"stateless_global_logical_business_state_not_proven"}
+            legacy_blockers = [str(x) for x in (out.get("v17_fidelity_blockers") or [])]
+            retired = [x for x in legacy_blockers if x in stale]
+            retained_v17 = [x for x in legacy_blockers if x not in stale]
+            if retired:
+                out["v18_retired_v17_blockers"] = sorted(set(retired))
+                out["v18_retained_v17_fidelity_blockers"] = sorted(set(retained_v17))
+                legacy_reasons = [str(x) for x in (out.get("paper_candidate_reasons") or [])]
+                retained_reasons = [x for x in legacy_reasons if x not in stale]
+                out["paper_candidate_reasons"] = sorted(set(retained_reasons))
+                if not retained_v17 and not retained_reasons:
+                    out["paper_candidate"] = True
+
     out["v18_fidelity_blockers"] = sorted(set(map(str, blockers)))
     out["v18_diagnostics"] = sorted(set(diagnostics))
     out["v18_paper_fidelity_candidate"] = not blockers
@@ -597,24 +678,41 @@ def apply_group_fidelity_gate(items: list[dict[str, Any]], report: dict[str, Any
         for reason in child.get("v18_fidelity_blockers") or []:
             blockers.append(f"{method}:{reason}")
 
-    # Preserve the raw V17 pairwise state result as diagnosis, but do not let it decide
-    # correctness or paper eligibility.
+    # MBE_OPTME_V24_GROUP_SUPERSESSION: preserve raw V17 diagnostics, but a
+    # generic V17 group blocker may be retired only when every underlying V17
+    # method blocker was itself explicitly retired by current method truth.
     old_group_blockers = [str(x) for x in out.get("v17_group_fidelity_blockers") or []]
-    retired = [x for x in old_group_blockers if x == "stateless_variants_logical_business_state_not_equivalent"]
-    retained = [x for x in old_group_blockers if x != "stateless_variants_logical_business_state_not_equivalent"]
-
+    unresolved_v17 = []
+    for child in targets:
+        retired_child = {str(x) for x in (child.get("v18_retired_v17_blockers") or [])}
+        for reason in child.get("v17_fidelity_blockers") or []:
+            reason = str(reason)
+            if reason not in retired_child:
+                unresolved_v17.append(f"{child.get('v18_method_id') or 'unknown'}:{reason}")
+    retired_group = []
+    retained = []
+    for reason in old_group_blockers:
+        if reason == "stateless_variants_logical_business_state_not_equivalent":
+            retired_group.append(reason)
+        elif reason == "one_or_more_method_v17_fidelity_blockers" and not unresolved_v17:
+            retired_group.append(reason)
+        else:
+            retained.append(reason)
+    base_performance_valid = bool((report or {}).get("performance_comparison_valid"))
+    base_paper_candidate = bool((report or {}).get("paper_candidate", True))
+    current_blockers = sorted(set(blockers + retained + unresolved_v17))
     out.update({
         "paper_fidelity_closure_version": CLOSURE_VERSION,
         "v18_correctness_model": "method_specific_reference_execution_not_cross_method_final_state_equality",
         "v18_method_specific_correctness_required": True,
         "v18_cross_method_final_state_equality_required": False,
-        "v18_retired_v17_group_blockers": retired,
-        "v18_retained_legacy_group_blockers": retained,
-        "v18_group_fidelity_blockers": sorted(set(blockers + retained)),
-        "performance_comparison_valid": False if (blockers or retained) else bool(out.get("performance_comparison_valid")),
+        "v18_retired_v17_group_blockers": sorted(set(retired_group)),
+        "v18_retained_legacy_group_blockers": sorted(set(retained)),
+        "v18_unresolved_v17_method_blockers": sorted(set(unresolved_v17)),
+        "v18_group_fidelity_blockers": current_blockers,
+        "performance_comparison_valid": base_performance_valid and not current_blockers,
     })
-    if blockers or retained:
-        out["paper_candidate"] = False
+    out["paper_candidate"] = base_paper_candidate and not current_blockers
     return enriched, out
 
 
@@ -629,9 +727,11 @@ def apply_fairness_fidelity_gate(rows: list[dict[str, Any]], report: dict[str, A
         requested = _as_int(topology.get("worker_count")) or _as_int(item.get("worker_count"))
         configured = _method_config_worker_count(item)
         observed_effective = _as_int(metrics.get("v18_effective_worker_count")) or _as_int(metrics.get("v16_effective_worker_count")) or _as_int(metrics.get("worker_count"))
-        # Porygon formal rows compile topology.worker_count into the actual executor.
-        # Registry default 4 is not runtime truth for an 8-worker formal row.
-        effective = requested if method == "stateless_porygon" and observed_effective is None else (observed_effective or configured)
+        # MBE_OPTME_V24_WORKER_TRUTH: OptME formal rows also compile the topology
+        # worker_count into the executor. Registry default 4 is not runtime truth
+        # for an 8-worker formal row.
+        topology_compiles_worker = method == "stateless_porygon" or _is_optme(method)
+        effective = requested if topology_compiles_worker and observed_effective is None else (observed_effective or configured)
         item["requested_worker_count"] = requested
         item["method_config_worker_count"] = configured
         item["effective_worker_count"] = effective

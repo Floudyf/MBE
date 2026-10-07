@@ -172,6 +172,11 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
     if (!isRecord(parsed) || parsed.schema_version !== "mbe_v5_formal_run_draft_v1") return null;
     const suite = FORMAL_SUITE_DEFINITIONS.some((item) => item.id === parsed.selectedSuite) ? parsed.selectedSuite as V5FormalSuite : "comparison_experiment";
     const methods = Array.isArray(parsed.selectedMethods) ? Array.from(new Set(parsed.selectedMethods.filter((item): item is string => typeof item === "string" && item.length > 0).map((item) => ["metatrack_exp", "metatrack_exp50", "metatrack_exp200", "metatrack_block_stm", "metatrack_serial", "metatrack_full_locality"].includes(item) ? "metatrack_latest" : item))) : [];
+    // MBE_METATRACK_MECHPACK_V25_UI_MIGRATION
+    const metaTrackDraft = methods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"));
+    const migratedMethods = suite === "ablation_experiment" && metaTrackDraft ? [...METATRACK_ABLATION_METHOD_IDS] : methods;
+    // MBE_METATRACK_DIAG_V28_UI_MIGRATION
+    const migratedDiagnosticMethods = migratedMethods.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_serial" : item);
     const topologyRaw = isRecord(parsed.topology) ? parsed.topology : {};
     const blockRaw = isRecord(parsed.blockProduction) ? parsed.blockProduction : {};
     const workloadRaw = isRecord(parsed.workload) ? parsed.workload : {};
@@ -183,7 +188,7 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
     return {
       schema_version: "mbe_v5_formal_run_draft_v1",
       saved_at: typeof parsed.saved_at === "string" ? parsed.saved_at : "",
-      selectedMethods: methods.length ? methods : [...V5_DEFAULT_METHOD_IDS],
+      selectedMethods: migratedDiagnosticMethods.length ? migratedDiagnosticMethods : [...V5_DEFAULT_METHOD_IDS],
       selectedSuite: suite,
       workerCount: positiveInteger(parsed.workerCount, 4, 8),
       topology: {
@@ -266,9 +271,13 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     const categories = new Set(catalog.map((item) => item.category));
     return catalog.length > 0 && defaultV5PluginSelections(catalog).length === categories.size;
   }, [catalog]);
-  const selectedRaw = methods.filter((method) => selectedMethods.includes(method.method_id));
+  const effectiveSelectedMethodIds = selectedSuite === "ablation_experiment" && selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))
+    ? [...METATRACK_ABLATION_METHOD_IDS]
+    : selectedMethods;
+  const diagnosticMigratedSelectedMethodIds = effectiveSelectedMethodIds.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_serial" : item);
+  const selectedRaw = methods.filter((method) => diagnosticMigratedSelectedMethodIds.includes(method.method_id));
   const selected = selectedRaw;
-  const groundhogSelected = selectedMethods.includes(groundhogMethodId);
+  const groundhogSelected = diagnosticMigratedSelectedMethodIds.includes(groundhogMethodId);
   const previewRunnable = Boolean(preview?.rows.length && preview.rows.every((row) => row.runnable && !row.blockers.length));
   const previewBlockers = useMemo(() => preview?.rows.flatMap((row) => row.blockers.map((blocker) => `${row.method.display_name}: ${blockerLabel(blocker)}`)) ?? [], [preview]);
   const workloadRunnable = Boolean(workloadPreview && !workloadPreviewDirty && !workloadPreview.blockers.length && !workloadPreviewError);
@@ -739,7 +748,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     <article className="final-card wide">
       <div className="section-heading"><div><h3>② 选择实验对象</h3><p className="muted">{FORMAL_SUITE_DEFINITIONS.find((item) => item.id === selectedSuite)?.description}</p></div></div>
       {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_latest"]))}>MetaTrack 对照组</button></div>}
-      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 四个模块替换消融。</small></button></div>}
+      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 三个一级机制替换消融。</small></button></div>}
       <div className="formal-method-groups">
         {(["stateful", "batch_si", "stateless", "metatrack"] as const).map((family) => {
           const definitions = FORMAL_METHOD_DEFINITIONS.filter((definition) => definition.family === family && (selectedSuite === "ablation_experiment" ? definition.ablationTarget === (selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack" : "batch_si") : selectedSuite === "main_experiment" ? definition.mainVisible : definition.comparisonVisible));
@@ -758,7 +767,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         })}
       </div>
       {!selected.length && <p className="file-error">尚未选择执行方法。</p>}
-      {selectedSuite === "ablation_experiment" && <p className="notice">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "完整 MetaTrack 始终作为主方法；四个消融分别将分片替换为确定性哈希、执行替换为单轨保守、共识窗口替换为固定 RouteBatch、状态路径替换为 Home 访问；每组仅替换一个机制，PBFT 协议保持冻结。" : "完整 Batch-SI 始终作为主方法；消融变体只复用 Batch-SI 自己的实现，不调用其他方案算法代码。"}</p>}
+      {selectedSuite === "ablation_experiment" && <p className="notice">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "完整 MetaTrack 始终作为主方法；三个正式消融分别去掉完整状态局部化、双轨执行、共识聚合；状态局部化包含依赖/共现 placement 与预取/本地 exact/批量状态传输，PBFT 协议保持冻结。" : "完整 Batch-SI 始终作为主方法；消融变体只复用 Batch-SI 自己的实现，不调用其他方案算法代码。"}</p>}
       {groundhogSelected && <p className="notice" data-testid="v5-groundhog-topology-notice">Groundhog 使用当前选择的节点数、分片数和每片验证节点数。核心复现要求跨片交易比例为 0；多分片时，各分片独立运行 Groundhog。</p>}
     </article>
 

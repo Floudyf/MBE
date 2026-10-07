@@ -20,26 +20,28 @@ def config_text(block: str) -> str:
     return block.split("plugin_config_overrides:",1)[1].split("},",1)[0].replace(" ","").replace("\n","")
 
 
+# MBE_METATRACK_MECHPACK_V1_TEST_UPDATE
+# MBE_METATRACK_MECHPACK_V2_TEST_UPDATE
+# MBE_METATRACK_MECHPACK_V2_TEST_UPDATE
+# MBE_METATRACK_MECHPACK_V2_TEST_UPDATE
+# MBE_METATRACK_MECHPACK_V2_TEST_UPDATE
+# MBE_METATRACK_MECHPACK_V2_TEST_UPDATE
+# MBE_METATRACK_MECHPACK_V2_TEST_UPDATE
 def test_v674_formal_ablations_are_single_variable_by_removed_innovation():
     front=read("frontend/src/v5MethodProfile.ts")
-    order=["metatrack_latest","metatrack_ab_route","metatrack_ab_track","metatrack_ab_cons","metatrack_ab_state","metatrack_ab_handoff"]
-    blocks={mid:method_block(front,mid,order[i+1] if i+1<len(order) else None) for i,mid in enumerate(order[:-1])}
+    order=["metatrack_latest","metatrack_unified","metatrack_ab_route","metatrack_ab_track","metatrack_ab_cons","metatrack_ab_state","metatrack_ab_handoff"]
+    blocks={mid:method_block(front,mid,order[i+1]) for i,mid in enumerate(order[:-1])}
     full=plugins(blocks["metatrack_latest"])
-    no_coaccess=plugins(blocks["metatrack_ab_route"])
-    assert no_coaccess==full
-    assert no_coaccess["routing"]=="metatrack_coaccess_routing"
-    assert "ablation_no_coaccess_sharding_v675:true" in config_text(blocks["metatrack_ab_route"])
-    assert "ablation_no_coaccess_sharding_v675:true" not in config_text(blocks["metatrack_latest"])
-    expected={"metatrack_ab_track":{"execution"},"metatrack_ab_cons":{"block_producer"},"metatrack_ab_state":{"state_access"}}
-    for mid,changed in expected.items():
-        current=plugins(blocks[mid])
-        actual={k for k in set(full)|set(current) if full.get(k)!=current.get(k)}
-        assert actual==changed,(mid,actual)
-        assert config_text(blocks[mid])==config_text(blocks["metatrack_latest"])
-        assert "ablation_" not in blocks[mid]
-    assert plugins(blocks["metatrack_ab_track"])["execution"]=="metatrack_single_execution"
-    assert plugins(blocks["metatrack_ab_cons"])["block_producer"]=="metatrack_route_batch_producer"
-    assert plugins(blocks["metatrack_ab_state"])["state_access"]=="metatrack_home_exact_access"
+    track=plugins(blocks["metatrack_ab_track"]); assert {k for k in set(full)|set(track) if full.get(k)!=track.get(k)}=={"execution"}
+    assert track["execution"]=="metatrack_single_execution"
+    cons=plugins(blocks["metatrack_ab_cons"]); assert {k for k in set(full)|set(cons) if full.get(k)!=cons.get(k)}=={"block_producer"}
+    assert cons["block_producer"]=="time_or_count_block_producer"
+    state=plugins(blocks["metatrack_ab_state"]); assert {k for k in set(full)|set(state) if full.get(k)!=state.get(k)}=={"state_access"}
+    compact=blocks["metatrack_ab_state"].replace(" ","").lower()
+    for token in ("ablation_no_coaccess_sharding_v675:true","batch_entry_state_prefetch:false","ablation_on_demand_state_fetch_v661:true","batch_remote_writeback:false","final_version_batch_writeback:false"): assert token in compact
+    for mid in ("metatrack_latest","metatrack_ab_track","metatrack_ab_cons","metatrack_ab_state"):
+        compact=blocks[mid].replace(" ","").lower()
+        for token in ('version_liveness:true','version_liveness_indexed:true','single_final_seal:true'): assert token in compact
 
 
 def test_v663_runtime_has_modular_plugin_ids_and_no_official_flag_dispatch():
@@ -63,13 +65,14 @@ def test_v675_state_access_remains_modular_and_no_coaccess_sharding_is_the_only_
     assert 'state_access: "metatrack_home_exact_access"' in no_state_prefetch
     assert "ablation_no_coaccess_sharding_v675: true" not in full
     assert "ablation_no_coaccess_sharding_v675: true" in no_coaccess
-    assert "ablation_" not in no_state_prefetch
+    assert "ablation_on_demand_state_fetch_v661: true" in no_state_prefetch
 
 
-def test_v663_ui_has_exactly_four_official_ablations():
+def test_v663_ui_has_exactly_three_official_ablations():
     catalog=read("frontend/src/v5FormalExperimentCatalog.ts")
     ids=catalog.split("export const METATRACK_ABLATION_METHOD_IDS = [",1)[1].split("] as const;",1)[0]
-    for mid in ["metatrack_latest","metatrack_ab_route","metatrack_ab_track","metatrack_ab_state","metatrack_ab_cons"]: assert f'"{mid}"' in ids
+    for mid in ["metatrack_latest","metatrack_ab_track","metatrack_ab_state","metatrack_ab_cons"]: assert f'"{mid}"' in ids
+    assert '"metatrack_ab_route"' not in ids
     assert '"metatrack_ab_handoff"' not in ids
 
 
@@ -110,7 +113,7 @@ def test_v669_full_uses_adaptive_consensus_and_fixed_batch_consensus_is_the_only
     assert plugins(blocks["metatrack_ab_route"])["block_producer"]=="metatrack_nl_window_v669"
     assert plugins(blocks["metatrack_ab_track"])["block_producer"]=="metatrack_nl_window_v669"
     assert plugins(blocks["metatrack_ab_state"])["block_producer"]=="metatrack_nl_window_v669"
-    assert plugins(blocks["metatrack_ab_cons"])["block_producer"]=="metatrack_route_batch_producer"
+    assert plugins(blocks["metatrack_ab_cons"])["block_producer"]=="time_or_count_block_producer"
     assert plugins(blocks["metatrack_unified"])["block_producer"]=="metatrack_adaptive_window_producer"
     for mid in ["metatrack_latest","metatrack_ab_route","metatrack_ab_track","metatrack_ab_cons","metatrack_ab_state"]:
         assert "micro_batch_size: 100" in blocks[mid]

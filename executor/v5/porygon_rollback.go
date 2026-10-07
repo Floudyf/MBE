@@ -118,6 +118,8 @@ func (r *NodeRuntime) verifyPorygonRollbackAck(ack PorygonRollbackAck) error {
 
 func porygonRollbackPartitionDigest(part PorygonRollbackPartitionCertificate) string {
 	copyPart := part
+	copyPart.Voters = append([]string(nil), part.Voters...)
+	copyPart.Acks = append([]PorygonRollbackAck(nil), part.Acks...)
 	sort.Strings(copyPart.Voters)
 	sort.Slice(copyPart.Acks, func(i, j int) bool { return copyPart.Acks[i].NodeID < copyPart.Acks[j].NodeID })
 	return stableJSONDigest(copyPart)
@@ -136,7 +138,12 @@ func porygonRollbackGlobalRoot(parts []PorygonRollbackPartitionCertificate) stri
 func porygonRollbackCertificateDigest(cert PorygonRollbackCertificate) string {
 	copyCert := cert
 	copyCert.CertificateDigest = ""
-	for i := range copyCert.Partitions {
+	copyCert.Partitions = make([]PorygonRollbackPartitionCertificate, len(cert.Partitions))
+	for i, part := range cert.Partitions {
+		copyPart := part
+		copyPart.Voters = append([]string(nil), part.Voters...)
+		copyPart.Acks = append([]PorygonRollbackAck(nil), part.Acks...)
+		copyCert.Partitions[i] = copyPart
 		sort.Strings(copyCert.Partitions[i].Voters)
 		sort.Slice(copyCert.Partitions[i].Acks, func(a, b int) bool {
 			return copyCert.Partitions[i].Acks[a].NodeID < copyCert.Partitions[i].Acks[b].NodeID

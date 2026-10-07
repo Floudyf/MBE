@@ -42,6 +42,7 @@ type PorygonTxRoundLifecycle struct {
 	CommitRound           uint64               `json:"commit_round,omitempty"`
 	CommitProposalHeight  uint64               `json:"commit_proposal_height,omitempty"`
 	UpdateDigest          string               `json:"update_digest,omitempty"`
+	RecoveryMode          string               `json:"recovery_mode,omitempty"`
 }
 
 type porygonPaperRuntimeState struct {
@@ -359,7 +360,7 @@ func (r *NodeRuntime) porygonPaperRegisterOrdered(block realblock.Block) error {
 	return nil
 }
 
-func (r *NodeRuntime) porygonPaperRegisterExecution(block realblock.Block, executed BlockExecutionResult) error {
+func (r *NodeRuntime) porygonPaperRegisterExecution(block realblock.Block, executed BlockExecutionResult, deferredShards map[string]bool) error {
 	plan, err := porygonPipelinePlan(block)
 	if err != nil {
 		return err
@@ -376,24 +377,52 @@ func (r *NodeRuntime) porygonPaperRegisterExecution(block realblock.Block, execu
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	// U_i is applied by this EC before L_i.  Its transaction remains pending
-	// until a later PBFT proposal commits the resulting T root.
+	// U_i is applied by this EC before L_i. Normal commit rows use h+2; a
+	// certified failed partition remains pending and is carried by following-ESC
+	// retry proposals. A rollback row is terminal only after its resulting root is
+	// recorded two proposal heights later.
+	txDeferred := map[string]bool{}
+	for _, update := range proposal.U {
+		for _, shard := range update.InvolvedShards {
+			if deferredShards[fmt.Sprintf("s%d", shard)] {
+				txDeferred[update.TxID] = true
+			}
+		}
+	}
 	for _, update := range proposal.U {
 		lifecycle := state.txs[update.TxID]
 		if lifecycle == nil {
 			continue
 		}
-		if lifecycle.UpdateProposalHeight == 0 || block.Height != lifecycle.UpdateProposalHeight {
-			return fmt.Errorf("Porygon CTx U applied at wrong proposal height for %s: got=%d want=%d", lifecycle.TxID, block.Height, lifecycle.UpdateProposalHeight)
+		if block.Height < lifecycle.OriginHeight+2 {
+			return fmt.Errorf("Porygon CTx U applied before update phase for %s: got=%d origin=%d", lifecycle.TxID, block.Height, lifecycle.OriginHeight)
+		}
+		deltaHeight := block.Height - lifecycle.OriginHeight
+		switch update.Kind {
+		case "commit":
+			if lifecycle.UpdateProposalHeight == 0 || block.Height != lifecycle.UpdateProposalHeight {
+				return fmt.Errorf("Porygon CTx U applied at wrong proposal height for %s: got=%d want=%d", lifecycle.TxID, block.Height, lifecycle.UpdateProposalHeight)
+			}
+			lifecycle.RecoveryMode = ""
+		case "retry":
+			lifecycle.RecoveryMode = "retry"
+		case "rollback":
+			lifecycle.RecoveryMode = "rollback"
+		default:
+			return fmt.Errorf("Porygon unknown Proposal.U kind %q for %s", update.Kind, lifecycle.TxID)
+		}
+		lifecycle.UpdateProposalHeight = block.Height
+		lifecycle.UpdateProposalRound = lifecycle.WitnessRound + 1 + deltaHeight
+		lifecycle.UpdateDigest = update.UpdateDigest
+		if txDeferred[update.TxID] {
+			lifecycle.Status = porygonPaperTxUpdatePending
+			continue
 		}
 		lifecycle.Status = porygonPaperTxUpdateApplied
-		lifecycle.UpdateExecutionRound = lifecycle.WitnessRound + 4
 		lifecycle.UpdateExecutionHeight = block.Height
-		// Figure 6: a CTx ordered in B_h is pre-executed next round, carried
-		// as U in B_(h+2), applied by that proposal's EC, and is not committed
-		// until the resulting T root is recorded in B_(h+4).
-		lifecycle.CommitProposalHeight = lifecycle.OriginHeight + 4
-		lifecycle.CommitRound = lifecycle.WitnessRound + 5
+		lifecycle.UpdateExecutionRound = lifecycle.WitnessRound + 2 + deltaHeight
+		lifecycle.CommitProposalHeight = block.Height + 2
+		lifecycle.CommitRound = lifecycle.WitnessRound + 3 + deltaHeight
 	}
 
 	for _, assignment := range plan.Assignments {
@@ -443,12 +472,20 @@ func (r *NodeRuntime) porygonPaperCommitReadyLocked(state *porygonPaperRuntimeSt
 		}
 		switch lifecycle.Status {
 		case porygonPaperTxITxExecuted, porygonPaperTxUpdateApplied:
+			if lifecycle.CrossShard && r.porygonV50RecoveryTxPending(lifecycle.OriginHeight, lifecycle.TxID, orderedHeight) {
+				continue
+			}
 			if err := r.porygonPaperRoundInvariant(*lifecycle); err != nil {
 				r.addPorygonRuntimeMetric("porygon_round_invariant_failure_count", 1)
 				continue
 			}
-			lifecycle.Status = porygonPaperTxCommitted
-			r.addPorygonRuntimeMetric("porygon_transaction_level_commit_count", 1)
+			if lifecycle.RecoveryMode == "rollback" {
+				lifecycle.Status = porygonPaperTxRolledBack
+				r.addPorygonRuntimeMetric("porygon_transaction_level_rollback_count", 1)
+			} else {
+				lifecycle.Status = porygonPaperTxCommitted
+				r.addPorygonRuntimeMetric("porygon_transaction_level_commit_count", 1)
+			}
 		}
 	}
 }
@@ -476,16 +513,38 @@ func (r *NodeRuntime) porygonPaperPendingEvidence() []porygonPendingTransactionE
 // has left the conflict-pending window at that deterministic proposal height.
 // ITx never enters the cross-round CTx pending set.
 func (r *NodeRuntime) porygonPaperPendingEvidenceForProposal(proposalHeight uint64) []porygonPendingTransactionEvidence {
+	// Porygon cross-round conflict protection covers every previous transaction
+	// that has not yet reached its deterministic commit proposal, not only CTx.
+	// B_(h+1) may overlap E(B_h), so an ITx ordered in B_h protects the following
+	// proposal until B_(h+2), where its committed T state becomes visible. A CTx
+	// protects h+1..h+3 on the normal six-round path, and a recovery CTx remains
+	// protected until its certified retry/rollback obligation is terminal.
+	dispositions := r.porygonCertifiedCTxDispositionSnapshot()
 	state := r.porygonPaperRuntimeState()
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	out := []porygonPendingTransactionEvidence{}
 	for _, lifecycle := range state.txs {
-		if lifecycle == nil || !lifecycle.CrossShard || lifecycle.OriginHeight == 0 || proposalHeight <= lifecycle.OriginHeight {
+		if lifecycle == nil || lifecycle.OriginHeight == 0 || proposalHeight <= lifecycle.OriginHeight {
 			continue
 		}
-		if proposalHeight >= lifecycle.OriginHeight+4 {
+		commitHeight := lifecycle.OriginHeight + 2 // ITx: four-round path.
+		recoveryPending := false
+		if lifecycle.CrossShard {
+			commitHeight = lifecycle.OriginHeight + 4 // CTx: six-round normal path.
+			recoveryPending = r.porygonV50RecoveryTxPending(lifecycle.OriginHeight, lifecycle.TxID, proposalHeight)
+		}
+		if proposalHeight >= commitHeight && !recoveryPending {
 			continue
+		}
+		// E(B_h) is a hard dependency only from proposal h+2 onward. Before
+		// that point, releasing a CTx based on whichever replica finished E(h)
+		// first would make Pending timing-dependent. Once h+2 is reached, the
+		// authenticated OC disposition may release a post-execution-abandoned CTx.
+		if lifecycle.CrossShard && proposalHeight >= lifecycle.OriginHeight+2 {
+			if retained, certified := dispositions[fmt.Sprintf("%d|%s", lifecycle.OriginHeight, lifecycle.TxID)]; certified && !retained {
+				continue
+			}
 		}
 		out = append(out, porygonPendingTransactionEvidence{
 			TxID: lifecycle.TxID, Height: lifecycle.OriginHeight,
@@ -510,35 +569,36 @@ func (r *NodeRuntime) porygonPaperProposalRoundBlocked(nextHeight uint64) bool {
 	}
 	pipeline := r.porygonPipelineRuntime()
 	pipeline.mu.Lock()
-	defer pipeline.mu.Unlock()
-	if nextHeight <= pipeline.baselineHeight+2 {
+	baseline := pipeline.baselineHeight
+	executedHeight := pipeline.executedHeight
+	pipeline.mu.Unlock()
+	if nextHeight <= baseline+2 {
 		return false
 	}
-	// Paper Figure 6: B_i carries T_i/U_i derived from the execution result
-	// returned in round i-1, which is execution of B_(i-2). Therefore O(B_i)
-	// may overlap E(B_(i-1)); only E(B_(i-2)) is a hard dependency.
-	return pipeline.executedHeight < nextHeight-2
+	// Paper Figure 6: normal proposals depend only on E(B_(i-2)), preserving
+	// O/E overlap. During the fault path, however, a following-ESC retry can
+	// decide whether the immediately next proposal must retry again or roll back;
+	// only that recovery edge waits for E(B_(i-1)).
+	if executedHeight < nextHeight-2 {
+		return true
+	}
+	return r.porygonV50RecoveryBlocksNextProposal(nextHeight, executedHeight)
 }
 
 func (r *NodeRuntime) porygonPaperMaintenanceReady(nextHeight uint64) bool {
-	state := r.porygonPaperRuntimeState()
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	for height, updates := range state.proposalUpdates {
-		if height >= nextHeight && len(updates) > 0 {
-			return true
-		}
+	// Consensus-time maintenance must follow the same frozen certified execution
+	// truth as Proposal.U. replica-local proposalUpdates is retained only as
+	// lifecycle/debug state and must not decide whether a maintenance proposal is
+	// emitted.
+	if r.porygonV50RecoveryPending(nextHeight) {
+		return true
 	}
-	for _, lifecycle := range state.txs {
-		switch lifecycle.Status {
-		case porygonPaperTxITxExecuted, porygonPaperTxUpdateApplied:
-			if lifecycle.CommitProposalHeight >= nextHeight {
-				return true
-			}
-		case porygonPaperTxUpdatePending:
-			return true
-		}
+	if r.porygonCertifiedFutureProposalPending(nextHeight) {
+		return true
 	}
+	// No mutable replica-local lifecycle state is allowed to decide whether an
+	// otherwise-empty maintenance proposal exists. Future protocol obligations are
+	// frozen at the authenticated ESC/OC execution boundary.
 	return false
 }
 
@@ -550,23 +610,23 @@ func (r *NodeRuntime) porygonPaperRoundInvariant(lifecycle PorygonTxRoundLifecyc
 		return fmt.Errorf("Porygon execution round invariant violated for %s", lifecycle.TxID)
 	}
 	if lifecycle.CrossShard {
-		if lifecycle.UpdateProposalRound != 0 && lifecycle.UpdateProposalRound != lifecycle.WitnessRound+3 {
-			return fmt.Errorf("Porygon CTx U proposal round invariant violated for %s", lifecycle.TxID)
-		}
-		if lifecycle.UpdateProposalHeight != 0 && lifecycle.UpdateProposalHeight != lifecycle.OriginHeight+2 {
+		if lifecycle.UpdateProposalHeight != 0 && lifecycle.UpdateProposalHeight < lifecycle.OriginHeight+2 {
 			return fmt.Errorf("Porygon CTx U proposal-height invariant violated for %s", lifecycle.TxID)
 		}
-		if lifecycle.UpdateExecutionRound != 0 && lifecycle.UpdateExecutionRound != lifecycle.WitnessRound+4 {
-			return fmt.Errorf("Porygon CTx U execution round invariant violated for %s", lifecycle.TxID)
-		}
-		if lifecycle.UpdateExecutionHeight != 0 && lifecycle.UpdateExecutionHeight != lifecycle.OriginHeight+2 {
-			return fmt.Errorf("Porygon CTx U execution-height invariant violated for %s", lifecycle.TxID)
-		}
-		if lifecycle.CommitRound != 0 && lifecycle.CommitRound != lifecycle.WitnessRound+5 {
-			return fmt.Errorf("Porygon CTx six-round commit invariant violated for %s", lifecycle.TxID)
-		}
-		if lifecycle.CommitProposalHeight != 0 && lifecycle.CommitProposalHeight != lifecycle.OriginHeight+4 {
-			return fmt.Errorf("Porygon CTx commit-proposal invariant violated for %s", lifecycle.TxID)
+		if lifecycle.UpdateExecutionHeight != 0 {
+			if lifecycle.UpdateExecutionHeight < lifecycle.OriginHeight+2 || lifecycle.UpdateProposalHeight != lifecycle.UpdateExecutionHeight {
+				return fmt.Errorf("Porygon CTx U execution-height invariant violated for %s", lifecycle.TxID)
+			}
+			deltaHeight := lifecycle.UpdateExecutionHeight - lifecycle.OriginHeight
+			if lifecycle.UpdateProposalRound != lifecycle.WitnessRound+1+deltaHeight {
+				return fmt.Errorf("Porygon CTx U proposal round invariant violated for %s", lifecycle.TxID)
+			}
+			if lifecycle.UpdateExecutionRound != lifecycle.WitnessRound+2+deltaHeight {
+				return fmt.Errorf("Porygon CTx U execution round invariant violated for %s", lifecycle.TxID)
+			}
+			if lifecycle.CommitProposalHeight != lifecycle.UpdateExecutionHeight+2 || lifecycle.CommitRound != lifecycle.WitnessRound+3+deltaHeight {
+				return fmt.Errorf("Porygon CTx delayed finality invariant violated for %s", lifecycle.TxID)
+			}
 		}
 	} else {
 		if lifecycle.CommitRound != 0 && lifecycle.CommitRound != lifecycle.WitnessRound+3 {
@@ -583,7 +643,7 @@ func (r *NodeRuntime) porygonPaperLifecycleMetrics() map[string]any {
 	state := r.porygonPaperRuntimeState()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	pending, itxCommitted, ctxCommitted := 0, 0, 0
+	pending, itxCommitted, ctxCommitted, ctxRolledBack := 0, 0, 0, 0
 	for _, l := range state.txs {
 		if l.Status != porygonPaperTxCommitted && l.Status != porygonPaperTxAbandoned && l.Status != porygonPaperTxRolledBack {
 			pending++
@@ -595,8 +655,16 @@ func (r *NodeRuntime) porygonPaperLifecycleMetrics() map[string]any {
 				itxCommitted++
 			}
 		}
+		if l.Status == porygonPaperTxRolledBack && l.CrossShard {
+			ctxRolledBack++
+		}
 	}
-	return map[string]any{"pending_transaction_count": pending, "itx_committed_count": itxCommitted, "ctx_committed_count": ctxCommitted}
+	return map[string]any{
+		"pending_transaction_count": pending,
+		"itx_committed_count": itxCommitted,
+		"ctx_committed_count": ctxCommitted,
+		"ctx_rolled_back_count": ctxRolledBack,
+	}
 }
 
 func porygonProposalFromBlock(block realblock.Block) (PorygonProposalBody, error) {

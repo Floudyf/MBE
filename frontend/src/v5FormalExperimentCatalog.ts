@@ -57,12 +57,16 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 { methodId: "metatrack_latest", title: "Metatrack", description: "完整版本：增量依赖/局部性感知分流 + 有效独立前沿双轨 + V669 依赖闭包安全门下的 N/L 自适应完整 RouteBatch 共识聚合 + 执行域本地 exact-version；正式消融统一固定 RouteBatch=100，保持已验证的流水线工作点。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
   { methodId: "metatrack_unified", title: "历史实验版（V668）", description: "历史兼容：保留原 V668 N/L-only 自适应共识实验及固定100笔 RouteBatch 配置；不进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
-  { methodId: "metatrack_ab_route", title: "去掉共现矩阵分片", description: "替换整个共现矩阵分片器为历史 frequency/load-only 状态放置：不构建/不使用 pair 共现矩阵、共现邻居扩展或历史 pair affinity；高频状态独立按负载放置，交易再按独立状态放置的 majority/队列负载决定执行 shard。Signed routing、exact-version、StateReady、双轨、V669、状态预取与 PBFT 保持不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_route", title: "历史子消融-无局部性放置", description: "状态局部化内部子消融：只把依赖/共现 placement 替换为历史 frequency/load-only 放置，仍保留预取与本地 exact；不进入正式三机制主矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_ab_track", title: "去掉双轨", description: "只去掉 Fast/Conservative 双轨：严格按 canonical 顺序执行，一次只允许 1 个 business execution in-flight；即使后续交易已 ready，也必须等待前一交易完成。依赖 DAG、StateReady、分流、V669 共识、状态访问与配置 worker_count 保持不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
-  { methodId: "metatrack_ab_cons", title: "去掉共识聚合", description: "只去掉多个 RouteBatch 的 V669 自适应聚合：一个完整 RouteBatch 一个 PBFT 共识窗口；RouteBatch=100 且 PBFT 协议本身不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
-  { methodId: "metatrack_ab_state", title: "去掉状态预取", description: "状态访问改为 Home exact-version 路径，以去掉执行域本地预取收益；exact-version、Version Liveness、RouteBatch=100、分流、双轨、V669 共识和 PBFT 保持不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_cons", title: "去掉共识聚合", description: "去掉依赖感知共识聚合：恢复历史 time/count + 单 signed shard projection PBFT 路径；PBFT 协议本身不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_state", title: "去掉状态局部化", description: "去掉完整状态局部化：Home exact + 真正按需远程获取，关闭 batch-entry prefetch、batch remote/final writeback；Version Liveness、分流、双轨、V669 与 PBFT 保持。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   { methodId: "metatrack_ab_handoff", title: "历史子消融-无本地版本交接", description: "历史结果兼容项；不再进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_exp", title: "实验版（旧）", description: "历史流式实验结果兼容项，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  // MBE_METATRACK_DIAG_V27_CATALOG
+  { methodId: "metatrack_diag_parallel", title: "历史诊断：统一单轨并行", description: "历史 v2.7 诊断结果兼容项；保留方法编号用于旧 artifacts，不再作为新诊断卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  // MBE_METATRACK_DIAG_V28_CATALOG
+  { methodId: "metatrack_diag_serial", title: "诊断：双轨单业务执行", description: "诊断专用：完整保留 Metatrack 的有效独立前沿双轨分类、快速轨优先、依赖图、状态预取、精确版本、StateReady、状态局部化与 V669；配置 Worker 数保持不变，但同一时刻只允许 1 笔业务交易执行。仅用于拆分双轨优先收益与多业务并发收益，不进入正式消融矩阵。", family: "metatrack", comparisonVisible: true, mainVisible: false },
 ];
 
 export const BATCH_SI_ABLATION_METHOD_IDS = [
@@ -73,9 +77,9 @@ export const BATCH_SI_ABLATION_METHOD_IDS = [
   "hash_batch_si_txid_priority",
 ] as const;
 
+// MBE_METATRACK_MECHPACK_V2_CATALOG
 export const METATRACK_ABLATION_METHOD_IDS = [
   "metatrack_latest",
-  "metatrack_ab_route",
   "metatrack_ab_track",
   "metatrack_ab_state",
   "metatrack_ab_cons",

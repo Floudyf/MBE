@@ -99,6 +99,8 @@ func porygonHandoffVoteBytes(vote PorygonUpdateHandoffVote) []byte {
 func porygonHandoffCertificateDigest(cert PorygonUpdateHandoffCertificate) string {
 	copyCert := cert
 	copyCert.CertificateDigest = ""
+	copyCert.Committee = append([]string(nil), cert.Committee...)
+	copyCert.Votes = append([]PorygonUpdateHandoffVote(nil), cert.Votes...)
 	sort.Strings(copyCert.Committee)
 	sort.Slice(copyCert.Votes, func(i, j int) bool { return copyCert.Votes[i].NodeID < copyCert.Votes[j].NodeID })
 	return stableJSONDigest(copyCert)

@@ -34,6 +34,7 @@ type PorygonESCBatchResult struct {
 	SenderNodeID         string                 `json:"sender_node_id"`
 	Results              []PorygonBatchTxResult `json:"results"`
 	StateRoot            string                 `json:"state_root"`
+	DeferredPartitions   []string               `json:"deferred_partitions,omitempty"`
 	ResultDigest         string                 `json:"result_digest"`
 	BusinessExecutionUS  int64                  `json:"business_execution_us"`
 }
@@ -56,6 +57,7 @@ type PorygonESCBatchResultWire struct {
 type PorygonESCBatchCertificateEntry struct {
 	ExecutionShardID string                       `json:"execution_shard_id"`
 	ResultDigest     string                       `json:"result_digest"`
+	Threshold        int                          `json:"threshold"`
 	Voters           []string                     `json:"voters"`
 	Attestations     []PorygonESCBatchAttestation `json:"attestations"`
 	Result           PorygonESCBatchResult        `json:"result"`
@@ -106,6 +108,8 @@ func porygonESCBatchResultDigest(result PorygonESCBatchResult) string {
 	copyResult.ResultDigest = ""
 	copyResult.BusinessExecutionUS = 0
 	copyResult.Results = append([]PorygonBatchTxResult(nil), copyResult.Results...)
+	copyResult.DeferredPartitions = append([]string(nil), copyResult.DeferredPartitions...)
+	sort.Strings(copyResult.DeferredPartitions)
 	sort.Slice(copyResult.Results, func(i, j int) bool { return copyResult.Results[i].TxID < copyResult.Results[j].TxID })
 	raw, _ := json.Marshal(copyResult)
 	return stableTextDigest(string(raw))
@@ -168,6 +172,13 @@ func (r *NodeRuntime) verifyPorygonBatchResultAttestation(result PorygonESCBatch
 func porygonBatchCertDigest(cert PorygonESCBatchCertificate) string {
 	copyCert := cert
 	copyCert.CertificateDigest = ""
+	copyCert.Entries = make([]PorygonESCBatchCertificateEntry, len(cert.Entries))
+	for i, entry := range cert.Entries {
+		copyEntry := entry
+		copyEntry.Voters = append([]string(nil), entry.Voters...)
+		copyEntry.Attestations = append([]PorygonESCBatchAttestation(nil), entry.Attestations...)
+		copyCert.Entries[i] = copyEntry
+	}
 	sort.Slice(copyCert.Entries, func(i, j int) bool {
 		return copyCert.Entries[i].ExecutionShardID < copyCert.Entries[j].ExecutionShardID
 	})
@@ -240,7 +251,7 @@ func (r *NodeRuntime) tryBuildPorygonBatchCertificate(blockHash string, height u
 	sort.Strings(shards)
 	for _, sid := range shards {
 		members := r.porygonExecutionRoleMembers(height, sid)
-		threshold := porygonExecutionThreshold(len(members))
+		threshold := porygonShardedExecutionResultThreshold(len(members))
 		buckets := state.results[blockHash][sid]
 		var chosen *porygonBatchBucket
 		for _, bucket := range buckets {
@@ -264,7 +275,7 @@ func (r *NodeRuntime) tryBuildPorygonBatchCertificate(blockHash string, height u
 			atts = append(atts, a)
 		}
 		sort.Slice(atts, func(i, j int) bool { return atts[i].NodeID < atts[j].NodeID })
-		cert.Entries = append(cert.Entries, PorygonESCBatchCertificateEntry{ExecutionShardID: sid, ResultDigest: chosen.result.ResultDigest, Voters: voters, Attestations: atts, Result: chosen.result})
+		cert.Entries = append(cert.Entries, PorygonESCBatchCertificateEntry{ExecutionShardID: sid, ResultDigest: chosen.result.ResultDigest, Threshold: threshold, Voters: voters, Attestations: atts, Result: chosen.result})
 	}
 	cert.CertificateDigest = porygonBatchCertDigest(cert)
 	state.certs[blockHash] = cert
@@ -287,12 +298,22 @@ func (r *NodeRuntime) validatePorygonBatchCertificate(cert PorygonESCBatchCertif
 			return fmt.Errorf("porygon batch certificate entry mismatch")
 		}
 		members := r.porygonExecutionRoleMembers(cert.Height, entry.ExecutionShardID)
-		threshold := porygonExecutionThreshold(len(members))
+		threshold := porygonShardedExecutionResultThreshold(len(members))
+		if entry.Threshold != threshold {
+			return fmt.Errorf("porygon sharded ESC result threshold mismatch for %s: got=%d want=%d", entry.ExecutionShardID, entry.Threshold, threshold)
+		}
+		seenDeferred := map[string]bool{}
+		for _, partitionID := range entry.Result.DeferredPartitions {
+			if partitionID != entry.ExecutionShardID || seenDeferred[partitionID] {
+				return fmt.Errorf("invalid Porygon deferred partition evidence %q for ESC %s", partitionID, entry.ExecutionShardID)
+			}
+			seenDeferred[partitionID] = true
+		}
 		if !containsString(members, entry.Result.SenderNodeID) {
 			return fmt.Errorf("invalid Porygon batch representative %s", entry.Result.SenderNodeID)
 		}
 		if len(entry.Voters) < threshold {
-			return fmt.Errorf("porygon batch Te not met for %s", entry.ExecutionShardID)
+			return fmt.Errorf("porygon sharded ESC strict-majority not met for %s", entry.ExecutionShardID)
 		}
 		declaredVoters := map[string]bool{}
 		for _, voter := range entry.Voters {
@@ -318,7 +339,7 @@ func (r *NodeRuntime) validatePorygonBatchCertificate(cert PorygonESCBatchCertif
 			return fmt.Errorf("porygon batch representative attestation missing for %s", entry.ExecutionShardID)
 		}
 		if len(seen) < threshold {
-			return fmt.Errorf("porygon batch authenticated Te not met for %s", entry.ExecutionShardID)
+			return fmt.Errorf("porygon sharded ESC authenticated strict-majority not met for %s", entry.ExecutionShardID)
 		}
 	}
 	return nil
@@ -438,11 +459,28 @@ func (r *NodeRuntime) handlePorygonESCBatchCertificate(msg p2p.MessageEnvelope) 
 	if err != nil {
 		return err
 	}
+	required := make([]string, 0, len(cert.Entries))
+	for _, entry := range cert.Entries {
+		required = append(required, entry.ExecutionShardID)
+	}
+	if err := r.validatePorygonBatchCertificate(cert, required); err != nil {
+		return err
+	}
+	// The certificate is self-authenticated by its ESC attestations and may be
+	// relayed by a later PBFT leader during recovery. Do not bind certificate
+	// validity to the transport sender or original OC leader.
+	semanticDigest := porygonBatchCertificateSemanticDigest(cert)
 	state := r.porygonBatchState()
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if existing, ok := state.certs[cert.BlockHash]; ok && existing.CertificateDigest != cert.CertificateDigest {
-		return fmt.Errorf("conflicting Porygon batch certificate")
+	if existing, ok := state.certs[cert.BlockHash]; ok {
+		if porygonBatchCertificateSemanticDigest(existing) != semanticDigest {
+			return fmt.Errorf("conflicting Porygon batch certificate semantic result")
+		}
+		// Different leaders/voter subsets may produce byte-distinct certificates
+		// for the same authenticated ESC result. They are protocol-equivalent; keep
+		// the first validated certificate instead of treating signatures as state.
+		return nil
 	}
 	state.certs[cert.BlockHash] = cert
 	return nil

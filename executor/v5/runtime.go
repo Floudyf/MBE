@@ -1317,6 +1317,7 @@ func (r *NodeRuntime) Start(ctx context.Context) error {
 		return err
 	}
 	r.startCommitWorker(ctx)
+	r.startTxAlloMappingWatcher(ctx)
 	return nil
 }
 
@@ -1325,6 +1326,7 @@ func (r *NodeRuntime) Stop() error {
 	r.stopCommitWorker()
 	r.stopStateFetchWorkers()
 	calvinReadStates.Delete(r)
+	cleanupPBFTCompactRuntime(r) // MBE_SHARED_PBFT_COMPACT_V1_RUNTIME
 	return r.transport.Stop()
 }
 
@@ -1334,6 +1336,11 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		item, err := p2p.DecodePayload[tx.SignedTransaction](msg)
 		if err != nil {
 			return err
+		}
+		if refresher, ok := r.plugins.Sharding.(txalloMappingRefresher); ok && refresher.TxAlloDynamicEnabled() {
+			if err := refresher.RefreshTxAlloMapping(); err != nil {
+				return fmt.Errorf("TxAllo mapping refresh: %w", err)
+			}
 		}
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "received", NodeID: r.node.NodeID, ShardID: r.node.ShardID, Success: true})
 		if err := r.admitTransaction(item); err != nil {
@@ -1365,6 +1372,10 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		return r.handlePBFTNewView(ctx, msg)
 	case p2p.MessagePBFTCheckpoint:
 		return r.handlePBFTCheckpoint(ctx, msg)
+	case pbftCompactTxRequestMessage:
+		return r.handlePBFTCompactTxRequest(ctx, msg)
+	case pbftCompactTxResponseMessage:
+		return r.handlePBFTCompactTxResponse(ctx, msg)
 	// MBE_PORYGON_ESC_OWNERSHIP_TIMING_TRUTH_V19_20260921: ESC business
 	// execution results are exchanged inside the single global ordering domain.
 	case calvinReadResultMessage:
@@ -1894,13 +1905,21 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		r.mu.Unlock()
 		return
 	}
+	reservedForProposal := porygonPlanningReservedItems(block, scheduledBlock)
 	block = scheduledBlock
+	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+		r.porygonRememberProposalReservation(block.BlockHash, block.Height, reservedForProposal)
+	}
 	proposalWorkUnits := r.estimateProposalValidationWork(block)
 	for _, item := range block.TxList {
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "proposed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
 	}
 	if err := r.beginPBFTProposal(ctx, block, proposalWorkUnits); err != nil {
-		r.pool.ReleaseReserved(block.TxList)
+		if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+			r.porygonReleaseProposalReservation(block.BlockHash, reservedForProposal)
+		} else {
+			r.pool.ReleaseReserved(block.TxList)
+		}
 		r.setLastProposalError(err)
 	} else if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 		r.startPorygonCrossBatchWitness(ctx, block.Height)
@@ -1979,11 +1998,19 @@ func (r *NodeRuntime) startContextProposalPlanning(ctx context.Context, block re
 		r.recordScheduleEvents(scheduledBlock, planned.Events, true)
 		r.rememberVerifiedExecutionPlan(scheduledBlock)
 		proposalWorkUnits := r.estimateProposalValidationWork(scheduledBlock)
-		for _, item := range porygonPlanningReservedItems(block, scheduledBlock) {
+		reservedForProposal := porygonPlanningReservedItems(block, scheduledBlock)
+		for _, item := range reservedForProposal {
 			r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "proposed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: scheduledBlock.Height, Success: true})
 		}
+		if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+			r.porygonRememberProposalReservation(scheduledBlock.BlockHash, scheduledBlock.Height, reservedForProposal)
+		}
 		if err := r.beginPBFTProposal(ctx, scheduledBlock, proposalWorkUnits); err != nil {
-			r.pool.ReleaseReserved(porygonPlanningReservedItems(block, scheduledBlock))
+			if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+				r.porygonReleaseProposalReservation(scheduledBlock.BlockHash, reservedForProposal)
+			} else {
+				r.pool.ReleaseReserved(reservedForProposal)
+			}
 			r.setLastProposalError(err)
 		} else if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 			r.startPorygonCrossBatchWitness(ctx, scheduledBlock.Height)
@@ -2979,12 +3006,10 @@ func (r *NodeRuntime) validatePrePrepare(fromNode string, block realblock.Block)
 	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 		expectedHeight := r.porygonConsensusNextHeight()
 		if block.Height == expectedHeight {
-			ready, reason := r.porygonPaperProposalValidationReady(block.Height)
-			if !ready {
-				r.addPorygonRuntimeMetric("porygon_preprepare_local_execution_deferred_count", 1)
-				r.setLastProposalError(fmt.Errorf("porygon pre-prepare local execution not ready at height %d: %s", block.Height, reason))
-				return false, false, nil
-			}
+			// Local Porygon execution readiness is handled in handlePBFTPrePrepare,
+			// where the authenticated PRE-PREPARE envelope (including its signature)
+			// is still available for semantic deferral and later replay.  This validator
+			// function is therefore only the deterministic semantic-rejection gate.
 			if err := r.verifyExecutionPlanEnvelope(block); err != nil {
 				r.addPorygonRuntimeMetric("porygon_preprepare_semantic_reject_count", 1)
 				message := strings.ToLower(err.Error())
@@ -3999,7 +4024,11 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	r.recordBlockExecutionResult(block, executed)
 	r.recordExecutionAndCommitDecisions(block, commitDecision, physicalDelta)
 	r.setCommitPhase("commit_reserved", block)
-	r.pool.CommitReserved(block.TxList)
+	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+		r.porygonCommitProposalReservation(block.BlockHash, block.TxList)
+	} else {
+		r.pool.CommitReserved(block.TxList)
+	}
 	// Every production validator advances its local proposer head after durable
 	// commit so any replica can safely become the primary in a later PBFT view.
 	// Some focused unit tests construct NodeRuntime literals without a proposer.
@@ -7243,9 +7272,9 @@ func (r *NodeRuntime) rememberProposal(block realblock.Block) {
 }
 func (r *NodeRuntime) recordEvent(txID, source, target, stage string, success bool, err string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	logicalID := txID
 	if logicalID == "" {
+		r.mu.Unlock()
 		return
 	}
 	uniqueStage := strings.ToLower(stage)
@@ -7255,6 +7284,7 @@ func (r *NodeRuntime) recordEvent(txID, source, target, stage string, success bo
 		}
 		key := logicalID + "|" + uniqueStage
 		if r.crossEventSeen[key] {
+			r.mu.Unlock()
 			return
 		}
 		r.crossEventSeen[key] = true
@@ -7263,6 +7293,8 @@ func (r *NodeRuntime) recordEvent(txID, source, target, stage string, success bo
 	lifecycle := LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: txID, LogicalTxID: logicalID, Stage: strings.ToLower(stage), NodeID: r.node.NodeID, ShardID: r.node.ShardID, SourceShard: source, TargetShard: target, Success: success, Error: err}
 	r.lifecycle = append(r.lifecycle, lifecycle)
 	r.emitRuntimeEventLocked(runtimeEventFromLifecycle(lifecycle))
+	r.mu.Unlock()
+	r.appendTxAlloEpochLifecycle(lifecycle)
 }
 
 func (r *NodeRuntime) recordCrossShardEvent(event CrossShardEvent) {
@@ -7279,9 +7311,10 @@ func (r *NodeRuntime) crossShardPlugin() CrossShardPlugin {
 
 func (r *NodeRuntime) recordLifecycle(event LifecycleEvent) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.lifecycle = append(r.lifecycle, event)
 	r.emitRuntimeEventLocked(runtimeEventFromLifecycle(event))
+	r.mu.Unlock()
+	r.appendTxAlloEpochLifecycle(event)
 }
 
 func (r *NodeRuntime) emitRuntimeEvent(event RuntimeEvent) {
