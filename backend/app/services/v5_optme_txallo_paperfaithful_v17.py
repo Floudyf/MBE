@@ -87,6 +87,8 @@ def _is_optme(method: str) -> bool:
 
 
 def _semantic_class(method: str) -> str:
+    if method.lower() == "stateful_txallo":
+        return "stateful_replicated_state"
     return "stateless_global_home" if _is_stateless(method) else "stateful_local_partition"
 
 
@@ -129,8 +131,8 @@ def compute_business_state_evidence_v17(run_dir: Path | str, method_id: str, met
             "status": "legacy_v16_or_older",
             "semantic_class": semantic,
             "storage_partition_digest": legacy if semantic == "stateful_local_partition" and _nonempty(legacy) else None,
-            "global_logical_business_digest": metrics.get("v16_logical_business_state_digest") if semantic == "stateless_global_home" else None,
-            "global_logical_conflict_key_count": metrics.get("v16_logical_business_state_conflict_key_count") if semantic == "stateless_global_home" else None,
+            "global_logical_business_digest": metrics.get("v16_logical_business_state_digest") if semantic in {"stateless_global_home", "stateful_replicated_state"} else None,
+            "global_logical_conflict_key_count": metrics.get("v16_logical_business_state_conflict_key_count") if semantic in {"stateless_global_home", "stateful_replicated_state"} else None,
             "replica_consistent": metrics.get("v16_logical_business_state_replica_consistent"),
             "source_files": [],
             "truth_boundary": "legacy_evidence_not_reinterpreted_as_cross_semantic_truth",
@@ -195,10 +197,10 @@ def compute_business_state_evidence_v17(run_dir: Path | str, method_id: str, met
         "status": "available",
         "semantic_class": semantic,
         "storage_partition_digest": storage_digest,
-        "global_logical_business_digest": global_digest if semantic == "stateless_global_home" else None,
+        "global_logical_business_digest": global_digest if semantic in {"stateless_global_home", "stateful_replicated_state"} else None,
         "global_logical_business_projection_status": (
-            "available" if semantic == "stateless_global_home" and not conflicts
-            else "conflicting_values" if semantic == "stateless_global_home"
+            "available" if semantic in {"stateless_global_home", "stateful_replicated_state"} and not conflicts
+            else "conflicting_values" if semantic in {"stateless_global_home", "stateful_replicated_state"}
             else "not_applicable_without_explicit_stateful_global_projection"
         ),
         "global_logical_conflict_key_count": len(conflicts),
@@ -238,6 +240,10 @@ def _split_accounts(value: str) -> list[str]:
 
 
 def compute_txallo_routing_coherence_v17(run_dir: Path | str) -> dict[str, Any]:
+    from backend.app.services.v5_txallo_mapping_epoch_v229 import compute_routing_coherence as _epoch_routing_coherence
+    epoch_result = _epoch_routing_coherence(run_dir)
+    if epoch_result is not None:
+        return epoch_result
     """Audit frozen-history mapping plus explicitly declared causal fallback.
 
     v20.2+ placement artifacts export canonical logical accounts and mapping
@@ -314,33 +320,45 @@ def compute_txallo_routing_coherence_v17(run_dir: Path | str) -> dict[str, Any]:
             "transaction_placement_source":str(files[0].relative_to(root)).replace("\\","/"),
             "paper_contract":"frozen_history_mapping_plus_causal_unseen_account_fallback_no_future_training" if new_schema_rows else "transaction_involved_shards_are_induced_by_account_allocation_definition_1"}
 
-def compute_txallo_physical_execution_coherence_v17(run_dir: Path | str) -> dict[str, Any]:
-    """Compare paper-derived involved shards with observed stateful execution shards.
+def compute_txallo_physical_execution_coherence_v17(run_dir: Path | str, method_id: str = "stateful_txallo") -> dict[str, Any]:
+    """Compare placement with the physical business-execution contract of the selected TxAllo mode.
 
-    This check is deliberately evidence-driven.  It runs only when the TxAllo
-    transaction-placement artifact explicitly exports an involved-shard set and
-    transaction execution traces expose the same logical transaction IDs.  It
-    never derives a missing shard set from legacy SourceShard/CrossShard flags.
+    Stateful-TxAllo retains the historical involved-shard execution audit. Stateless-TxAllo
+    is direct execution: business logic executes once on the explicit placement execution_shard;
+    persistent Home/writeback activity is not a second business execution.
     """
     root = Path(run_dir)
+    stateless = _is_stateless(method_id)
     placement_files = _candidate_files(root,
         ("client/txallo_transaction_placement.csv", "txallo_transaction_placement.csv"),
         ("*txallo*transaction*placement*.csv",))
     if not placement_files:
         return {"status":"missing_transaction_placement", "passed":None}
     expected: dict[str, set[str]] = {}
+    missing_placement_semantics = 0
     for row in _read_csv(placement_files[0]):
         low = {str(k).lower(): "" if v is None else str(v).strip() for k,v in row.items()}
         txid = low.get("logical_tx_id") or low.get("logical_id") or low.get("tx_id") or low.get("transaction_id")
         if not txid:
             continue
+        if stateless:
+            execution_shard = low.get("execution_shard") or low.get("execution_partition")
+            if execution_shard:
+                expected[txid] = {execution_shard}
+            else:
+                missing_placement_semantics += 1
+            continue
         raw = low.get("involved_shards") or low.get("shards") or low.get("execution_shards")
         shards = set(_split_accounts(raw))
         if shards:
             expected[txid] = shards
+        else:
+            missing_placement_semantics += 1
     if not expected:
         return {
-            "status":"placement_rows_lack_explicit_involved_shards", "passed":None,
+            "status":"placement_rows_lack_explicit_execution_contract", "passed":None,
+            "method_semantics":"stateless_direct_execution_shard" if stateless else "stateful_involved_shards",
+            "missing_placement_semantics_count":missing_placement_semantics,
             "transaction_placement_source":str(placement_files[0].relative_to(root)).replace("\\","/"),
         }
 
@@ -372,21 +390,28 @@ def compute_txallo_physical_execution_coherence_v17(run_dir: Path | str) -> dict
         if got != want:
             mismatch += 1
             if len(examples) < 8:
-                examples.append({"logical_tx_id":txid,"expected_involved_shards":sorted(want),"observed_execution_shards":sorted(got)})
+                examples.append({"logical_tx_id":txid,"expected_business_execution_shards":sorted(want),"observed_execution_shards":sorted(got)})
     return {
         "status":"available" if checked else "no_joinable_transaction_ids",
         "checked_transaction_count":checked,
         "mismatch_count":mismatch if checked else None,
         "missing_trace_transaction_count":missing_trace,
-        "passed":(mismatch == 0 and missing_trace == 0) if checked else None,
+        "missing_placement_semantics_count":missing_placement_semantics,
+        "passed":(mismatch == 0 and missing_trace == 0 and missing_placement_semantics == 0) if checked else None,
         "examples":examples,
+        "method_semantics":"stateless_direct_execution_shard" if stateless else "stateful_involved_shards",
         "transaction_placement_source":str(placement_files[0].relative_to(root)).replace("\\","/"),
         "execution_trace_sources":sorted(used),
-        "paper_contract":"stateful_transaction_execution_shards_match_account_allocation_induced_involved_shards",
+        "paper_contract":(
+            "stateless_business_execution_occurs_once_on_explicit_execution_shard"
+            if stateless else
+            "stateful_transaction_execution_shards_match_account_allocation_induced_involved_shards"
+        ),
         "legacy_source_shard_cross_shard_flags_used":False,
     }
 
-def compute_txallo_paper_audit_v17(run_dir: Path | str, metrics: dict[str, Any]) -> dict[str, Any]:
+
+def compute_txallo_paper_audit_v17(run_dir: Path | str, metrics: dict[str, Any], method_id: str = "") -> dict[str, Any]:
     evidence = v16.compute_txallo_evidence(run_dir, metrics)
     allocation = evidence.get("account_allocation") or {}
     eta = _as_float(metrics.get("txallo_eta")); lam = _as_float(metrics.get("txallo_lambda")); eps = _as_float(metrics.get("txallo_epsilon"))
@@ -397,7 +422,7 @@ def compute_txallo_paper_audit_v17(run_dir: Path | str, metrics: dict[str, Any])
         topo = compiled.get("topology") or compiled.get("topology_point") or {}
         if isinstance(topo, dict): k = _as_int(topo.get("shards") or topo.get("shard_count"))
     routing = compute_txallo_routing_coherence_v17(run_dir)
-    physical = compute_txallo_physical_execution_coherence_v17(run_dir)
+    physical = compute_txallo_physical_execution_coherence_v17(run_dir, _method_id(method_id, metrics) or "stateful_txallo")
     nonempty = _as_int(allocation.get("nonempty_shard_count"))
     return {
         "reference": TXALLO_PAPER_REFERENCE,
@@ -568,7 +593,7 @@ def enrich_metrics(run_dir: Path | str, method_id: str | None, result: dict[str,
     out["v17_replica_fanout_ratio"] = wb.get("replica_fanout_ratio")
 
     if _is_txallo(method):
-        audit = compute_txallo_paper_audit_v17(run_dir, out)
+        audit = compute_txallo_paper_audit_v17(run_dir, out, method)
         out["v17_txallo_paper_audit"] = audit
         out["v17_txallo_routing_coherence_passed"] = (audit.get("routing_coherence") or {}).get("passed")
     if _is_optme(method):
@@ -585,7 +610,7 @@ def enrich_metrics(run_dir: Path | str, method_id: str | None, result: dict[str,
     actual_e = out.get("stateful_serializability_actual_partition_effect_digests")
     replay_e = out.get("stateful_serializability_replay_partition_effect_digests")
     partition_ok = bool(isinstance(actual_b, dict) and actual_b and actual_b == replay_b and isinstance(actual_e, dict) and actual_e and actual_e == replay_e)
-    out["v17_stateful_serial_partition_equivalent"] = partition_ok if not _is_stateless(method) else None
+    out["v17_stateful_serial_partition_equivalent"] = partition_ok if _semantic_class(method) == "stateful_local_partition" else None
     return out
 
 
@@ -610,9 +635,9 @@ def _canonical_child(item: dict[str, Any]) -> dict[str, Any]:
         # logical workload identity remains mandatory
         if not _nonempty(out.get("v16_logical_transaction_identity_digest")):
             blockers.append("logical_transaction_identity_digest_missing")
-        if _is_stateless(method):
+        if _is_stateless(method) or out.get("v17_semantic_class") == "stateful_replicated_state":
             if out.get("v17_logical_business_state_projection_status") != "available":
-                blockers.append("stateless_global_logical_business_state_not_proven")
+                blockers.append("global_logical_business_state_not_proven")
         else:
             if not _nonempty(out.get("v17_storage_partition_state_digest")):
                 blockers.append("stateful_partition_business_state_not_proven")

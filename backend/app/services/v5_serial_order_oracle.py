@@ -631,6 +631,9 @@ def _evaluate_calvin_partitioned(run_dir: Path, summary: dict[str, Any]) -> dict
     }
 
 def evaluate(run_dir: Path, *, result_summary: dict | None = None) -> dict[str, Any]:
+    if str((result_summary or {}).get("method_config_id") or "") == "stateful_txallo":
+        from backend.app.services.v5_txallo_stateful_oracle_v229 import evaluate as evaluate_txallo_stateful
+        return evaluate_txallo_stateful(run_dir, dict(result_summary or {}))
     # MBE_TXALLO_EVIDENCE_V203: Stateless-TxAllo needs a real multi-shard
     # logical serial replay, not the generic replica-determinism fallback.
     if str((result_summary or {}).get("method_config_id") or "") == "stateless_txallo":

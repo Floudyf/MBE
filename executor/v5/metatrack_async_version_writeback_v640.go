@@ -176,6 +176,16 @@ func (r *NodeRuntime) drainMetaTrackAsyncFinalLaneV640(block realblock.Block, pu
 		lane.finals = nil
 		publisherState.mu.Unlock()
 
+		// MBE_METATRACK_VARIANCE_DIAG_V30_ASYNC
+		// Keep the original opportunistic drain semantics unchanged; only capture
+		// the batch boundary that the goroutine happened to observe.
+		oldestEnqueuedAtV30 := tasks[0].EnqueuedAt
+		for _, task := range tasks[1:] {
+			if !task.EnqueuedAt.IsZero() && (oldestEnqueuedAtV30.IsZero() || task.EnqueuedAt.Before(oldestEnqueuedAtV30)) {
+				oldestEnqueuedAtV30 = task.EnqueuedAt
+			}
+		}
+
 		// Home consensus later sorts versioned deltas by exact ProducedVersion.
 		// Sorting here makes transport deterministic as well and prevents a batch
 		// from depending on goroutine completion order.
@@ -199,7 +209,9 @@ func (r *NodeRuntime) drainMetaTrackAsyncFinalLaneV640(block realblock.Block, pu
 
 		started := time.Now()
 		err := r.applyRemoteStateDeltaBatch(publisherState.ctx, block, homeShard, items, unqualified, deltas)
-		elapsed := time.Since(started)
+		finished := time.Now()
+		r.recordMetaTrackAsyncDrainV30(block, homeShard, len(tasks), oldestEnqueuedAtV30, started, finished, err)
+		elapsed := finished.Sub(started)
 
 		publisherState.mu.Lock()
 		if err != nil {

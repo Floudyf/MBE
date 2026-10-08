@@ -412,7 +412,7 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         if txallo_routing_id == "stateless_txallo_routing":
             warnings.append("Stateless-TxAllo shares the exact frozen TxAllo account mapping with TxAllo and changes only the generic stateless remote-state substrate; the measured evaluation window is not used to train its own mapping")
         else:
-            warnings.append("TxAllo uses the ICDE 2023 account graph/allocation path with a frozen pre-evaluation-history mapping and the shared stateful MBE execution/relay substrate")
+            warnings.append("Stateful-TxAllo preserves the ICDE 2023 G/A allocation and MBE Relay/PBFT path while realizing the paper Section-VII replicated/virtual-global-state assumption with PBFT-bound committed-state dissemination; this is an MBE reproduction substrate, not a TxAllo optimization")
 
     if spec.execution_backend == "real_cluster" and blockers:
         warnings.append("real_cluster is blocked and will not fall back to simulation or V4 smoke")

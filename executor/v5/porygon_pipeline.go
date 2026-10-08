@@ -265,11 +265,14 @@ func (r *NodeRuntime) bindPorygonCrossRoundEvidence(block realblock.Block) (real
 	if !r.porygonPipelineEnabledRuntime() {
 		return block, nil
 	}
+	r.porygonProposalPhaseV532("BIND_CROSS_ROUND_BEGIN", block.Height, block.BlockHash, true, "")
 	evidence, err := decodePorygonTransactionBlockEvidence(block)
 	if err != nil {
 		return block, err
 	}
+	r.porygonProposalPhaseV532("PENDING_EVIDENCE_BEGIN", block.Height, block.BlockHash, true, "")
 	pending := r.porygonPaperPendingEvidenceForProposal(block.Height)
+	r.porygonProposalPhaseV532("PENDING_EVIDENCE_END", block.Height, block.BlockHash, true, fmt.Sprintf("count=%d", len(pending)))
 	evidence.PreviousPendingTransactions = pending
 	evidence.PreviousPendingDigest = ""
 	if len(pending) > 0 {
@@ -280,7 +283,11 @@ func (r *NodeRuntime) bindPorygonCrossRoundEvidence(block realblock.Block) (real
 		return block, err
 	}
 	realblock.AssignHash(&block)
-	return r.porygonBindCompactProposalContext(block)
+	r.porygonProposalPhaseV532("BIND_COMPACT_BEGIN", block.Height, block.BlockHash, true, "")
+	bound, bindErr := r.porygonBindCompactProposalContext(block)
+	r.porygonProposalPhaseV532("BIND_COMPACT_END", block.Height, bound.BlockHash, bindErr == nil, porygonProposalPhaseErrV532(bindErr))
+	r.porygonProposalPhaseV532("BIND_CROSS_ROUND_END", block.Height, bound.BlockHash, bindErr == nil, porygonProposalPhaseErrV532(bindErr))
+	return bound, bindErr
 }
 
 func (r *NodeRuntime) verifyPorygonCrossRoundEvidence(block realblock.Block) error {
@@ -339,6 +346,7 @@ func (r *NodeRuntime) porygonPipelineOnOrderingCertified(block realblock.Block) 
 			return fmt.Errorf("porygon ordered-height conflict at %d", block.Height)
 		}
 		state.mu.Unlock()
+		r.porygonV54ConvergeOrderedDuplicate(block)
 		return nil
 	}
 	if block.Height != state.orderedHeight+1 || block.PreviousHash != state.orderedHash {
@@ -538,6 +546,7 @@ func (r *NodeRuntime) executePorygonPipelineBlock(ctx context.Context, state *po
 	// make a previously received current-height PRE-PREPARE semantically
 	// verifiable. Replay it now; this is a local wake-up, never PBFT catch-up.
 	r.replayPorygonSemanticDeferredPrePrepare(ctx)
+	r.replayPorygonV51SelectedPrepare(ctx)
 
 	select {
 	case <-ctx.Done():

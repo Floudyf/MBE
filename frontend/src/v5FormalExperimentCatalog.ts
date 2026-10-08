@@ -63,10 +63,10 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_ab_state", title: "去掉状态局部化", description: "去掉完整状态局部化：Home exact + 真正按需远程获取，关闭 batch-entry prefetch、batch remote/final writeback；Version Liveness、分流、双轨、V669 与 PBFT 保持。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   { methodId: "metatrack_ab_handoff", title: "历史子消融-无本地版本交接", description: "历史结果兼容项；不再进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_exp", title: "实验版（旧）", description: "历史流式实验结果兼容项，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
-  // MBE_METATRACK_DIAG_V27_CATALOG
-  { methodId: "metatrack_diag_parallel", title: "历史诊断：统一单轨并行", description: "历史 v2.7 诊断结果兼容项；保留方法编号用于旧 artifacts，不再作为新诊断卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
-  // MBE_METATRACK_DIAG_V28_CATALOG
-  { methodId: "metatrack_diag_serial", title: "诊断：双轨单业务执行", description: "诊断专用：完整保留 Metatrack 的有效独立前沿双轨分类、快速轨优先、依赖图、状态预取、精确版本、StateReady、状态局部化与 V669；配置 Worker 数保持不变，但同一时刻只允许 1 笔业务交易执行。仅用于拆分双轨优先收益与多业务并发收益，不进入正式消融矩阵。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  // MBE_METATRACK_EXEC4_V1: separate scheduler diagnostics, not official ablations
+  { methodId: "metatrack_diag_ready8", title: "② 统一单轨并行", description: "沿用本次 Full 的依赖图、版本与状态机制；移除 Fast/Conservative 调度分轨，Ready 交易可以绕行，业务并发上限仍为配置的 Worker 数。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_diag_dual1", title: "③ 双轨单业务", description: "沿用 Full 的双轨判定、Fast 优先及 Ready 绕行，但任一时刻仅运行一笔业务交易；Worker 配置不改变。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_diag_fifo1", title: "④ 严格 FIFO", description: "与正式去双轨 A2 的执行插件完全一致：不做双轨分类、不允许已 Ready 的后继绕过队首，同时只运行一笔业务交易。", family: "metatrack", comparisonVisible: true, mainVisible: false },
 ];
 
 export const BATCH_SI_ABLATION_METHOD_IDS = [
@@ -84,6 +84,8 @@ export const METATRACK_ABLATION_METHOD_IDS = [
   "metatrack_ab_state",
   "metatrack_ab_cons",
 ] as const;
+
+export const METATRACK_SCHEDULER_DIAG_METHOD_IDS = ["metatrack_latest", "metatrack_diag_ready8", "metatrack_diag_dual1", "metatrack_diag_fifo1"] as const;
 
 export const PARALLEL_WORKER_OPTIONS = [1, 2, 4, 8] as const;
 

@@ -179,6 +179,17 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 	if previewErr != nil {
 		return BlockExecutionResult{}, previewErr
 	}
+	sameESCDeferredPreview, _, sameESCDeferredPreviewCount, sameESCPreviewErr := porygonSameESCDeferredWriteHazardPreview(plan.Assignments, block.TxList)
+	if sameESCPreviewErr != nil {
+		return BlockExecutionResult{}, sameESCPreviewErr
+	}
+	// Cross-ESC OC conflicts and same-ESC deferred-write hazards are both known
+	// before local lane execution. Quarantine any CTx that will be abandoned so
+	// its speculative S value can never influence a retained successor.
+	speculativeQuarantine := porygonMergeTxBoolSets(postExecutionConflictPreview, sameESCDeferredPreview)
+	sameESCDeferredNewAbandonedCount := 0
+	sameESCDeferredRemainingPairs := 0
+	sameESCDeferredClosureVerified := true
 	if distributedOwnership {
 		// Porygon ESC members execute their entire assigned batch locally and
 		// return one batch result to the OC. Local waves preserve each ESC's
@@ -228,7 +239,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 				// to conflict with an ITx on another ESC still executes and returns S3,
 				// but its speculative writes are quarantined from later transactions.
 				// OC formally marks it Abandoned only after certified ESC results arrive.
-				porygonPublishSpeculativeOverlay(executionView, block.ShardID, txResult, postExecutionConflictPreview)
+				porygonPublishSpeculativeOverlay(executionView, block.ShardID, txResult, speculativeQuarantine)
 			}
 		}
 		requiredShards := sortedBoolKeys(requiredSet)
@@ -383,6 +394,19 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		if postExecutionCTxITxConflictCount != postExecutionConflictPreviewCount {
 			return BlockExecutionResult{}, fmt.Errorf("porygon OC CTx/ITx preview mismatch: preview=%d final=%d", postExecutionConflictPreviewCount, postExecutionCTxITxConflictCount)
 		}
+		var sameESCAbandoned map[string]bool
+		var sameESCErr error
+		finalAssignments, sameESCAbandoned, sameESCDeferredNewAbandonedCount, sameESCDeferredRemainingPairs, sameESCErr = porygonApplySameESCDeferredWriteHazards(finalAssignments, block.TxList, distributedCertified)
+		if sameESCErr != nil {
+			return BlockExecutionResult{}, sameESCErr
+		}
+		if !porygonPreviewAbandonmentClosed(sameESCDeferredPreview, finalAssignments) {
+			return BlockExecutionResult{}, fmt.Errorf("porygon same-ESC deferred-write preview did not converge to terminal abandonment")
+		}
+		for txID := range sameESCAbandoned {
+			postExecutionAbandoned[txID] = true
+		}
+		sameESCDeferredClosureVerified = sameESCDeferredRemainingPairs == 0
 		finalConflictClosureVerified = finalNonAbandonedCrossESCConflictPairs == 0
 		finalAssignmentByID = map[string]porygonTxAssignment{}
 		for _, assignment := range finalAssignments {
@@ -671,7 +695,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_logical_state_cross_shard_transaction_count": plan.CrossShardTransactionCnt,
 		"porygon_logical_state_cross_shard_ratio":             float64(plan.CrossShardTransactionCnt) / float64(max(1, plan.IntraShardTransactionCnt+plan.CrossShardTransactionCnt)),
 		"porygon_planned_logical_cross_shard_ratio":           float64(plan.CrossShardTransactionCnt) / float64(max(1, plan.IntraShardTransactionCnt+plan.CrossShardTransactionCnt)),
-		"porygon_executed_cross_shard_ratio":                  float64(crossShardExecuted) / float64(max(1, len(plan.Assignments)-plan.IntraShardTransactionCnt-plan.AbandonedCrossShardTransactionCnt-postExecutionCTxITxConflictCount)),
+		"porygon_executed_cross_shard_ratio":                  float64(crossShardExecuted) / float64(max(1, len(plan.Assignments)-plan.IntraShardTransactionCnt-plan.AbandonedCrossShardTransactionCnt-postExecutionCTxITxConflictCount-sameESCDeferredNewAbandonedCount)),
 		"porygon_cross_esc_abandon_ratio":                     float64(plan.AbandonedCrossShardTransactionCnt+postExecutionCTxITxConflictCount) / float64(max(1, plan.IntraShardTransactionCnt+plan.CrossShardTransactionCnt)),
 		"porygon_cross_shard_metric_truth_scope":              "execution_esc_plus_signed_access_state_shard_ownership;not_workload_source_target_ratio",
 		"porygon_single_shard_execution_count":                crossShardExecuted,
@@ -698,10 +722,10 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_multi_shard_update_threshold_policy":         "strict_majority",
 		"porygon_real_cross_execution_shard_network":          distributedOwnership,
 		"porygon_generic_relay_finalize_used":                 false,
-		"porygon_cross_shard_conflict_abandoned_count":        plan.AbandonedCrossShardTransactionCnt + postExecutionCTxITxConflictCount,
-		"porygon_protocol_abandoned_transaction_count":        plan.AbandonedOrderingTransactionCnt + postExecutionCTxITxConflictCount,
-		"porygon_post_execution_candidate_quarantine_count":   postExecutionConflictPreviewCount,
-		"porygon_abandoned_ctx_itx_conflict_count":            postExecutionCTxITxConflictCount,
+		"porygon_cross_shard_conflict_abandoned_count":        plan.AbandonedCrossShardTransactionCnt + postExecutionCTxITxConflictCount + sameESCDeferredNewAbandonedCount,
+		"porygon_protocol_abandoned_transaction_count":        plan.AbandonedOrderingTransactionCnt + postExecutionCTxITxConflictCount + sameESCDeferredNewAbandonedCount,
+		"porygon_post_execution_candidate_quarantine_count":   len(speculativeQuarantine),
+		"porygon_abandoned_ctx_itx_conflict_count":            postExecutionCTxITxConflictCount + sameESCDeferredNewAbandonedCount,
 		"porygon_abandoned_ctx_ctx_conflict_count":            plan.AbandonedCTxCTxConflictCnt,
 		"porygon_rollback_abandoned_ctx_count":                rollbackAbandonedCount,
 		"porygon_nonabandoned_cross_esc_conflict_pair_count":  finalNonAbandonedCrossESCConflictPairs,
@@ -738,9 +762,9 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"worker_pool_create_count":                            1,
 		"worker_pool_setup_ms":                                poolSetupDuration.Milliseconds(),
 		"wave_barrier_count":                                  len(plan.Waves),
-		"abort_count":                                         plan.AbandonedOrderingTransactionCnt + postExecutionCTxITxConflictCount,
+		"abort_count":                                         plan.AbandonedOrderingTransactionCnt + postExecutionCTxITxConflictCount + sameESCDeferredNewAbandonedCount,
 		"reexecution_count":                                   0,
-		"serializable":                                        finalConflictClosureVerified && finalNonAbandonedCrossESCConflictPairs == 0,
+		"serializable":                                        finalConflictClosureVerified && finalNonAbandonedCrossESCConflictPairs == 0 && sameESCDeferredClosureVerified,
 		"porygon_mbe_consensus_adaptation":                    "single_global_pbft_ordering_domain_with_esc_quorum_result_exchange",
 		"porygon_storage_node_adaptation":                     "paper_storage_role_co_located_on_existing_mbe_nodes;dynamic_esc_identity_separated_from_fixed_storage_role;logical_partition_root_strict_majority_authenticated",
 		"porygon_witness_adaptation":                          "real_ec_witness_certificate_with_mbe_pbft_validator_identity",
@@ -754,6 +778,11 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_v50_deferred_partitions":                     sortedBoolKeys(deferredPartitions),
 		"porygon_v50_deferred_partition_count":                len(deferredPartitions),
 	}
+	metrics["porygon_same_esc_deferred_write_candidate_count"] = sameESCDeferredPreviewCount
+	metrics["porygon_same_esc_deferred_write_abandoned_count"] = sameESCDeferredPreviewCount
+	metrics["porygon_same_esc_deferred_write_new_abandoned_count"] = sameESCDeferredNewAbandonedCount
+	metrics["porygon_same_esc_deferred_write_remaining_pair_count"] = sameESCDeferredRemainingPairs
+	metrics["porygon_same_esc_deferred_write_closure_verified"] = sameESCDeferredClosureVerified
 	if certifiedExecutionTruth != nil {
 		metrics["porygon_certified_execution_truth_version"] = certifiedExecutionTruth.Version
 		metrics["porygon_certified_execution_semantic_digest"] = certifiedExecutionTruth.SemanticDigest

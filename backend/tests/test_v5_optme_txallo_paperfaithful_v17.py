@@ -35,12 +35,24 @@ def _commit(node: Path, shard: str, rows: list[tuple[str,str,str]]) -> None:
     })
 
 
-def test_stateful_keeps_partition_identity(tmp_path: Path) -> None:
+def test_stateful_txallo_replicated_state_detects_conflicting_logical_values(tmp_path: Path) -> None:
     for n in ("n0","n1"): _commit(tmp_path/"nodes"/n, "s0", [("p0","k","v0")])
     for n in ("n2","n3"): _commit(tmp_path/"nodes"/n, "s1", [("p1","k","v1")])
     got = compute_business_state_evidence_v17(tmp_path, "stateful_txallo", {})
     assert got["status"] == "available"
+    assert got["semantic_class"] == "stateful_replicated_state"
     assert got["storage_partition_digest"]
+    assert got["global_logical_business_digest"] is None
+    assert got["global_logical_business_projection_status"] == "conflicting_values"
+    assert got["global_logical_conflict_key_count"] == 1
+
+
+def test_other_stateful_method_keeps_partition_identity(tmp_path: Path) -> None:
+    for n in ("n0","n1"): _commit(tmp_path/"nodes"/n, "s0", [("p0","k","v0")])
+    for n in ("n2","n3"): _commit(tmp_path/"nodes"/n, "s1", [("p1","k","v1")])
+    got = compute_business_state_evidence_v17(tmp_path, "stateful_optme", {})
+    assert got["status"] == "available"
+    assert got["semantic_class"] == "stateful_local_partition"
     assert got["global_logical_business_digest"] is None
     assert got["global_logical_business_projection_status"] == "not_applicable_without_explicit_stateful_global_projection"
     assert got["global_logical_conflict_key_count"] == 1
@@ -134,7 +146,8 @@ def test_stateful_partition_oracle_match_overrides_legacy_digest_contradiction(t
         "global_business_state_digest":"legacy",
     }
     got = enrich_metrics(tmp_path, "stateful_txallo", base)
-    assert got["v17_stateful_serial_partition_equivalent"] is True
+    assert got["v17_semantic_class"] == "stateful_replicated_state"
+    assert got["v17_stateful_serial_partition_equivalent"] is None
 
 
 def test_group_does_not_compare_stateful_partition_digest_as_global_business_state() -> None:
@@ -164,6 +177,25 @@ def test_txallo_stateful_physical_execution_matches_explicit_paper_placement(tmp
     assert got["mismatch_count"] == 0
     assert got["passed"] is True
     assert got["legacy_source_shard_cross_shard_flags_used"] is False
+
+
+def test_txallo_stateless_physical_execution_uses_single_execution_shard(tmp_path: Path) -> None:
+    _write_csv(tmp_path/"client/txallo_transaction_placement.csv", [
+        {"logical_tx_id":"t1","involved_shards":"s0|s1","execution_shard":"s1"},
+        {"logical_tx_id":"t2","involved_shards":"s0","execution_shard":"s0"},
+    ])
+    _write_csv(tmp_path/"nodes/n0/transaction_execution_trace.csv", [
+        {"tx_id":"t2","shard_id":"s0"},
+    ])
+    _write_csv(tmp_path/"nodes/n4/transaction_execution_trace.csv", [
+        {"tx_id":"t1","shard_id":"s1"},
+    ])
+    got = compute_txallo_physical_execution_coherence_v17(tmp_path, "stateless_txallo")
+    assert got["status"] == "available"
+    assert got["method_semantics"] == "stateless_direct_execution_shard"
+    assert got["checked_transaction_count"] == 2
+    assert got["mismatch_count"] == 0
+    assert got["passed"] is True
 
 
 def test_txallo_stateful_physical_execution_detects_legacy_routing_override(tmp_path: Path) -> None:

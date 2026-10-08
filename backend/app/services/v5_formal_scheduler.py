@@ -467,6 +467,18 @@ def expand(plan: V5FormalExperimentPlan, backend: str) -> list[dict]:
 
 
 def _execution_semantics(snapshot: dict[str, str], method_id: str = "") -> dict[str, object]:
+    if method_id == "stateful_txallo":
+        return {
+            "comparison_semantics_class": "txallo_paper_replicated_state_v229",
+            "state_access_semantics": "txallo_section_vii_pbft_bound_replicated_state",
+            "state_home_mapping_policy": "globally_replicated_logical_business_state",
+            "remote_fetch_policy": "none",
+            "remote_writeback_policy": "committed_state_replica_dissemination",
+            "version_plan_policy": "signed_source_order_exact_predecessor_for_noncommutative_state",
+            "proof_policy": "txallo_replica_commit_feed_plus_mapping_epoch_history",
+            "legacy_cross_shard_protocol": True,
+            "measurement_boundary": "client_submit_to_txallo_terminal_with_replica_convergence_before_mapping_update",
+        }
     # MBE_OPTME_V23_FORMAL_TRUTH: both cards share one global order; only the
     # state substrate differs.
     if method_id == "stateful_optme" or snapshot.get("block_executor") == "optme_block_executor":
@@ -1207,8 +1219,13 @@ def _state_equivalence_individual_reasons(item: dict) -> list[str]:
     summary = ((item.get("result") or {}).get("summary") or {})
     finality = summary.get("finality_evidence") if isinstance(summary.get("finality_evidence"), dict) else {}
 
+    semantic_class = str(item.get("comparison_semantics_class") or "")
+
     def number(name: str):
-        for source in (metrics, finality, summary):
+        # Porygon finality is certified post-drain. Never prefer a stale
+        # per-block paper count over result.summary.finality_evidence.
+        sources = (finality, metrics, summary) if semantic_class == "porygon_3d_global_ordering_paper_fidelity_v5" else (metrics, finality, summary)
+        for source in sources:
             value = source.get(name) if isinstance(source, dict) else None
             if isinstance(value, bool):
                 continue

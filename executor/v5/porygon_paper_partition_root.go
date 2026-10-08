@@ -279,34 +279,25 @@ func (r *NodeRuntime) porygonPaperCertifiedPartitionRoot(ctx context.Context, pr
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
+	// Only the remote Storage Role ACK wait uses proposalTimeout. Waiting for
+	// a known active predecessor to certify h-1 is a separate Paper2
+	// readiness dependency, not a PBFT or network timeout.
 	// This cadence is transport recovery only. It never changes quorum,
 	// acceptance, state selection, or any Porygon algorithmic decision.
 	recovery := time.NewTicker(50 * time.Millisecond)
 	defer recovery.Stop()
 
-	// B_h can execute from T(h-2) before this replica has finished certifying
-	// canonical state h-1. Wait locally for the immutable h-1 base instead of
-	// turning normal pipeline skew into a deterministic execution failure.
-	var baseHeight uint64
-	var baseRoot string
-	for {
-		var ok bool
-		baseHeight, baseRoot, ok = r.porygonPaperCanonicalPartitionBase(height, partitionID)
-		if ok {
-			break
-		}
-		r.addPorygonRuntimeMetric("porygon_partition_root_local_base_not_ready_count", 1)
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-timer.C:
-			r.addPorygonRuntimeMetric("porygon_partition_root_timeout_count", 1)
-			return "", fmt.Errorf("Porygon Paper2 partition-root local base timeout: height=%d partition=%s requester=%s required_base=%d", height, partitionID, r.node.NodeID, height-1)
-		case <-recovery.C:
-		}
+	// E(h) reads from Proposal.T(h-2) but certifies U/ITx against immutable
+	// canonical state h-1. The predecessor may still be executing on another
+	// Paper EC slot; it must not be mistaken for a fatal root timeout.
+	baseHeight, baseRoot, baseErr := r.porygonV55AwaitCanonicalBase(ctx, height, partitionID, timeout)
+	if baseErr != nil {
+		return "", baseErr
 	}
+	// Start a FULL Storage Role quorum budget after the canonical base exists;
+	// previous versions consumed this timer while waiting for h-1 locally.
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 
 	requestID := stableTextDigest(fmt.Sprintf("paper2-partition-root|%s|%d|%s|%s|%s|%d|%s|%s", blockHash, height, r.node.NodeID, partitionID, partitionRoot, baseHeight, baseRoot, updateDigest))
 	request := PorygonPaperPartitionRootRequest{

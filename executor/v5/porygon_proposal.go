@@ -162,6 +162,7 @@ func porygonCompactProposalTransactions(block realblock.Block) bool {
 }
 
 func (r *NodeRuntime) porygonBindCompactProposalContext(block realblock.Block) (realblock.Block, error) {
+	r.porygonProposalPhaseV532("COMPACT_CONTEXT_BEGIN", block.Height, block.BlockHash, true, "")
 	evidence, err := decodePorygonTransactionBlockEvidence(block)
 	if err != nil {
 		return block, err
@@ -176,6 +177,7 @@ func (r *NodeRuntime) porygonBindCompactProposalContext(block realblock.Block) (
 		if err := r.porygonStoreTransactionBlockForRole(body); err != nil {
 			return block, err
 		}
+		r.porygonProposalPhaseV532("COMPACT_TXBLOCK_STORED", block.Height, block.BlockHash, true, "")
 		ref := porygonTransactionBlockRef(body)
 		ref.StorageNodeIDs = r.porygonTransactionBlockStorageNodeIDs(body)
 		if len(ref.StorageNodeIDs) == 0 {
@@ -188,15 +190,21 @@ func (r *NodeRuntime) porygonBindCompactProposalContext(block realblock.Block) (
 		evidence.DataAvailabilityRef = "paper_maintenance_no_transaction_block"
 		evidence.WitnessCertificate = nil
 	}
+	r.porygonProposalPhaseV532("COMPACT_T_ANCHOR_BEGIN", block.Height, block.BlockHash, true, "")
 	stateHeight, stateRoot, partitionRoots := r.porygonPaperStateAnchorForProposal(block.Height)
+	r.porygonProposalPhaseV532("COMPACT_T_ANCHOR_END", block.Height, block.BlockHash, stateRoot != "", fmt.Sprintf("t_height=%d", stateHeight))
 	if stateRoot == "" {
 		return block, fmt.Errorf("Porygon compact proposal agreed T state unavailable")
 	}
+	r.porygonProposalPhaseV532("COMPACT_U_CERTIFIED_BEGIN", block.Height, block.BlockHash, true, "")
 	normalUpdates, updatesErr := r.porygonPaperCertifiedUpdatesForProposal(block.Height)
+	r.porygonProposalPhaseV532("COMPACT_U_CERTIFIED_END", block.Height, block.BlockHash, updatesErr == nil, porygonProposalPhaseErrV532(updatesErr))
 	if updatesErr != nil {
 		return block, updatesErr
 	}
+	r.porygonProposalPhaseV532("COMPACT_U_RECOVERY_BEGIN", block.Height, block.BlockHash, true, "")
 	recoveryUpdates := r.porygonV50RecoveryProposalUpdates(block.Height)
+	r.porygonProposalPhaseV532("COMPACT_U_RECOVERY_END", block.Height, block.BlockHash, true, fmt.Sprintf("count=%d", len(recoveryUpdates)))
 	updates := porygonV50MergeProposalUpdates(normalUpdates, recoveryUpdates)
 	ec := porygonECDescriptorForHeight(r.plan.NodeConfigs, block.Height, block.ShardID, r.porygonExecutionShardCount(), r.porygonExecutionCommitteeCount())
 	proposal := PorygonProposalBody{
@@ -215,6 +223,7 @@ func (r *NodeRuntime) porygonBindCompactProposalContext(block realblock.Block) (
 		return block, err
 	}
 	realblock.AssignHash(&block)
+	r.porygonProposalPhaseV532("COMPACT_CONTEXT_END", block.Height, block.BlockHash, true, fmt.Sprintf("u=%d;maintenance=%t", len(updates), maintenance))
 	return block, nil
 }
 

@@ -62,3 +62,36 @@ Stateless-TxAllo can consume a changed execution mapping because its persistent 
 The TxAllo paper evaluation used `tau1=300` source blocks. MBE formal comparison runs use an explicit adapted profile with `tau1=15` Alien Worlds source blocks. The original paper value is retained as machine-readable evidence (`paper_reference_a_epoch_blocks=300`), while the effective runtime value is `a_epoch_blocks=15` and `a_epoch_parameterization=mbe_adapted_fixed_15_source_blocks`. This is an experimental adaptation, not a claim that the TxAllo paper used 15 blocks.
 
 The external source-block clock is retained so Stateful-TxAllo and Stateless-TxAllo see identical update boundaries even when their physical MBE committed-block counts differ. The paper case-study ratio `tau2/tau1=20` is preserved, so periodic G-TxAllo occurs every 20 closed A epochs, i.e. every 300 source blocks under this profile. Commit-only A input, future-leakage prevention, mapping ACK, Stateful migration fail-closed behavior, PBFT, and the frozen TxAllo G/A core are unchanged.
+
+
+## v22.9.3 paper-equivalent replicated state substrate
+
+Stateful-TxAllo no longer interprets a TxAllo mapping change as a request for an ad-hoc account migration. TxAllo Algorithm 1/2 and PBFT remain unchanged. MBE now realizes the state-availability assumption described in TxAllo Section VII by disseminating every successfully committed Stateful-TxAllo business-state update to every physical shard. Dissemination occurs only after the source business block is durably committed, and every target shard materializes the replica through its ordinary PBFT-bound `SystemStateDelta` + WAL commit path; queue receipt is never treated as durable visibility.
+
+Non-commutative logical state carries an exact `RequiredVersion -> ProducedVersion` chain. A transaction may enter a Stateful-TxAllo PBFT proposal only when its external predecessor is already durably materialized at that execution shard, or is produced earlier in the same candidate. Commutative deltas retain commutative semantics and are disseminated as deltas rather than being forced into the exact-value chain. Relay target execution remains protocol-only (`relay_commit`) and never republishes business state.
+
+Before A/G may publish a new mapping epoch, the client requires every validator to expose durable replica-feed tokens for every write in the closed source epoch. Mapping moves therefore remain fail-closed unless a complete paper-equivalent replica convergence proof exists. `txallo_mapping_epochs.jsonl` records the mapping/digest active at every epoch so historical fallback placement is audited against the mapping that actually existed when the transaction was routed, rather than against the final mapping.
+
+
+## v22.9.4 paper-equivalent replicated state substrate
+
+Stateful-TxAllo no longer interprets a TxAllo mapping change as a request for an ad-hoc account migration. TxAllo Algorithm 1/2 and PBFT remain unchanged. MBE now realizes the state-availability assumption described in TxAllo Section VII by disseminating every successfully committed Stateful-TxAllo business-state update to every physical shard. Dissemination occurs only after the source business block is durably committed, and every target shard materializes the replica through its ordinary PBFT-bound `SystemStateDelta` + WAL commit path; queue receipt is never treated as durable visibility.
+
+Non-commutative logical state carries an exact `RequiredVersion -> ProducedVersion` chain. A transaction may enter a Stateful-TxAllo PBFT proposal only when its external predecessor is already durably materialized at that execution shard, or is produced earlier in the same candidate. Commutative deltas retain commutative semantics and are disseminated as deltas rather than being forced into the exact-value chain. Relay target execution remains protocol-only (`relay_commit`) and never republishes business state.
+
+Before A/G may publish a new mapping epoch, the client requires every validator to expose durable replica-feed tokens for every write in the closed source epoch. Mapping moves therefore remain fail-closed unless a complete paper-equivalent replica convergence proof exists. `txallo_mapping_epochs.jsonl` records the mapping/digest active at every epoch so historical fallback placement is audited against the mapping that actually existed when the transaction was routed, rather than against the final mapping.
+
+
+## v22.9.6 Stateful local-replica execution isolation
+
+Stateful-TxAllo carries exact logical versions only for the replicated-state consistency contract. Those versions must not activate MBE's generic versioned remote-wave executor. v22.9.6 executes from durable local replica/history projection and then the shared serial executor. Physical `V5_STATE_FETCH_REQUEST/RESPONSE` messages or generic `versioned_state_ready` waves are fidelity violations; only PBFT-bound replica dissemination (`V5_STATE_DELTA_APPLY/ACK`) is allowed.
+
+
+## v22.9.7 immutable dynamic control plane
+
+Dynamic TxAllo mapping publication is epoch-addressed and write-once. The runtime protocol reads `txallo_mapping_snapshot_eNNNNNN.json` and waits for `txallo_mapping_ack_eNNNNNN.json`; the historical `txallo_mapping_snapshot.json` and per-node `txallo_mapping_ack.json` remain compatibility/latest evidence only and are not correctness-critical. Windows sharing/access/lock violations are retried only as bounded transient I/O, while unknown I/O errors remain fail-closed. Snapshot watchers no longer use file mtime. ACK state advances only after durable immutable ACK publication succeeds. Append-only mapping-history, lifecycle, and replica-feed opens use the same transient-open closure without changing their partial-line protocol.
+
+
+## v22.9.9 sub-millisecond timing and execution-audit truth
+
+TxAllo runtime semantics are unchanged. The shared Serial executor now exports the same measured monotonic transaction-execution duration at nanosecond, microsecond, and legacy millisecond precision. Metric extraction accumulates nanoseconds before converting to milliseconds, so real sub-millisecond execution is not rounded to a false zero; the existing completed-with-zero-time fail-closed fidelity gate remains unchanged. TxAllo v17 physical execution audit is method-aware: Stateful-TxAllo checks account-allocation-induced involved shards, while Stateless-TxAllo direct business execution checks exactly the placement `execution_shard`; remote Home/writeback activity is not counted as a second business execution.

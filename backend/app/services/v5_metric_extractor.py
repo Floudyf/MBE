@@ -338,6 +338,18 @@ def extract(run_dir: Path, method_id: str | None = None) -> dict:
         metrics["actual_block_fill_ratio"] = actual_average_tx_per_block / configured_block_size
         metrics["block_utilization_truth_scope"] = "actual_average_committed_tx_per_block_over_configured_block_size"
     _apply_porygon_metrics(metrics, run_dir)
+    if metrics.get("porygon_metrics_available") is True:
+        from backend.app.services.v5_porygon_phase_trace_v54 import export_porygon_phase_trace
+        phase_trace_truth = export_porygon_phase_trace(run_dir)
+        metrics.update(phase_trace_truth)
+        from backend.app.services.v5_porygon_truth_audit_v56 import export_porygon_truth_audit
+        v56_truth_audit = export_porygon_truth_audit(run_dir)
+        metrics.update(v56_truth_audit)
+        for v56_source in v56_truth_audit.get("porygon_v56_audit_artifacts", []):
+            if v56_source not in metrics["source_artifacts"]:
+                metrics["source_artifacts"].append(v56_source)
+        if phase_trace_truth.get("porygon_proposal_phase_trace_available") is True:
+            metrics["source_artifacts"].append("porygon_proposal_phase_trace.csv")
     _apply_calvin_metrics(metrics, run_dir)
     _apply_optme_metrics(metrics, run_dir)
     _apply_txallo_metrics(metrics, run_dir)
@@ -564,6 +576,13 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
         for block in summary_blocks:
             if not isinstance(block, dict):
                 continue
+            raw_ns = block.get("transaction_execution_ns")
+            if raw_ns is not None and not isinstance(raw_ns, bool):
+                try:
+                    business_us += float(raw_ns) / 1000.0
+                    continue
+                except (TypeError, ValueError):
+                    pass
             raw = block.get("transaction_execution_us")
             if raw is not None and not isinstance(raw, bool):
                 try:
@@ -589,10 +608,15 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
         metrics["planner_build_critical_path_ms"] = max(planner_us_by_leader, default=0.0) / 1000.0
         metrics["planner_build_timing_truth_scope"] = "proposal_leader_consensus_plan_build_only"
 
+    transaction_ns = total_number("transaction_execution_ns")
     transaction_us = total_number("transaction_execution_us")
     materialization_us = total_number("deterministic_materialization_us")
     metrics["transaction_execution_ms"] = (
-        transaction_us / 1000.0 if transaction_us > 0 else total_int("transaction_execution_ms")
+        transaction_ns / 1_000_000.0
+        if transaction_ns > 0
+        else transaction_us / 1000.0
+        if transaction_us > 0
+        else total_int("transaction_execution_ms")
     )
     metrics["deterministic_materialization_ms"] = (
         materialization_us / 1000.0
@@ -607,7 +631,9 @@ def _apply_common_block_execution_timing(metrics: dict[str, Any], run_dir: Path)
         )
     )
     metrics["state_commitment_ms"] = total_int("state_commitment_ms")
-    if transaction_us > 0 or materialization_us > 0:
+    if transaction_ns > 0:
+        metrics["execution_phase_timing_precision"] = "nanosecond_accumulated_then_reported_ms"
+    elif transaction_us > 0 or materialization_us > 0:
         metrics["execution_phase_timing_precision"] = "microsecond_accumulated_then_reported_ms"
     else:
         metrics["execution_phase_timing_precision"] = "millisecond_executor_fields"
@@ -767,21 +793,43 @@ def _apply_porygon_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "porygon_v50_fault_recovery_observed": any(bool(block.get("porygon_v50_fault_recovery_observed")) for block in blocks),
         "porygon_storage_node_adaptation": next((block.get("porygon_storage_node_adaptation") for block in blocks if block.get("porygon_storage_node_adaptation")), None),
     })
-    # Porygon v5 paper-fidelity terminal truth: a successfully proposal-carried
-    # rollback is a terminal protocol abort, not an incomplete transaction and
-    # not a finalized business transaction.  Derive these counts from the
-    # replica-consistent paper lifecycle instead of the original execution
-    # receipt, which necessarily predates the future-ESC retry/rollback rounds.
+    # Porygon's block-level paper counters are diagnostics, not a replacement
+    # for authoritative post-drain, deduplicated transaction-finality outcomes.
+    # A prior extractor overwrote the correct finality_summary.json totals here,
+    # causing completed_invalid from inconsistent child metric snapshots.
     paper_finalized = int(metrics.get("porygon_paper_itx_committed_count") or 0) + int(metrics.get("porygon_paper_ctx_committed_count") or 0)
     paper_abandoned = int(metrics.get("porygon_protocol_abandoned_unique_tx_count") or 0)
+    metrics["porygon_paper_committed_diagnostic_count"] = paper_finalized
+    metrics["porygon_paper_abandoned_diagnostic_count"] = paper_abandoned
+    finality_truth = _read_json(run_dir / "finality_summary.json")
+    fields = (
+        "submitted_unique_tx_count", "terminal_unique_tx_count",
+        "finalized_unique_logical_tx_count", "incomplete_unique_tx_count",
+    )
+    for field in fields:
+        value = finality_truth.get(field)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            metrics.setdefault("missing", []).append("porygon_post_drain_finality:" + field)
+            continue
+        metrics[field] = int(value)
+    metrics["porygon_terminal_truth_scope"] = "post_drain_authoritative_finality_summary_unique_logical_outcome"
     submitted = metrics.get("submitted_unique_tx_count")
-    if isinstance(submitted, (int, float)) and not isinstance(submitted, bool):
-        submitted_int = int(submitted)
-        terminal = min(submitted_int, paper_finalized + paper_abandoned)
-        metrics["finalized_unique_logical_tx_count"] = paper_finalized
-        metrics["terminal_unique_tx_count"] = terminal
-        metrics["incomplete_unique_tx_count"] = max(0, submitted_int - terminal)
-        metrics["porygon_terminal_truth_scope"] = "paper_lifecycle_committed_plus_ordering_postexecution_abandoned_plus_proposal_carried_rollback"
+    terminal = metrics.get("terminal_unique_tx_count")
+    finalized = metrics.get("finalized_unique_logical_tx_count")
+    incomplete = metrics.get("incomplete_unique_tx_count")
+    if all(isinstance(v, int) and not isinstance(v, bool) for v in (submitted, terminal, finalized, incomplete)):
+        metrics["porygon_post_drain_count_identity_valid"] = (0 <= finalized <= terminal <= submitted and incomplete == submitted - terminal)
+        if not metrics["porygon_post_drain_count_identity_valid"]:
+            metrics.setdefault("missing", []).append("porygon_post_drain_finality:count_identity_mismatch")
+    metrics["porygon_paper_vs_finality_committed_delta"] = (
+        finalized - paper_finalized if isinstance(finalized, int) else None
+    )
+    replay_truth = _read_json(run_dir / "workload_replay_summary.json")
+    source_target_ratio = replay_truth.get("expected_cross_shard_ratio")
+    if isinstance(source_target_ratio, (int, float)) and not isinstance(source_target_ratio, bool):
+        metrics["porygon_source_target_cross_shard_ratio"] = float(source_target_ratio)
+        metrics["porygon_source_target_cross_shard_truth_scope"] = "workload_source_target_assignment_not_porygon_logical_esc"
+    metrics["porygon_logical_state_cross_shard_truth_scope"] = "all_declared_state_access_esc_ownership"
     for path in _batch_si_leader_summary_paths(run_dir):
         if path.is_file():
             rel = str(path.relative_to(run_dir)).replace("\\", "/")
@@ -1604,6 +1652,13 @@ def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
         "stateful_migration_required_account_count",
         "stateful_migration_required_accounts_digest",
         "stateful_migration_rejected_source_epoch",
+        "stateful_replica_substrate_enabled",
+        "stateful_replica_convergence_confirmed",
+        "stateful_replica_convergence_source_epoch",
+        "stateful_replica_convergence_token_digest",
+        "stateful_replica_convergence_token_count",
+        "stateful_replica_convergence_verified_source_epoch",
+        "stateful_replica_convergence_verified_token_count",
         "mapping_nonempty",
         "mapping_structurally_complete",
         "mapping_operationally_valid",
@@ -1627,7 +1682,7 @@ def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             rel = str(path.relative_to(run_dir)).replace("\\", "/")
             if rel not in metrics["source_artifacts"]:
                 metrics["source_artifacts"].append(rel)
-    metrics["txallo_truth_scope"] = "initial_g_uses_pre_evaluation_history;dynamic_updates_use_successfully_committed_prior_300_source_block_epochs_only;all_nodes_ack_mapping_before_next_epoch;stateful_committed_account_home_moves_fail_closed_without_migration_or_replication;paper_case_study_g_every_20_source_epochs;modeled_throughput_is_paper_objective_not_measured_end_to_end_tps"
+    metrics["txallo_truth_scope"] = "initial_g_uses_pre_evaluation_history;dynamic_updates_use_successfully_committed_prior_15_source_block_mbe_adapted_epochs_only;all_nodes_ack_mapping_before_next_epoch;stateful_mapping_moves_require_all_node_durable_paper_replica_convergence;paper_case_study_g_every_20_source_epochs;modeled_throughput_is_paper_objective_not_measured_end_to_end_tps"
 
 
 def _apply_calvin_metrics(metrics: dict[str, Any], run_dir: Path) -> None:

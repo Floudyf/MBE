@@ -2,9 +2,11 @@ package v5
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +39,8 @@ type txalloDynamicAllocationRuntime interface {
 	TxAlloGlobalEpochMultiple() int
 	TxAlloMappingEpoch() uint64
 	TxAlloMappingStateDigest() string
+	TxAlloStatefulReplicaEnabled() bool
+	ConfirmTxAlloReplicaConvergence(uint64, string, int) error
 	ApplyCommittedTxAlloEpoch([]WorkloadRecord, uint64, bool) error
 }
 
@@ -55,6 +59,19 @@ type txalloMappingSnapshotV22 struct {
 	MappingDigest string            `json:"mapping_digest"`
 	AliasesDigest string            `json:"aliases_digest"`
 	StateDigest   string            `json:"state_digest"`
+}
+
+type txalloMappingEpochRowV229 struct {
+	SchemaVersion   string            `json:"schema_version"`
+	Epoch           uint64            `json:"epoch"`
+	Mapping         map[string]string `json:"mapping"`
+	Aliases         map[string]string `json:"aliases"`
+	MappingDigest   string            `json:"mapping_digest"`
+	AliasesDigest   string            `json:"aliases_digest"`
+	StateDigest     string            `json:"state_digest"`
+	SourceEpoch     int64             `json:"source_epoch"`
+	UpdateAlgorithm string            `json:"update_algorithm"`
+	TimestampMS     int64             `json:"timestamp_ms"`
 }
 
 type txalloMappingAckV222 struct {
@@ -370,19 +387,52 @@ func (p *txalloAccountSharding) txalloMappingSnapshotLocked() txalloMappingSnaps
 	}
 }
 
-func txalloWriteAtomicJSON(path string, value any) error {
+func txalloControlJSONBytes(value any) ([]byte, error) {
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(raw, '\n'), nil
+}
+
+func txalloWriteSyncedTemp(path string, raw []byte) (string, error) {
 	if strings.TrimSpace(path) == "" {
-		return fmt.Errorf("TxAllo mapping snapshot path is empty")
+		return "", fmt.Errorf("TxAllo control-file path is empty")
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+		return "", err
 	}
-	raw, err := json.MarshalIndent(value, "", "  ")
+	tmp := fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), time.Now().UnixNano())
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return "", err
+	}
+	cleanup := func() {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+	}
+	if _, err := f.Write(raw); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := f.Sync(); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return tmp, nil
+}
+
+func txalloWriteAtomicJSON(path string, value any) error {
+	raw, err := txalloControlJSONBytes(value)
 	if err != nil {
 		return err
 	}
-	tmp := fmt.Sprintf("%s.tmp-%d-%d", path, os.Getpid(), time.Now().UnixNano())
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
+	tmp, err := txalloWriteSyncedTemp(path, raw)
+	if err != nil {
 		return err
 	}
 	if err := txalloAtomicReplace(tmp, path); err != nil {
@@ -390,6 +440,138 @@ func txalloWriteAtomicJSON(path string, value any) error {
 		return err
 	}
 	return nil
+}
+
+// txalloPublishImmutableJSON is the protocol publication primitive for mapping
+// snapshots and node ACKs. Epoch files are write-once. Re-publication is
+// allowed only when the exact sealed bytes already exist; conflicting bytes are
+// a protocol error and are never overwritten.
+func txalloPublishImmutableJSON(path string, value any) error {
+	raw, err := txalloControlJSONBytes(value)
+	if err != nil {
+		return err
+	}
+	if existing, err := txalloReadFileStable(path); err == nil {
+		if bytes.Equal(existing, raw) {
+			return nil
+		}
+		return fmt.Errorf("TxAllo immutable control file conflicts: %s", path)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	tmp, err := txalloWriteSyncedTemp(path, raw)
+	if err != nil {
+		return err
+	}
+	if err := txalloAtomicPublishNew(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		if errors.Is(err, os.ErrExist) {
+			existing, readErr := txalloReadFileStable(path)
+			if readErr == nil && bytes.Equal(existing, raw) {
+				return nil
+			}
+			if readErr != nil {
+				return readErr
+			}
+			return fmt.Errorf("TxAllo immutable control file conflicts after publish race: %s", path)
+		}
+		return err
+	}
+	return nil
+}
+
+func txalloMappingSnapshotEpochPath(base string, epoch uint64) string {
+	return filepath.Join(filepath.Dir(base), fmt.Sprintf("txallo_mapping_snapshot_e%06d.json", epoch))
+}
+
+func txalloMappingAckEpochPath(dataDir string, epoch uint64) string {
+	return filepath.Join(dataDir, fmt.Sprintf("txallo_mapping_ack_e%06d.json", epoch))
+}
+
+var txalloMappingEpochHistoryMu sync.Mutex
+
+func txalloAppendMappingEpochHistoryV229(path string, snapshot txalloMappingSnapshotV22, sourceEpoch int64, algorithm string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("TxAllo mapping epoch history path is empty")
+	}
+	if err := txalloValidSnapshot(snapshot, uniqueStringsFromMappingV229(snapshot.Mapping)); err != nil {
+		return err
+	}
+	txalloMappingEpochHistoryMu.Lock()
+	defer txalloMappingEpochHistoryMu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if raw, err := txalloReadFileStable(path); err == nil {
+		maxEpoch := uint64(0)
+		haveEpoch := false
+		sameEpoch := false
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			var row txalloMappingEpochRowV229
+			if err := json.Unmarshal([]byte(line), &row); err != nil {
+				return fmt.Errorf("TxAllo mapping epoch history decode: %w", err)
+			}
+			if row.SchemaVersion != txalloDynamicMappingSchema || row.StateDigest == "" {
+				return fmt.Errorf("TxAllo mapping epoch history contains invalid row")
+			}
+			if row.Epoch == snapshot.Epoch {
+				if row.StateDigest != snapshot.StateDigest {
+					return fmt.Errorf("TxAllo mapping epoch history conflicts at epoch %d", snapshot.Epoch)
+				}
+				sameEpoch = true
+			}
+			if !haveEpoch || row.Epoch > maxEpoch {
+				maxEpoch = row.Epoch
+				haveEpoch = true
+			}
+		}
+		if haveEpoch && snapshot.Epoch < maxEpoch {
+			return fmt.Errorf("TxAllo mapping epoch history regressed: got=%d latest=%d", snapshot.Epoch, maxEpoch)
+		}
+		if sameEpoch {
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	row := txalloMappingEpochRowV229{SchemaVersion: snapshot.SchemaVersion, Epoch: snapshot.Epoch, Mapping: copyMapping(snapshot.Mapping), Aliases: copyMapping(snapshot.Aliases), MappingDigest: snapshot.MappingDigest, AliasesDigest: snapshot.AliasesDigest, StateDigest: snapshot.StateDigest, SourceEpoch: sourceEpoch, UpdateAlgorithm: algorithm, TimestampMS: time.Now().UnixMilli()}
+	payload, err := json.Marshal(row)
+	if err != nil {
+		return err
+	}
+	f, err := txalloOpenAppendFileStable(path, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(payload, '\n')); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// uniqueStringsFromMappingV229 returns the declared shard domain needed by the
+// existing snapshot validator without importing any new topology mechanism.
+func uniqueStringsFromMappingV229(mapping map[string]string) []string {
+	seen := map[string]bool{}
+	for _, shard := range mapping {
+		if strings.TrimSpace(shard) != "" {
+			seen[shard] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for shard := range seen {
+		out = append(out, shard)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (p *txalloAccountSharding) writeTxAlloMappingSnapshot() error {
@@ -401,7 +583,40 @@ func (p *txalloAccountSharding) writeTxAlloMappingSnapshot() error {
 	path := p.mappingSnapshotPath
 	snapshot := p.txalloMappingSnapshotLocked()
 	p.mu.RUnlock()
-	return txalloWriteAtomicJSON(path, snapshot)
+	// Keep the historical latest alias for UI/export compatibility, but publish
+	// the epoch-specific immutable file as the runtime protocol source of truth.
+	if err := txalloWriteAtomicJSON(path, snapshot); err != nil {
+		return err
+	}
+	historyPath := filepath.Join(filepath.Dir(path), txalloMappingEpochHistoryName)
+	if err := txalloAppendMappingEpochHistoryV229(historyPath, snapshot, -1, "initial_G-TxAllo"); err != nil {
+		return err
+	}
+	return txalloPublishImmutableJSON(txalloMappingSnapshotEpochPath(path, snapshot.Epoch), snapshot)
+}
+
+func (p *txalloAccountSharding) ConfirmTxAlloReplicaConvergence(sourceEpoch uint64, digest string, tokenCount int) error {
+	if p == nil || !p.TxAlloStatefulReplicaEnabled() {
+		return fmt.Errorf("TxAllo Stateful replica convergence confirmation requires paper replicated-state mode")
+	}
+	if strings.TrimSpace(digest) == "" || tokenCount < 0 {
+		return fmt.Errorf("TxAllo Stateful replica convergence proof is invalid")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	expectedEpoch := uint64(intValue(p.evidence["closed_source_epoch_count"]))
+	if sourceEpoch != expectedEpoch {
+		return fmt.Errorf("TxAllo replica convergence epoch mismatch: got=%d want=%d", sourceEpoch, expectedEpoch)
+	}
+	p.replicaConvergenceSet = true
+	p.replicaConvergedEpoch = sourceEpoch
+	p.replicaConvergedDigest = digest
+	p.replicaConvergedCount = tokenCount
+	p.evidence["stateful_replica_convergence_confirmed"] = true
+	p.evidence["stateful_replica_convergence_source_epoch"] = sourceEpoch
+	p.evidence["stateful_replica_convergence_token_digest"] = digest
+	p.evidence["stateful_replica_convergence_token_count"] = tokenCount
+	return nil
 }
 
 // ApplyCommittedTxAlloEpoch closes one source-block epoch. Empty source epochs
@@ -425,6 +640,17 @@ func (p *txalloAccountSharding) ApplyCommittedTxAlloEpoch(records []WorkloadReco
 	if sourceEpoch != expectedEpoch {
 		p.mu.Unlock()
 		return fmt.Errorf("TxAllo source epoch closure out of order: got=%d want=%d", sourceEpoch, expectedEpoch)
+	}
+	replicaReady := false
+	if !statelessDirect && p.TxAlloStatefulReplicaEnabled() {
+		expectedTokens := txalloExpectedReplicaTokensV229(records)
+		expectedDigest := stableJSONDigest(expectedTokens)
+		if !p.replicaConvergenceSet || p.replicaConvergedEpoch != sourceEpoch || p.replicaConvergedDigest != expectedDigest || p.replicaConvergedCount != len(expectedTokens) {
+			p.evidence["stateful_replica_convergence_confirmed"] = false
+			p.mu.Unlock()
+			return fmt.Errorf("TxAllo Stateful mapping update requires durable all-node replica convergence for source epoch %d", sourceEpoch)
+		}
+		replicaReady = true
 	}
 	beforeMapping := copyMapping(p.allocator.Mapping)
 	nextHistory := append(append([]txalloHistoryTx(nil), p.dynamicHistory...), history...)
@@ -460,7 +686,7 @@ func (p *txalloAccountSharding) ApplyCommittedTxAlloEpoch(records []WorkloadReco
 			moved = txalloStatefulMigrationAccounts(p, beforeMapping, candidate.Mapping, records)
 		}
 	}
-	if !statelessDirect && len(moved) > 0 {
+	if !statelessDirect && len(moved) > 0 && !replicaReady {
 		p.evidence["stateful_migration_guard_triggered"] = true
 		p.evidence["stateful_migration_required_account_count"] = len(moved)
 		p.evidence["stateful_migration_required_accounts_digest"] = stableJSONDigest(moved)
@@ -493,6 +719,11 @@ func (p *txalloAccountSharding) ApplyCommittedTxAlloEpoch(records []WorkloadReco
 	p.evidence["last_update_algorithm"] = updateAlgorithm
 	p.evidence["stateful_migration_guard_triggered"] = false
 	p.evidence["stateful_migration_required_account_count"] = 0
+	if replicaReady {
+		p.evidence["stateful_migration_policy"] = "paper_replicated_state_all_nodes_durable_before_mapping_publish"
+		p.evidence["stateful_replica_convergence_verified_source_epoch"] = sourceEpoch
+		p.evidence["stateful_replica_convergence_verified_token_count"] = p.replicaConvergedCount
+	}
 
 	initial := intValue(p.evidence["initial_g_history_transaction_count"])
 	if initial <= 0 {
@@ -530,11 +761,26 @@ func (p *txalloAccountSharding) ApplyCommittedTxAlloEpoch(records []WorkloadReco
 		path = p.mappingSnapshotPath
 		snapshot = p.txalloMappingSnapshotLocked()
 	}
+	if replicaReady {
+		p.replicaConvergenceSet = false
+		p.replicaConvergedEpoch = 0
+		p.replicaConvergedDigest = ""
+		p.replicaConvergedCount = 0
+	}
 	p.mu.Unlock()
 
 	if didUpdate && strings.TrimSpace(path) != "" {
+		// The mutable latest alias remains compatibility evidence only. Runtime
+		// watchers never consume it after v22.9.7.
 		if err := txalloWriteAtomicJSON(path, snapshot); err != nil {
-			return fmt.Errorf("TxAllo mapping epoch publish: %w", err)
+			return fmt.Errorf("TxAllo mapping latest-alias publish: %w", err)
+		}
+		historyPath := filepath.Join(filepath.Dir(path), txalloMappingEpochHistoryName)
+		if err := txalloAppendMappingEpochHistoryV229(historyPath, snapshot, int64(sourceEpoch), updateAlgorithm); err != nil {
+			return fmt.Errorf("TxAllo mapping epoch history publish: %w", err)
+		}
+		if err := txalloPublishImmutableJSON(txalloMappingSnapshotEpochPath(path, snapshot.Epoch), snapshot); err != nil {
+			return fmt.Errorf("TxAllo immutable mapping epoch publish: %w", err)
 		}
 	}
 	return nil
@@ -570,68 +816,56 @@ func (p *txalloAccountSharding) RefreshTxAlloMapping() error {
 		return nil
 	}
 	p.mu.RLock()
-	path := p.mappingSnapshotPath
-	lastMod := p.mappingSnapshotModTime
+	basePath := p.mappingSnapshotPath
 	currentEpoch := p.mappingEpoch
 	shards := append([]string(nil), p.shards...)
 	p.mu.RUnlock()
-	if strings.TrimSpace(path) == "" {
+	if strings.TrimSpace(basePath) == "" {
 		return nil
 	}
-	info, err := os.Stat(path)
+	// v22.9.7 removes Stat/mtime from the protocol. A node at epoch N reads
+	// exactly the immutable N+1 file. Absence means "not published yet";
+	// transient Windows sharing/lock errors are classified by the watcher and
+	// retried without producing an error ACK.
+	nextPath := txalloMappingSnapshotEpochPath(basePath, currentEpoch+1)
+	raw, err := txalloReadFileStable(nextPath)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	mod := info.ModTime().UnixNano()
-	if mod <= lastMod {
-		return nil
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
 	var snapshot txalloMappingSnapshotV22
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
-		return fmt.Errorf("TxAllo mapping snapshot decode: %w", err)
+		return fmt.Errorf("TxAllo mapping snapshot decode epoch=%d: %w", currentEpoch+1, err)
 	}
 	if err := txalloValidSnapshot(snapshot, shards); err != nil {
 		return err
 	}
-	if snapshot.Epoch < currentEpoch {
-		return fmt.Errorf("TxAllo mapping snapshot epoch regressed")
-	}
-	if snapshot.Epoch == currentEpoch {
-		p.mu.RLock()
-		currentStateDigest := txalloStateDigest(p.allocator.Mapping, p.aliases)
-		p.mu.RUnlock()
-		if currentStateDigest != snapshot.StateDigest {
-			return fmt.Errorf("TxAllo mapping snapshot conflicts with local epoch %d", currentEpoch)
-		}
+	if snapshot.Epoch != currentEpoch+1 {
+		return fmt.Errorf("TxAllo immutable mapping snapshot epoch mismatch: file=%d payload=%d", currentEpoch+1, snapshot.Epoch)
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if snapshot.Epoch > p.mappingEpoch {
-		p.allocator.Mapping = copyMapping(snapshot.Mapping)
-		p.aliases = copyMapping(snapshot.Aliases)
-		p.mappingEpoch = snapshot.Epoch
-		p.evidence["mapping_epoch"] = snapshot.Epoch
-		p.evidence["mapping_digest"] = snapshot.MappingDigest
-		p.evidence["mapped_account_count"] = len(snapshot.Mapping)
+	if p.mappingEpoch != currentEpoch {
+		return nil
 	}
-	p.mappingSnapshotModTime = mod
+	p.allocator.Mapping = copyMapping(snapshot.Mapping)
+	p.aliases = copyMapping(snapshot.Aliases)
+	p.mappingEpoch = snapshot.Epoch
+	p.evidence["mapping_epoch"] = snapshot.Epoch
+	p.evidence["mapping_digest"] = snapshot.MappingDigest
+	p.evidence["mapped_account_count"] = len(snapshot.Mapping)
 	return nil
 }
 
-func (r *NodeRuntime) writeTxAlloMappingAck(refreshErr error) {
+func (r *NodeRuntime) writeTxAlloMappingAck(epoch uint64, stateDigest string, refreshErr error) error {
 	if r == nil || r.plugins.Sharding == nil {
-		return
+		return nil
 	}
 	dynamic, ok := r.plugins.Sharding.(txalloMappingRefresher)
 	if !ok || !dynamic.TxAlloDynamicEnabled() {
-		return
+		return nil
 	}
 	status := "ok"
 	errText := ""
@@ -639,16 +873,24 @@ func (r *NodeRuntime) writeTxAlloMappingAck(refreshErr error) {
 		status = "error"
 		errText = refreshErr.Error()
 	}
-	ack := txalloMappingAckV222{
+	// Latest alias keeps a diagnostic wall-clock timestamp. The immutable ACK
+	// uses TimestampMS=0 so retries for the same epoch are byte-identical.
+	protocolAck := txalloMappingAckV222{
 		SchemaVersion: txalloDynamicMappingAckSchema,
 		NodeID:        r.node.NodeID,
-		Epoch:         dynamic.TxAlloMappingEpoch(),
-		StateDigest:   dynamic.TxAlloMappingStateDigest(),
+		Epoch:         epoch,
+		StateDigest:   stateDigest,
 		Status:        status,
 		Error:         errText,
-		TimestampMS:   time.Now().UnixMilli(),
+		TimestampMS:   0,
 	}
-	_ = txalloWriteAtomicJSON(filepath.Join(r.node.DataDir, txalloDynamicMappingAckName), ack)
+	latestAck := protocolAck
+	latestAck.TimestampMS = time.Now().UnixMilli()
+	latestPath := filepath.Join(r.node.DataDir, txalloDynamicMappingAckName)
+	if err := txalloWriteAtomicJSON(latestPath, latestAck); err != nil {
+		return err
+	}
+	return txalloPublishImmutableJSON(txalloMappingAckEpochPath(r.node.DataDir, epoch), protocolAck)
 }
 
 func (r *NodeRuntime) startTxAlloMappingWatcher(ctx context.Context) {
@@ -662,17 +904,38 @@ func (r *NodeRuntime) startTxAlloMappingWatcher(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
-		lastAckSignature := ""
+		lastPublishedSignature := ""
 		for {
+			beforeEpoch := refresher.TxAlloMappingEpoch()
 			err := refresher.RefreshTxAlloMapping()
+			if err != nil && txalloControlFileTransient(err) {
+				// A sharing/access/lock window is transport-not-ready, not a mapping
+				// rejection. Never freeze an error ACK for a transient condition.
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					continue
+				}
+			}
+			epoch := refresher.TxAlloMappingEpoch()
+			digest := refresher.TxAlloMappingStateDigest()
+			if err != nil {
+				// A non-transient validation/I/O failure while reading N+1 is a
+				// permanent fail-closed rejection for that requested epoch.
+				epoch = beforeEpoch + 1
+				digest = ""
+			}
 			errText := ""
 			if err != nil {
 				errText = err.Error()
 			}
-			signature := fmt.Sprintf("%d|%s|%s", refresher.TxAlloMappingEpoch(), refresher.TxAlloMappingStateDigest(), errText)
-			if signature != lastAckSignature {
-				r.writeTxAlloMappingAck(err)
-				lastAckSignature = signature
+			signature := fmt.Sprintf("%d|%s|%s", epoch, digest, errText)
+			if signature != lastPublishedSignature {
+				if writeErr := r.writeTxAlloMappingAck(epoch, digest, err); writeErr == nil {
+					// Advance only after durable immutable ACK publication succeeds.
+					lastPublishedSignature = signature
+				}
 			}
 			select {
 			case <-ctx.Done():
@@ -689,30 +952,30 @@ func txalloWaitMappingAcks(ctx context.Context, nodes []NodePlan, epoch uint64, 
 	}
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
+	lastTransient := map[string]string{}
 	for {
 		complete := true
+		pending := make([]string, 0)
 		for _, node := range nodes {
-			raw, err := os.ReadFile(filepath.Join(node.DataDir, txalloDynamicMappingAckName))
-			if os.IsNotExist(err) {
+			path := txalloMappingAckEpochPath(node.DataDir, epoch)
+			raw, err := txalloReadFileStable(path)
+			if os.IsNotExist(err) || txalloControlFileTransient(err) {
 				complete = false
+				pending = append(pending, node.NodeID)
+				if err != nil && !os.IsNotExist(err) {
+					lastTransient[node.NodeID] = err.Error()
+				}
 				continue
 			}
 			if err != nil {
-				return err
+				return fmt.Errorf("TxAllo mapping ACK read node=%s epoch=%d: %w", node.NodeID, epoch, err)
 			}
 			var ack txalloMappingAckV222
 			if err := json.Unmarshal(raw, &ack); err != nil {
-				return fmt.Errorf("TxAllo mapping ACK decode: %w", err)
+				return fmt.Errorf("TxAllo mapping ACK decode node=%s epoch=%d: %w", node.NodeID, epoch, err)
 			}
-			if ack.SchemaVersion != txalloDynamicMappingAckSchema || ack.NodeID != node.NodeID {
-				return fmt.Errorf("TxAllo mapping ACK schema/node mismatch")
-			}
-			if ack.Epoch < epoch {
-				complete = false
-				continue
-			}
-			if ack.Epoch > epoch {
-				return fmt.Errorf("TxAllo mapping ACK advanced past requested epoch")
+			if ack.SchemaVersion != txalloDynamicMappingAckSchema || ack.NodeID != node.NodeID || ack.Epoch != epoch {
+				return fmt.Errorf("TxAllo mapping ACK schema/node/epoch mismatch node=%s epoch=%d", node.NodeID, epoch)
 			}
 			if ack.Status == "error" {
 				return fmt.Errorf("TxAllo node %s rejected mapping epoch %d: %s", node.NodeID, epoch, ack.Error)
@@ -720,13 +983,14 @@ func txalloWaitMappingAcks(ctx context.Context, nodes []NodePlan, epoch uint64, 
 			if ack.Status != "ok" || ack.StateDigest != stateDigest {
 				return fmt.Errorf("TxAllo node %s mapping ACK digest mismatch at epoch %d", node.NodeID, epoch)
 			}
+			delete(lastTransient, node.NodeID)
 		}
 		if complete {
 			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("TxAllo mapping ACK barrier: %w", ctx.Err())
+			return fmt.Errorf("TxAllo mapping ACK barrier epoch=%d pending=%s transient=%v: %w", epoch, strings.Join(pending, ","), lastTransient, ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -761,7 +1025,7 @@ func (r *NodeRuntime) appendTxAlloEpochLifecycle(event LifecycleEvent) {
 	txalloEpochFeedMu.Lock()
 	defer txalloEpochFeedMu.Unlock()
 	path := filepath.Join(r.node.DataDir, txalloDynamicEpochFeedName)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := txalloOpenAppendFileStable(path, 0o644)
 	if err != nil {
 		return
 	}
@@ -782,7 +1046,7 @@ func newTxAlloEpochFeedReaderV22() *txalloEpochFeedReaderV22 {
 func (reader *txalloEpochFeedReaderV22) poll(nodes []NodePlan) error {
 	for _, node := range nodes {
 		path := filepath.Join(node.DataDir, txalloDynamicEpochFeedName)
-		f, err := os.Open(path)
+		f, err := txalloOpenFileStable(path)
 		if os.IsNotExist(err) {
 			continue
 		}

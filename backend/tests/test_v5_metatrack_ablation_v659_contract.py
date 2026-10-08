@@ -38,7 +38,8 @@ def test_v674_formal_ablations_are_single_variable_by_removed_innovation():
     assert cons["block_producer"]=="time_or_count_block_producer"
     state=plugins(blocks["metatrack_ab_state"]); assert {k for k in set(full)|set(state) if full.get(k)!=state.get(k)}=={"state_access"}
     compact=blocks["metatrack_ab_state"].replace(" ","").lower()
-    for token in ("ablation_no_coaccess_sharding_v675:true","batch_entry_state_prefetch:false","ablation_on_demand_state_fetch_v661:true","batch_remote_writeback:false","final_version_batch_writeback:false"): assert token in compact
+    assert "ablation_no_coaccess_sharding_v675:true" not in compact
+    for token in ("batch_entry_state_prefetch:false","ablation_on_demand_state_fetch_v661:true","batch_remote_writeback:false","final_version_batch_writeback:false"): assert token in compact
     for mid in ("metatrack_latest","metatrack_ab_track","metatrack_ab_cons","metatrack_ab_state"):
         compact=blocks[mid].replace(" ","").lower()
         for token in ('version_liveness:true','version_liveness_indexed:true','single_final_seal:true'): assert token in compact
@@ -65,6 +66,7 @@ def test_v675_state_access_remains_modular_and_no_coaccess_sharding_is_the_only_
     assert 'state_access: "metatrack_home_exact_access"' in no_state_prefetch
     assert "ablation_no_coaccess_sharding_v675: true" not in full
     assert "ablation_no_coaccess_sharding_v675: true" in no_coaccess
+    assert "ablation_no_coaccess_sharding_v675: true" not in no_state_prefetch
     assert "ablation_on_demand_state_fetch_v661: true" in no_state_prefetch
 
 

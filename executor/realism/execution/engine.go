@@ -35,6 +35,8 @@ type Result struct {
 	BlockSTMMetrics                BlockSTMMetrics   `json:"block_stm_metrics,omitempty"`
 	SerialEquivalent               bool              `json:"serial_equivalent,omitempty"`
 	TransactionExecutionMS         int64             `json:"transaction_execution_ms,omitempty"`
+	TransactionExecutionUS         int64             `json:"transaction_execution_us,omitempty"`
+	TransactionExecutionNS         int64             `json:"transaction_execution_ns,omitempty"`
 	DeterministicMaterializationMS int64             `json:"deterministic_materialization_ms,omitempty"`
 	StateCommitmentMS              int64             `json:"state_commitment_ms,omitempty"`
 	StateRootVersion               string            `json:"state_root_version,omitempty"`

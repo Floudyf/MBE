@@ -127,6 +127,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	transactionPlacementRows := [][]string{}
 	dependencyRows := [][]string{}
 	remoteStateRows := [][]string{}
+	// MBE_METATRACK_VARIANCE_DIAG_V30_CLIENT
+	// Observation only: one compact row per completed client RouteBatch.
+	metatrackRouteBatchTimelineRowsV30 := [][]string{}
 	txalloPlacementRows := [][]string{}
 	var txalloBootstrapEvidence map[string]any
 	var txalloBootstrapMapping map[string]string
@@ -134,6 +137,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	var txalloDynamic txalloDynamicAllocationRuntime
 	var txalloDynamicEnabled bool
 	var txalloFeedReader *txalloEpochFeedReaderV22
+	var txalloReplicaFeedReader *txalloReplicaFeedReaderV229
 	var txalloBlockIndex *txalloDynamicBlockIndexV222
 	resolvedAccessRows := []resolvedAccessEntry{}
 	connections := map[string]net.Conn{}
@@ -180,6 +184,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		txalloDynamic = dynamic
 		txalloDynamicEnabled = true
 		txalloFeedReader = newTxAlloEpochFeedReaderV22()
+		if !usesStatelessDirectExecution(plugins.Routing) && dynamic.TxAlloStatefulReplicaEnabled() {
+			txalloReplicaFeedReader = newTxAlloReplicaFeedReaderV229()
+		}
 		var blockErr error
 		txalloBlockIndex, blockErr = txalloLoadDynamicBlockIndexV222(outDir, plan.WorkloadPlan)
 		if blockErr != nil {
@@ -227,7 +234,10 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	windowProducerV663, modularWindowV663 := plugins.BlockProducer.(metaTrackConsensusWindowProducer)
 	transactionFrontierV656Enabled := isMetaTrackRoutingPlugin(plugins.Routing) && bindBatchProjectionMetadata
 	leaderStreamingWindowV2 := transactionFrontierV656Enabled && plugins.BlockProducer != nil && plugins.BlockProducer.ID() == metaTrackNLWindowProducerV669ID
-	clientWindowBufferingV6568 := transactionFrontierV656Enabled && modularWindowV663 && !leaderStreamingWindowV2 && !streamPartitionInvariantV658
+	// MBE_METATRACK_COMPLETE_WINDOW_V671_CLIENT
+	// Keep the historical leaderStreamingWindowV2 identifier for diagnostics,
+	// but official V669 now uses the existing complete-window planner below.
+	clientWindowBufferingV6568 := transactionFrontierV656Enabled && modularWindowV663 && !streamPartitionInvariantV658
 	consensusPredecessorsV656 := newMetaTrackConsensusPredecessorTrackerV656()
 	criticalWidthWindowV6568 := newMetaTrackCriticalWidthWindowPlannerV6568()
 
@@ -358,6 +368,8 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if len(records) == 0 {
 			return nil
 		}
+		routeBatchReadyAtV30 := time.Now()
+		routeBatchSubmissionStartedAtV30 := time.Time{}
 		preparedV6568 := make([]metaTrackPreparedRecordV6568, 0, len(records))
 		if bindExecutionRouting {
 			for index := range records {
@@ -372,6 +384,12 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					// consensus-bound Calvin block order. Client/source order must not
 					// be signed into ExecutionRouting.StateVersions.
 					records[index].StateVersions = nil
+				} else if plugins.Routing.ID() == txalloRoutingID {
+					// MBE_TXALLO_PAPER_REPLICA_V229: the Stateful paper substrate
+					// replicates every non-commutative logical state key, including
+					// account state. These versions are a state-consistency carrier only;
+					// TxAllo G/A account allocation remains unchanged.
+					records[index].StateVersions = txalloStatefulReplicaDependenciesForRecord(records[index], ordinal, lastWriterOrdinal)
 				} else {
 					records[index].StateVersions = stateVersionDependenciesForRecord(records[index], ordinal, lastWriterOrdinal)
 				}
@@ -450,8 +468,12 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					recordByIndex[rr.Index] = rr
 				}
 				mappingDigest := ""
+				mappingStateDigest := ""
 				if txalloBootstrapEvidence != nil {
 					mappingDigest = strings.TrimSpace(fmt.Sprint(txalloBootstrapEvidence["mapping_digest"]))
+				}
+				if txalloDynamic != nil {
+					mappingStateDigest = txalloDynamic.TxAlloMappingStateDigest()
 				}
 				for _, placement := range routePlan.TransactionPlacements {
 					rr := recordByIndex[placement.TxIndex]
@@ -474,7 +496,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 					}
 					txalloCrossByLogical[placement.LogicalID] = placement.TargetShard != "" && placement.TargetShard != placement.HomeShard
 					sort.Strings(involved)
-					txalloPlacementRows = append(txalloPlacementRows, []string{fmt.Sprint(routePlan.BatchIndex), placement.LogicalID, fmt.Sprint(placement.TxIndex), sender, receiver, senderSource, receiverSource, placement.HomeShard, placement.TargetShard, strings.Join(involved, "|"), placement.HomeShard, placement.ExecutionShard, placement.TargetShard, fmt.Sprint(placement.TargetShard != "" && placement.TargetShard != placement.HomeShard), fmt.Sprint(placement.RemoteAccessCount), mappingDigest, placement.Reason, routePlan.PlanDigest})
+					txalloPlacementRows = append(txalloPlacementRows, []string{fmt.Sprint(routePlan.BatchIndex), placement.LogicalID, fmt.Sprint(placement.TxIndex), sender, receiver, senderSource, receiverSource, placement.HomeShard, placement.TargetShard, strings.Join(involved, "|"), placement.HomeShard, placement.ExecutionShard, placement.TargetShard, fmt.Sprint(placement.TargetShard != "" && placement.TargetShard != placement.HomeShard), fmt.Sprint(placement.RemoteAccessCount), fmt.Sprint(placement.RoutingEpoch), mappingDigest, mappingStateDigest, placement.Reason, routePlan.PlanDigest})
 				}
 			}
 			for _, placement := range routePlan.TransactionPlacements {
@@ -540,14 +562,16 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			}
 		}
 		if transactionFrontierV656Enabled {
+			routeBatchSubmissionStartedAtV30 = time.Now()
 			if leaderStreamingWindowV2 {
-				// Evaluate V669 on the just-completed global RouteBatch, sign only
-				// its cumulative-prefix certificate, then submit it immediately.
-				streamed, err := criticalWidthWindowV6568.PushBatchAdaptiveNLV669StreamingV2(preparedV6568, plugins.BlockProducer.BlockSize())
+				// MBE_METATRACK_COMPLETE_WINDOW_V671_CLIENT
+				// Close the logical N/L window before its members are submitted.
+				// The existing per-transaction pacer still controls physical rate.
+				closed, err := windowProducerV663.PushMetaTrackRouteBatch(criticalWidthWindowV6568, preparedV6568, plugins.BlockProducer.BlockSize())
 				if err != nil {
 					return err
 				}
-				for _, prepared := range streamed {
+				for _, prepared := range closed {
 					if err := submitRecord(prepared.Record, prepared.Route); err != nil {
 						return err
 					}
@@ -572,11 +596,22 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				}
 			}
 		}
+		if bindBatchProjectionMetadata && !routeBatchSubmissionStartedAtV30.IsZero() {
+			routeBatchSubmissionFinishedAtV30 := time.Now()
+			metatrackRouteBatchTimelineRowsV30 = append(metatrackRouteBatchTimelineRowsV30, []string{
+				fmt.Sprint(batchIndex), fmt.Sprint(batchIndex + 1), fmt.Sprint(len(records)),
+				fmt.Sprint(routeBatchReadyAtV30.UnixMilli()), fmt.Sprint(routeBatchSubmissionStartedAtV30.UnixMilli()),
+				fmt.Sprint(routeBatchSubmissionFinishedAtV30.UnixMilli()),
+				fmt.Sprint(routeBatchSubmissionStartedAtV30.Sub(routeBatchReadyAtV30).Milliseconds()),
+				fmt.Sprint(routeBatchSubmissionFinishedAtV30.Sub(routeBatchSubmissionStartedAtV30).Milliseconds()),
+				fmt.Sprint(routePlanUS), routePlanDigest,
+			})
+		}
 		batchIndex++
 		return nil
 	}
 	// MBE_TXALLO_DYNAMIC_V222: block-height epoch barrier. A source epoch is
-	// exactly 300 source blocks relative to the first evaluation block. The
+	// exactly 15 source blocks in the explicit MBE-adapted profile (paper reference tau1=300). The
 	// prior epoch must be terminally committed before its A/G update can affect
 	// the next epoch. The final partial epoch is never used as future training.
 	txalloEpochBucket := int64(-1)
@@ -587,6 +622,15 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 		if len(records) > 0 {
 			if err := txalloWaitCommittedEpoch(ctx, plan.NodeConfigs, records, txalloCrossByLogical, statelessDirect, txalloFeedReader); err != nil {
+				return err
+			}
+		}
+		if !statelessDirect && txalloDynamic.TxAlloStatefulReplicaEnabled() {
+			expectedReplicaTokens := txalloExpectedReplicaTokensV229(records)
+			if err := txalloWaitReplicaConvergenceV229(ctx, plan.NodeConfigs, expectedReplicaTokens, txalloReplicaFeedReader); err != nil {
+				return err
+			}
+			if err := txalloDynamic.ConfirmTxAlloReplicaConvergence(uint64(epoch), stableJSONDigest(expectedReplicaTokens), len(expectedReplicaTokens)); err != nil {
 				return err
 			}
 		}
@@ -740,7 +784,12 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 	}
 	if len(txalloPlacementRows) > 0 {
-		if err := metrics.WriteCSV(filepath.Join(outDir, "txallo_transaction_placement.csv"), []string{"batch_index", "logical_id", "tx_index", "sender_account", "receiver_account", "sender_mapping_source", "receiver_mapping_source", "sender_shard", "receiver_shard", "involved_shards", "home_shard", "execution_shard", "target_shard", "txallo_cross_shard", "cross_shard_edge_count", "mapping_digest", "reason", "plan_digest"}, txalloPlacementRows); err != nil {
+		if err := metrics.WriteCSV(filepath.Join(outDir, "txallo_transaction_placement.csv"), []string{"batch_index", "logical_id", "tx_index", "sender_account", "receiver_account", "sender_mapping_source", "receiver_mapping_source", "sender_shard", "receiver_shard", "involved_shards", "home_shard", "execution_shard", "target_shard", "txallo_cross_shard", "cross_shard_edge_count", "routing_epoch", "mapping_digest", "mapping_state_digest", "reason", "plan_digest"}, txalloPlacementRows); err != nil {
+			return err
+		}
+	}
+	if len(metatrackRouteBatchTimelineRowsV30) > 0 {
+		if err := metrics.WriteCSV(filepath.Join(outDir, "metatrack_route_batch_timeline.csv"), []string{"batch_index", "route_batch_sequence", "tx_count", "batch_ready_at_ms", "submission_started_at_ms", "submission_finished_at_ms", "ready_to_submit_ms", "submission_duration_ms", "route_plan_us", "route_plan_digest"}, metatrackRouteBatchTimelineRowsV30); err != nil {
 			return err
 		}
 	}

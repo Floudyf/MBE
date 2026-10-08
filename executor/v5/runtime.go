@@ -325,109 +325,112 @@ type stateFetchResponseTask struct {
 }
 
 type NodeRuntime struct {
-	plan                               Plan
-	node                               NodePlan
-	peers                              []p2p.Peer
-	transport                          *p2p.Transport
-	consensus                          *pbft.State
-	sendToNodeHook                     func(context.Context, string, p2p.MessageEnvelope) error
-	pool                               *mempool.Mempool
-	proposer                           *realblock.Proposer
-	db                                 *state.DB
-	store                              *storage.BlockStore
-	mu                                 sync.Mutex
-	commitMu                           sync.Mutex
-	commitTasks                        chan commitTask
-	proposalWakeup                     chan struct{}
-	commitWorkerCancel                 context.CancelFunc
-	commitWorkerContext                context.Context
-	commitWorkerWG                     sync.WaitGroup
-	queuedCommitTasks                  map[string]bool
-	stateFetchTasks                    chan stateFetchTask
-	stateFetchWorkerCancel             context.CancelFunc
-	stateFetchWorkerContext            context.Context
-	stateFetchWorkerWG                 sync.WaitGroup
-	stateFetchResponseTasks            chan stateFetchResponseTask
-	stateFetchResponseWG               sync.WaitGroup
-	stateFetchSnapshotMu               sync.Mutex
-	proposals                          map[string]realblock.Block
-	deferredPrePrepares                map[uint64]deferredPrePrepare
-	votes                              map[string]map[string]bool
-	committed                          map[string]bool
-	committing                         map[string]bool
-	committedHeight                    uint64
-	committedHash                      string
-	commitPhase                        string
-	commitPhaseHeight                  uint64
-	commitPhaseHash                    string
-	lastProgressAt                     int64
-	pendingCommits                     map[uint64]realblock.Block
-	pendingCommitErrors                map[uint64]string
-	proposalInFlight                   bool
-	proposalInFlightHash               string
-	proposalStartedAt                  time.Time
-	proposalLastBroadcastAt            time.Time
-	proposalRetransmitCount            int
-	proposalWorkUnits                  atomic.Int64
-	proposalPlanningInFlight           bool
-	proposalPlanningView               uint64
-	proposalPlanningHeight             uint64
-	proposalPlanningAlgorithmID        string
-	proposalPlanningPhase              string
-	proposalPlanningStartedAt          time.Time
-	proposalPlanningProgressAt         time.Time
-	proposalPlanningWorkUnits          int64
-	proposalPlanningDetailCount        int64
-	proposalPlanningCancel             context.CancelFunc
-	proposalPlanningGeneration         uint64
-	proposalPlanningCancelReason       string
-	proposalPlanningWG                 sync.WaitGroup
-	verifiedExecutionPlans             map[string]verifiedExecutionPlanRecord
-	viewChangeStartedAt                time.Time
-	viewChangeLastBroadcast            time.Time
-	viewChangeRetransmits              int
-	viewChangeTarget                   uint64
-	lastProposalError                  string
-	lastCommitFailure                  CommitFailure
-	fatalPersistenceError              string
-	fatalExecutionError                string
-	fatalPlanningError                 string
-	blockExecutionProgress             execution.BlockSTMProgress
-	lastCatchupRequest                 time.Time
-	catchupTargetHeight                uint64
-	catchupResponsesInFlight           int
-	lastCrossShardRetry                time.Time
-	relaySource                        map[string]Relay
-	pendingOutboundRelays              map[string]Relay
-	pendingFinalizeMessages            map[string]Finalize
-	outboundRelayRetryAfter            map[string]time.Time
-	finalizeRetryAfter                 map[string]time.Time
-	outboundRelaySendErrors            map[string]string
-	finalizeSendErrors                 map[string]string
-	crossEventSeen                     map[string]bool
-	relayAdmissionFailures             map[string]string
-	events                             []Event
-	lifecycle                          []LifecycleEvent
-	consensusRows                      [][]string
-	executionRows                      [][]string
-	dependencyStructureBlocks          []metaTrackDependencyStructureBlockCapture
-	schedulerRows                      [][]string
-	schedulerAggregate                 schedulerSummary
-	schedulerRowsDropped               int64
-	commitRows                         [][]string
-	logicalPhysicalRows                [][]string
-	chainRows                          [][]string
-	blockExecutionSummaries            []map[string]any
-	executionPlans                     []map[string]any
-	proposalEvidence                   []map[string]any
-	txExecutionTraceRows               [][]string
-	observedStateAccessRows            [][]string
-	businessExecutionRows              [][]string
-	stateDeltaRows                     [][]string
-	planDigestRows                     [][]string
-	remoteStateRows                    [][]string
-	initialBusinessStateV204           map[string]string // MBE_TXALLO_ADAPTATION_V204 evidence-only pre-runtime business projection
-	runtimeEventRows                   [][]string
+	plan                         Plan
+	node                         NodePlan
+	peers                        []p2p.Peer
+	transport                    *p2p.Transport
+	consensus                    *pbft.State
+	sendToNodeHook               func(context.Context, string, p2p.MessageEnvelope) error
+	pool                         *mempool.Mempool
+	proposer                     *realblock.Proposer
+	db                           *state.DB
+	store                        *storage.BlockStore
+	mu                           sync.Mutex
+	commitMu                     sync.Mutex
+	commitTasks                  chan commitTask
+	proposalWakeup               chan struct{}
+	commitWorkerCancel           context.CancelFunc
+	commitWorkerContext          context.Context
+	commitWorkerWG               sync.WaitGroup
+	queuedCommitTasks            map[string]bool
+	stateFetchTasks              chan stateFetchTask
+	stateFetchWorkerCancel       context.CancelFunc
+	stateFetchWorkerContext      context.Context
+	stateFetchWorkerWG           sync.WaitGroup
+	stateFetchResponseTasks      chan stateFetchResponseTask
+	stateFetchResponseWG         sync.WaitGroup
+	stateFetchSnapshotMu         sync.Mutex
+	proposals                    map[string]realblock.Block
+	deferredPrePrepares          map[uint64]deferredPrePrepare
+	votes                        map[string]map[string]bool
+	committed                    map[string]bool
+	committing                   map[string]bool
+	committedHeight              uint64
+	committedHash                string
+	commitPhase                  string
+	commitPhaseHeight            uint64
+	commitPhaseHash              string
+	lastProgressAt               int64
+	pendingCommits               map[uint64]realblock.Block
+	pendingCommitErrors          map[uint64]string
+	proposalInFlight             bool
+	proposalInFlightHash         string
+	proposalStartedAt            time.Time
+	proposalLastBroadcastAt      time.Time
+	proposalRetransmitCount      int
+	proposalWorkUnits            atomic.Int64
+	proposalPlanningInFlight     bool
+	proposalPlanningView         uint64
+	proposalPlanningHeight       uint64
+	proposalPlanningAlgorithmID  string
+	proposalPlanningPhase        string
+	proposalPlanningStartedAt    time.Time
+	proposalPlanningProgressAt   time.Time
+	proposalPlanningWorkUnits    int64
+	proposalPlanningDetailCount  int64
+	proposalPlanningCancel       context.CancelFunc
+	proposalPlanningGeneration   uint64
+	proposalPlanningCancelReason string
+	proposalPlanningWG           sync.WaitGroup
+	verifiedExecutionPlans       map[string]verifiedExecutionPlanRecord
+	viewChangeStartedAt          time.Time
+	viewChangeLastBroadcast      time.Time
+	viewChangeRetransmits        int
+	viewChangeTarget             uint64
+	lastProposalError            string
+	lastCommitFailure            CommitFailure
+	fatalPersistenceError        string
+	fatalExecutionError          string
+	fatalPlanningError           string
+	blockExecutionProgress       execution.BlockSTMProgress
+	lastCatchupRequest           time.Time
+	catchupTargetHeight          uint64
+	catchupResponsesInFlight     int
+	lastCrossShardRetry          time.Time
+	relaySource                  map[string]Relay
+	pendingOutboundRelays        map[string]Relay
+	pendingFinalizeMessages      map[string]Finalize
+	outboundRelayRetryAfter      map[string]time.Time
+	finalizeRetryAfter           map[string]time.Time
+	outboundRelaySendErrors      map[string]string
+	finalizeSendErrors           map[string]string
+	crossEventSeen               map[string]bool
+	relayAdmissionFailures       map[string]string
+	events                       []Event
+	lifecycle                    []LifecycleEvent
+	consensusRows                [][]string
+	executionRows                [][]string
+	dependencyStructureBlocks    []metaTrackDependencyStructureBlockCapture
+	schedulerRows                [][]string
+	schedulerAggregate           schedulerSummary
+	schedulerRowsDropped         int64
+	commitRows                   [][]string
+	logicalPhysicalRows          [][]string
+	chainRows                    [][]string
+	blockExecutionSummaries      []map[string]any
+	executionPlans               []map[string]any
+	proposalEvidence             []map[string]any
+	txExecutionTraceRows         [][]string
+	observedStateAccessRows      [][]string
+	businessExecutionRows        [][]string
+	stateDeltaRows               [][]string
+	planDigestRows               [][]string
+	remoteStateRows              [][]string
+	initialBusinessStateV204     map[string]string // MBE_TXALLO_ADAPTATION_V204 evidence-only pre-runtime business projection
+	runtimeEventRows             [][]string
+	// MBE_METATRACK_VARIANCE_DIAG_V30_RUNTIME
+	metaTrackProposalDiagRowsV30       [][]string
+	metaTrackAsyncDrainDiagRowsV30     [][]string
 	runtimeEventTotal                  int64
 	runtimeEventRowsDropped            int64
 	runtimeMetricCounts                map[string]int64
@@ -490,6 +493,8 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 		return err
 	}
 	interval := r.blockInterval()
+	stopPorygonLeaseWatch := r.porygonV54StartLeaseWatch(ctx, interval)
+	defer stopPorygonLeaseWatch()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	statusInterval := runtimeStatusWriteInterval(interval)
@@ -501,6 +506,7 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 		case <-r.proposalWakeup:
 			r.handleMetaTrackDurableProposalWakeupV654(ctx)
 		case <-ticker.C:
+			r.porygonV54SweepLocalLease()
 			r.retryPendingRelays()
 			r.retryPendingCrossShardMessages(ctx)
 			// Pre-consensus planning must never pin an obsolete primary after a
@@ -1311,6 +1317,9 @@ func floatValue(value any) float64 {
 }
 
 func (r *NodeRuntime) Start(ctx context.Context) error {
+	if err := r.loadTxAlloReplicaStateV229(); err != nil {
+		return fmt.Errorf("TxAllo paper replica state load: %w", err)
+	}
 	r.startStateFetchWorkers(ctx)
 	if err := r.transport.Start(ctx); err != nil {
 		r.stopStateFetchWorkers()
@@ -1326,6 +1335,7 @@ func (r *NodeRuntime) Stop() error {
 	r.stopCommitWorker()
 	r.stopStateFetchWorkers()
 	calvinReadStates.Delete(r)
+	r.cleanupTxAlloReplicaStateV229()
 	cleanupPBFTCompactRuntime(r) // MBE_SHARED_PBFT_COMPACT_V1_RUNTIME
 	return r.transport.Stop()
 }
@@ -1793,10 +1803,13 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		return
 	}
 	r.mu.Unlock()
+	r.porygonProposalPhaseV532("PRE_ORDERING_WINDOW", r.porygonConsensusNextHeight(), "", true, "")
 	if !r.porygonPipelineOrderingWindowOpen() {
+		r.porygonProposalPhaseV532("ORDERING_WINDOW_BLOCKED", r.porygonConsensusNextHeight(), "", false, "")
 		return
 	}
 	nextHeight := r.proposer.NextHeight
+	r.porygonProposalPhaseV532("ORDERING_WINDOW_OPEN", nextHeight, "", true, "")
 	readySystemDeltas, systemDrainPending := r.remoteStateDeltaDrainState(nextHeight)
 
 	// SystemDeltaReady also acts as the block-producer wake-up signal.
@@ -1816,6 +1829,7 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 		porygonMaintenanceReady = r.porygonPaperMaintenanceReady(nextHeight)
 		porygonPaperRoundBlocked = r.porygonPaperProposalRoundBlocked(nextHeight)
+		r.porygonProposalPhaseV532("ROUND_GATE", nextHeight, "", !porygonPaperRoundBlocked, fmt.Sprintf("maintenance=%t;blocked=%t", porygonMaintenanceReady, porygonPaperRoundBlocked))
 	}
 	input := BlockProductionInput{
 		Pool:                            r.pool,
@@ -1831,12 +1845,17 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		RoutingPluginID:                 routingPluginID,
 		MetaTrackExactVersionReadyV6566: r.metaTrackExactVersionReadyV6566,
 		MetaTrackWorkerCountV6567:       blockExecutorWorkerCountFromProfile(r.pluginSnapshot),
+		MetaTrackProposalObserverV30:    r.recordMetaTrackProposalV30,
 	}
 	if !r.plugins.BlockProducer.ShouldProduce(input) {
+		r.porygonProposalPhaseV532("SHOULD_PRODUCE_FALSE", nextHeight, "", false, "")
 		return
 	}
+	r.porygonProposalPhaseV532("SHOULD_PRODUCE_TRUE", nextHeight, "", true, "")
 
+	r.porygonProposalPhaseV532("BUILD_CANDIDATE_BEGIN", nextHeight, "", true, "")
 	block, err := r.plugins.BlockProducer.BuildCandidate(input)
+	r.porygonProposalPhaseV532("BUILD_CANDIDATE_END", nextHeight, block.BlockHash, err == nil, porygonProposalPhaseErrV532(err))
 	if err != nil && errors.Is(err, errMetaTrackBatchProjectionIncomplete) {
 		if systemDrainPending {
 			block = r.buildSystemDeltaDrainBlock(input.Now, readySystemDeltas)
@@ -1878,9 +1897,32 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 			block = admitted
 		}
 	}
+	if r.txalloReplicaAdmissionEnabledV229(block) {
+		originalCandidate := append([]tx.SignedTransaction(nil), block.TxList...)
+		admitted, deferred, admissionErr := r.admitTxAlloReplicaCandidateV229(block)
+		if admissionErr != nil {
+			r.pool.ReleaseReserved(originalCandidate)
+			r.setLastProposalError(admissionErr)
+			return
+		}
+		if len(deferred) > 0 {
+			r.pool.ReleaseReserved(deferred)
+		}
+		if len(admitted.TxList) == 0 {
+			if systemDrainPending {
+				block = r.buildSystemDeltaDrainBlock(input.Now, readySystemDeltas)
+			} else {
+				return
+			}
+		} else {
+			block = admitted
+		}
+	}
 	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 		var witnessErr error
+		r.porygonProposalPhaseV532("ENSURE_WITNESS_BEGIN", block.Height, block.BlockHash, true, "")
 		block, witnessErr = r.ensurePorygonWitnessedBlock(ctx, block)
+		r.porygonProposalPhaseV532("ENSURE_WITNESS_END", block.Height, block.BlockHash, witnessErr == nil, porygonProposalPhaseErrV532(witnessErr))
 		if witnessErr != nil {
 			r.pool.ReleaseReserved(block.TxList)
 			r.setLastProposalError(witnessErr)
@@ -1897,7 +1939,9 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 		return
 	}
 
+	r.porygonProposalPhaseV532("PLAN_BLOCK_BEGIN", block.Height, block.BlockHash, true, "")
 	scheduledBlock, scheduleErr := r.scheduleBlock(block)
+	r.porygonProposalPhaseV532("PLAN_BLOCK_END", block.Height, scheduledBlock.BlockHash, scheduleErr == nil, porygonProposalPhaseErrV532(scheduleErr))
 	if scheduleErr != nil {
 		r.pool.ReleaseReserved(block.TxList)
 		r.mu.Lock()
@@ -1909,12 +1953,15 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 	block = scheduledBlock
 	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 		r.porygonRememberProposalReservation(block.BlockHash, block.Height, reservedForProposal)
+		r.porygonProposalPhaseV532("RESERVATION_RECORDED", block.Height, block.BlockHash, true, fmt.Sprintf("items=%d", len(reservedForProposal)))
 	}
 	proposalWorkUnits := r.estimateProposalValidationWork(block)
 	for _, item := range block.TxList {
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "proposed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, BlockHeight: block.Height, Success: true})
 	}
+	r.porygonProposalPhaseV532("BEGIN_PBFT_BEGIN", block.Height, block.BlockHash, true, fmt.Sprintf("work=%d", proposalWorkUnits))
 	if err := r.beginPBFTProposal(ctx, block, proposalWorkUnits); err != nil {
+		r.porygonProposalPhaseV532("BEGIN_PBFT_END", block.Height, block.BlockHash, false, err.Error())
 		if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 			r.porygonReleaseProposalReservation(block.BlockHash, reservedForProposal)
 		} else {
@@ -3748,6 +3795,17 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
 	executionSnapshot, baseStateCommitment, err := applyStateDeltaToSnapshotWithCommitment(stateBefore, baseStateCommitment, remoteDeltas, statePartitionID, block.Height)
+	if err == nil && r.txalloStatefulReplicaEnabled() {
+		var projected bool
+		executionSnapshot, projected, err = r.prepareTxAlloReplicaProjectionV229(block, executionSnapshot)
+		if err == nil && projected && baseStateCommitment == nil {
+			err = fmt.Errorf("TxAllo exact historical read projection requires authenticated physical base commitment")
+		}
+		// For a historical read-only value, BaseStateSnapshot supplies the value
+		// observed by execution while BaseStateCommitment intentionally remains the
+		// latest physical durable root. Serial applies only this block's real writes
+		// to that root, so a read projection never rewinds persistent state.
+	}
 	var optmeProjection optmeStatelessProjectionResult
 	if err == nil && r.optmeStatelessProjectionEnabled() {
 		executionSnapshot, optmeProjection, err = r.prepareOptMEStatelessProjection(ctx, block, stateBefore)
@@ -4014,6 +4072,15 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		"state_root_after_wal":        stateRootAfterWAL,
 		"per_block_full_snapshot":     stateMetrics.SnapshotCount > 0,
 		"receipt_tx_index_batch_mode": true,
+	}
+	if err := r.markTxAlloReplicaDurableV229(block, executed.ExecutionResult.TxDeltas); err != nil {
+		r.markTxAlloReplicaPostCommitFailureV229(err)
+	}
+	if err := r.replicateTxAlloCommittedBlockV229(ctx, block, executed.ExecutionResult.TxDeltas); err != nil {
+		// The business block is already durable and must never be rolled back here.
+		// Fail-stop the runtime; the client-side replica convergence barrier keeps
+		// the next TxAllo mapping epoch from becoming visible.
+		r.markTxAlloReplicaPostCommitFailureV229(err)
 	}
 	r.markRemoteStateDeltasApplied(block.SystemStateDeltas)
 	r.markLocalVersionedMaterialized(block.TxList)
@@ -4449,6 +4516,10 @@ func (r *NodeRuntime) publishMethodPreservingStateVersions(ctx context.Context, 
 }
 
 func (r *NodeRuntime) versionedRemoteWaveExecutionEnabled(block realblock.Block) bool {
+	if r.txalloStatefulReplicaEnabled() {
+		// MBE_TXALLO_STATEFUL_NO_REMOTE_WAVE_V2296: Stateful-TxAllo uses durable local replica/history projection only.
+		return false
+	}
 	if r.statelessCalvinRemoteStateEnabled() {
 		return false
 	}
@@ -5481,6 +5552,10 @@ func (r *NodeRuntime) publishStateVersion(key string, version uint64, value stri
 }
 
 func (r *NodeRuntime) stateVersionPublisher(block realblock.Block) StateVersionPublishFunc {
+	if r.txalloStatefulReplicaEnabled() {
+		// MBE_TXALLO_PAPER_REPLICA_V229: expose logical versions only after PBFT durability.
+		return nil
+	}
 	if len(r.shardIDs()) < 2 || !r.hasBatchRoutingControlPlane() {
 		return nil
 	}
@@ -6523,7 +6598,7 @@ func (r *NodeRuntime) handleStateDeltaApplyRequest(request StateDeltaApplyReques
 		// the separate contiguous receipt-visibility chain below: exact versions become
 		// readable once Home has received a predecessor-consistent immutable value,
 		// while durable DB materialization still waits for Home PBFT.
-		if request.ApplyOrigin != methodPreservingVersionedRemoteHomeOrigin {
+		if request.ApplyOrigin != methodPreservingVersionedRemoteHomeOrigin && request.ApplyOrigin != txalloPaperReplicaOrigin {
 			r.publishStateVersion(request.Key, request.ProducedVersion, request.Value)
 		}
 	}
@@ -6640,7 +6715,7 @@ func selectRemoteStateDeltasForHomeBlock(requests []StateDeltaApplyRequest, mate
 		if request.ApplyOrigin == calvinStatelessSameBlockOrigin {
 			continue
 		}
-		if request.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin && request.ProducedVersion > 0 && request.UpdateSemantics != "commutative_delta" {
+		if (request.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin || request.ApplyOrigin == txalloPaperReplicaOrigin) && request.ProducedVersion > 0 && request.UpdateSemantics != "commutative_delta" {
 			currentVersion := current[request.Key]
 			if request.ProducedVersion <= currentVersion {
 				// A duplicate already covered by an earlier materialized version may
@@ -6769,9 +6844,10 @@ func (r *NodeRuntime) publishSystemStateDeltaVersions(items []realblock.SystemSt
 		if item.ProducedVersion == 0 || item.UpdateSemantics == "commutative_delta" || item.Key == "" {
 			continue
 		}
-		if item.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin {
-			// v14 receipt visibility is already published by the contiguous Home
-			// chain. Durable commit only advances the materialized frontier below.
+		if item.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin || item.ApplyOrigin == txalloPaperReplicaOrigin {
+			// Stateless-TxAllo has a receipt-visible Home chain. Stateful-TxAllo
+			// replica versions are stricter: they become visible only after the
+			// target shard durable commit in markTxAlloReplicaDurableV229.
 			continue
 		}
 		r.publishStateVersion(item.Key, item.ProducedVersion, item.Value)
@@ -6818,7 +6894,7 @@ func (r *NodeRuntime) materializableRemoteStateDeltasInternal(block realblock.Bl
 			if item.ProducedVersion <= materialized[item.Key] {
 				continue
 			}
-			if enforceMethodContinuity && item.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin && item.PreviousVersion != materialized[item.Key] {
+			if enforceMethodContinuity && (item.ApplyOrigin == methodPreservingVersionedRemoteHomeOrigin || item.ApplyOrigin == txalloPaperReplicaOrigin) && item.PreviousVersion != materialized[item.Key] {
 				return nil, fmt.Errorf("method-preserving Home version chain mismatch key=%s previous=%d materialized=%d produced=%d", item.Key, item.PreviousVersion, materialized[item.Key], item.ProducedVersion)
 			}
 			materialized[item.Key] = item.ProducedVersion
@@ -7754,6 +7830,11 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	if err := r.writeRuntimeStatus(); err != nil {
 		return err
 	}
+	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+		if err := r.porygonV56WritePaperIdentity(filepath.Join(r.node.DataDir, "porygon_paper_lifecycle_v56.csv")); err != nil {
+			return err
+		}
+	}
 	if err := SaveJSON(filepath.Join(r.node.DataDir, "fault_policy.json"), map[string]any{"requested": r.plan.FaultPlan, "applied": r.plugins.Fault.Policy(r.plan.FaultPlan), "fault_plugin_id": r.plugins.Fault.ID()}); err != nil {
 		return err
 	}
@@ -7781,6 +7862,8 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	stateDeltaRows := append([][]string(nil), r.stateDeltaRows...)
 	planDigestRows := append([][]string(nil), r.planDigestRows...)
 	runtimeEventRows := append([][]string(nil), r.runtimeEventRows...)
+	metaTrackProposalDiagRowsV30 := append([][]string(nil), r.metaTrackProposalDiagRowsV30...)
+	metaTrackAsyncDrainDiagRowsV30 := append([][]string(nil), r.metaTrackAsyncDrainDiagRowsV30...)
 	runtimeMetricCounts := map[string]int64{}
 	for key, value := range r.runtimeMetricCounts {
 		runtimeMetricCounts[key] = value
@@ -7836,7 +7919,7 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "observed_state_access.csv"), []string{"node_id", "shard_id", "block_hash", "height", "tx_id", "original_index", "access_type", "state_key", "value_digest", "source"}, observedStateAccessRows); err != nil {
 		return err
 	}
-	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "business_execute_invocation_count_by_node.csv"), []string{"node_id", "shard_id", "block_height", "block_hash", "tx_id", "track", "attempt", "reason", "success", "final_completion", "duration_us", "duration_ns", "sojourn_ns", "state_wait_ns", "dependency_wait_ns", "queue_wait_ns", "attempt_start_offset_ns", "attempt_end_offset_ns"}, businessExecutionRows); err != nil {
+	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "business_execute_invocation_count_by_node.csv"), []string{"node_id", "shard_id", "block_height", "block_hash", "tx_id", "track", "attempt", "reason", "success", "final_completion", "duration_us", "duration_ns", "sojourn_ns", "state_wait_ns", "dependency_wait_ns", "queue_wait_ns", "attempt_start_offset_ns", "attempt_end_offset_ns", "fifo_ready_offset_ns", "fifo_release_offset_ns", "fifo_ready_blocked_ns", "fifo_initial_head_tx_id"}, businessExecutionRows); err != nil {
 		return err
 	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "state_delta_log.csv"), []string{"node_id", "shard_id", "block_hash", "height", "key", "value_digest"}, stateDeltaRows); err != nil {
@@ -7847,6 +7930,16 @@ func (r *NodeRuntime) WriteArtifacts() error {
 	}
 	if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "runtime_events.csv"), []string{"timestamp_ms", "event_type", "node_id", "shard_id", "tx_id", "block_hash", "height", "success", "error", "attributes_digest"}, runtimeEventRows); err != nil {
 		return err
+	}
+	if len(metaTrackProposalDiagRowsV30) > 0 {
+		if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "metatrack_proposal_timeline.csv"), []string{"timestamp_ms", "node_id", "shard_id", "height", "pool_depth_before_reserve", "reserved_tx_count", "complete_route_batch_count", "complete_route_batch_sequences", "first_incomplete_route_batch_sequence", "first_incomplete_have", "first_incomplete_expected", "selected_tx_count", "selected_route_batch_count", "selected_route_batch_sequences", "selection_error"}, metaTrackProposalDiagRowsV30); err != nil {
+			return err
+		}
+	}
+	if len(metaTrackAsyncDrainDiagRowsV30) > 0 {
+		if err := metrics.WriteCSV(filepath.Join(r.node.DataDir, "metatrack_async_drain_timeline.csv"), []string{"timestamp_ms", "node_id", "shard_id", "height", "block_hash", "home_shard", "item_count", "oldest_enqueued_at_ms", "drain_started_at_ms", "drain_finished_at_ms", "queue_delay_ms", "work_ms", "success", "error"}, metaTrackAsyncDrainDiagRowsV30); err != nil {
+			return err
+		}
 	}
 	if err := SaveJSON(filepath.Join(r.node.DataDir, "runtime_metrics.json"), map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "metrics_plugin_id": r.plugins.Metrics.ID(), "observability_plugin_id": r.plugins.Observability.ID(), "counts": runtimeMetricCounts}); err != nil {
 		return err
@@ -8429,7 +8522,11 @@ func (r *NodeRuntime) recordExecutionAndCommitDecisions(block realblock.Block, c
 	timestamp := fmt.Sprint(time.Now().UnixMilli())
 	classification := batchClassification(block.TxList, r.plugins.Execution)
 	var dependencyCapture *metaTrackDependencyStructureBlockCapture
-	if executionPlugin == "dual_track_execution" && len(block.TxList) > 0 {
+	// MBE_METATRACK_HOL_STRUCTURE_V11
+	// Observation only: capture the same signed dependency structure for Full,
+	// historical single-conservative, and strict no-dual-track execution. The
+	// matrix analyzer is independent from scheduling decisions.
+	if (executionPlugin == "dual_track_execution" || executionPlugin == metaTrackSingleConservativeExecutionID || executionPlugin == metaTrackSingleExecutionID) && len(block.TxList) > 0 {
 		decisions := make(map[string]ExecutionDecision, len(block.TxList))
 		for _, item := range block.TxList {
 			decisions[txIdentifier(item)] = decisionForTx(item, classification.Decisions, r.plugins.Execution)
@@ -8465,6 +8562,8 @@ func blockExecutionTimingFields(result BlockExecutionResult) map[string]any {
 	return map[string]any{
 		"block_execution_ms":               result.BlockExecutionMS,
 		"transaction_execution_ms":         result.TransactionExecutionMS,
+		"transaction_execution_us":         (result.ExecutionResult.TransactionExecutionMS * 1000 /* MT_EXEC4_METRIC_COMPAT_MS_DERIVED */),
+		"transaction_execution_ns":         (result.ExecutionResult.TransactionExecutionMS * 1000000 /* MT_EXEC4_METRIC_COMPAT_MS_DERIVED */),
 		"deterministic_materialization_ms": result.DeterministicApplyMS,
 		"deterministic_apply_ms":           result.DeterministicApplyMS,
 		"state_db_apply_ms":                result.StateDBApplyMS,
@@ -8551,7 +8650,7 @@ func (r *NodeRuntime) recordBlockExecutionResult(block realblock.Block, result B
 	}
 	businessRows := make([][]string, 0, len(result.BusinessAttempts))
 	for _, attempt := range result.BusinessAttempts {
-		businessRows = append(businessRows, []string{r.node.NodeID, r.node.ShardID, fmt.Sprint(attempt.BlockHeight), block.BlockHash, attempt.TxID, attempt.Track, fmt.Sprint(attempt.Attempt), attempt.Reason, fmt.Sprint(attempt.Success), fmt.Sprint(attempt.FinalCompletion), fmt.Sprint(attempt.DurationUS), fmt.Sprint(attempt.DurationNS), fmt.Sprint(attempt.SojournNS), fmt.Sprint(attempt.StateWaitNS), fmt.Sprint(attempt.DependencyWaitNS), fmt.Sprint(attempt.QueueWaitNS), fmt.Sprint(attempt.AttemptStartOffsetNS), fmt.Sprint(attempt.AttemptEndOffsetNS)})
+		businessRows = append(businessRows, []string{r.node.NodeID, r.node.ShardID, fmt.Sprint(attempt.BlockHeight), block.BlockHash, attempt.TxID, attempt.Track, fmt.Sprint(attempt.Attempt), attempt.Reason, fmt.Sprint(attempt.Success), fmt.Sprint(attempt.FinalCompletion), fmt.Sprint(attempt.DurationUS), fmt.Sprint(attempt.DurationNS), fmt.Sprint(attempt.SojournNS), fmt.Sprint(attempt.StateWaitNS), fmt.Sprint(attempt.DependencyWaitNS), fmt.Sprint(attempt.QueueWaitNS), fmt.Sprint(attempt.AttemptStartOffsetNS), fmt.Sprint(attempt.AttemptEndOffsetNS), fmt.Sprint(attempt.FIFOReadyOffsetNS), fmt.Sprint(attempt.FIFOReleaseOffsetNS), fmt.Sprint(attempt.FIFOReadyBlockedNS), attempt.FIFOInitialHeadTxID})
 	}
 	stateRows := make([][]string, 0, len(result.StateDelta))
 	for _, item := range result.StateDelta {

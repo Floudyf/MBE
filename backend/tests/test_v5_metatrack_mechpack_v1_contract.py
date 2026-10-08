@@ -38,14 +38,14 @@ def test_v2_official_matrix_is_three_mechanisms():
     assert "历史子消融-无局部性放置" in catalog
 
 
-def test_v2_state_locality_ablation_removes_placement_and_transport_together():
+def test_v2_state_locality_ablation_removes_state_locality_without_routing():
     front = read("frontend/src/v5MethodProfile.ts")
     backend = read("backend/app/services/v5_formal_plan_validator.py")
     for text, helper in ((front, front_block), (backend, backend_block)):
         state = helper(text, "metatrack_ab_state", "metatrack_ab_handoff")
         compact = compact_config(state)
         assert "metatrack_home_exact_access" in state
-        assert "ablation_no_coaccess_sharding_v675:true" in compact
+        assert "ablation_no_coaccess_sharding_v675:true" not in compact
         assert "batch_entry_state_prefetch:false" in compact
         assert "ablation_on_demand_state_fetch_v661:true" in compact
         assert "batch_remote_writeback:false" in compact
@@ -68,25 +68,22 @@ def test_v2_routing_uses_five_dimension_threshold_free_minimax():
     assert "metaTrackMechanismCandidateLessV1" not in routing
 
 
-def test_v2_full_consensus_is_leader_streaming_and_ablation_is_single_projection():
+def test_v2_full_consensus_uses_complete_v669_window_and_ablation_is_single_projection():
     client = read("executor/v5/client.go")
     registry = read("executor/v5/registry.go")
-    pbft = read("executor/v5/pbft_safety.go")
-    stream = read("executor/v5/metatrack_stream_window_v2.go")
+    planner = read("executor/v5/metatrack_critical_width_window_v6568.go")
     front = read("frontend/src/v5MethodProfile.ts")
-    assert "PushBatchAdaptiveNLV669StreamingV2" in client
-    assert "leaderStreamingWindowV2" in client
-    assert "clientWindowBufferingV6568" in client
-    assert "selectMetaTrackStreamingWindowV2" in registry
-    assert "metaTrackNLWindowProducerV669ID" in registry
-    assert "validateMetaTrackStreamingWindowV2" in pbft
-    assert "leader_streaming_signed_prefix_n_over_l_v2" in stream
+    assert "MBE_METATRACK_COMPLETE_WINDOW_V671_CLIENT" in client
+    assert "PushMetaTrackRouteBatch(criticalWidthWindowV6568, preparedV6568" in client
+    assert "PushBatchAdaptiveNLV669StreamingV2(preparedV6568" not in client
+    assert "clientWindowBufferingV6568 := transactionFrontierV656Enabled && modularWindowV663 && !streamPartitionInvariantV658" in client
+    assert "MBE_METATRACK_COMPLETE_WINDOW_V671_PRODUCER" in registry
+    assert "selectMetaTrackCriticalWidthWindowV6568(reserved, limit, input.Proposer.ShardID, input.Pool)" in registry
+    assert "PushBatchAdaptiveNLV669" in planner
     ab = front_block(front, "metatrack_ab_cons", "metatrack_ab_state")
     assert 'block_producer: "time_or_count_block_producer"' in ab
     assert "dependency_closed_consensus: false" in ab
-    # PBFT algorithm remains the same formal consensus plugin; only proposal grouping changes.
     assert 'consensus: "pbft_style_consensus"' in front.split("V5_CANONICAL_DEFAULT_PLUGIN_IDS", 1)[1].split("};", 1)[0]
-
 
 def test_v2_client_preserves_signed_frontier_for_no_consensus_ablation():
     client = read("executor/v5/client.go")

@@ -138,7 +138,7 @@ func (e *SerialExecutor) ExecuteBlockWithCommitment(b block.Block, base map[stri
 	plan := buildSerialPlan(b, declared)
 	result.Plan = plan
 	result.PlanDigest = plan.PlanDigest
-	result.TransactionExecutionMS = transactionExecutionDuration.Milliseconds()
+	result.TransactionExecutionNS, result.TransactionExecutionUS, result.TransactionExecutionMS = serialTimingFromDurationV2299(transactionExecutionDuration) // MBE_TXALLO_SERIAL_TIMING_V2299: monotonic business only; no floor
 	result.DeterministicMaterializationMS = materializationDuration.Milliseconds()
 	result.StateCommitmentMS = stateCommitmentDuration.Milliseconds()
 	return result
@@ -199,7 +199,7 @@ func (e *SerialExecutor) ExecuteBlockDeltas(b block.Block, base map[string]strin
 			result.FailedTxs++
 		}
 	}
-	result.TransactionExecutionMS = transactionExecutionDuration.Milliseconds()
+	result.TransactionExecutionNS, result.TransactionExecutionUS, result.TransactionExecutionMS = serialTimingFromDurationV2299(transactionExecutionDuration) // MBE_TXALLO_SERIAL_TIMING_V2299: delta-only
 	return result
 }
 
@@ -620,4 +620,10 @@ func stableDigest(value any) string {
 	payload, _ := json.Marshal(value)
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+// serialTimingFromDurationV2299 preserves monotonic business execution time
+// as ns, us, ms. No synthetic minimum, wall-clock time, or delay.
+func serialTimingFromDurationV2299(d time.Duration) (int64, int64, int64) {
+	return d.Nanoseconds(), d.Microseconds(), d.Milliseconds()
 }

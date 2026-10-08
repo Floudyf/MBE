@@ -69,6 +69,10 @@ type txalloAccountSharding struct {
 	mappingSnapshotPath    string
 	mappingSnapshotModTime int64
 	dynamicHistory         []txalloHistoryTx
+	replicaConvergenceSet  bool
+	replicaConvergedEpoch  uint64
+	replicaConvergedDigest string
+	replicaConvergedCount  int
 }
 
 func (p *txalloAccountSharding) configuredFloat(key string, fallback float64) float64 {
@@ -525,7 +529,7 @@ func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Contex
 	if dynamicA && gEpochMultiple != 20 {
 		return fmt.Errorf("formal TxAllo dynamic hybrid requires g_epoch_multiple=20")
 	}
-	for k, v := range map[string]any{"truth_boundary": txalloTruthBoundary, "allocation_mode": mode, "history_source": "manifest_preanchor_ratio_sidecar", "history_policy": "preceding_ratio_v1", "history_ratio": floatValue(meta["history_ratio"]), "history_pool_count": intValue(meta["history_pool_count"]), "history_transaction_count": len(history), "history_window_start_source_order": intValue(meta["history_window_start_source_order"]), "history_window_end_source_order": intValue(meta["history_window_end_source_order"]), "history_selected_sha256": hsha, "history_sidecar_sha256_verified": true, "g_cache_hit": hit, "g_cache_key": key, "g_txallo_run_count": 1, "g_txallo_executed_this_run": !hit, "a_txallo_run_count": 0, "periodic_g_txallo_run_count": 0, "dynamic_a_txallo_runtime_enabled": dynamicA, "a_epoch_blocks": aEpochBlocks, "paper_reference_a_epoch_blocks": 300, "a_epoch_parameterization": "mbe_adapted_fixed_15_source_blocks", "g_epoch_multiple": gEpochMultiple, "a_epoch_policy": "source_block_height_15_committed_only_mbe_adapted", "global_epoch_policy": "mbe_adapted_tau1_15_paper_case_study_tau2_over_tau1_20", "mapping_ack_policy": "all_nodes_before_next_epoch", "stateful_migration_policy": "fail_closed_on_committed_account_home_move_without_migration_or_replication", "initial_g_history_transaction_count": len(history), "initial_g_lambda": alloc.Lambda, "initial_g_epsilon": alloc.Epsilon, "committed_dynamic_transaction_count": 0, "a_txallo_transaction_count": 0, "total_allocator_history_transaction_count": len(history), "closed_source_epoch_count": 0, "last_closed_source_epoch": -1, "mapping_epoch": uint64(0), "pending_or_uncommitted_transactions_used": 0, "mapping_nonempty": len(alloc.Mapping) > 0, "mapping_structurally_complete": len(alloc.Mapping) == graphCount, "mapping_operationally_valid": len(alloc.Mapping) > 0 && len(alloc.Mapping) == graphCount, "future_evaluation_transactions_used": 0, "bootstrap_ms": time.Since(started).Milliseconds()} {
+	for k, v := range map[string]any{"truth_boundary": txalloTruthBoundary, "allocation_mode": mode, "history_source": "manifest_preanchor_ratio_sidecar", "history_policy": "preceding_ratio_v1", "history_ratio": floatValue(meta["history_ratio"]), "history_pool_count": intValue(meta["history_pool_count"]), "history_transaction_count": len(history), "history_window_start_source_order": intValue(meta["history_window_start_source_order"]), "history_window_end_source_order": intValue(meta["history_window_end_source_order"]), "history_selected_sha256": hsha, "history_sidecar_sha256_verified": true, "g_cache_hit": hit, "g_cache_key": key, "g_txallo_run_count": 1, "g_txallo_executed_this_run": !hit, "a_txallo_run_count": 0, "periodic_g_txallo_run_count": 0, "dynamic_a_txallo_runtime_enabled": dynamicA, "a_epoch_blocks": aEpochBlocks, "paper_reference_a_epoch_blocks": 300, "a_epoch_parameterization": "mbe_adapted_fixed_15_source_blocks", "g_epoch_multiple": gEpochMultiple, "a_epoch_policy": "source_block_height_15_committed_only_mbe_adapted", "global_epoch_policy": "mbe_adapted_tau1_15_paper_case_study_tau2_over_tau1_20", "mapping_ack_policy": "all_nodes_before_next_epoch", "stateful_migration_policy": "paper_replicated_state_required_for_mapping_moves", "stateful_replica_substrate_enabled": p.TxAlloStatefulReplicaEnabled(), "initial_g_history_transaction_count": len(history), "initial_g_lambda": alloc.Lambda, "initial_g_epsilon": alloc.Epsilon, "committed_dynamic_transaction_count": 0, "a_txallo_transaction_count": 0, "total_allocator_history_transaction_count": len(history), "closed_source_epoch_count": 0, "last_closed_source_epoch": -1, "mapping_epoch": uint64(0), "pending_or_uncommitted_transactions_used": 0, "mapping_nonempty": len(alloc.Mapping) > 0, "mapping_structurally_complete": len(alloc.Mapping) == graphCount, "mapping_operationally_valid": len(alloc.Mapping) > 0 && len(alloc.Mapping) == graphCount, "future_evaluation_transactions_used": 0, "bootstrap_ms": time.Since(started).Milliseconds()} {
 		ev[k] = v
 	}
 	p.mu.Lock()
@@ -538,6 +542,10 @@ func (p *txalloAccountSharding) BootstrapHistoricalAllocation(ctx context.Contex
 	p.mappingSnapshotPath = filepath.Join(filepath.Dir(path), txalloDynamicMappingSnapshotName)
 	p.mappingSnapshotModTime = 0
 	p.dynamicHistory = append([]txalloHistoryTx(nil), history...)
+	p.replicaConvergenceSet = false
+	p.replicaConvergedEpoch = 0
+	p.replicaConvergedDigest = ""
+	p.replicaConvergedCount = 0
 	if p.provisionalAccounts == nil {
 		p.provisionalAccounts = map[string]bool{}
 	}
@@ -657,7 +665,7 @@ func (p txalloRouting) Route(input RoutingInput) RoutingDecision {
 	return d
 }
 func (p txalloRouting) StatelessDirectExecution() bool     { return p.stateless }
-func (p txalloRouting) BindExecutionRoutingMetadata() bool { return p.stateless }
+func (p txalloRouting) BindExecutionRoutingMetadata() bool { return true } // MBE_TXALLO_PAPER_REPLICA_V229: Stateful also binds exact logical versions; it still does not enable stateless remote-home execution.
 func (p txalloRouting) BindBatchProjectionMetadata() bool  { return false }
 func (p txalloRouting) BatchExecutionPlanAlgorithmID() string {
 	return "txallo_frozen_mapping_route_plan_v1"
@@ -742,6 +750,14 @@ func validateTxAlloPluginCombination(p RuntimePlugins) error {
 	}
 	if rid == txalloRoutingID && p.CrossShard.ID() != "relay_certificate_protocol" {
 		return fmt.Errorf("stateful TxAllo requires cross_shard:relay_certificate_protocol")
+	}
+	if sharding, ok := p.Sharding.(*txalloAccountSharding); ok {
+		if rid == txalloRoutingID && !sharding.TxAlloStatefulReplicaEnabled() {
+			return fmt.Errorf("stateful TxAllo requires paper-equivalent replicated-state substrate")
+		}
+		if rid == txalloStatelessRoutingID && sharding.TxAlloStatefulReplicaEnabled() {
+			return fmt.Errorf("Stateless-TxAllo must not enable Stateful paper-replicated-state substrate")
+		}
 	}
 	return nil
 }

@@ -56,7 +56,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   // MBE_OPTME_V22_GLOBAL_ORDER_PROFILE
   { method_id: "stateful_optme", display_name: "OptME", role: "baseline", plugin_overrides: { transaction_admission: "signature_nonce_admission", txpool: "fifo_per_node_mempool", sharding: "deterministic_state_key_sharding", routing: "optme_global_routing", block_producer: "time_or_count_block_producer", consensus: "pbft_style_consensus", network: "localhost_tcp_typed_network", execution: "optme_execution", scheduler: "optme_scheduler", block_executor: "optme_block_executor", state_access: "direct_state_access", state_storage: "persistent_local_state_store", cross_shard: "optme_global_no_relay", commit: "normal_commit", metrics: "runtime_core_metrics", observability: "node_network_consensus_observer" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
   { method_id: "stateless_optme", display_name: "Stateless-OptME", role: "baseline", plugin_overrides: { transaction_admission: "signature_nonce_admission", txpool: "fifo_per_node_mempool", sharding: "deterministic_state_key_sharding", routing: "stateless_optme_routing", block_producer: "time_or_count_block_producer", consensus: "pbft_style_consensus", network: "localhost_tcp_typed_network", execution: "optme_execution", scheduler: "optme_scheduler", block_executor: "stateless_optme_block_executor", state_access: "direct_state_access", state_storage: "optme_partition_state_store", cross_shard: "optme_global_no_relay", commit: "normal_commit", metrics: "runtime_core_metrics", observability: "node_network_consensus_observer" }, plugin_config_overrides: { block_executor: { worker_count: 4 } } },
-  { method_id: "stateful_txallo", display_name: "TxAllo", role: "baseline", plugin_overrides: { sharding: "txallo_account_sharding", routing: "txallo_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { sharding: { eta: 2.0, lambda: 0.0, epsilon: 0.0, history_ratio: 0.10, allocation_mode: "paper_g_ratio_snapshot", g_cache_enabled: true, dynamic_a_txallo_runtime: true, a_epoch_blocks: 15, g_epoch_multiple: 20 }, block_executor: { worker_count: 1 } } },
+  { method_id: "stateful_txallo", display_name: "TxAllo", role: "baseline", plugin_overrides: { sharding: "txallo_account_sharding", routing: "txallo_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { sharding: { eta: 2.0, lambda: 0.0, epsilon: 0.0, history_ratio: 0.10, allocation_mode: "paper_g_ratio_snapshot", g_cache_enabled: true, dynamic_a_txallo_runtime: true, a_epoch_blocks: 15, g_epoch_multiple: 20, stateful_paper_replicated_state: true }, block_executor: { worker_count: 1 } } },
   { method_id: "stateless_txallo", display_name: "Stateless-TxAllo", role: "baseline", plugin_overrides: { sharding: "txallo_account_sharding", routing: "stateless_txallo_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit", cross_shard: "txallo_no_relay" }, plugin_config_overrides: { sharding: { eta: 2.0, lambda: 0.0, epsilon: 0.0, history_ratio: 0.10, allocation_mode: "paper_g_ratio_snapshot", g_cache_enabled: true, dynamic_a_txallo_runtime: true, a_epoch_blocks: 15, g_epoch_multiple: 20 }, block_executor: { worker_count: 1 } } },
   { method_id: "stateless_calvin", display_name: "Stateless Calvin", role: "compatibility", plugin_overrides: { transaction_admission: "calvin_declared_access_admission", routing: "stateless_calvin_global_routing", execution: "calvin_execution", scheduler: "stateless_calvin_deterministic_scheduler", block_executor: "stateless_calvin_block_executor", state_access: "stateless_calvin_state_access", state_storage: "calvin_partition_state_store", cross_shard: "calvin_no_2pc_coordinator", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 4, read_result_timeout_ms: 0, outcome_timeout_ms: 0 } } },
   { method_id: "stateless_hash_serial", display_name: "Stateless Hash + Serial", role: "baseline", plugin_overrides: { routing: "stateless_hash_routing", execution: "serial_execution_baseline", scheduler: "fifo_serial_scheduler", block_executor: "serial_block_executor", commit: "normal_commit" }, plugin_config_overrides: { block_executor: { worker_count: 1, versioned_wave_policy: "strict_single_tx_block_order_v1" } } },
@@ -211,7 +211,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true, ablation_no_coaccess_sharding_v675: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: false, ablation_on_demand_state_fetch_v661: true, batch_remote_writeback: false, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: false, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
@@ -233,30 +233,10 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2", local_exact_version_handoff: false, batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, ablation_force_home_exact_v660: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
-  // MBE_METATRACK_DIAG_V27_PROFILE
+  // MBE_METATRACK_EXEC4_V1: four-run scheduler control (current Full clone)
   {
-    method_id: "metatrack_diag_parallel",
-    display_name: "诊断：统一单轨并行",
-    role: "custom",
-    plugin_overrides: {
-      transaction_admission: "metatrack_strict_admission_v1",
-      routing: "metatrack_coaccess_routing",
-      block_producer: "metatrack_nl_window_v669",
-      execution: "metatrack_single_conservative_execution",
-      scheduler: "fast_first_scheduler",
-      block_executor: "metatrack_block_executor",
-      state_access: "metatrack_local_exact_access",
-      commit: "commutative_hot_update_aggregation",
-    },
-    plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
-      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
-    },
-  },
-  // MBE_METATRACK_DIAG_V28_PROFILE
-  {
-    method_id: "metatrack_diag_serial",
-    display_name: "诊断：双轨单业务执行",
+    method_id: "metatrack_diag_ready8",
+    display_name: "调度②：统一单轨并行",
     role: "custom",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -270,7 +250,45 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
     },
     plugin_config_overrides: {
       routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
-      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true, diagnostic_single_business_execution_v28: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true, diagnostic_unified_ready_v1: true },
+    },
+  },
+  {
+    method_id: "metatrack_diag_dual1",
+    display_name: "调度③：双轨单业务",
+    role: "custom",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "dual_track_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_local_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true, diagnostic_single_business_execution_v1: true },
+    },
+  },
+  {
+    method_id: "metatrack_diag_fifo1",
+    display_name: "调度④：严格 FIFO",
+    role: "custom",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "metatrack_single_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_local_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
 ];

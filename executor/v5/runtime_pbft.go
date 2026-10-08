@@ -864,22 +864,33 @@ func (r *NodeRuntime) onPBFTNewViewAccepted(ctx context.Context, nv pbft.NewView
 	}
 	r.mu.Unlock()
 
+	porygonMode := r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID
 	if oldBlock.BlockHash != "" && (!hasSelected || oldBlock.BlockHash != selected.BlockHash) {
-		if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+		if porygonMode {
 			r.porygonReleaseProposalReservation(oldHash, oldBlock.TxList)
 		} else {
 			r.pool.ReleaseReserved(oldBlock.TxList)
 		}
+	}
+	// If NEW-VIEW safely carries the exact same prepared compact proposal to a
+	// new primary, the former primary must stop owning local mempool reservation
+	// bits. Keep the proposal ledger itself until durable commit/discard so the
+	// compact body still has exact transaction cleanup identity.
+	if porygonMode && hasSelected && !r.isCurrentLeader() {
+		r.porygonDemoteProposalReservation(selected.BlockHash)
 	}
 	// Any next-height Witness reservation created by the old leader/view is local
 	// liveness state, not consensus evidence. Release it unless it still belongs
 	// to the installed leader and exact next height.
 	r.porygonReleaseStalePrewitnessedBatch()
 
-	if !r.isCurrentLeader() {
+	if !hasSelected {
 		return nil
 	}
-	if !hasSelected {
+	if !r.isCurrentLeader() {
+		if porygonMode {
+			return r.porygonV51RecoverSelectedPrepare(ctx, nv, selected)
+		}
 		return nil
 	}
 

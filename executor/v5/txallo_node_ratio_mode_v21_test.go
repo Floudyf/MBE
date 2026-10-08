@@ -13,7 +13,7 @@ func txalloNodeRatioModeProfileV21(stateless bool) map[string]PluginConfig {
 		"workload":              {PluginID: "deterministic_signed_synthetic", Config: map[string]any{"cross_shard_ratio": 0.0, "timeout_every": 0}},
 		"transaction_admission": {PluginID: "signature_nonce_admission", Config: map[string]any{}},
 		"txpool":                {PluginID: "fifo_per_node_mempool", Config: map[string]any{"capacity": 10000}},
-		"sharding":              {PluginID: txalloShardingID, Config: map[string]any{"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": true}},
+		"sharding":              {PluginID: txalloShardingID, Config: map[string]any{"eta": 2.0, "lambda": 0.0, "epsilon": 0.0, "history_ratio": 0.10, "allocation_mode": "paper_g_ratio_snapshot", "g_cache_enabled": true, "stateful_paper_replicated_state": !stateless}},
 		"routing":               {PluginID: routing, Config: map[string]any{}},
 		"block_producer":        {PluginID: "time_or_count_block_producer", Config: map[string]any{"block_size": 1000, "interval_ms": 100}},
 		"consensus":             {PluginID: "pbft_style_consensus", Config: map[string]any{}},

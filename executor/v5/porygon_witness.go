@@ -71,6 +71,7 @@ type porygonPrewitnessedBatch struct {
 	LeaderID     string
 	Items        []tx.SignedTransaction
 	Certificate  PorygonWitnessCertificate
+	StoredAt     time.Time // local cache TTL only; never consensus evidence
 }
 
 var porygonPrewitnessedBatches sync.Map // map[*mempool.Mempool]porygonPrewitnessedBatch
@@ -266,6 +267,10 @@ func porygonConfiguredWitnessThreshold(config map[string]any, memberCount int) i
 }
 
 func (r *NodeRuntime) collectPorygonWitnessCertificate(ctx context.Context, target PorygonWitnessRequest) (PorygonWitnessCertificate, error) {
+	witnessCtx, cancel := context.WithTimeout(ctx, porygonWitnessCollectionTimeout)
+	defer cancel()
+	ctx = witnessCtx
+
 	members := porygonWitnessCommittee(r.plan.NodeConfigs, target.Height, target.OrderingDomain, target.FullBodyDigest)
 	if len(members) == 0 {
 		return PorygonWitnessCertificate{}, fmt.Errorf("porygon witness committee is empty")
@@ -300,8 +305,6 @@ func (r *NodeRuntime) collectPorygonWitnessCertificate(ctx context.Context, targ
 		}
 	}
 
-	timeout := time.NewTimer(5 * time.Second)
-	defer timeout.Stop()
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -326,9 +329,10 @@ func (r *NodeRuntime) collectPorygonWitnessCertificate(ctx context.Context, targ
 		}
 		select {
 		case <-ctx.Done():
+			if ctx.Err() == context.DeadlineExceeded {
+				return PorygonWitnessCertificate{}, fmt.Errorf("porygon witness threshold timeout: got=%d want=%d", len(votes), threshold)
+			}
 			return PorygonWitnessCertificate{}, ctx.Err()
-		case <-timeout.C:
-			return PorygonWitnessCertificate{}, fmt.Errorf("porygon witness threshold timeout: got=%d want=%d", len(votes), threshold)
 		case <-ticker.C:
 		}
 	}
@@ -395,14 +399,21 @@ func porygonStorePrewitnessedBatch(pool *mempool.Mempool, batch porygonPrewitnes
 	if pool == nil || len(batch.Items) == 0 {
 		return
 	}
+	porygonV54CacheMu.Lock()
+	if batch.StoredAt.IsZero() {
+		batch.StoredAt = time.Now()
+	}
 	porygonPrewitnessedBatches.Store(pool, batch)
+	porygonV54CacheMu.Unlock()
 }
 
 func porygonTakePrewitnessedBatch(pool *mempool.Mempool, targetHeight uint64, leaderID string) (porygonPrewitnessedBatch, bool) {
 	if pool == nil {
 		return porygonPrewitnessedBatch{}, false
 	}
+	porygonV54CacheMu.Lock()
 	value, ok := porygonPrewitnessedBatches.LoadAndDelete(pool)
+	porygonV54CacheMu.Unlock()
 	if !ok {
 		return porygonPrewitnessedBatch{}, false
 	}
@@ -418,14 +429,19 @@ func (r *NodeRuntime) startPorygonCrossBatchWitness(ctx context.Context, current
 	if r.plugins.BlockProducer == nil || r.plugins.BlockProducer.ID() != porygonBlockProducerID || !r.isCurrentLeader() || r.pool == nil {
 		return
 	}
-	if _, loaded := porygonPrewitnessInFlight.LoadOrStore(r.pool, true); loaded {
+	record, witnessCtx, ok := porygonV53TryBeginPrewitness(r, ctx, currentHeight)
+	if !ok {
 		return
 	}
 	go func() {
-		defer porygonPrewitnessInFlight.Delete(r.pool)
 		started := time.Now()
 		items := r.pool.ReserveReady(r.blockSize())
 		if len(items) == 0 {
+			porygonV53ReleasePrewitness(r.pool, record, "")
+			return
+		}
+		if !porygonV53AttachPrewitnessItems(record, items) {
+			r.pool.ReleaseReserved(items)
 			return
 		}
 		// The next-batch witness has now started while currentHeight is already
@@ -433,27 +449,30 @@ func (r *NodeRuntime) startPorygonCrossBatchWitness(ctx context.Context, current
 		// by the executor metric; merely enabling the pipeline is not enough.
 		porygonCrossBatchWitnessOverlapHeight.Store(r, currentHeight)
 		target := porygonWitnessTarget(currentHeight+1, r.node.ShardID, items)
-		cert, err := r.collectPorygonWitnessCertificate(ctx, target)
+		cert, err := r.collectPorygonWitnessCertificate(witnessCtx, target)
 		if err != nil {
-			r.pool.ReleaseReserved(items)
-			r.addPorygonRuntimeMetric("porygon_cross_batch_witness_failure_count", 1)
+			porygonV53ReleasePrewitness(r.pool, record, "porygon_cross_batch_witness_failure_count")
 			return
 		}
 		// A witness result belongs only to the exact next height and the leader that
 		// initiated it. If PBFT changed view/leader while Witness was in flight, do
 		// not strand the reservation in a stale cache.
 		if !r.isCurrentLeader() || r.porygonConsensusNextHeight() != target.Height {
-			r.pool.ReleaseReserved(items)
-			r.addPorygonRuntimeMetric("porygon_cross_batch_witness_stale_release_count", 1)
+			porygonV53ReleasePrewitness(r.pool, record, "porygon_cross_batch_witness_stale_release_count")
 			return
 		}
-		porygonStorePrewitnessedBatch(r.pool, porygonPrewitnessedBatch{TargetHeight: target.Height, LeaderID: r.node.NodeID, Items: items, Certificate: cert})
+		batch := porygonPrewitnessedBatch{TargetHeight: target.Height, LeaderID: r.node.NodeID, Items: items, Certificate: cert}
+		if !porygonV53CompletePrewitness(r.pool, record, batch) {
+			return
+		}
+		// The cache handoff above already cleared the in-flight suppression. Metrics
+		// are deliberately non-critical and cannot delay the next proposal anymore.
 		r.addPorygonRuntimeMetric("porygon_cross_batch_witness_completed_count", 1)
 		r.addPorygonRuntimeMetric("porygon_cross_batch_witness_overlap_us", time.Since(started).Microseconds())
 	}()
 }
 
-var porygonPrewitnessInFlight sync.Map // map[*mempool.Mempool]bool
+var porygonPrewitnessInFlight sync.Map // map[*mempool.Mempool]*porygonPrewitnessInFlightRecord
 
 // porygonCrossBatchWitnessOverlapHeight records the current PBFT height during
 // which this runtime actually began witnessing the next batch. It is local
@@ -471,11 +490,7 @@ func (r *NodeRuntime) porygonCrossBatchWitnessOverlapObserved(height uint64) boo
 }
 
 func porygonPrewitnessRunning(pool *mempool.Mempool) bool {
-	if pool == nil {
-		return false
-	}
-	_, ok := porygonPrewitnessInFlight.Load(pool)
-	return ok
+	return porygonV53PrewitnessRunning(pool)
 }
 
 func (r *NodeRuntime) ensurePorygonWitnessedBlock(ctx context.Context, block realblock.Block) (realblock.Block, error) {
@@ -491,6 +506,7 @@ func (r *NodeRuntime) ensurePorygonWitnessedBlock(ctx context.Context, block rea
 	}
 	if evidence.WitnessCertificate != nil && evidence.WitnessPolicy == "ec_witness_certificate_v1" {
 		if err := r.verifyPorygonWitnessCertificate(*evidence.WitnessCertificate, block.TxList); err == nil {
+			r.porygonProposalPhaseV532("WITNESS_CERT_REUSE", block.Height, block.BlockHash, true, "")
 			changed := false
 			if prior, ok := r.porygonLatestGlobalRootEvidence(); ok && prior.Height+1 == block.Height && !prior.RolledBack {
 				if evidence.PreviousGlobalStateRoot != prior.GlobalStateRoot || evidence.PreviousMultiShardCertificateDigest != prior.CertificateDigest {
@@ -515,7 +531,9 @@ func (r *NodeRuntime) ensurePorygonWitnessedBlock(ctx context.Context, block rea
 		return block, err
 	}
 	target := porygonWitnessTarget(block.Height, block.ShardID, block.TxList)
+	r.porygonProposalPhaseV532("WITNESS_COLLECT_BEGIN", block.Height, block.BlockHash, true, "")
 	cert, err := r.collectPorygonWitnessCertificate(ctx, target)
+	r.porygonProposalPhaseV532("WITNESS_COLLECT_END", block.Height, block.BlockHash, err == nil, porygonProposalPhaseErrV532(err))
 	if err != nil {
 		return block, err
 	}

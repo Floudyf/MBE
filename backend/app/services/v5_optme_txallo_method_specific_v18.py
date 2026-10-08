@@ -99,6 +99,20 @@ def compute_method_specific_correctness_v18(method_id: str, metrics: dict[str, A
                 "legacy_generic_oracle_status": metrics.get("serial_order_oracle_status"),
             }
 
+    if method == "stateful_txallo":
+        kind = str(metrics.get("method_correctness_oracle_kind") or "")
+        if kind == "mbe_txallo_stateful_replica_oracle_v229":
+            status = str(metrics.get("method_correctness_oracle_status") or "unproven")
+            valid = metrics.get("method_correctness_oracle_valid")
+            return {
+                "status": status,
+                "valid": valid if isinstance(valid, bool) else None,
+                "kind": kind,
+                "scope": metrics.get("method_correctness_oracle_scope"),
+                "blockers": list(metrics.get("method_correctness_oracle_blockers") or []),
+                "legacy_generic_oracle_status": metrics.get("serial_order_oracle_status"),
+            }
+
     serial_status = str(metrics.get("serial_order_oracle_status") or "").lower()
     serial_equiv = metrics.get("serial_order_replay_equivalent")
     serial_scope = str(metrics.get("serial_order_replay_supported_scope") or metrics.get("method_correctness_oracle_scope") or "")
@@ -177,6 +191,10 @@ def compute_method_specific_correctness_v18(method_id: str, metrics: dict[str, A
 
 
 def compute_txallo_independent_account_coverage_v18(run_dir: Path | str) -> dict[str, Any]:
+    from backend.app.services.v5_txallo_mapping_epoch_v229 import compute_account_coverage as _epoch_account_coverage
+    epoch_result = _epoch_account_coverage(run_dir)
+    if epoch_result is not None:
+        return epoch_result
     """Validate canonical v20.2 accounts while preserving legacy artifact audits.
 
     New evaluation-only accounts may use deterministic causal fallback. Older
@@ -504,7 +522,7 @@ def enrich_metrics(run_dir: Path | str, method_id: str | None, result: dict[str,
 
     # Fix the v17 derived-field timing issue by recomputing after the serial oracle fields
     # already exist in the extracted result.
-    if not _is_stateless(method):
+    if not _is_stateless(method) and method != "stateful_txallo":
         out["v18_stateful_serial_partition_equivalent"] = correctness.get("valid") if correctness.get("status") in {"passed", "failed"} else None
     else:
         out["v18_stateful_serial_partition_equivalent"] = None

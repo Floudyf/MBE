@@ -346,6 +346,9 @@ type BlockProductionInput struct {
 	RoutingPluginID                 string
 	MetaTrackExactVersionReadyV6566 metaTrackExactVersionReadyV6566
 	MetaTrackWorkerCountV6567       int
+	// MBE_METATRACK_VARIANCE_DIAG_V30_PROPOSAL
+	// Optional observation callback. It is never consulted by selection logic.
+	MetaTrackProposalObserverV30 func(metaTrackProposalObservationV30)
 }
 
 var _ = selectMetaTrackTransactionFrontierV656             // v6.5.6.7 compatibility anchor; active selector is critical-width consensus window
@@ -510,6 +513,13 @@ type BusinessExecutionAttempt struct {
 	QueueWaitNS          int64
 	AttemptStartOffsetNS int64
 	AttemptEndOffsetNS   int64
+	// MBE_METATRACK_HOL_EXTERNALITY_V1
+	// Pure observability for strict canonical FIFO. These fields never feed
+	// scheduling, StateReady, execution, consensus, or materialization.
+	FIFOReadyOffsetNS   int64
+	FIFOReleaseOffsetNS int64
+	FIFOReadyBlockedNS  int64
+	FIFOInitialHeadTxID string
 }
 type WorkloadItem struct {
 	Payload    string
@@ -1910,16 +1920,24 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 				reserveLimit = limit
 			}
 		}
+		poolDepthBeforeReserveV30 := input.Pool.Len()
 		reserved := input.Pool.ReserveReady(reserveLimit)
 		if len(reserved) == 0 {
 			return realblock.Block{}, fmt.Errorf("empty_mempool")
+		}
+		var proposalObservationV30 *metaTrackProposalObservationV30
+		if leaderStreamingWindowV2 && input.MetaTrackProposalObserverV30 != nil {
+			observation := inspectMetaTrackProposalV30(input.Now, input.Proposer.NextHeight, poolDepthBeforeReserveV30, reserved)
+			proposalObservationV30 = &observation
 		}
 		var selected, deferred []tx.SignedTransaction
 		var err error
 		if partitionInvariantV658 {
 			selected, deferred, _, err = selectMetaTrackPartitionInvariantFrontierV658(reserved, limit, input.Proposer.ShardID, input.Pool)
 		} else if leaderStreamingWindowV2 && boolFromAny(p.config["dependency_closed_consensus"]) {
-			selected, deferred, _, err = selectMetaTrackStreamingWindowV2(reserved, limit, input.Proposer.ShardID)
+			// MBE_METATRACK_COMPLETE_WINDOW_V671_PRODUCER
+			// Require the whole client-signed logical V669 projection.
+			selected, deferred, _, err = selectMetaTrackCriticalWidthWindowV6568(reserved, limit, input.Proposer.ShardID, input.Pool)
 		} else if boolFromAny(p.config["dependency_closed_consensus"]) {
 			selected, deferred, _, err = selectMetaTrackCriticalWidthWindowV6568(reserved, limit, input.Proposer.ShardID, input.Pool)
 		} else {
@@ -1927,6 +1945,10 @@ func (p builtinBlockProducer) BuildCandidate(input BlockProductionInput) (realbl
 			// PBFT block. Only the newest MetaTrack profile enables dependency-
 			// closed multi-projection aggregation.
 			selected, deferred, err = selectMetaTrackLivenessSafePBFTProjection(reserved, limit, input.Proposer.ShardID)
+		}
+		if proposalObservationV30 != nil {
+			finishMetaTrackProposalV30(proposalObservationV30, selected, err)
+			input.MetaTrackProposalObserverV30(*proposalObservationV30)
 		}
 		if err != nil {
 			input.Pool.ReleaseReserved(reserved)
@@ -3546,6 +3568,20 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		return BlockExecutionResult{}, fmt.Errorf("metatrack block executor schedule length mismatch")
 	}
 	classification := batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
+	// MBE_METATRACK_EXEC4_V1: suppress lane classification, never the signed
+	// dependency DAG/StateReady oracle. Classification work is still counted.
+	diagnosticUnifiedReadyV1 := boolFromAny(p.config["diagnostic_unified_ready_v1"])
+	if diagnosticUnifiedReadyV1 {
+		if executionPlugin.ID() != "dual_track_execution" {
+			return BlockExecutionResult{}, fmt.Errorf("metatrack unified-ready diagnostic requires dual_track_execution dependency graph")
+		}
+		for txID, decision := range classification.Decisions {
+			decision.Track = "conservative"
+			decision.Reason = "diagnostic_unified_ready_v1"
+			classification.Decisions[txID] = decision
+			classification.ReasonCodes[txID] = append(classification.ReasonCodes[txID], "diagnostic_unified_ready_v1")
+		}
+	}
 	bindMetaTrackInBlockVersionHandoffs(input.Block.TxList, &classification)
 	strictFrontier := metaTrackStrictFrontierPolicyEnabled(p.config)
 	localExactVersionHandoff, _ := p.config["local_exact_version_handoff"].(bool)
@@ -3562,8 +3598,11 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	// policy and configured worker pool, but allow at most one business execution
 	// to be in flight. This is intentionally independent from the strict FIFO
 	// no-dual-track ablation.
-	diagnosticSingleBusinessV28 := boolFromAny(p.config[metaTrackDiagnosticSingleBusinessExecutionV28])
-	singleReadyQueueV661 := singleConservativeSerialV675 || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) // legacy flag fallback only
+	diagnosticSingleBusinessV28 := boolFromAny(p.config[metaTrackDiagnosticSingleBusinessExecutionV28]) || boolFromAny(p.config["diagnostic_single_business_execution_v1"])
+	if diagnosticUnifiedReadyV1 && diagnosticSingleBusinessV28 {
+		return BlockExecutionResult{}, fmt.Errorf("metatrack exec4 conflicting diagnostic dispatch modes")
+	}
+	singleReadyQueueV661 := singleConservativeSerialV675 || diagnosticUnifiedReadyV1 || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) // legacy flag fallback only
 	onDemandStateFetchV661 := boolFromAny(p.config[metaTrackAblationOnDemandStateFetchV661])
 	var batchFetch RemoteStateBatchFetchFunc
 	if batchEntryStatePrefetch && !onDemandStateFetchV661 {
@@ -3578,13 +3617,30 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	for key, value := range metaTrackClassificationMetrics(classification, len(input.Block.TxList)) {
 		actualMetrics[key] = value
 	}
-	dualTrackRuntimeV663 := executionPlugin.ID() == "dual_track_execution"
+	dualTrackRuntimeV663 := executionPlugin.ID() == "dual_track_execution" && !diagnosticUnifiedReadyV1
+	actualMetrics["metatrack_diag_unified_ready_v1"] = diagnosticUnifiedReadyV1
+	actualMetrics["metatrack_diag_single_business_execution_v1"] = boolFromAny(p.config["diagnostic_single_business_execution_v1"])
+	actualMetrics["metatrack_diag_single_business_execution_v28"] = boolFromAny(p.config[metaTrackDiagnosticSingleBusinessExecutionV28])
+	exec4Mode := "legacy_or_other"
+	if dualTrackRuntimeV663 {
+		exec4Mode = "full_dual_parallel"
+	}
+	if diagnosticUnifiedReadyV1 {
+		exec4Mode = "unified_ready_parallel"
+	} else if boolFromAny(p.config["diagnostic_single_business_execution_v1"]) {
+		exec4Mode = "dual_track_single_business"
+	} else if singleConservativeSerialV675 {
+		exec4Mode = "strict_fifo_single"
+	}
+	actualMetrics["metatrack_exec4_mode"] = exec4Mode
 	unifiedReadyRuntimeV667 := executionPlugin.ID() == metaTrackSingleExecutionID
 	actualMetrics["metatrack_actual_dual_track_runtime"] = dualTrackRuntimeV663
 	actualMetrics["metatrack_single_conservative_runtime_v663"] = executionPlugin.ID() == metaTrackSingleConservativeExecutionID
 	actualMetrics["metatrack_unified_ready_runtime_v667"] = unifiedReadyRuntimeV667
 	actualMetrics["metatrack_single_track_fifo_runtime_v674"] = singleConservativeSerialV675
-	if dualTrackRuntimeV663 {
+	if diagnosticUnifiedReadyV1 {
+		actualMetrics["metatrack_scheduler_evidence_scope"] = "diagnostic_unified_ready_parallel_v1"
+	} else if dualTrackRuntimeV663 {
 		actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_dual_track_runtime"
 	} else if unifiedReadyRuntimeV667 {
 		actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_single_conservative_serial_runtime_v675"
@@ -3899,6 +3955,14 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	singleFIFOBlockedReady := map[string]bool{}
 	singleFIFOBlockedHead := map[string]bool{}
 	singleFIFOReadyAt := map[string]time.Time{}
+	// MBE_METATRACK_HOL_EXTERNALITY_V1
+	// Exact per-transaction FIFO evidence. The existing aggregate counters below
+	// remain the source of truth and these maps only expose the same timing at tx
+	// granularity for post-run causal attribution.
+	singleFIFOReadyOffsetNSByTx := map[string]int64{}
+	singleFIFOReleaseOffsetNSByTx := map[string]int64{}
+	singleFIFOReadyBlockedNSByTx := map[string]int64{}
+	singleFIFOInitialHeadByTx := map[string]string{}
 	singleFIFOCursor := 0
 	singleFIFOBypassPreventedCount := 0
 	singleFIFOHeadBlockCount := 0
@@ -4004,7 +4068,9 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			}
 			singleFIFOReady[txID] = true
 			if _, exists := singleFIFOReadyAt[txID]; !exists {
-				singleFIFOReadyAt[txID] = time.Now()
+				readyAt := time.Now()
+				singleFIFOReadyAt[txID] = readyAt
+				singleFIFOReadyOffsetNSByTx[txID] = readyAt.Sub(trackTimingOrigin).Nanoseconds()
 			}
 			for singleFIFOCursor < len(singleFIFOOrder) {
 				head := singleFIFOOrder[singleFIFOCursor]
@@ -4016,9 +4082,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 					break
 				}
 				singleFIFOReleased[head] = true
+				releasedAt := time.Now()
+				singleFIFOReleaseOffsetNSByTx[head] = releasedAt.Sub(trackTimingOrigin).Nanoseconds()
 				if singleFIFOBlockedReady[head] {
 					if readyAt, ok := singleFIFOReadyAt[head]; ok {
-						waitNS := time.Since(readyAt).Nanoseconds()
+						waitNS := releasedAt.Sub(readyAt).Nanoseconds()
+						singleFIFOReadyBlockedNSByTx[head] = waitNS
 						singleFIFOReadyBlockedDurationCount++
 						singleFIFOReadyBlockedSumNS += waitNS
 						if waitNS > singleFIFOReadyBlockedMaxNS {
@@ -4046,6 +4115,7 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				if !singleFIFOBlockedReady[txID] {
 					singleFIFOBlockedReady[txID] = true
 					singleFIFOBypassPreventedCount++
+					singleFIFOInitialHeadByTx[txID] = head
 				}
 				if head != "" && !singleFIFOBlockedHead[head] {
 					singleFIFOBlockedHead[head] = true
@@ -4877,7 +4947,7 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				atomic.AddInt64(&conservativeReexecutionCount, 1)
 				decisionByID[doneID] = ExecutionDecision{Track: "conservative", Reason: "fast_fallback:" + reason}
 				sojournNS, stateWaitNS, dependencyWaitNS, queueWaitNS := attemptTiming(doneID)
-				attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: "fast", Attempt: done.outcome.Attempt, Reason: "fast_fallback:" + reason, Success: done.outcome.Receipt.Success, FinalCompletion: false, DurationUS: done.outcome.DurationUS, DurationNS: done.outcome.DurationNS, SojournNS: sojournNS, StateWaitNS: stateWaitNS, DependencyWaitNS: dependencyWaitNS, QueueWaitNS: queueWaitNS, AttemptStartOffsetNS: done.outcome.AttemptStartOffsetNS, AttemptEndOffsetNS: done.outcome.AttemptEndOffsetNS})
+				attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: "fast", Attempt: done.outcome.Attempt, Reason: "fast_fallback:" + reason, Success: done.outcome.Receipt.Success, FinalCompletion: false, DurationUS: done.outcome.DurationUS, DurationNS: done.outcome.DurationNS, SojournNS: sojournNS, StateWaitNS: stateWaitNS, DependencyWaitNS: dependencyWaitNS, QueueWaitNS: queueWaitNS, AttemptStartOffsetNS: done.outcome.AttemptStartOffsetNS, AttemptEndOffsetNS: done.outcome.AttemptEndOffsetNS, FIFOReadyOffsetNS: singleFIFOReadyOffsetNSByTx[doneID], FIFOReleaseOffsetNS: singleFIFOReleaseOffsetNSByTx[doneID], FIFOReadyBlockedNS: singleFIFOReadyBlockedNSByTx[doneID], FIFOInitialHeadTxID: singleFIFOInitialHeadByTx[doneID]})
 				resetTrackAttemptTiming(doneID)
 				conservativeReady = append(conservativeReady, doneID)
 				readyQueueStarted[doneID] = time.Now()
@@ -4973,7 +5043,7 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		completed[doneID] = true
 		executionOutcomes = append(executionOutcomes, done.outcome)
 		sojournNS, stateWaitNS, dependencyWaitNS, queueWaitNS := attemptTiming(doneID)
-		attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: done.outcome.Track, Attempt: done.outcome.Attempt, Reason: fmt.Sprintf("worker_%d_completion", done.outcome.WorkerID), Success: done.outcome.Receipt.Success, FinalCompletion: true, DurationUS: done.outcome.DurationUS, DurationNS: done.outcome.DurationNS, SojournNS: sojournNS, StateWaitNS: stateWaitNS, DependencyWaitNS: dependencyWaitNS, QueueWaitNS: queueWaitNS, AttemptStartOffsetNS: done.outcome.AttemptStartOffsetNS, AttemptEndOffsetNS: done.outcome.AttemptEndOffsetNS})
+		attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: done.outcome.Track, Attempt: done.outcome.Attempt, Reason: fmt.Sprintf("worker_%d_completion", done.outcome.WorkerID), Success: done.outcome.Receipt.Success, FinalCompletion: true, DurationUS: done.outcome.DurationUS, DurationNS: done.outcome.DurationNS, SojournNS: sojournNS, StateWaitNS: stateWaitNS, DependencyWaitNS: dependencyWaitNS, QueueWaitNS: queueWaitNS, AttemptStartOffsetNS: done.outcome.AttemptStartOffsetNS, AttemptEndOffsetNS: done.outcome.AttemptEndOffsetNS, FIFOReadyOffsetNS: singleFIFOReadyOffsetNSByTx[doneID], FIFOReleaseOffsetNS: singleFIFOReleaseOffsetNSByTx[doneID], FIFOReadyBlockedNS: singleFIFOReadyBlockedNSByTx[doneID], FIFOInitialHeadTxID: singleFIFOInitialHeadByTx[doneID]})
 		decision := decisionByID[doneID]
 		events = append(events, ScheduleEvent{TxID: doneID, Track: decision.Track, QueueName: "completion_channel", DecisionReason: fmt.Sprintf("actual_completion:worker_%d", done.outcome.WorkerID), LocalExecution: true, StolenWork: done.outcome.Stolen, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
 		releasedThisCompletion := 0

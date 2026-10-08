@@ -553,6 +553,45 @@ def _summarize_metatrack_streaming_windows_v2(run_dir: Path, representative_bloc
     return base
 
 
+# MBE_METATRACK_COMPLETE_WINDOW_OBS_V671
+def _metatrack_v669_streaming_prefix_metadata_v671(representative_blocks: dict) -> bool:
+    """Detect historical V669 Streaming-V2 cumulative-prefix metadata.
+
+    Historical Streaming V2 re-signed each RouteBatch with the currently-known
+    cumulative prefix, so one logical window can contain multiple distinct
+    final-window identities. Complete V669 assigns one final identity to every
+    transaction in the window. Preserve the old decoder only for the former.
+    """
+    identities_by_window: dict[int, set[tuple[int, int, int, int]]] = defaultdict(set)
+    batches_by_window: dict[int, set[int]] = defaultdict(set)
+    for block in representative_blocks.values():
+        tx_list = block.get("tx_list") if isinstance(block.get("tx_list"), list) else []
+        for item in tx_list:
+            if not isinstance(item, dict):
+                continue
+            routing = item.get("execution_routing") if isinstance(item.get("execution_routing"), dict) else {}
+            window = int(routing.get("consensus_window_sequence") or 0)
+            batch = int(routing.get("route_batch_sequence") or 0)
+            if window <= 0 or batch <= 0:
+                continue
+            batches_by_window[window].add(batch)
+            # MBE_METATRACK_COMPLETE_WINDOW_OBS_V672
+            # Only globally invariant fields belong to the window identity.
+            # consensus_window_shard_transaction_count is shard-local by
+            # design (for example s0=61, s1=39) and must not make a complete
+            # V669 window look like a historical cumulative-prefix stream.
+            identities_by_window[window].add((
+                int(routing.get("consensus_window_end_batch_sequence") or 0),
+                int(routing.get("consensus_window_route_batch_count") or 0),
+                int(routing.get("consensus_window_transaction_count") or 0),
+                int(routing.get("consensus_window_critical_path") or 0),
+            ))
+    return any(
+        len(batches_by_window.get(window, set())) > 1 and len(identities) > 1
+        for window, identities in identities_by_window.items()
+    )
+
+
 def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
     """Reconstruct v6.5.6.8 windows only from durable committed signed metadata."""
     run_dir = Path(run_dir)
@@ -593,7 +632,15 @@ def summarize_metatrack_consensus_windows(run_dir: Path) -> dict[str, Any]:
         return base
 
     block_producer_id_v668 = _metatrack_block_producer_id_v663(run_dir, cluster)
-    if block_producer_id_v668 == "metatrack_nl_window_v669":
+    # MBE_METATRACK_COMPLETE_WINDOW_OBS_V671
+    # V669 historically used Streaming-V2 cumulative prefixes. The runtime now
+    # uses the existing complete-window path again. Decode by durable signed
+    # metadata shape so old archives remain readable while new runs use the
+    # formal dependency-closed N/L reconstruction below.
+    if (
+        block_producer_id_v668 == "metatrack_nl_window_v669"
+        and _metatrack_v669_streaming_prefix_metadata_v671(representative_blocks)
+    ):
         return _summarize_metatrack_streaming_windows_v2(run_dir, representative_blocks, source_artifacts)
     single_route_batch_ablation = block_producer_id_v668 == "metatrack_route_batch_producer"
     historical_n_over_l_v668 = block_producer_id_v668 == "metatrack_adaptive_window_producer"

@@ -237,12 +237,18 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
                 "workload/txallo_dynamic_blocks.jsonl.gz",
                 "workload/txallo_dynamic_blocks_summary.json",
                 "workload/txallo_mapping_snapshot.json",
+                "workload/txallo_mapping_epochs.jsonl",
             ]
             expected_artifacts += [
                 f"nodes/{node.node_id}/{artifact}"
                 for node in nodes
                 for artifact in ("txallo_epoch_lifecycle.jsonl", "txallo_mapping_ack.json")
             ]
+            if profile.get("routing", {}).get("plugin_id") == "txallo_routing" and bool((profile.get("sharding", {}).get("config") or {}).get("stateful_paper_replicated_state")):
+                expected_artifacts += ["network_message_summary.csv"]
+                expected_artifacts += [f"nodes/{node.node_id}/txallo_replica_commit.jsonl" for node in nodes]
+            if profile.get("routing", {}).get("plugin_id") == "txallo_routing" and bool((profile.get("sharding", {}).get("config") or {}).get("stateful_paper_replicated_state")):
+                expected_artifacts += [f"nodes/{node.node_id}/txallo_replica_commit.jsonl" for node in nodes]
 
     if (
         profile.get("block_executor", {}).get("plugin_id") in {"optme_block_executor", "stateless_optme_block_executor"}
