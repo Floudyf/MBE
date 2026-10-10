@@ -21,6 +21,7 @@ def test_v38_0_4_stateful_evidence_name_scope_is_exact() -> None:
 
 
 def test_v38_0_4_bundle_streams_stateful_oracle_evidence_from_cold_archive(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("MBE_ARTIFACTS_FULL_ORACLE_EVIDENCE", "1")  # MBE_MV_FIX_V2
     group_dir = tmp_path / "group"
     group_dir.mkdir()
     (group_dir / "run_group.json").write_text("{}\n", encoding="utf-8")

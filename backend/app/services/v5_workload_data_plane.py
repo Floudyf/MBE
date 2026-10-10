@@ -1324,6 +1324,16 @@ def _validated_prefix_streaming_preview(
     }
 
 def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4, selection_mode: str = "contiguous_window", supported_counts: set[int] | frozenset[int] | None = None, variant_parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    # MBE_MV_UIFIX_V1 exact-window preverified sparse preview. Full SHA and
+    # the original canonical projection still run before real materialization.
+    if str(manifest.get("preview_policy") or "") == "mv_verified_window_index_v1":
+        from backend.app.services.mv_window_preview_v1 import fast_preview
+        from backend.app.services.v5_workload_data_plane import WORKLOAD_CACHE_ROOT
+        return fast_preview(csv_path=csv_path, manifest=manifest, cache_root=WORKLOAD_CACHE_ROOT,
+                            requested_tx_count=requested_tx_count, seed=seed,
+                            variant_mode=variant_mode, target_alpha=target_alpha,
+                            skew_axis=skew_axis, shards=shards, selection_mode=selection_mode,
+                            supported_counts=supported_counts, variant_parameters=variant_parameters)
     adapter = adapter_for_manifest(manifest)
     if (
         str(manifest.get("preview_policy") or "") == "validated_prefix_streaming_v1"

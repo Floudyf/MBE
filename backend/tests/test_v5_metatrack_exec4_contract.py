@@ -1,4 +1,4 @@
-"""Current, independent four-way MetaTrack scheduler diagnostic contract.
+"""Retained historical MetaTrack scheduler diagnostic contracts.
 
 The visible four variants are not added to the official ablation suite.
 """
@@ -57,15 +57,15 @@ def test_four_cards_only_in_metatrack_comparison_and_old_diagnostics_gone():
         assert method_id in catalog and method_id in profile
     for method_id in IDS[1:]:
         row = next(row for row in catalog.splitlines() if f'methodId: "{method_id}"' in row)
-        assert 'comparisonVisible: true' in row
+        assert 'comparisonVisible: false' in row
         assert 'mainVisible: false' in row
         assert 'ablationTarget' not in row
         assert method_id not in ablations
     for retired_id in ('metatrack_diag_parallel','metatrack_diag_serial'):
         assert f'methodId: "{retired_id}"' not in catalog
         assert f'method_id: "{retired_id}"' not in profile
-    assert 'METATRACK_SCHEDULER_DIAG_METHOD_IDS' in page
-    assert 'v5-metatrack-exec4-preset' in page
+    assert 'METATRACK_SHARD4_METHOD_IDS' in page
+    assert 'v5-metatrack-shard4-preset' in page
     assert 'metatrack_diag_parallel" ? "metatrack_diag_ready8"' in page
     assert 'metatrack_diag_serial" ? "metatrack_diag_dual1"' in page
 

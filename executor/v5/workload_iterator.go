@@ -234,13 +234,32 @@ func (it *CanonicalTraceIterator) Summary() WorkloadReplaySummary {
 	return out
 }
 
+// MBE_MV_COMPAT_V1 -- isolate replay admission nonce counters per actual PBFT ingress domain.
+// Business sender identity, signing key, declared access and routing remain unchanged.
 func (it *CanonicalTraceIterator) SignedTransaction(record WorkloadRecord) (tx.SignedTransaction, error) {
+	return it.signCanonicalTransaction(record, "")
+}
+
+func (it *CanonicalTraceIterator) SignedTransactionForAdmissionDomain(record WorkloadRecord, domain string) (tx.SignedTransaction, error) {
+	if strings.TrimSpace(domain) == "" {
+		return tx.SignedTransaction{}, fmt.Errorf("empty V4 admission nonce domain")
+	}
+	return it.signCanonicalTransaction(record, domain)
+}
+
+func (it *CanonicalTraceIterator) signCanonicalTransaction(record WorkloadRecord, domain string) (tx.SignedTransaction, error) {
 	privateSeed := canonicalPrivateSeed(it.plan, record.SenderID)
 	publicKey, privateKey := tx.DeterministicKeyPair(privateSeed)
 	sender := tx.AddressFromPublicKey(publicKey)
 	it.identities[record.SenderID] = sender
-	nonce := it.nonces[record.SenderID]
-	it.nonces[record.SenderID] = nonce + 1
+	// V4 direct-access replays use one nonce stream per sender and actual
+	// admitting PBFT domain. Legacy traces retain the original global stream.
+	nonceKey := record.SenderID
+	if domain != "" {
+		nonceKey += "\x00" + domain
+	}
+	nonce := it.nonces[nonceKey]
+	it.nonces[nonceKey] = nonce + 1
 	receiver := "receiver_" + record.ReceiverID
 	if len(record.AccessList) == 0 {
 		return tx.SignedTransaction{}, fmt.Errorf("empty resolved access list for source_event_id=%s", record.SourceEventID)

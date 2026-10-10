@@ -1,0 +1,43 @@
+{
+  "schema_version": "mbe_dataset_manifest_v2",
+  "dataset_id": "tapos_layered_v4",
+  "display_name": "Tapos 峰值精确写集 V4 统一适配",
+  "description": "Aptos/Tapos 真实观察的逐交易精确写集；保留原始记录、账户和写键，未观测链上读集不推断。",
+  "source_platform": "tapos",
+  "source_chain": "aptos",
+  "dataset_type": "observed_exact_write_set_layered_replay",
+  "adapter_id": "mv_tapos_layered_v4",
+  "source_layout": "single_file",
+  "local_raw_relative_path": "dataset/Tapos/tapos_peak_exact_write_set.csv",
+  "source_sha256": "c9cf4ebd3161514dd587ebb9024d65b0ff24ef6bd7fdb21c1dd79d2c7dd9b398",
+  "source_size_bytes": 529878284,
+  "row_count": 781712,
+  "unique_source_tx_hash_count": 0,
+  "truth_label": "real_observed",
+  "catalog_validation": "file_metadata",
+  "supported_tx_counts": [100,1000,10000,50000,100000,250000,500000,750000],
+  "allow_full_dataset": true,
+  "supported_variants": ["original_window","key_zipf"],
+  "supported_skew_axes": ["primary_write_key","entry_function"],
+  "default_skew_axis": "primary_write_key",
+  "variant_definitions": [
+    {"variant_mode":"original_window","display_name":"真实原始连续窗口","kind":"original","selection_mode":"contiguous_window","parameters":[]},
+    {"variant_mode":"key_zipf","display_name":"写键/函数偏斜控制重采样","kind":"derived","selection_mode":"contiguous_window","parameters":[
+      {"name":"skew_axis","label":"偏斜轴","type":"enum","options":["primary_write_key","entry_function"],"default":"primary_write_key","required":true},
+      {"name":"target_alpha","label":"Zipf alpha","type":"number_enum","options":[0.0,0.2,0.4,0.6,0.8,1.0,1.2,1.4],"default":1.0,"required":true}
+    ]}
+  ],
+  "included_categories": ["tapos_transaction"],
+  "excluded_categories": [],
+  "operation_counts": {},
+  "time_start_ms": 0,
+  "time_end_ms": 0,
+  "verification_method": "full_source_sha256_observed_write_set_v4_digest_and_row_count",
+  "verification_sample_count": 100,
+  "verification_results": "100-row fixture tested; full-source validation in installer staging required",
+  "usage_note": "Only observed write keys are declared; original-chain read set not available. Derived key_zipf samples with replacement and must not be mislabeled as original transactions.",
+  "generator_version": "mv_tapos_layered_v4_v1",
+  "preview_policy": "mv_verified_window_index_v1",
+  "preview_provenance": "complete_source_attested_sparse_index_exact_window",
+  "warnings": ["Static complete envelope applies only to the declared write-only MBE replay model, not the original complete on-chain read set."]
+}

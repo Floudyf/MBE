@@ -52,6 +52,9 @@ _PRESERVED_SHELL = {
     "shutdown_status.json",
     "aggregate/block_production_summary.json",
     "aggregate/mechanism_metrics_summary.json",
+    # MBE_TXALLO_TERMINAL_CLOSE_V14: small postprocessing summaries remain online.
+    "aggregate/txallo_evidence_summary.json",
+    "aggregate/txallo_terminal_breakdown.json",
 }
 
 _PRESERVED_NODE_SHELL_NAMES = {

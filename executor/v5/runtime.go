@@ -3795,9 +3795,11 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
 	}
 	executionSnapshot, baseStateCommitment, err := applyStateDeltaToSnapshotWithCommitment(stateBefore, baseStateCommitment, remoteDeltas, statePartitionID, block.Height)
+	txalloHistoricalProjectionV1 := false
 	if err == nil && r.txalloStatefulReplicaEnabled() {
 		var projected bool
 		executionSnapshot, projected, err = r.prepareTxAlloReplicaProjectionV229(block, executionSnapshot)
+		txalloHistoricalProjectionV1 = projected
 		if err == nil && projected && baseStateCommitment == nil {
 			err = fmt.Errorf("TxAllo exact historical read projection requires authenticated physical base commitment")
 		}
@@ -3849,8 +3851,15 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		// Legacy prefetch may overlay additional remote values but does not expose
 		// the touched-key set needed to update the authenticated view. Preserve
 		// correctness by falling back to executor reconstruction on that path.
+		// Stateful-TxAllo's generic prefetch is an identity operation: its
+		// replicated local DB already holds the execution state. Only
+		// historical exact-version read overlays may change that view.
 		if len(r.shardIDs()) > 1 {
-			baseStateCommitment = nil
+			if !txalloIdentityPrefetchCanReuseCommitmentV1(
+				r.txalloStatefulReplicaEnabled(), r.genericStatelessRemoteStateEnabled(),
+				txalloHistoricalProjectionV1, baseStateCommitment) {
+				baseStateCommitment = nil
+			}
 		}
 	}
 	r.setCommitPhase("validate_execution_plan", block)
@@ -3862,6 +3871,18 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	// execution-side projection guard. Catch-up/recovery/direct paths stay
 	// fail-closed and retain full planner recomputation.
 	executionPlanVerified := origin == CommitOriginConsensus && r.hasVerifiedExecutionPlan(block)
+	// Diagnostics count attempted inputs to Serial, not durable commits.
+	// No TxAllo core, PBFT, or shared state storage semantics are changed.
+	if r.txalloStatefulReplicaEnabled() {
+		if txalloHistoricalProjectionV1 {
+			r.addRuntimeMetric("txallo_historical_projection_block_attempt_count", 1)
+		}
+		if baseStateCommitment != nil {
+			r.addRuntimeMetric("txallo_commitment_reuse_block_attempt_count", 1)
+		} else {
+			r.addRuntimeMetric("txallo_commitment_full_build_block_attempt_count", 1)
+		}
+	}
 	r.setCommitPhase("execute_block", block)
 	executeStarted := time.Now()
 	var executed BlockExecutionResult
@@ -5241,6 +5262,14 @@ func (r *NodeRuntime) metaTrackStateReadyInputs(block realblock.Block) (map[stri
 		return RemoteStateReadyEvent{TxID: item.TxID, Key: access.Key, ReadinessToken: token, Value: response.Value, HomeShard: homeShard, StateVersion: response.StateVersion, LatencyMS: latency.Milliseconds()}, nil
 	}
 	return readiness, fetch
+}
+
+// txalloIdentityPrefetchCanReuseCommitmentV1 applies only to the
+// Stateful paper-replicated substrate. A historical read overlay must
+// retain the previous executor construction behavior until the
+// execution-view versus physical-view root contract is separately audited.
+func txalloIdentityPrefetchCanReuseCommitmentV1(statefulReplica, genericStateless, historicalProjection bool, base *state.Commitment) bool {
+	return statefulReplica && !genericStateless && !historicalProjection && base != nil
 }
 
 func (r *NodeRuntime) prepareMetaTrackStateSnapshot(ctx context.Context, block realblock.Block, stateBefore map[string]string) (map[string]string, error) {

@@ -389,6 +389,22 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         for selected in by_category.values()
     )
     if txallo_selected:
+        # MBE_MV_FIX_V2: fail at method-compatibility preview, not in child execution.
+        source = getattr(spec, 'workload_source', None)
+        source_id = str(getattr(source, 'dataset_id', '') or '')
+        # MBE_MV_TXALLO_EVENT_CLOCK_V1: reviewed MBE event-order extension, not a chain-block reproduction.
+        if source_id in {'dcl_sales_layered_v4', 'tapos_layered_v4'}:
+            warnings.append(
+                'TxAllo '+source_id+' uses an MBE-adapted EVENT-ORDER epoch clock '
+                '(15 actual source events per A window, G every 20 closed epochs), '
+                'NOT observed chain blocks. audited raw data contains no observed chain '
+                'block identity; this method is ineligible for paper source-block reproduction. '
+                'Only original contiguous windows with pre-evaluation history may run.'
+            )
+            if str(getattr(source, 'variant_mode', '') or 'original_window') != 'original_window' or str(getattr(source,'selection_mode','') or 'contiguous_window') != 'contiguous_window':
+                blockers.append('TxAllo MBE event-order extension requires original_window + contiguous_window; Zipf/reordered source events are not eligible')
+        if source_id == 'axie_day_layered_v4' and str(getattr(source, 'variant_mode', '') or 'original_window') != 'original_window':
+            blockers.append('TxAllo Axie V4 requires original_window: resampled Zipf events are not observed source blocks')
         txallo_routing_id = routing.plugin_id if routing else ""
         if txallo_routing_id not in {"txallo_routing", "stateless_txallo_routing"}:
             blockers.append("TxAllo requires routing:txallo_routing or routing:stateless_txallo_routing")

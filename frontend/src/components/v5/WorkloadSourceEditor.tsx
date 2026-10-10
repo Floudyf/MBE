@@ -41,12 +41,29 @@ function countLabel(value: number): string {
   return String(value);
 }
 
+// MBE_MV_UIFIX_V1 formal-run catalog visibility only.
+const PUBLISHED_V5_DATASETS = new Set([
+  "alien_worlds_layered_v2_controlled",
+  "alien_worlds_layered_v2_historical",
+  "axie_day_layered_v4",
+  "dcl_sales_layered_v4",
+  "axie_infinity_controlled_prefix_rmw_v1",
+  "tapos_layered_v4", // MBE_MV_TAPOS_V4_V1
+
+]);
+
+export function publishedWorkloadDatasets(datasets: V5WorkloadDatasetSummary[], mode: WorkloadMode): V5WorkloadDatasetSummary[] {
+  if (mode === "synthetic") return [];
+  return datasets.filter((dataset) => PUBLISHED_V5_DATASETS.has(dataset.dataset_id) && definitionsForMode(dataset, mode).length > 0);
+}
+
 export default function WorkloadSourceEditor({ state, datasets, onChange }: { state: WorkloadEditorState; datasets: V5WorkloadDatasetSummary[]; onChange: (state: WorkloadEditorState) => void }) {
-  const dataset = datasets.find((item) => item.dataset_id === state.datasetId);
+  const visibleDatasets = publishedWorkloadDatasets(datasets, state.mode);
+  const dataset = visibleDatasets.find((item) => item.dataset_id === state.datasetId);
   const modeDefinitions = definitionsForMode(dataset, state.mode);
   const selectedDefinition = modeDefinitions.find((item) => item.variant_mode === state.variantMode) ?? modeDefinitions[0];
-  const hasOriginalDataset = datasets.some((item) => item.selectable && definitionsForMode(item, "dataset_original").length > 0);
-  const hasDerivedDataset = datasets.some((item) => item.selectable && definitionsForMode(item, "dataset_derived").length > 0);
+  const hasOriginalDataset = publishedWorkloadDatasets(datasets, "dataset_original").some((item) => item.selectable);
+  const hasDerivedDataset = publishedWorkloadDatasets(datasets, "dataset_derived").some((item) => item.selectable);
   const datasetDisabled = state.mode !== "synthetic" && (!dataset || !dataset.selectable || !selectedDefinition);
   const supportedCounts = (dataset?.supported_tx_counts?.length ? dataset.supported_tx_counts : [1_000, 10_000, 50_000, 100_000, 250_000])
     .filter((value) => value >= 1_000 || value === state.txCount)
@@ -56,7 +73,8 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
 
   function selectMode(mode: WorkloadMode) {
     if (mode === "synthetic") { patch({ mode, useFullDataset: false }); return; }
-    const candidateDataset = dataset?.selectable && definitionsForMode(dataset, mode).length ? dataset : datasets.find((item) => item.selectable && definitionsForMode(item, mode).length);
+    const choices = publishedWorkloadDatasets(datasets, mode);
+    const candidateDataset = choices.find((item) => item.dataset_id === state.datasetId && item.selectable) ?? choices.find((item) => item.selectable);
     const definition = definitionsForMode(candidateDataset, mode)[0];
     const parameters = initialParameters(definition);
     patch({
@@ -72,8 +90,9 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
   }
 
   function selectDataset(datasetId: string) {
-    const nextDataset = datasets.find((item) => item.dataset_id === datasetId);
-    const definition = definitionsForMode(nextDataset, state.mode)[0] ?? nextDataset?.variant_definitions?.[0];
+    const nextDataset = visibleDatasets.find((item) => item.dataset_id === datasetId);
+    if (!nextDataset) return;
+    const definition = definitionsForMode(nextDataset, state.mode)[0];
     const parameters = initialParameters(definition);
     patch({
       datasetId,
@@ -115,7 +134,7 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
     </div>
 
     {state.mode !== "synthetic" && <div className="experiment-condition-grid">
-      <label><span>数据集</span><select aria-label="dataset_id" value={state.datasetId} onChange={(event) => selectDataset(event.target.value)}>{datasets.map((item) => <option key={item.dataset_id} value={item.dataset_id} disabled={!item.selectable}>{item.display_name} / {item.selectable ? "selectable" : "unavailable"}</option>)}</select></label>
+      <label><span>数据集</span><select aria-label="dataset_id" value={state.datasetId} onChange={(event) => selectDataset(event.target.value)}>{visibleDatasets.map((item) => <option key={item.dataset_id} value={item.dataset_id} disabled={!item.selectable}>{item.display_name} / {item.selectable ? "selectable" : "unavailable"}</option>)}</select></label>
       <label><span>数据来源平台</span><input value={dataset?.source_platform ?? "registry"} readOnly /></label>
       <label><span>数据来源链</span><input value={dataset?.source_chain ?? "registry"} readOnly /></label>
       {modeDefinitions.length > 1 && <label><span>负载模式</span><select aria-label="variant_mode" value={selectedDefinition?.variant_mode ?? ""} onChange={(event) => selectVariant(event.target.value)}>{modeDefinitions.map((item) => <option key={item.variant_mode} value={item.variant_mode}>{item.display_name ?? item.variant_mode}</option>)}</select></label>}

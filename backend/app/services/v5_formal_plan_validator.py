@@ -221,6 +221,64 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
+    # MBE_METATRACK_SHARD4_V1_1: routing-only clones of current Full
+    "metatrack_sh_hash": V5FormalMethod(
+        method_id="metatrack_sh_hash",
+        display_name="② 哈希执行分片",
+        role="custom",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_hash_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": False},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
+    "metatrack_sh_coacc": V5FormalMethod(
+        method_id="metatrack_sh_coacc",
+        display_name="③ 原始共现矩阵",
+        role="custom",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": False},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
+    "metatrack_sh_noco": V5FormalMethod(
+        method_id="metatrack_sh_noco",
+        display_name="④ 增量分片去共现",
+        role="custom",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "ablation_ignore_coaccess_routing_v661": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
     # MBE_METATRACK_EXEC4_V1: comparison-only variants cloned from CURRENT Full
     "metatrack_diag_ready8": V5FormalMethod(
         method_id="metatrack_diag_ready8",

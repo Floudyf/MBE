@@ -233,6 +233,64 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2", local_exact_version_handoff: false, batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, ablation_force_home_exact_v660: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
+  // MBE_METATRACK_SHARD4_V1_1: three routing-only clones of unmodified Full
+  {
+    method_id: "metatrack_sh_hash",
+    display_name: "② 哈希执行分片",
+    role: "custom",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_hash_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "dual_track_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_local_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: false },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
+    },
+  },
+  {
+    method_id: "metatrack_sh_coacc",
+    display_name: "③ 原始共现矩阵",
+    role: "custom",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "dual_track_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_local_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: false },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
+    },
+  },
+  {
+    method_id: "metatrack_sh_noco",
+    display_name: "④ 增量分片去共现",
+    role: "custom",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "dual_track_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_local_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true, ablation_ignore_coaccess_routing_v661: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
+    },
+  },
   // MBE_METATRACK_EXEC4_V1: four-run scheduler control (current Full clone)
   {
     method_id: "metatrack_diag_ready8",

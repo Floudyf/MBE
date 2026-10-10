@@ -183,6 +183,8 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 		txalloDynamic = dynamic
 		txalloDynamicEnabled = true
+		txalloInitEpochTimingV1(outDir)
+		txalloCaptureClientBuildV1(outDir)
 		txalloFeedReader = newTxAlloEpochFeedReaderV22()
 		if !usesStatelessDirectExecution(plugins.Routing) && dynamic.TxAlloStatefulReplicaEnabled() {
 			txalloReplicaFeedReader = newTxAlloReplicaFeedReaderV229()
@@ -310,7 +312,14 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if datasetIterator, ok := iterator.(*CanonicalTraceIterator); ok {
 			record.StateKeys = stateKeys
 			record.Payload = payload
-			item, err = datasetIterator.SignedTransaction(record)
+			// MBE_MV_COMPAT_V1: the MBE mempool checks Nonce within each PBFT
+			// admission domain. V4 layered replays cannot reuse a global
+			// sender nonce across dynamically selected ingress domains.
+			if record.SchedulingAccessSchema != "" && record.SchedulingAccessDigest != "" {
+				item, err = datasetIterator.SignedTransactionForAdmissionDomain(record, shardID)
+			} else {
+				item, err = datasetIterator.SignedTransaction(record)
+			}
 			sender = item.Sender
 			generatedCrossShardCount = datasetIterator.summary.ActualCrossShardCount
 		} else {
@@ -616,34 +625,65 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	// the next epoch. The final partial epoch is never used as future training.
 	txalloEpochBucket := int64(-1)
 	txalloEpochRecords := []WorkloadRecord{}
-	closeTxAlloSourceEpoch := func(epoch int64, records []WorkloadRecord) error {
+	closeTxAlloSourceEpoch := func(epoch int64, records []WorkloadRecord) (retErr error) {
 		if !txalloDynamicEnabled {
 			return nil
 		}
+		txalloObsStartV1 := time.Now()
+		txalloObsTraceV1 := txalloEpochTimingV1{
+			SchemaVersion: txalloEpochTimingSchemaV1,
+			SourceEpoch: epoch,
+			TransactionCount: len(records),
+			RoutingEpochBefore: txalloDynamic.TxAlloMappingEpoch(),
+		}
+		defer func() {
+			txalloObsTraceV1.RoutingEpochAfter = txalloDynamic.TxAlloMappingEpoch()
+			txalloObsTraceV1.TotalBarrierNS = txalloObserveDurationV1(txalloObsStartV1)
+			txalloRecordEpochTimingV1(outDir, txalloObsTraceV1, retErr)
+		}()
 		if len(records) > 0 {
+			txalloObsStageV1 := time.Now()
 			if err := txalloWaitCommittedEpoch(ctx, plan.NodeConfigs, records, txalloCrossByLogical, statelessDirect, txalloFeedReader); err != nil {
+				txalloObsTraceV1.CommitWaitNS = txalloObserveDurationV1(txalloObsStageV1)
+				txalloObsTraceV1.FailurePhase = "commit_wait"
 				return err
 			}
+			txalloObsTraceV1.CommitWaitNS = txalloObserveDurationV1(txalloObsStageV1)
 		}
 		if !statelessDirect && txalloDynamic.TxAlloStatefulReplicaEnabled() {
+			txalloObsStageV1 := time.Now()
 			expectedReplicaTokens := txalloExpectedReplicaTokensV229(records)
+			txalloObsTraceV1.ReplicaTokenCount = len(expectedReplicaTokens)
 			if err := txalloWaitReplicaConvergenceV229(ctx, plan.NodeConfigs, expectedReplicaTokens, txalloReplicaFeedReader); err != nil {
+				txalloObsTraceV1.ReplicaWaitNS = txalloObserveDurationV1(txalloObsStageV1)
+				txalloObsTraceV1.FailurePhase = "replica_wait"
 				return err
 			}
 			if err := txalloDynamic.ConfirmTxAlloReplicaConvergence(uint64(epoch), stableJSONDigest(expectedReplicaTokens), len(expectedReplicaTokens)); err != nil {
+				txalloObsTraceV1.ReplicaWaitNS = txalloObserveDurationV1(txalloObsStageV1)
+				txalloObsTraceV1.FailurePhase = "replica_confirmation"
 				return err
 			}
+			txalloObsTraceV1.ReplicaWaitNS = txalloObserveDurationV1(txalloObsStageV1)
 		}
 		beforeEpoch := txalloDynamic.TxAlloMappingEpoch()
+		txalloObsStageV1 := time.Now()
 		if err := txalloDynamic.ApplyCommittedTxAlloEpoch(records, uint64(epoch), statelessDirect); err != nil {
+			txalloObsTraceV1.AllocationUpdateNS = txalloObserveDurationV1(txalloObsStageV1)
+			txalloObsTraceV1.FailurePhase = "allocation_update_or_publish"
 			return err
 		}
+		txalloObsTraceV1.AllocationUpdateNS = txalloObserveDurationV1(txalloObsStageV1)
 		txalloBootstrapEvidence = txalloDynamic.HistoricalAllocationEvidence()
 		txalloBootstrapMapping = txalloDynamic.TxAlloMappingSnapshot()
 		if txalloDynamic.TxAlloMappingEpoch() != beforeEpoch {
+			txalloObsStageV1 := time.Now()
 			if err := txalloWaitMappingAcks(ctx, plan.NodeConfigs, txalloDynamic.TxAlloMappingEpoch(), txalloDynamic.TxAlloMappingStateDigest()); err != nil {
+				txalloObsTraceV1.MappingAckWaitNS = txalloObserveDurationV1(txalloObsStageV1)
+				txalloObsTraceV1.FailurePhase = "mapping_ack_wait"
 				return err
 			}
+			txalloObsTraceV1.MappingAckWaitNS = txalloObserveDurationV1(txalloObsStageV1)
 		}
 		return nil
 	}

@@ -373,6 +373,10 @@ func (r *NodeRuntime) porygonPaperRegisterExecution(block realblock.Block, execu
 	for _, d := range executed.ExecutionResult.TxDeltas {
 		deltaByID[d.TxID] = d
 	}
+	// Snapshot the *certified ordered* frontier before taking paper state.mu.
+	// This keeps the existing pipeline.mu -> paper.mu lock ordering and permits
+	// late E(h) completion to reconcile with an already ordered commit height.
+	commitEligibleThrough := r.porygonV57LifecycleOrderedHeight(block.Height)
 	state := r.porygonPaperRuntimeState()
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -461,7 +465,7 @@ func (r *NodeRuntime) porygonPaperRegisterExecution(block realblock.Block, execu
 		lifecycle.UpdateProposalHeight = targetHeight
 		lifecycle.UpdateDigest = update.UpdateDigest
 	}
-	r.porygonPaperCommitReadyLocked(state, block.Height)
+	r.porygonPaperCommitReadyLocked(state, commitEligibleThrough)
 	return nil
 }
 

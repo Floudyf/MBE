@@ -27,9 +27,9 @@ import {
   type V5WorkloadSourceSpec,
 } from "../api";
 import WorkloadPreviewPanel from "../components/v5/WorkloadPreviewPanel";
-import WorkloadSourceEditor, { type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
+import WorkloadSourceEditor, { publishedWorkloadDatasets, type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
 import { backendLabel, blockerLabel, faultModeLabel, statusLabel, suiteLabel } from "../v5Labels";
-import { BATCH_SI_ABLATION_METHOD_IDS, METATRACK_ABLATION_METHOD_IDS, METATRACK_SCHEDULER_DIAG_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
+import { BATCH_SI_ABLATION_METHOD_IDS, METATRACK_ABLATION_METHOD_IDS, METATRACK_SHARD4_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
 import { V5_BUILTIN_METHODS, V5_DEFAULT_METHOD_IDS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
 import { buildThetaSweepPoints, compactCount, thetaOptionsForDataset, type SkewExperimentPreset } from "../v5SkewExperiment"; // V5_SKEW_MAIN_PRESET_V1
 import "../v5UiPolish.css";
@@ -176,7 +176,7 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
     const metaTrackDraft = methods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"));
     const migratedMethods = suite === "ablation_experiment" && metaTrackDraft ? [...METATRACK_ABLATION_METHOD_IDS] : methods;
     // MBE_METATRACK_DIAG_V28_UI_MIGRATION
-    const migratedDiagnosticMethods = migratedMethods.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item);
+    const migratedDiagnosticMethods = migratedMethods.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item).map((item) => item === "metatrack_diag_ready8" ? "metatrack_sh_hash" : item === "metatrack_diag_dual1" ? "metatrack_sh_coacc" : item === "metatrack_diag_fifo1" ? "metatrack_sh_noco" : item);
     const topologyRaw = isRecord(parsed.topology) ? parsed.topology : {};
     const blockRaw = isRecord(parsed.blockProduction) ? parsed.blockProduction : {};
     const workloadRaw = isRecord(parsed.workload) ? parsed.workload : {};
@@ -274,7 +274,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   const effectiveSelectedMethodIds = selectedSuite === "ablation_experiment" && selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))
     ? [...METATRACK_ABLATION_METHOD_IDS]
     : selectedMethods;
-  const diagnosticMigratedSelectedMethodIds = effectiveSelectedMethodIds.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item);
+  const diagnosticMigratedSelectedMethodIds = effectiveSelectedMethodIds.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item).map((item) => item === "metatrack_diag_ready8" ? "metatrack_sh_hash" : item === "metatrack_diag_dual1" ? "metatrack_sh_coacc" : item === "metatrack_diag_fifo1" ? "metatrack_sh_noco" : item);
   const selectedRaw = methods.filter((method) => diagnosticMigratedSelectedMethodIds.includes(method.method_id));
   const selected = selectedRaw;
   const groundhogSelected = diagnosticMigratedSelectedMethodIds.includes(groundhogMethodId);
@@ -327,6 +327,22 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       const [pluginResponse, datasetResponse] = await Promise.all([fetchV5PluginCatalog("real_cluster"), fetchV5WorkloadDatasets()]);
       setCatalog(pluginResponse);
       setDatasets(datasetResponse);
+      // MBE_MV_UIFIX_V1 repair saved drafts whose old or wrong-tab datasets
+      // are now hidden, without changing source facts or method selection.
+      setWorkload((current) => {
+        if (current.mode === "synthetic") return current;
+        const visible = publishedWorkloadDatasets(datasetResponse, current.mode).filter((item) => item.selectable);
+        if (visible.some((item) => item.dataset_id === current.datasetId)) return current;
+        const next = visible[0];
+        if (!next) return current;
+        const desired = current.mode === "dataset_original" ? "original" : "derived";
+        const definition = (next.variant_definitions ?? []).find((item) => (item.kind ?? "original") === desired);
+        if (!definition) return current;
+        const parameters = Object.fromEntries((definition.parameters ?? []).flatMap((field) => field.default === undefined || field.default === null ? [] : [[field.name, field.default]]));
+        return { ...current, datasetId: next.dataset_id, variantMode: definition.variant_mode,
+          variantParameters: parameters, useFullDataset: false,
+          txCount: next.supported_tx_counts?.includes(current.txCount) ? current.txCount : (next.supported_tx_counts?.find((n) => n >= 1000) ?? current.txCount) };
+      });
       const categories = new Set(pluginResponse.map((item) => item.category));
       setCatalogError(pluginResponse.length > 0 && defaultV5PluginSelections(pluginResponse).length === categories.size ? "" : "真实集群插件目录不完整。");
       const available = V5_BUILTIN_METHODS.map((item) => item.method_id);
@@ -747,7 +763,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
 
     <article className="final-card wide">
       <div className="section-heading"><div><h3>② 选择实验对象</h3><p className="muted">{FORMAL_SUITE_DEFINITIONS.find((item) => item.id === selectedSuite)?.description}</p></div></div>
-      {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_latest"]))}>MetaTrack 对照组</button><button type="button" className="ghost-button" data-testid="v5-metatrack-exec4-preset" onClick={() => update(() => setSelectedMethods([...METATRACK_SCHEDULER_DIAG_METHOD_IDS]))}>MetaTrack 四组调度</button></div>}
+      {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_latest"]))}>MetaTrack 对照组</button><button type="button" className="ghost-button" data-testid="v5-metatrack-shard4-preset" onClick={() => update(() => setSelectedMethods([...METATRACK_SHARD4_METHOD_IDS]))}>MetaTrack 四组执行分片</button></div>}
       {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 三个一级机制替换消融。</small></button></div>}
       <div className="formal-method-groups">
         {(["stateful", "batch_si", "stateless", "metatrack"] as const).map((family) => {

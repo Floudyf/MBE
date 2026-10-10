@@ -90,6 +90,7 @@ type txalloDynamicBlockRowV222 struct {
 	RawSourceRowIndex int    `json:"raw_source_row_index"`
 	TransactionID     string `json:"transaction_id"`
 	BlockNum          int64  `json:"block_num"`
+	EpochCoordinate   int64  `json:"epoch_coordinate,omitempty"` // MBE_MV_TXALLO_EVENT_CLOCK_V1: observed source event position, never chain block
 	GlobalSequence    int64  `json:"global_sequence"`
 	SenderID          string `json:"sender_id"`
 	ReceiverID        string `json:"receiver_id"`
@@ -194,6 +195,11 @@ func txalloLoadDynamicBlockIndexV222(dataDir string, plan WorkloadPlan) (*txallo
 	expectedSHA := strings.ToLower(strings.TrimSpace(fmt.Sprint(meta["sha256"])))
 	expectedCount := intValue(meta["selected_count"])
 	anchorRaw := intValue(meta["evaluation_anchor_raw_row_index"])
+	clockKind, _ := meta["epoch_clock_source"].(string)
+	if clockKind != "" && clockKind != "mbe_event_order_index" {
+		return nil, fmt.Errorf("unsupported TxAllo clock provenance: %s", clockKind)
+	}
+	eventClock := clockKind == "mbe_event_order_index"
 	if rel == "" || len(expectedSHA) != 64 || expectedCount <= 0 || expectedCount != plan.ActualTxCount {
 		return nil, fmt.Errorf("TxAllo dynamic block sidecar metadata incomplete")
 	}
@@ -231,14 +237,29 @@ func txalloLoadDynamicBlockIndexV222(dataDir string, plan WorkloadPlan) (*txallo
 			return nil, fmt.Errorf("TxAllo dynamic block sidecar decode: %w", err)
 		}
 		index := len(blocks)
-		if row.SchemaVersion != txalloDynamicBlockRowSchema || row.MaterializedIndex != index {
-			return nil, fmt.Errorf("TxAllo dynamic block sidecar index/schema mismatch")
+		schema := txalloDynamicBlockRowSchema
+		if eventClock {
+			schema = "mbe_txallo_event_clock_v1"
+		}
+		if row.SchemaVersion != schema || row.MaterializedIndex != index {
+			return nil, fmt.Errorf("TxAllo dynamic block sidecar index/schema/clock mismatch")
 		}
 		if row.RawSourceRowIndex != anchorRaw+index {
 			return nil, fmt.Errorf("TxAllo dynamic block sidecar raw-source alignment mismatch")
 		}
-		if row.BlockNum <= 0 || (lastBlock > 0 && row.BlockNum < lastBlock) {
-			return nil, fmt.Errorf("TxAllo dynamic block sidecar block order invalid")
+		coordinate := row.BlockNum
+		if eventClock {
+			// No block number is invented. The explicitly typed event coordinate
+			// drives identical 15-event A intervals across all methods.
+			if row.BlockNum != 0 || row.EpochCoordinate != int64(row.RawSourceRowIndex)+1 || row.GlobalSequence != row.EpochCoordinate {
+				return nil, fmt.Errorf("TxAllo event-order clock provenance/alignment invalid")
+			}
+			coordinate = row.EpochCoordinate
+		} else if row.EpochCoordinate != 0 {
+			return nil, fmt.Errorf("TxAllo observed source block sidecar cannot carry virtual clock coordinates")
+		}
+		if coordinate <= 0 || (lastBlock > 0 && coordinate < lastBlock) {
+			return nil, fmt.Errorf("TxAllo dynamic source clock regressed or invalid")
 		}
 		if row.GlobalSequence <= lastSeq {
 			return nil, fmt.Errorf("TxAllo dynamic block sidecar global sequence invalid")
@@ -246,9 +267,9 @@ func txalloLoadDynamicBlockIndexV222(dataDir string, plan WorkloadPlan) (*txallo
 		if strings.TrimSpace(row.TransactionID) == "" || strings.TrimSpace(row.SenderID) == "" || strings.TrimSpace(row.ReceiverID) == "" {
 			return nil, fmt.Errorf("TxAllo dynamic block sidecar identity incomplete")
 		}
-		lastBlock = row.BlockNum
+		lastBlock = coordinate
 		lastSeq = row.GlobalSequence
-		blocks = append(blocks, row.BlockNum)
+		blocks = append(blocks, coordinate)
 		senders = append(senders, strings.ToLower(strings.TrimSpace(row.SenderID)))
 		receivers = append(receivers, strings.ToLower(strings.TrimSpace(row.ReceiverID)))
 	}

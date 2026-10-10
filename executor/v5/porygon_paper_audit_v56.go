@@ -3,7 +3,6 @@ package v5
 import (
 	"fmt"
 	"sort"
-	"strconv"
 
 	"metaverse-chainlab/executor/realism/metrics"
 )
@@ -22,27 +21,33 @@ func (r *NodeRuntime) porygonV56WritePaperIdentity(path string) error {
 	}
 	state.mu.Lock()
 	rows := make([][]string, 0, len(state.txs))
-	for id, item := range state.txs {
+	for _, item := range state.txs {
 		if item == nil {
 			continue
 		}
-		rows = append(rows, []string{
-			id, string(item.Status), strconv.FormatUint(item.OriginHeight, 10),
-			strconv.FormatBool(item.CrossShard),
-			strconv.FormatUint(item.WitnessRound, 10),
-			strconv.FormatUint(item.OrderingRound, 10),
-			strconv.FormatUint(item.PreExecutionRound, 10),
-			strconv.FormatUint(item.UpdateProposalHeight, 10),
-			strconv.FormatUint(item.UpdateExecutionHeight, 10),
-			strconv.FormatUint(item.CommitProposalHeight, 10),
-			strconv.FormatUint(item.CommitRound, 10), item.RecoveryMode,
-		})
+		rows = append(rows, porygonV57LifecycleRow(item))
 	}
 	state.mu.Unlock()
+	archived, err := r.porygonV57ArchivedPaperRows()
+	if err != nil {
+		return err
+	}
+	// A pruned row is still an actual paper terminal, not absent evidence.
+	// Reject conflicting duplicate identities instead of fabricating success.
+	byID := map[string][]string{}
+	for _, row := range append(archived, rows...) {
+		if previous, exists := byID[row[0]]; exists {
+			if !porygonV57IdenticalPaperRows(previous, row) {
+				return fmt.Errorf("Porygon v5.7 conflicting live/archive identity for %s", row[0])
+			}
+			continue
+		}
+		byID[row[0]] = row
+	}
+	rows = rows[:0]
+	for _, row := range byID {
+		rows = append(rows, row)
+	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i][0] < rows[j][0] })
-	return metrics.WriteCSV(path, []string{
-		"tx_id", "paper_status", "origin_height", "cross_shard", "witness_round",
-		"ordering_round", "pre_execution_round", "update_proposal_height",
-		"update_execution_height", "commit_proposal_height", "commit_round", "recovery_mode",
-	}, rows)
+	return metrics.WriteCSV(path, porygonV57PaperHeader, rows)
 }

@@ -63,10 +63,14 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_ab_state", title: "去掉状态局部化", description: "去掉完整状态局部化：Home exact + 真正按需远程获取，关闭 batch-entry prefetch、batch remote/final writeback；Version Liveness、分流、双轨、V669 与 PBFT 保持。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   { methodId: "metatrack_ab_handoff", title: "历史子消融-无本地版本交接", description: "历史结果兼容项；不再进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_exp", title: "实验版（旧）", description: "历史流式实验结果兼容项，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  // MBE_METATRACK_SHARD4_V1_1: routing comparisons only; all nonrouting Full components unchanged
+  { methodId: "metatrack_sh_hash", title: "② 哈希执行分片", description: "复用现有 MetaTrack 哈希分流；保留与 Full 相同的 V669 共识、双轨、精确版本状态供应和 Worker 配置。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_sh_coacc", title: "③ 原始共现矩阵", description: "调用原 frequency_coaccess_admissible_v2 共现状态关联放置与覆盖度分流；其他执行、共识和状态机制沿用 Full。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_sh_noco", title: "④ 增量分片去共现", description: "保持 Full 增量分片及其版本就绪、跨域依赖、远程代价、容量与负载规则，仅将共现评分置零；共现历史统计仍运行。", family: "metatrack", comparisonVisible: true, mainVisible: false },
   // MBE_METATRACK_EXEC4_V1: separate scheduler diagnostics, not official ablations
-  { methodId: "metatrack_diag_ready8", title: "② 统一单轨并行", description: "沿用本次 Full 的依赖图、版本与状态机制；移除 Fast/Conservative 调度分轨，Ready 交易可以绕行，业务并发上限仍为配置的 Worker 数。", family: "metatrack", comparisonVisible: true, mainVisible: false },
-  { methodId: "metatrack_diag_dual1", title: "③ 双轨单业务", description: "沿用 Full 的双轨判定、Fast 优先及 Ready 绕行，但任一时刻仅运行一笔业务交易；Worker 配置不改变。", family: "metatrack", comparisonVisible: true, mainVisible: false },
-  { methodId: "metatrack_diag_fifo1", title: "④ 严格 FIFO", description: "与正式去双轨 A2 的执行插件完全一致：不做双轨分类、不允许已 Ready 的后继绕过队首，同时只运行一笔业务交易。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_diag_ready8", title: "② 统一单轨并行", description: "沿用本次 Full 的依赖图、版本与状态机制；移除 Fast/Conservative 调度分轨，Ready 交易可以绕行，业务并发上限仍为配置的 Worker 数。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  { methodId: "metatrack_diag_dual1", title: "③ 双轨单业务", description: "沿用 Full 的双轨判定、Fast 优先及 Ready 绕行，但任一时刻仅运行一笔业务交易；Worker 配置不改变。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  { methodId: "metatrack_diag_fifo1", title: "④ 严格 FIFO", description: "与正式去双轨 A2 的执行插件完全一致：不做双轨分类、不允许已 Ready 的后继绕过队首，同时只运行一笔业务交易。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 ];
 
 export const BATCH_SI_ABLATION_METHOD_IDS = [
@@ -84,6 +88,8 @@ export const METATRACK_ABLATION_METHOD_IDS = [
   "metatrack_ab_state",
   "metatrack_ab_cons",
 ] as const;
+
+export const METATRACK_SHARD4_METHOD_IDS = ["metatrack_latest", "metatrack_sh_hash", "metatrack_sh_coacc", "metatrack_sh_noco"] as const;
 
 export const METATRACK_SCHEDULER_DIAG_METHOD_IDS = ["metatrack_latest", "metatrack_diag_ready8", "metatrack_diag_dual1", "metatrack_diag_fifo1"] as const;
 

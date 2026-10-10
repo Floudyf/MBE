@@ -1,0 +1,48 @@
+{
+  "dataset_id": "dcl_sales_layered_v4",
+  "display_name": "Decentraland 原始销售事件 V4 静态语义适配",
+  "description": "Polygon 市场真实销售事件；保留同哈希多事件；统一买卖双方账户键；不伪造NFT Token ID。",
+  "source_platform": "decentraland_marketplace",
+  "source_chain": "polygon_mainnet",
+  "dataset_type": "marketplace_sale_trace_semantic_v4",
+  "adapter_id": "mv_dcl_layered_v4",
+  "local_raw_relative_path": "dataset/Decentraland/dcl_sales_workload_chain_ready.csv",
+  "source_sha256": "f690db630e061a15dfab3f2b8a654006bccb010517a8d67379817fdda522474e",
+  "source_size_bytes": 69027787,
+  "row_count": 271868,
+  "supported_tx_counts": [
+    100,
+    1000,
+    10000,
+    50000,
+    100000,
+    250000
+  ],
+  "schema_version": "mbe_dataset_manifest_v2",
+  "source_layout": "single_file",
+  "truth_label": "real_replay_projected",
+  "catalog_validation": "file_metadata",
+  "allow_full_dataset": true,
+  "generator_version": "mv_layered_v4_v1",
+  "supported_variants": [
+    "original_window"
+  ],
+  "variant_definitions": [
+    {
+      "variant_mode": "original_window",
+      "display_name": "真实原始连续窗口",
+      "kind": "original",
+      "selection_mode": "contiguous_window",
+      "parameters": []
+    }
+  ],
+  "warnings": [
+    "静态 R/W 为事先声明的确定性语义重放投影，不代表链上实际读写集。",
+    "保留全部原始交易哈希、事件 ID 与事件顺序；禁止按重复交易哈希去重。",
+    "所有方法共享规范化数据，但需各自按论文机制控制提前可见的字段。"
+  ],
+  "verification_method": "source_file_sha256_and_full_stream_relation_check",
+  "original_adapter_id": "decentraland_sales_v1",
+  "preview_policy": "mv_verified_window_index_v1",
+  "preview_provenance": "full_source_checked_index_exact_canonical_selector"
+}

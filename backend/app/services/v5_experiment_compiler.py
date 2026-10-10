@@ -11,6 +11,7 @@ from backend.app.services.v5_plugin_manifest_store import STORE
 from backend.app.services import v5_workload_data_plane as workload_plane
 from backend.app.services.v5_workload_data_plane import WorkloadPreviewRequest
 from backend.app.services.v5_txallo_history_ratio_v21 import compile_txallo_history
+from backend.app.services.mv_txallo_input_v1 import compile_v4_txallo_inputs  # MBE_MV_COMPAT_V1
 from backend.app.services.v5_txallo_dynamic_blocks_v222 import compile_txallo_dynamic_blocks
 
 
@@ -239,6 +240,13 @@ def compile_plan(spec: V5ExperimentSpec, run_dir: Path, *, source_saved_config_i
                 "workload/txallo_mapping_snapshot.json",
                 "workload/txallo_mapping_epochs.jsonl",
             ]
+            # MBE_TXALLO_OBSERVABILITY_V13: only client-produced artifacts are
+            # required at the runner completion gate. The aggregate observation
+            # is generated later by the metric extractor, before cold archive.
+            expected_artifacts += [
+                "client/txallo_epoch_timing.jsonl",
+                "client/txallo_client_binary_v1.json",
+            ]
             expected_artifacts += [
                 f"nodes/{node.node_id}/{artifact}"
                 for node in nodes
@@ -382,6 +390,8 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         },
         "base_window_sha256": materialized.summary.get("base_window_sha256"),
         "base_window_hash": materialized.summary.get("base_window_sha256"),
+        "start_offset": materialized.summary.get("start_offset"),
+        "end_offset": materialized.summary.get("end_offset"),
         "expected_cross_shard_count": expected_cross,
         "expected_cross_shard_ratio": (float(expected_cross) / actual) if actual else 0,
         "topology_preview_cross_shard_count": topology_preview_cross_shard_count,
@@ -391,8 +401,16 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
         "generator_version": workload_plane.GENERATOR_VERSION,
         "no_fallback": True,
     }
-    txallo_history = compile_txallo_history(run_dir=run_dir, manifest=manifest, workload_plan=plan, profile=profile)
-    txallo_dynamic_blocks = compile_txallo_dynamic_blocks(run_dir=run_dir, manifest=manifest, workload_plan=plan, profile=profile)
+    # MBE_MV_COMPAT_V1: input-only bridge for verified V4 original Axie source blocks.
+    mv_sidecars = compile_v4_txallo_inputs(
+        run_dir=run_dir, manifest=manifest, workload_plan=plan, profile=profile,
+        cache_root=workload_plane.WORKLOAD_CACHE_ROOT, project_root=workload_plane.ROOT,
+    )
+    if mv_sidecars is None:
+        txallo_history = compile_txallo_history(run_dir=run_dir, manifest=manifest, workload_plan=plan, profile=profile)
+        txallo_dynamic_blocks = compile_txallo_dynamic_blocks(run_dir=run_dir, manifest=manifest, workload_plan=plan, profile=profile)
+    else:
+        txallo_history, txallo_dynamic_blocks = mv_sidecars
     if txallo_history is not None or txallo_dynamic_blocks is not None:
         audit_metadata = dict(plan.get("audit_metadata") or {})
         if txallo_history is not None:

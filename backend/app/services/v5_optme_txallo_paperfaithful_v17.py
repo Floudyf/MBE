@@ -646,6 +646,10 @@ def _canonical_child(item: dict[str, Any]) -> dict[str, Any]:
         if metrics.get("v16_business_execution_timer_complete") is False:
             blockers.append("business_execution_measurement_incomplete")
     if _is_txallo(method):
+        # MBE_MV_TXALLO_EVENT_CLOCK_V1: method-local execution may be correct, but a virtual
+        # event clock must never be classified as a paper source-block reproduction.
+        if metrics.get('txallo_epoch_clock_source') == 'mbe_event_order_index':
+            blockers.append('txallo_mbe_event_order_extension_not_paper_source_block_reproduction')
         audit = metrics.get("v17_txallo_paper_audit") or {}
         if audit.get("account_uniqueness_passed") is False: blockers.append("txallo_definition1_account_uniqueness_failed")
         if audit.get("account_completeness_passed") is False: blockers.append("txallo_definition1_account_completeness_failed")
@@ -710,11 +714,13 @@ def apply_group_fidelity_gate(items: list[dict[str, Any]], report: dict[str, Any
         x["pairwise_logical_transaction_identity_equivalent"] = workload_equal
         x["stateless_pair_logical_business_state_equivalent"] = stateless_business_equal
         x["stateful_pair_partition_state_equivalent"] = stateful_partition_equal
-        if x.get("v17_fidelity_blockers") or workload_equal is not True:
-            x["paper_candidate"] = False
-            reasons = list(x.get("paper_candidate_reasons") or []) + list(x.get("v17_fidelity_blockers") or [])
-            if workload_equal is not True: reasons.append("logical_transaction_identity_not_proven_equal")
-            x["paper_candidate_reasons"] = sorted(set(map(str,reasons)))
+        # MBE_MV_FIX_V2: peer failure blocks group comparison, never independently
+        # invalidates an otherwise valid completed method's local paper evidence.
+        x['v17_cross_method_comparison_blocked'] = workload_equal is not True
+        if x.get('v17_fidelity_blockers'):
+            x['paper_candidate'] = False
+            reasons = list(x.get('paper_candidate_reasons') or []) + list(x.get('v17_fidelity_blockers') or [])
+            x['paper_candidate_reasons'] = sorted(set(map(str, reasons)))
     return enriched, out
 
 

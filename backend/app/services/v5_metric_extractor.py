@@ -1611,6 +1611,13 @@ def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
     summary = _read_json(summary_path)
     if not summary:
         return
+    # MBE_MV_TXALLO_EVENT_CLOCK_V1: visible, cryptographically bound per-run truth boundary.
+    epoch_source = _read_json(run_dir / 'workload' / 'txallo_dynamic_blocks_summary.json')
+    if isinstance(epoch_source, dict) and epoch_source.get('epoch_clock_source') == 'mbe_event_order_index':
+        metrics['txallo_epoch_clock_source'] = 'mbe_event_order_index'
+        metrics['txallo_epoch_source_block_observed'] = False
+        metrics['txallo_paper_source_block_reproduction'] = False
+        metrics['txallo_epoch_a_unit'] = 'source_events_not_chain_blocks'
     metrics["txallo_metrics_available"] = True
     for key in (
         "allocation_mode", "history_source", "history_cutoff_source_row_index", "history_transaction_count", "history_limit",
@@ -1683,6 +1690,16 @@ def _apply_txallo_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
             if rel not in metrics["source_artifacts"]:
                 metrics["source_artifacts"].append(rel)
     metrics["txallo_truth_scope"] = "initial_g_uses_pre_evaluation_history;dynamic_updates_use_successfully_committed_prior_15_source_block_mbe_adapted_epochs_only;all_nodes_ack_mapping_before_next_epoch;stateful_mapping_moves_require_all_node_durable_paper_replica_convergence;paper_case_study_g_every_20_source_epochs;modeled_throughput_is_paper_objective_not_measured_end_to_end_tps"
+    if metrics.get('txallo_epoch_clock_source') == 'mbe_event_order_index':
+        metrics['txallo_a_epoch_parameterization'] = 'mbe_adapted_fixed_15_observed_events'
+        metrics['txallo_a_epoch_policy'] = 'source_event_order_15_committed_only_mbe_adapted'
+        metrics['txallo_global_epoch_policy'] = 'mbe_adapted_tau1_15_source_events_G_every_20_closed_epochs'
+        metrics['txallo_truth_boundary'] = 'MBE_EVENT_ORDER_EXTENSION_NOT_PAPER_SOURCE_BLOCK_REPRODUCTION'
+        metrics['txallo_truth_scope'] = 'initial_G_pre_evaluation_observed_source_events;A_committed_prior_15_ordered_source_events_only;G_every_20_closed_event_epochs;all_nodes_mapping_ACK;not_observed_chain_block_clock'
+
+    # TxAllo observation-only closure, before the formal cold archive.
+    from backend.app.services.v5_txallo_observability_v1 import emit_for_extractor
+    emit_for_extractor(metrics, run_dir)
 
 
 def _apply_calvin_metrics(metrics: dict[str, Any], run_dir: Path) -> None:

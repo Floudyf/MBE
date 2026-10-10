@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os  # MBE_MV_FIX_V2 environment switch for explicit full evidence export
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -59,6 +61,21 @@ def build(group_dir: Path, group: dict, output_path: Path | None = None) -> Path
     ]
     archive_entries.extend(_failed_runtime_diagnostics(group_dir, group))
     streamed_entries = _stateful_oracle_archived_evidence(group_dir, group)
+    # Compact by default. Raw oracle files remain in verified cold archives.
+    # Full export is opt-in only when the operator requests the original bundle.
+    full_oracle = os.environ.get('MBE_ARTIFACTS_FULL_ORACLE_EVIDENCE', '').strip() == '1'
+    evidence_index = {
+        'schema_version': 'mbe_cold_oracle_evidence_index_v1',
+        'storage': 'original_run_cold_archive_not_embedded',
+        'full_evidence_embedded': full_oracle,
+        'retrieval_note': 'Verify archive manifest and stream raw evidence from original run archive as needed',
+        'files': [{
+            'name': item['archive_name'], 'run_id': item['runtime_root'].name,
+            'archive_member': item['artifact_name'], 'sha256': item['sha256'],
+            'size_bytes': item['size_bytes'],
+        } for item in streamed_entries],
+    }
+    evidence_index_bytes = (json.dumps(evidence_index, sort_keys=True, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
     manifest_files = [
         {
             "name": archive_name,
@@ -68,15 +85,18 @@ def build(group_dir: Path, group: dict, output_path: Path | None = None) -> Path
         }
         for path, archive_name, source in archive_entries
     ]
-    manifest_files.extend(
-        {
-            "name": item["archive_name"],
-            "source": item["source"],
-            "size_bytes": item["size_bytes"],
-            "sha256": item["sha256"],
-        }
-        for item in streamed_entries
-    )
+    if full_oracle:
+        manifest_files.extend(
+            {'name': item['archive_name'], 'source': item['source'],
+             'size_bytes': item['size_bytes'], 'sha256': item['sha256']}
+            for item in streamed_entries
+        )
+    manifest_files.append({
+        'name': 'cold_oracle_evidence_index.json',
+        'source': 'cold_archive_manifest_index',
+        'size_bytes': len(evidence_index_bytes),
+        'sha256': hashlib.sha256(evidence_index_bytes).hexdigest(),
+    })
     manifest = {
         "run_group_id": group["run_group_id"],
         "experiment_conditions": _experiment_conditions(group),
@@ -91,14 +111,17 @@ def build(group_dir: Path, group: dict, output_path: Path | None = None) -> Path
         for path, archive_name, _ in archive_entries:
             if path.is_file():
                 archive.write(path, archive_name)
-        for item in streamed_entries:
-            info = zipfile.ZipInfo(item["archive_name"])
-            info.compress_type = zipfile.ZIP_DEFLATED
-            with archive.open(info, "w", force_zip64=True) as target:
-                for chunk in v5_artifact_storage.stream_archived_artifact(
-                    item["runtime_root"], item["artifact_name"]
-                ):
-                    target.write(chunk)
+        if full_oracle:
+            for item in streamed_entries:
+                info = zipfile.ZipInfo(item['archive_name'])
+                info.compress_type = zipfile.ZIP_DEFLATED
+                with archive.open(info, 'w', force_zip64=True) as target:
+                    for chunk in v5_artifact_storage.stream_archived_artifact(
+                        item['runtime_root'], item['artifact_name']
+                    ):
+                        target.write(chunk)
+        archive.writestr('cold_oracle_evidence_index.json', evidence_index_bytes,
+                         compress_type=zipfile.ZIP_DEFLATED)
         archive.write(reproducibility_manifest, reproducibility_manifest.name)
         archive.write(artifact_manifest, artifact_manifest.name)
     return output

@@ -894,6 +894,11 @@ def _run_worker(group_id: str) -> None:
                     # extract_metrics ran before evaluate_serial_order_oracle.
                     if str(row.get("method_config_id") or "") in {"stateful_optme", "stateless_optme", "stateful_txallo", "stateless_txallo"}:
                         metrics = enrich_optme_txallo_v18(result_dir, row.get("method_config_id"), metrics)
+                    # MBE_TXALLO_TERMINAL_CLOSE_V14: post-extraction observations only.
+                    # Refresh the catalog BEFORE cold archive, never touch formal gates.
+                    if str(row.get("method_config_id") or "") in {"stateful_txallo", "stateless_txallo"}:
+                        from backend.app.services.v5_txallo_close_v14 import postprocess as _txobs_close_v14
+                        metrics.update(_txobs_close_v14(result_dir, result))
                     if isinstance(result.get("summary"), dict):
                         # Persist the exact semantic contract used by the oracle so
                         # exported child/result evidence is self-describing.

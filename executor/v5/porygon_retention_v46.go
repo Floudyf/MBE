@@ -39,16 +39,10 @@ func (r *NodeRuntime) porygonPruneProtocolCaches(durableHeight uint64) {
 				delete(state.proposalUpdates, height)
 			}
 		}
-		for txID, lifecycle := range state.txs {
-			if lifecycle == nil || lifecycle.OriginHeight >= cutoff {
-				continue
-			}
-			switch lifecycle.Status {
-			case porygonPaperTxCommitted, porygonPaperTxAbandoned, porygonPaperTxRolledBack:
-				delete(state.txs, txID)
-			}
-		}
 		state.mu.Unlock()
+		// Archive terminal evidence before dropping the bounded protocol cache.
+		// Observer I/O failure preserves the original rows, never protocol truth.
+		r.porygonV57ArchiveAndPruneTerminals(state, cutoff, durableHeight)
 	}
 
 	if value, ok := porygonBatchExchangeStates.Load(r); ok {
