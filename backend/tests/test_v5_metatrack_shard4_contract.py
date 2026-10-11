@@ -47,14 +47,15 @@ def test_existing_plugins_and_branches_reused_instead_of_new_algorithms():
     assert 'ablation_no_coaccess_sharding_v675' not in opts
 
 
-def test_only_four_comparison_cards_are_visible_and_preset_is_updated():
+def test_retired_routing_comparison_cards_hidden_and_preset_removed():
     catalog=(ROOT/'frontend/src/v5FormalExperimentCatalog.ts').read_text(encoding='utf-8')
     page=(ROOT/'frontend/src/pages/V5FormalRunPage.tsx').read_text(encoding='utf-8')
     ts=(ROOT/'frontend/src/v5MethodProfile.ts').read_text(encoding='utf-8')
     for mid in IDS:
         matches=[row for row in catalog.splitlines() if f'methodId: "{mid}"' in row]
         assert len(matches)==1
-        assert 'comparisonVisible: true' in matches[0]
+        assert ('comparisonVisible: true' if mid == FULL else 'comparisonVisible: false') in matches[0]
+        assert 'mainVisible: false' in matches[0] if mid != FULL else 'mainVisible: true' in matches[0]
         assert f'method_id: "{mid}"' in ts
         assert f'"{mid}": V5FormalMethod(' in (ROOT/'backend/app/services/v5_formal_plan_validator.py').read_text(encoding='utf-8')
     for mid in LEGACY:
@@ -62,12 +63,12 @@ def test_only_four_comparison_cards_are_visible_and_preset_is_updated():
         assert len(matches)==1
         assert 'comparisonVisible: false' in matches[0]
         assert mid in BUILTIN_METHODS  # old artifact compatibility
-    method_set=catalog.split('export const METATRACK_SHARD4_METHOD_IDS = [',1)[1].split('] as const;',1)[0]
-    assert all(f'"{mid}"' in method_set for mid in IDS)
-    assert 'MetaTrack 四组执行分片' in page
-    assert 'v5-metatrack-shard4-preset' in page
-    assert 'METATRACK_SHARD4_METHOD_IDS' in page
-    assert all(mid in page for mid in IDS[1:])
+    assert 'export const METATRACK_SHARD4_METHOD_IDS' not in catalog
+    assert 'MetaTrack 四组执行分片' not in page
+    assert 'v5-metatrack-shard4-preset' not in page
+    assert 'METATRACK_SHARD4_METHOD_IDS' not in page
+    assert all(mid in page for mid in IDS[1:])  # retired IDs are migrated, not newly selectable
+    assert 'Array.from(new Set(' in page
     official=catalog.split('export const METATRACK_ABLATION_METHOD_IDS = [',1)[1].split('] as const;',1)[0]
     assert all(mid not in official for mid in IDS[1:])
 

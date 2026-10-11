@@ -4110,7 +4110,7 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	r.setCommitPhase("record_execution_artifacts", block)
 	r.recordProposalEvidence(block)
 	r.recordBlockExecutionResult(block, executed)
-	r.recordExecutionAndCommitDecisions(block, commitDecision, physicalDelta)
+	r.recordExecutionAndCommitDecisions(block, commitDecision, physicalDelta, executed.MetaTrackObservedClassification)
 	r.setCommitPhase("commit_reserved", block)
 	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
 		r.porygonCommitProposalReservation(block.BlockHash, block.TxList)
@@ -6529,6 +6529,11 @@ func writeSetContainsStateKey(writeSet map[string]string, stateKey string) bool 
 }
 
 func (r *NodeRuntime) applyRemoteStateDelta(ctx context.Context, block realblock.Block, item state.StateKV, unqualifiedKey, homeShard string, txDeltas []execution.TxDelta) ([]StateDeltaApplyAck, time.Duration, error) {
+	// MBE_MT_TAPOS_V1: only MetaTrack gets bounded, validated, retryable
+	// single Home ACKs. Other methods retain their existing contracts.
+	if r.metaTrackBlockExecutorFlag("version_liveness") && r.metaTrackBlockExecutorFlag("dependency_closed_consensus") {
+		return r.applyMetaTrackSingleDeltaReliableV1(ctx, block, item, unqualifiedKey, homeShard, txDeltas)
+	}
 	targetNodes := r.stateAccessNodeIDsForShard(homeShard)
 	if len(targetNodes) == 0 {
 		return nil, 0, fmt.Errorf("metatrack remote state apply home nodes missing for %s", homeShard)
@@ -8545,11 +8550,23 @@ func (r *NodeRuntime) recordProposalEvidence(block realblock.Block) {
 	r.mu.Unlock()
 }
 
-func (r *NodeRuntime) recordExecutionAndCommitDecisions(block realblock.Block, commitDecision CommitDecision, physicalDelta []state.StateKV) {
+func (r *NodeRuntime) recordExecutionAndCommitDecisions(block realblock.Block, commitDecision CommitDecision, physicalDelta []state.StateKV, reuse ...*BatchClassificationResult) {
 	executionPlugin := r.plugins.Execution.ID()
 	commitPlugin := r.plugins.Commit.ID()
 	timestamp := fmt.Sprint(time.Now().UnixMilli())
-	classification := batchClassification(block.TxList, r.plugins.Execution)
+	// MBE_METATRACK_CLASSREUSE_V1: post-commit artifacts need the original
+	// classification decisions, never a second O(key-hotness^2) topology scan.
+	// Non-MetaTrack and legacy direct calls keep their original fallback.
+	var classification BatchClassificationResult
+	if len(reuse) > 0 && isMetaTrackExecutionPlugin(r.plugins.Execution) {
+		if reused, ok := metaTrackReuseObservedClassificationV1(reuse[0], block.TxList); ok {
+			classification = reused
+		} else {
+			classification = batchClassification(block.TxList, r.plugins.Execution)
+		}
+	} else {
+		classification = batchClassification(block.TxList, r.plugins.Execution)
+	}
 	var dependencyCapture *metaTrackDependencyStructureBlockCapture
 	// MBE_METATRACK_HOL_STRUCTURE_V11
 	// Observation only: capture the same signed dependency structure for Full,

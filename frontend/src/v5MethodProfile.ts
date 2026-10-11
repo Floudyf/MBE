@@ -197,6 +197,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
     },
   },
   {
+    // MBE_MT_TAPOS_V1: disable fetch preloading only; preserve Full reliable Home writeback.
     method_id: "metatrack_ab_state",
     display_name: "去掉状态局部化",
     role: "ablation",
@@ -212,7 +213,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
     },
     plugin_config_overrides: {
       routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
-      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: false, ablation_on_demand_state_fetch_v661: true, batch_remote_writeback: false, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: false, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: false, ablation_on_demand_state_fetch_v661: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
   {

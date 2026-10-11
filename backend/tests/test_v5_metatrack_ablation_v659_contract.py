@@ -1,3 +1,4 @@
+# MBE_MT_TAPOS_V1: TAPOS no-prefetch must keep reliable batch Home writeback.
 from pathlib import Path
 import re
 
@@ -39,7 +40,7 @@ def test_v674_formal_ablations_are_single_variable_by_removed_innovation():
     state=plugins(blocks["metatrack_ab_state"]); assert {k for k in set(full)|set(state) if full.get(k)!=state.get(k)}=={"state_access"}
     compact=blocks["metatrack_ab_state"].replace(" ","").lower()
     assert "ablation_no_coaccess_sharding_v675:true" not in compact
-    for token in ("batch_entry_state_prefetch:false","ablation_on_demand_state_fetch_v661:true","batch_remote_writeback:false","final_version_batch_writeback:false"): assert token in compact
+    for token in ("batch_entry_state_prefetch:false","ablation_on_demand_state_fetch_v661:true","batch_remote_writeback:true","final_version_batch_writeback:true"): assert token in compact
     for mid in ("metatrack_latest","metatrack_ab_track","metatrack_ab_cons","metatrack_ab_state"):
         compact=blocks[mid].replace(" ","").lower()
         for token in ('version_liveness:true','version_liveness_indexed:true','single_final_seal:true'): assert token in compact

@@ -495,6 +495,7 @@ type BlockExecutionResult struct {
 	PersistenceMetrics        map[string]any                  `json:"persistence_metrics,omitempty"`
 	ScheduleEvents            []ScheduleEvent                 `json:"schedule_events,omitempty"`
 	ActualMetrics             map[string]any                  `json:"actual_metrics,omitempty"`
+	MetaTrackObservedClassification *BatchClassificationResult `json:"-"` // transient: no persisted/consensus payload
 	BusinessAttempts          []BusinessExecutionAttempt
 }
 type BusinessExecutionAttempt struct {
@@ -788,6 +789,7 @@ type BatchClassificationResult struct {
 type ScheduleResult struct {
 	Ordered                      []tx.SignedTransaction
 	Events                       []ScheduleEvent
+	MetaTrackPreparedClassification *BatchClassificationResult `json:"-"` // per-call, never persisted
 	ReadyPriorityPolicy          string
 	DependencyInfluenceTailDepth map[string]int
 	DependencyInfluenceDescCount map[string]int
@@ -2655,6 +2657,11 @@ func (p builtinScheduler) Schedule(items []tx.SignedTransaction, execution Execu
 	ordered := append([]tx.SignedTransaction(nil), items...)
 	result := ScheduleResult{Ordered: ordered}
 	classification := batchClassification(ordered, execution)
+	// MBE_METATRACK_CLASSREUSE_V1: the scheduler already built the immutable
+	// structure from the exact same original TxList the block executor receives.
+	if isMetaTrackExecutionPlugin(execution) {
+		result.MetaTrackPreparedClassification = &classification
+	}
 	decisions := classification.Decisions
 	fastDepth, conservativeDepth := 0, 0
 	for _, item := range ordered {
@@ -3567,7 +3574,10 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	if len(schedule.Ordered) != len(input.Block.TxList) {
 		return BlockExecutionResult{}, fmt.Errorf("metatrack block executor schedule length mismatch")
 	}
-	classification := batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
+	classification, classificationReusedV1 := metaTrackReuseScheduleClassificationV1(schedule.MetaTrackPreparedClassification, input.Block.TxList, input.RemoteStateReadiness)
+	if !classificationReusedV1 {
+		classification = batchClassificationWithReadiness(input.Block.TxList, executionPlugin, input.RemoteStateReadiness)
+	}
 	// MBE_METATRACK_EXEC4_V1: suppress lane classification, never the signed
 	// dependency DAG/StateReady oracle. Classification work is still counted.
 	diagnosticUnifiedReadyV1 := boolFromAny(p.config["diagnostic_unified_ready_v1"])
@@ -3617,6 +3627,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	for key, value := range metaTrackClassificationMetrics(classification, len(input.Block.TxList)) {
 		actualMetrics[key] = value
 	}
+	actualMetrics["metatrack_structural_classification_reused_v1"] = classificationReusedV1
 	dualTrackRuntimeV663 := executionPlugin.ID() == "dual_track_execution" && !diagnosticUnifiedReadyV1
 	actualMetrics["metatrack_diag_unified_ready_v1"] = diagnosticUnifiedReadyV1
 	actualMetrics["metatrack_diag_single_business_execution_v1"] = boolFromAny(p.config["diagnostic_single_business_execution_v1"])
@@ -3675,12 +3686,16 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		}
 		finalSeen[outcome.TxID] = true
 		delta := outcome.Delta
-		if outcome.Receipt.Success && metaTrackPureCommutativeTransaction(outcome.Tx) {
-			delta.WriteSet = metaTrackApplyCommutativeTransaction(working, input.Block.ShardID, outcome.Tx)
-		} else {
-			for key, value := range delta.WriteSet {
-				working[qualifyStateKey(input.Block.ShardID, key)] = value
-			}
+		// MBE_METATRACK_FIX_V1: mixed read_write + commutative_delta must
+		// rebase each commutative key on the canonical block-ordered state.
+		// Do not materialize speculative worker-absolute counter values.
+		canonicalWritesV1, canonicalErrV1 := metaTrackCanonicalizeTxDeltaV1(working, input.Block.ShardID, outcome.Tx, delta.WriteSet, outcome.Receipt.Success)
+		if canonicalErrV1 != nil {
+			return BlockExecutionResult{}, fmt.Errorf("metatrack canonical delta %s: %w", outcome.TxID, canonicalErrV1)
+		}
+		delta.WriteSet = canonicalWritesV1
+		for key, value := range delta.WriteSet {
+			working[qualifyStateKey(input.Block.ShardID, key)] = value
 		}
 		materializationCommitment.Apply(delta.WriteSet, func(key string) string {
 			return qualifyStateKey(input.Block.ShardID, key)
@@ -3722,6 +3737,11 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	result.PlanDigest = plan.PlanDigest
 	actualMetrics["duplicate_final_completion_count"] = duplicateFinalCompletions
 	actualMetrics["unique_final_logical_completion_count"] = len(finalSeen)
+	// Preserve the historical diagnostic-unified-ready observation policy.
+	var observedClassificationV1 *BatchClassificationResult
+	if !diagnosticUnifiedReadyV1 {
+		observedClassificationV1 = &classification
+	}
 	return BlockExecutionResult{
 		ExecutionResult:        result,
 		StateDelta:             stateKVsFromExecutionDelta(result.StateDelta),
@@ -3731,6 +3751,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		DeterministicApplyMS:   result.DeterministicMaterializationMS,
 		ScheduleEvents:         planEvents,
 		ActualMetrics:          actualMetrics,
+		MetaTrackObservedClassification: observedClassificationV1,
 		BusinessAttempts:       attempts,
 	}, nil
 }

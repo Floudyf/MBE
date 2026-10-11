@@ -381,7 +381,6 @@ func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block real
 	}
 	for _, target := range targets {
 		requests := make([]StateDeltaApplyRequest, 0, len(items))
-		waiters := map[string]chan StateDeltaApplyAck{}
 		for _, item := range items {
 			key := unqualified[item.Key]
 			joined := strings.Join(item.TxIDs, "|")
@@ -395,14 +394,6 @@ func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block real
 			}
 			requestID := stableTextDigest(strings.Join([]string{"batch_writeback", r.node.NodeID, target, block.BlockHash, joined, item.Key, key, item.Value, item.UpdateSemantics, fmt.Sprint(item.Delta), baseDigest, fmt.Sprint(item.RoutingOrdinal), homeShard, r.stateAccessPartitionID()}, "|"))
 			request := r.plugins.StateAccess.BuildDeltaApplyRequest(StateDeltaApplyInput{RequestID: requestID, TxID: joined, TxIDs: append([]string(nil), item.TxIDs...), BlockHash: block.BlockHash, Key: key, Value: item.Value, UpdateSemantics: item.UpdateSemantics, Delta: item.Delta, BaseValue: baseValue, BaseValueDigest: baseDigest, ApplyOrigin: item.ApplyOrigin, DeltaKind: item.DeltaKind, HasInitialValue: item.HasInitialValue, InitialValue: item.InitialValue, HomeShard: homeShard, ExecutionShard: r.stateAccessPartitionID(), SourceKey: item.Key, SourceHeight: block.Height, RoutingOrdinal: item.RoutingOrdinal, PreviousVersion: item.PreviousVersion, ProducedVersion: item.ProducedVersion, OrderingNoop: item.OrderingNoop})
-			waiter := make(chan StateDeltaApplyAck, 1)
-			r.mu.Lock()
-			if r.stateApplyWaiters == nil {
-				r.stateApplyWaiters = map[string]chan StateDeltaApplyAck{}
-			}
-			r.stateApplyWaiters[requestID] = waiter
-			r.mu.Unlock()
-			waiters[requestID] = waiter
 			requests = append(requests, request)
 		}
 		batchID := stableTextDigest(strings.Join([]string{r.node.NodeID, target, block.BlockHash, homeShard, r.stateAccessPartitionID(), fmt.Sprint(len(requests))}, "|"))
@@ -411,31 +402,54 @@ func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block real
 		if err != nil {
 			return err
 		}
-		started := time.Now()
-		if err := r.sendStateAccessToNode(ctx, target, envelope); err != nil {
-			return err
-		}
-		r.incrementFullLocalityMetric("metatrack_batch_writeback_request_count", 1)
-		r.incrementFullLocalityMetric("metatrack_batch_writeback_item_count", int64(len(requests)))
-		for i, request := range requests {
-			waiter := waiters[request.RequestID]
-			select {
-			case ack := <-waiter:
-				r.mu.Lock()
-				delete(r.stateApplyWaiters, request.RequestID)
-				r.mu.Unlock()
-				if !ack.Success {
-					return fmt.Errorf("metatrack batch writeback failed on %s: %s", target, ack.Error)
+		// MBE_METATRACK_FIX_V1: all item waiters share one batch inbox. Register
+		// before sending, keep them live across retries, and remove on any exit.
+		if err := func() error {
+			inbox := make(chan StateDeltaApplyAck, len(requests)*2+16)
+			r.mu.Lock()
+			seen := make(map[string]bool, len(requests))
+			for _, request := range requests {
+				if request.RequestID == "" || seen[request.RequestID] || r.stateApplyWaiters[request.RequestID] != nil {
+					r.mu.Unlock()
+					return fmt.Errorf("metatrack batch writeback duplicate or missing request ID to %s: %s", target, request.RequestID)
 				}
-				r.recordRemoteStateApply(block, items[i], request.Key, ack, time.Since(started))
-			case <-time.After(2 * time.Second):
-				r.mu.Lock()
-				delete(r.stateApplyWaiters, request.RequestID)
-				r.mu.Unlock()
-				return fmt.Errorf("metatrack batch writeback timed out for %s", request.Key)
-			case <-ctx.Done():
-				return ctx.Err()
+				seen[request.RequestID] = true
 			}
+			if r.stateApplyWaiters == nil {
+				r.stateApplyWaiters = map[string]chan StateDeltaApplyAck{}
+			}
+			for _, request := range requests {
+				r.stateApplyWaiters[request.RequestID] = inbox
+			}
+			r.mu.Unlock()
+			defer func() {
+				r.mu.Lock()
+				for _, request := range requests {
+					delete(r.stateApplyWaiters, request.RequestID)
+				}
+				r.mu.Unlock()
+			}()
+			// One bounded request/ACK lifecycle per target, not a timer for each
+			// item. The Home still requires every request and its matching ACK.
+			batchCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+			defer cancel()
+			send := func() error { return r.sendStateAccessToNode(batchCtx, target, envelope) }
+			started := time.Now()
+			if err := send(); err != nil {
+				return err
+			}
+			r.incrementFullLocalityMetric("metatrack_batch_writeback_request_count", 1)
+			r.incrementFullLocalityMetric("metatrack_batch_writeback_item_count", int64(len(requests)))
+			return metaTrackAwaitBatchAcksV1(batchCtx, requests, inbox, 3*time.Second, 12*time.Second,
+				func() error {
+					r.incrementFullLocalityMetric("metatrack_batch_writeback_retry_count", 1)
+					return send() // stable batch and request IDs; Home deduplicates
+				}, func(index int, ack StateDeltaApplyAck) error {
+					r.recordRemoteStateApply(block, items[index], requests[index].Key, ack, time.Since(started))
+					return nil
+				})
+		}(); err != nil {
+			return fmt.Errorf("metatrack batch writeback to %s/%s: %w", homeShard, target, err)
 		}
 	}
 	return nil
@@ -450,6 +464,12 @@ func (r *NodeRuntime) handleStateDeltaApplyBatch(ctx context.Context, requester 
 	envelope, err := p2p.NewEnvelope(stateDeltaApplyBatchAckMessage, r.node.NodeID, requester, r.node.ShardID, 0, 0, 0, payload)
 	if err != nil {
 		return err
+	}
+	// MBE_MT_HOME_ACK_V2: MetaTrack must not synchronously send Home ACKs
+	// from the inbound state-access TCP reader. Request/ACK sharing one
+	// per-peer lane can cause reciprocal leader backpressure on TAPOS.
+	if r.metaTrackBlockExecutorFlag("version_liveness") && r.metaTrackBlockExecutorFlag("dependency_closed_consensus") {
+		return r.enqueueMetaTrackHomeBatchAckV2(ctx, requester, envelope)
 	}
 	return r.sendStateAccessToNode(ctx, requester, envelope)
 }

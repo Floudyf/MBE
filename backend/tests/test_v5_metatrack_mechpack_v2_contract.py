@@ -1,3 +1,4 @@
+# MBE_MT_TAPOS_V1: TAPOS no-prefetch must keep reliable batch Home writeback.
 from pathlib import Path
 import re
 
@@ -48,8 +49,8 @@ def test_v2_state_locality_ablation_removes_state_locality_without_routing():
         assert "ablation_no_coaccess_sharding_v675:true" not in compact
         assert "batch_entry_state_prefetch:false" in compact
         assert "ablation_on_demand_state_fetch_v661:true" in compact
-        assert "batch_remote_writeback:false" in compact
-        assert "final_version_batch_writeback:false" in compact
+        assert "batch_remote_writeback:true" in compact
+        assert "final_version_batch_writeback:true" in compact
         assert "version_liveness:true" in compact
         assert "version_liveness_indexed:true" in compact
         assert "single_final_seal:true" in compact

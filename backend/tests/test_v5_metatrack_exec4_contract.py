@@ -48,7 +48,7 @@ def test_current_boolean_flags_fail_closed_in_plugin_manifest():
         assert manifest.config_schema['properties'][flag] == {'type': 'boolean', 'default': False}
 
 
-def test_four_cards_only_in_metatrack_comparison_and_old_diagnostics_gone():
+def test_legacy_scheduler_diagnostics_hidden_and_old_routing_preset_removed():
     catalog = (ROOT/'frontend/src/v5FormalExperimentCatalog.ts').read_text(encoding='utf-8')
     profile = (ROOT/'frontend/src/v5MethodProfile.ts').read_text(encoding='utf-8')
     page = (ROOT/'frontend/src/pages/V5FormalRunPage.tsx').read_text(encoding='utf-8')
@@ -64,10 +64,11 @@ def test_four_cards_only_in_metatrack_comparison_and_old_diagnostics_gone():
     for retired_id in ('metatrack_diag_parallel','metatrack_diag_serial'):
         assert f'methodId: "{retired_id}"' not in catalog
         assert f'method_id: "{retired_id}"' not in profile
-    assert 'METATRACK_SHARD4_METHOD_IDS' in page
-    assert 'v5-metatrack-shard4-preset' in page
+    assert 'METATRACK_SHARD4_METHOD_IDS' not in page
+    assert 'v5-metatrack-shard4-preset' not in page
     assert 'metatrack_diag_parallel" ? "metatrack_diag_ready8"' in page
     assert 'metatrack_diag_serial" ? "metatrack_diag_dual1"' in page
+    assert '"metatrack_sh_noco"].includes(item) ? "metatrack_latest"' in page
 
 
 def test_runtime_semantics_not_just_four_frontend_titles():
