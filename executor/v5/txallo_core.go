@@ -32,6 +32,8 @@ type txalloEdgeKey struct{ A, B string }
 type txalloGraph struct {
 	Nodes map[string]bool
 	Edges map[txalloEdgeKey]float64
+	// Derived lookup only, never serialized or used as allocator evidence.
+	neighborIndex map[string]map[string]float64
 }
 
 func newTxAlloGraph() *txalloGraph {
@@ -48,6 +50,8 @@ func (g *txalloGraph) addTransaction(accounts []string) {
 	if len(uniq) == 0 {
 		return
 	}
+	// Every A/G history append invalidates the derived adjacency index.
+	g.neighborIndex = nil
 	for _, a := range uniq {
 		g.Nodes[a] = true
 	}
@@ -79,13 +83,29 @@ func (g *txalloGraph) totalWeight() float64 {
 	return t
 }
 func (g *txalloGraph) neighbors(v string) map[string]float64 {
-	out := map[string]float64{}
-	for e, w := range g.Edges {
-		if e.A == v && e.B != v {
-			out[e.B] += w
-		} else if e.B == v && e.A != v {
-			out[e.A] += w
+	// The immutable-in-between-RunA graph edge table has unique undirected
+	// edges. Materializing an adjacency index once per graph revision keeps
+	// every original weight, Eq.(6)/(8), candidate set and tie-break intact.
+	if g.neighborIndex == nil {
+		index := make(map[string]map[string]float64)
+		for e, w := range g.Edges {
+			if e.A == e.B {
+				continue
+			}
+			if index[e.A] == nil {
+				index[e.A] = map[string]float64{}
+			}
+			if index[e.B] == nil {
+				index[e.B] = map[string]float64{}
+			}
+			index[e.A][e.B] += w
+			index[e.B][e.A] += w
 		}
+		g.neighborIndex = index
+	}
+	out := map[string]float64{}
+	for name, weight := range g.neighborIndex[v] {
+		out[name] = weight
 	}
 	return out
 }

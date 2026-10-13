@@ -108,9 +108,20 @@ def build(root: Path | str) -> dict[str, Any]:
         if not isinstance(cfg, list):
             raise ValueError("invalid node_configs")
         side_summary = _json(locations["sidecar_summary"])
-        first_block = _int(side_summary.get("first_block_num"))
-        if first_block is None:
-            raise ValueError("sidecar first_block_num missing")
+        # Observed source blocks and MBE's explicitly typed event clock have
+        # distinct coordinates. Never invent block heights for event inputs.
+        clock_kind = str(side_summary.get("epoch_clock_source") or "").strip()
+        event_clock = clock_kind == "mbe_event_order_index"
+        if event_clock:
+            if side_summary.get("first_block_num") is not None:
+                raise ValueError("event clock summary invents first_block_num")
+            first_block = _int(side_summary.get("first_epoch_coordinate"))
+            if first_block is None or first_block <= 0:
+                raise ValueError("sidecar first_epoch_coordinate missing")
+        else:
+            first_block = _int(side_summary.get("first_block_num"))
+            if first_block is None:
+                raise ValueError("sidecar first_block_num missing")
         sharding = plan.get("plugin_profile", {}).get("sharding", {})
         if not sharding:
             sharding = (cfg[0].get("plugin_profile", {}).get("sharding", {}) if cfg and isinstance(cfg[0], dict) else {})
@@ -132,8 +143,17 @@ def build(root: Path | str) -> dict[str, Any]:
         for row in _rows(locations["sidecar"]):
             index = _int(row.get("materialized_index"))
             block = _int(row.get("block_num"))
+            if event_clock:
+                coord = _int(row.get("epoch_coordinate"))
+                raw_index = _int(row.get("raw_source_row_index"))
+                seq = _int(row.get("global_sequence"))
+                if block != 0 or coord is None or raw_index is None or coord != raw_index + 1 or seq != coord:
+                    raise ValueError("invalid event-clock sidecar provenance/alignment")
+                block = coord
+            elif row.get("epoch_coordinate") not in (None, 0):
+                raise ValueError("observed-block sidecar carries event coordinate")
             if index is None or block is None or block < first_block or index in index_epoch:
-                raise ValueError("invalid sidecar index/block")
+                raise ValueError("invalid sidecar index/clock")
             index_epoch[index] = (block - first_block) // epoch_width
 
         logical_to_epoch = {}
@@ -221,7 +241,9 @@ def build(root: Path | str) -> dict[str, Any]:
             "source_epoch_count": len(results), "closed_epoch_count": len(timings),
             "total_logical_transaction_count": len(logical_to_epoch),
             "event_rows_used": {"client": client_count, "nodes": node_events},
-            "epoch_width_source_blocks": epoch_width,
+            "epoch_width_source_blocks": None if event_clock else epoch_width,
+            "epoch_width_source_events": epoch_width if event_clock else None,
+            "epoch_clock_source": clock_kind or "observed_source_blocks",
             "epochs": results,
             "clock_sync_verified": False,
             "cross_node_latency_ms": None,

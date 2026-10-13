@@ -100,8 +100,12 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 				if strings.TrimSpace(storageShardID) != "" {
 					storageKey = qualifyStateKey(homeShard, row.Key)
 				}
-				working[storageKey] = row.Value
-				commitment.Set(storageKey, row.Value)
+				update := porygonStateUpdateKVV1(row, homeShard)
+				update.Key = storageKey
+				if err := porygonApplyCanonicalKVV1(working, update); err != nil {
+					return BlockExecutionResult{}, err
+				}
+				commitment.Set(storageKey, working[storageKey])
 				paperProposalUpdateCount++
 			}
 		}
@@ -530,7 +534,11 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 						}
 						storageKey = qualifyStateKey(homeShard, key)
 					}
-					working[storageKey] = txResult.Delta.WriteSet[key]
+					update := porygonTypedUpdateV1(PorygonStateUpdate{TxID: txResult.Item.TxID, Key: key, Value: txResult.Delta.WriteSet[key]}, assignment.Accesses)
+					physical := state.StateKV{Key: storageKey, Value: update.Value, UpdateSemantics: update.UpdateSemantics, Delta: update.Delta}
+					if err := porygonApplyCanonicalKVV1(working, physical); err != nil {
+						return BlockExecutionResult{}, err
+					}
 				}
 				applyDuration += time.Since(applyStarted)
 				commitmentStarted = time.Now()
@@ -543,7 +551,7 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 						}
 						storageKey = qualifyStateKey(homeShard, key)
 					}
-					commitment.Set(storageKey, txResult.Delta.WriteSet[key])
+					commitment.Set(storageKey, working[storageKey])
 				}
 				stateCommitmentDuration += time.Since(commitmentStarted)
 			}
@@ -772,8 +780,8 @@ func executePorygonPlan(ctx context.Context, block realblock.Block, base map[str
 		"porygon_wall_clock_pipeline_overlap_claimed":         wallClockPipelineOverlapClaimed,
 		"porygon_full_woec_pipeline_overlap_claimed":          false,
 		"porygon_cross_shard_atomicity_truth_boundary":        "single_esc_preexecution_S_then_OC_U_then_following_EC_application_then_later_proposal_commit",
-		"porygon_paper_fidelity_version":                       porygonPaperFidelityV50Version,
-		"porygon_sharded_execution_result_threshold_rule":      "strict_majority_more_than_half",
+		"porygon_paper_fidelity_version":                      porygonPaperFidelityV50Version,
+		"porygon_sharded_execution_result_threshold_rule":     "strict_majority_more_than_half",
 		"porygon_v50_ec_slot":                                 porygonV50ECSlotForHeight(block.Height),
 		"porygon_v50_deferred_partitions":                     sortedBoolKeys(deferredPartitions),
 		"porygon_v50_deferred_partition_count":                len(deferredPartitions),
@@ -1123,7 +1131,8 @@ func porygonPaperLogicalPartitionUpdates(proposal PorygonProposalBody, localResu
 			if homeShard != executionShardID {
 				continue
 			}
-			updates = append(updates, PorygonStateUpdate{TxID: result.Delta.TxID, OriginalIndex: result.Delta.OriginalIndex, Key: key, Value: result.Delta.WriteSet[key]})
+			update := PorygonStateUpdate{TxID: result.Delta.TxID, OriginalIndex: result.Delta.OriginalIndex, Key: key, Value: result.Delta.WriteSet[key]}
+			updates = append(updates, porygonTypedUpdateV1(update, assignment.Accesses))
 		}
 	}
 	return porygonPaperCollapseOrderedStateUpdates(updates)

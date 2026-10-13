@@ -117,6 +117,26 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
+  // MBE_MT_DUAL_READY_V1: isolated candidate, never official ablation
+  {
+    method_id: "metatrack_dyntrack",
+    display_name: "动态阻塞隔离双轨（候选）",
+    role: "custom",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "dual_track_execution",
+      scheduler: "metatrack_unlock_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_local_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
+    },
+  },
   {
     method_id: "metatrack_unified",
     display_name: "实验版",
@@ -234,6 +254,26 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       block_executor: { worker_count: 4, control_policy: "declared_access_frontier_v2", local_exact_version_handoff: false, batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, ablation_force_home_exact_v660: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
+  // MBE_MT_FLOW_ABL_V1: official fixed-hash replacement; old A1 remains historical.
+  {
+    method_id: "metatrack_ab_flow",
+    display_name: "去依赖感知增量分流",
+    role: "ablation",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "dual_track_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_local_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: false, ablation_hash_routing_v662: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
+    },
+  },
   // MBE_METATRACK_SHARD4_V1_1: three routing-only clones of unmodified Full
   {
     method_id: "metatrack_sh_hash",
@@ -275,8 +315,8 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   },
   {
     method_id: "metatrack_sh_noco",
-    display_name: "④ 增量分片去共现",
-    role: "custom",
+    display_name: "去共现矩阵分片",
+    role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
       routing: "metatrack_coaccess_routing",
@@ -351,6 +391,25 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
     },
   },
 ];
+
+// MBE_MT_OBS_PARITY_V1: scheduler-only diagnostic methods copied from current Full.
+const mtObsParityFullV1 = V5_BUILTIN_METHODS.find((item) => item.method_id === "metatrack_latest");
+if (!mtObsParityFullV1) throw new Error("MetaTrack Full profile unavailable for parity diagnostics");
+for (const [id, name, scheduler] of [
+  ["metatrack_diag_rr", "诊断：等配置就绪轮次", "ready_round_control_scheduler"],
+  ["metatrack_diag_hd", "诊断：等配置依赖影响", "dependency_influence_scheduler"],
+] as const) {
+  V5_BUILTIN_METHODS.push({
+    ...mtObsParityFullV1,
+    method_id: id,
+    display_name: name,
+    role: "custom",
+    plugin_overrides: { ...mtObsParityFullV1.plugin_overrides, scheduler },
+    plugin_config_overrides: Object.fromEntries(
+      Object.entries(mtObsParityFullV1.plugin_config_overrides ?? {}).map(([key, settings]) => [key, { ...settings }]),
+    ),
+  });
+}
 
 export function defaultV5PluginSelections(catalog: V5PluginManifest[]): V5PluginSelection[] {
   return Array.from(new Set(catalog.map((item) => item.category))).map((category) => {

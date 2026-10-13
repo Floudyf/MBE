@@ -19,7 +19,7 @@ def test_sharding_controls_clone_full_without_execution_consensus_or_state_chang
               (NOCOACC,'metatrack_coaccess_routing',True,True))
     for mid,routing,incremental,remove_coacc in expected:
         m=BUILTIN_METHODS[mid]
-        assert m.role=='custom'
+        assert m.role==('ablation' if mid == NOCOACC else 'custom')
         assert m.plugin_overrides == {**full.plugin_overrides,'routing':routing}
         assert m.plugin_config_overrides['block_executor'] == full.plugin_config_overrides['block_executor']
         assert set(m.plugin_config_overrides) == set(full.plugin_config_overrides)
@@ -70,7 +70,10 @@ def test_retired_routing_comparison_cards_hidden_and_preset_removed():
     assert all(mid in page for mid in IDS[1:])  # retired IDs are migrated, not newly selectable
     assert 'Array.from(new Set(' in page
     official=catalog.split('export const METATRACK_ABLATION_METHOD_IDS = [',1)[1].split('] as const;',1)[0]
-    assert all(mid not in official for mid in IDS[1:])
+    assert all(mid not in official for mid in (HASH,COACC))
+    # Routing-only diagnostics are historical, not official.
+    assert '"metatrack_ab_flow"' in official
+    assert f'"{NOCOACC}"' not in official
 
 
 def test_full_profile_remains_the_control_and_old_scheduler_flags_are_absent_in_new_routes():

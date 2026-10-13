@@ -206,7 +206,10 @@ func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteSt
 	}
 }
 
-func (r *NodeRuntime) handleStateFetchBatchRequest(ctx context.Context, requester string, request StateFetchBatchRequest) error {
+func (r *NodeRuntime) handleStateFetchBatchRequest(ctx context.Context, requester string, request StateFetchBatchRequest) (traceErr error) {
+	// MBE_MT_HOME_CAUSE_TRACE_V1: candidate-only, no service-order changes.
+	finishHomeFetchTrace := r.mtHomeTraceSpanV1("home_fetch_batch", request.HomeShard, request.BlockHash, requester, 0, len(request.Items), -1)
+	defer func() { finishHomeFetchTrace(traceErr) }()
 	responses := make([]StateFetchResponse, 0, len(request.Items))
 	for _, item := range request.Items {
 		qualifiedKey := item.HomeShard + "::" + item.Key
@@ -371,7 +374,9 @@ func (r *NodeRuntime) applyMetaTrackRemoteDeltasBatched(ctx context.Context, blo
 	return local, nil
 }
 
-func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block realblock.Block, homeShard string, items []state.StateKV, unqualified map[string]string, txDeltas []execution.TxDelta) error {
+func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block realblock.Block, homeShard string, items []state.StateKV, unqualified map[string]string, txDeltas []execution.TxDelta) (traceErr error) {
+	finishOutboundTrace := r.mtHomeTraceSpanV1("source_batch_"+mtHomeTraceKindV1(ctx), homeShard, block.BlockHash, "", block.Height, len(items), -1)
+	defer func() { finishOutboundTrace(traceErr) }()
 	if len(items) == 0 {
 		return nil
 	}
@@ -404,7 +409,9 @@ func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block real
 		}
 		// MBE_METATRACK_FIX_V1: all item waiters share one batch inbox. Register
 		// before sending, keep them live across retries, and remove on any exit.
-		if err := func() error {
+		if err := func() (targetErr error) {
+			finishTargetTrace := r.mtHomeTraceSpanV1("source_target_"+mtHomeTraceKindV1(ctx), homeShard, block.BlockHash, target, block.Height, len(requests), -1)
+			defer func() { finishTargetTrace(targetErr) }()
 			inbox := make(chan StateDeltaApplyAck, len(requests)*2+16)
 			r.mu.Lock()
 			seen := make(map[string]bool, len(requests))
@@ -434,8 +441,10 @@ func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block real
 			batchCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
 			defer cancel()
 			send := func() error { return r.sendStateAccessToNode(batchCtx, target, envelope) }
+			// MBE_MT_RESOURCE_LANE_V2: priority applies ONLY to the real TCP send, not waiting for ACK.
+			sendWithResourceLane := func() error { return r.mtResourceSendV2(batchCtx, target, mtHomeTraceKindV1(ctx), envelope, send) }
 			started := time.Now()
-			if err := send(); err != nil {
+			if err := sendWithResourceLane(); err != nil {
 				return err
 			}
 			r.incrementFullLocalityMetric("metatrack_batch_writeback_request_count", 1)
@@ -443,7 +452,7 @@ func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block real
 			return metaTrackAwaitBatchAcksV1(batchCtx, requests, inbox, 3*time.Second, 12*time.Second,
 				func() error {
 					r.incrementFullLocalityMetric("metatrack_batch_writeback_retry_count", 1)
-					return send() // stable batch and request IDs; Home deduplicates
+					return sendWithResourceLane() // stable batch and request IDs; Home deduplicates
 				}, func(index int, ack StateDeltaApplyAck) error {
 					r.recordRemoteStateApply(block, items[index], requests[index].Key, ack, time.Since(started))
 					return nil
@@ -455,7 +464,9 @@ func (r *NodeRuntime) applyRemoteStateDeltaBatch(ctx context.Context, block real
 	return nil
 }
 
-func (r *NodeRuntime) handleStateDeltaApplyBatch(ctx context.Context, requester string, request StateDeltaApplyBatchRequest) error {
+func (r *NodeRuntime) handleStateDeltaApplyBatch(ctx context.Context, requester string, request StateDeltaApplyBatchRequest) (traceErr error) {
+	finishHomeApplyTrace := r.mtHomeTraceSpanV1("home_apply_batch", request.HomeShard, request.BlockHash, requester, 0, len(request.Items), -1)
+	defer func() { finishHomeApplyTrace(traceErr) }()
 	acks := make([]StateDeltaApplyAck, 0, len(request.Items))
 	for _, item := range request.Items {
 		acks = append(acks, r.handleStateDeltaApplyRequest(item))

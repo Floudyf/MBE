@@ -148,14 +148,14 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
                 blockers.append(f"MetaTrack declared_access_frontier_v2 requires {category}:{plugin_id}")
         if not execution or execution.plugin_id not in {"dual_track_execution", "metatrack_single_conservative_execution", "metatrack_single_execution"}:
             blockers.append("MetaTrack declared_access_frontier_v2 requires a MetaTrack execution-track plugin")
-        allowed_schedulers = {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler"}
+        allowed_schedulers = {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler", "metatrack_unlock_scheduler"}
         selected_scheduler = by_category.get("scheduler")
         if not selected_scheduler or selected_scheduler.plugin_id not in allowed_schedulers:
-            blockers.append("MetaTrack declared_access_frontier_v2 requires scheduler:fast_first_scheduler, scheduler:ready_round_control_scheduler, or scheduler:dependency_influence_scheduler")
+            blockers.append("MetaTrack declared_access_frontier_v2 requires scheduler:fast_first_scheduler, scheduler:ready_round_control_scheduler, scheduler:dependency_influence_scheduler, or scheduler:metatrack_unlock_scheduler")
         selected_executor = by_category.get("block_executor")
         if selected_executor and selected_executor.plugin_id == "metatrack_block_executor" and selected_executor.config.get("control_policy") != "declared_access_frontier_v2":
             blockers.append("MetaTrack routing and block executor control_policy must match declared_access_frontier_v2")
-    if scheduler and scheduler.plugin_id in {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler"} and (not execution or execution.plugin_id not in {"dual_track_execution", "metatrack_single_conservative_execution", "metatrack_single_execution"}):
+    if scheduler and scheduler.plugin_id in {"fast_first_scheduler", "ready_round_control_scheduler", "dependency_influence_scheduler", "metatrack_unlock_scheduler"} and (not execution or execution.plugin_id not in {"dual_track_execution", "metatrack_single_conservative_execution", "metatrack_single_execution"}):
         blockers.append(f"{scheduler.plugin_id} requires a MetaTrack execution-track plugin")
     block_producer = by_category.get("block_producer")
     block_executor = by_category.get("block_executor")

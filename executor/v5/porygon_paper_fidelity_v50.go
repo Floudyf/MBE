@@ -971,7 +971,8 @@ func porygonPaperDurableStateDeltaV50(
 			if strings.TrimSpace(storagePartitionID) != "" && home != storagePartitionID {
 				continue
 			}
-			ordered = append(ordered, PorygonStateUpdate{TxID: delta.TxID, OriginalIndex: delta.OriginalIndex, Key: key, Value: delta.WriteSet[key]})
+			update := PorygonStateUpdate{TxID: delta.TxID, OriginalIndex: delta.OriginalIndex, Key: key, Value: delta.WriteSet[key]}
+			ordered = append(ordered, porygonTypedUpdateV1(update, assignment.Accesses))
 		}
 	}
 	collapsed := porygonPaperCollapseOrderedStateUpdates(ordered)
@@ -984,7 +985,7 @@ func porygonPaperDurableStateDeltaV50(
 		if strings.TrimSpace(storagePartitionID) != "" {
 			storageKey = qualifyStateKey(storagePartitionID, update.Key)
 		}
-		out = append(out, statepkg.StateKV{Key: storageKey, Value: update.Value})
+		out = append(out, statepkg.StateKV{Key: storageKey, Value: update.Value, UpdateSemantics: update.UpdateSemantics, Delta: update.Delta})
 	}
 	return out, nil
 }

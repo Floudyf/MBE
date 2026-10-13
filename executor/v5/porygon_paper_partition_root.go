@@ -3,9 +3,9 @@ package v5
 import (
 	"context"
 	"crypto/ed25519"
-	"errors"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -129,7 +129,9 @@ func (r *NodeRuntime) porygonPaperProposalForIdentity(blockHash string, height u
 func porygonPaperProspectivePartitionRoot(snapshot map[string]string, partitionID string, updates []PorygonStateUpdate) string {
 	next := copyRegistryStringMap(snapshot)
 	for _, update := range porygonCanonicalStateUpdates(updates) {
-		next[qualifyStateKey(partitionID, update.Key)] = update.Value
+		if err := porygonApplyCanonicalKVV1(next, porygonStateUpdateKVV1(update, partitionID)); err != nil {
+			return ""
+		}
 	}
 	return statepkg.RootOfSnapshot(next)
 }
@@ -194,6 +196,9 @@ func (r *NodeRuntime) buildPorygonPaperPartitionRootAck(request PorygonPaperPart
 		return PorygonPaperPartitionRootAck{}, fmt.Errorf("%w: canonical snapshot height=%d partition=%s", errPorygonPaperPartitionRootNotReady, baseHeight, request.PartitionID)
 	}
 	root := porygonPaperProspectivePartitionRoot(snapshot, request.PartitionID, updates)
+	if root == "" {
+		return PorygonPaperPartitionRootAck{}, fmt.Errorf("Porygon proposed partition update has invalid delta semantics")
+	}
 	return r.signPorygonPaperPartitionRootAck(PorygonPaperPartitionRootAck{
 		RequestID: request.RequestID, RequesterNode: request.RequesterNode,
 		BlockHash: request.BlockHash, Height: request.Height, TStateHeight: request.TStateHeight,

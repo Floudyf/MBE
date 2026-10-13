@@ -32,8 +32,9 @@ type Transport struct {
 }
 
 type outboundConn struct {
-	conn net.Conn
-	mu   sync.Mutex
+	conn                  net.Conn
+	mu                    sync.Mutex
+	stateAccessPriorityV2 stateAccessWriteAdmissionV2 // opt-in; PBFT/other methods unchanged
 }
 
 func NewTransport(nodeID, listenAddr string, peers []Peer, handler Handler) *Transport {
@@ -231,11 +232,33 @@ func (t *Transport) send(ctx context.Context, peerID string, msg MessageEnvelope
 	for attempt := 0; attempt < 3; attempt++ {
 		start := time.Now()
 		outbound, err := t.outboundFor(ctx, peerID, peer.ListenAddr, outboundByPeer)
+		// MBE_MT_RESOURCE_LANE_V2: tagged MetaTrack state writes arbitrate
+		// only at the real per-peer TCP Encode lock. Dial/retry and ACK wait
+		// remain outside the admitted service interval.
+		var resourceDoneV2 func()
+		var classTaggedV2 bool
+		if err == nil && direction == "state_access_send" {
+			if kind, tagged := ctx.Value(stateAccessClassKeyV2{}).(string); tagged && (kind == "critical" || kind == "background") {
+				classTaggedV2 = true
+				queueStartV2 := time.Now()
+				var queuedV2 bool
+				resourceDoneV2, queuedV2, err = outbound.stateAccessPriorityV2.enter(ctx, kind == "critical")
+				if queuedV2 {
+					t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: peerID, Direction: "state_access_priority_wait_v2", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: err == nil, LatencyMS: time.Since(queueStartV2).Milliseconds()})
+				}
+			}
+		}
 		if err == nil {
 			outbound.mu.Lock()
 			_ = outbound.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 			err = Encode(outbound.conn, msg)
 			outbound.mu.Unlock()
+		}
+		if resourceDoneV2 != nil {
+			resourceDoneV2()
+		}
+		if classTaggedV2 && err != nil && ctx.Err() != nil {
+			return ctx.Err()
 		}
 		if err == nil {
 			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: peerID, Direction: direction, MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Bytes: len(msg.Payload), Success: true, LatencyMS: time.Since(start).Milliseconds()})

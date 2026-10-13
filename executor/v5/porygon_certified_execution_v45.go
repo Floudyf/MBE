@@ -235,7 +235,7 @@ func porygonBuildCertifiedExecutionTruth(
 		}
 		if assignment.CrossShard {
 			retainedCTx = append(retainedCTx, assignment.TxID)
-			updates := porygonPaperStateUpdates(result.Delta, plan.ExecutionShardCount)
+			updates := porygonPaperStateUpdates(result.Delta, plan.ExecutionShardCount, assignment.Accesses)
 			update := PorygonProposalUpdate{
 				TxID: assignment.TxID, OriginHeight: height, Kind: "commit",
 				InvolvedShards: append([]int(nil), assignment.InvolvedShards...), Updates: updates,

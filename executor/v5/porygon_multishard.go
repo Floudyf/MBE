@@ -22,10 +22,12 @@ const (
 )
 
 type PorygonStateUpdate struct {
-	TxID          string `json:"tx_id"`
-	OriginalIndex int    `json:"original_index"`
-	Key           string `json:"key"`
-	Value         string `json:"value"`
+	TxID            string `json:"tx_id"`
+	OriginalIndex   int    `json:"original_index"`
+	Key             string `json:"key"`
+	Value           string `json:"value"`
+	UpdateSemantics string `json:"update_semantics,omitempty"`
+	Delta           int64  `json:"delta,omitempty"`
 }
 
 type PorygonPartitionUpdateRequest struct {

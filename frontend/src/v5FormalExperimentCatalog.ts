@@ -56,6 +56,9 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_serial", title: "MetaTrack（初始版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 { methodId: "metatrack_latest", title: "Metatrack", description: "完整版本：增量依赖/局部性感知分流 + 有效独立前沿双轨 + V669 依赖闭包安全门下的 N/L 自适应完整 RouteBatch 共识聚合 + 执行域本地 exact-version；正式消融统一固定 RouteBatch=100，保持已验证的流水线工作点。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
+  { methodId: "metatrack_ab_flow", title: "去依赖感知增量分流", description: "以同容量约束的确定性哈希执行分片替代依赖感知增量分流；保留精确版本依赖图、双轨、共识聚合、状态供应及全部 PBFT 参数。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  // MBE_MT_DUAL_READY_V1: candidate in MetaTrack method family, not formal ablation
+  { methodId: "metatrack_dyntrack", title: "动态阻塞隔离双轨（候选）", description: "保留 Full 的分片、PBFT、精确版本就绪与语义双轨，复用原语义约束及 StateReady，运行时按远程关键版本发布风险分为正常与风险资源轨；仅在 Worker 竞争时采用有界正常轨保护和即时依赖解锁仲裁，禁止跨轮饥饿；仍属待验证候选，不进入四项正式消融。", family: "metatrack", comparisonVisible: true, mainVisible: true },
   { methodId: "metatrack_unified", title: "历史实验版（V668）", description: "历史兼容：保留原 V668 N/L-only 自适应共识实验及固定100笔 RouteBatch 配置；不进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_ab_route", title: "历史子消融-无局部性放置", description: "状态局部化内部子消融：只把依赖/共现 placement 替换为历史 frequency/load-only 放置，仍保留预取与本地 exact；不进入正式三机制主矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_ab_track", title: "去掉双轨", description: "只去掉 Fast/Conservative 双轨：严格按 canonical 顺序执行，一次只允许 1 个 business execution in-flight；即使后续交易已 ready，也必须等待前一交易完成。依赖 DAG、StateReady、分流、V669 共识、状态访问与配置 worker_count 保持不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
@@ -66,11 +69,14 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   // MBE_METATRACK_SHARD4_V1_1: routing comparisons only; all nonrouting Full components unchanged
   { methodId: "metatrack_sh_hash", title: "② 哈希执行分片", description: "复用现有 MetaTrack 哈希分流；保留与 Full 相同的 V669 共识、双轨、精确版本状态供应和 Worker 配置。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_sh_coacc", title: "③ 原始共现矩阵", description: "调用原 frequency_coaccess_admissible_v2 共现状态关联放置与覆盖度分流；其他执行、共识和状态机制沿用 Full。", family: "metatrack", comparisonVisible: false, mainVisible: false },
-  { methodId: "metatrack_sh_noco", title: "④ 增量分片去共现", description: "保持 Full 增量分片及其版本就绪、跨域依赖、远程代价、容量与负载规则，仅将共现评分置零；共现历史统计仍运行。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  { methodId: "metatrack_sh_noco", title: "去共现矩阵分片", description: "保持 Full 增量分片及其版本就绪、跨域依赖、远程代价、容量与负载规则，仅将共现评分置零；共现历史统计仍运行。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   // MBE_METATRACK_EXEC4_V1: separate scheduler diagnostics, not official ablations
   { methodId: "metatrack_diag_ready8", title: "② 统一单轨并行", description: "沿用本次 Full 的依赖图、版本与状态机制；移除 Fast/Conservative 调度分轨，Ready 交易可以绕行，业务并发上限仍为配置的 Worker 数。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_diag_dual1", title: "③ 双轨单业务", description: "沿用 Full 的双轨判定、Fast 优先及 Ready 绕行，但任一时刻仅运行一笔业务交易；Worker 配置不改变。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_diag_fifo1", title: "④ 严格 FIFO", description: "与正式去双轨 A2 的执行插件完全一致：不做双轨分类、不允许已 Ready 的后继绕过队首，同时只运行一笔业务交易。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  // MBE_MT_OBS_PARITY_V1: scheduler-only clones of Full, diagnostics not ablations
+  { methodId: "metatrack_diag_rr", title: "诊断：等配置就绪轮次", description: "诊断专用；完整复制 Full 的 V669 出块、增量路由、StateReady、状态访问与 Worker 设置，仅替换就绪轮次调度器。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_diag_hd", title: "诊断：等配置依赖影响", description: "诊断专用；完整复制 Full 的非调度设置，仅替换为已有 H/D 依赖影响调度器。", family: "metatrack", comparisonVisible: true, mainVisible: false },
 ];
 
 export const BATCH_SI_ABLATION_METHOD_IDS = [
@@ -84,6 +90,7 @@ export const BATCH_SI_ABLATION_METHOD_IDS = [
 // MBE_METATRACK_MECHPACK_V2_CATALOG
 export const METATRACK_ABLATION_METHOD_IDS = [
   "metatrack_latest",
+  "metatrack_ab_flow",
   "metatrack_ab_track",
   "metatrack_ab_state",
   "metatrack_ab_cons",
@@ -91,7 +98,7 @@ export const METATRACK_ABLATION_METHOD_IDS = [
 
 // MBE_METATRACK_UI_RETIRE_V1: retired the obsolete routing-only four-way UI preset; old method profiles remain compatible.
 
-export const METATRACK_SCHEDULER_DIAG_METHOD_IDS = ["metatrack_latest", "metatrack_diag_ready8", "metatrack_diag_dual1", "metatrack_diag_fifo1"] as const;
+export const METATRACK_SCHEDULER_DIAG_METHOD_IDS = ["metatrack_latest", "metatrack_diag_ready8", "metatrack_diag_dual1", "metatrack_diag_fifo1", "metatrack_diag_rr", "metatrack_diag_hd"] as const;
 
 export const PARALLEL_WORKER_OPTIONS = [1, 2, 4, 8] as const;
 

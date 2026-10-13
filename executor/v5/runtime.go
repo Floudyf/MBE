@@ -4013,6 +4013,15 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		physicalDelta = append([]state.StateKV(nil), executed.StateDelta...)
 	}
 	physicalDelta = annotateStateDeltaTxIDs(physicalDelta, executed.ExecutionResult.TxDeltas, block.TxList)
+	if porygonCompactConsensus {
+		// Porygon has already authenticated final materialization semantics via
+		// Storage Role quorum. The generic TxID annotator must not overwrite
+		// those semantics based on a second AccessList inference.
+		physicalDelta, err = porygonPreserveCertifiedDeltaV1(physicalDelta, executed.StateDelta)
+		if err != nil {
+			return CommitResult{Disposition: CommitRejected, Block: block}, r.rollbackCommitFailure(block.BlockHash, stateBefore, stateCheckpoint, checkpoint, err)
+		}
+	}
 	if r.optmeStatelessProjectionEnabled() {
 		physicalDelta, err = r.optmePartitionOwnedStateDelta(block, physicalDelta)
 		if err != nil {

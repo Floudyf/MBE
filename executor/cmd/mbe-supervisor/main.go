@@ -2639,6 +2639,10 @@ func aggregateMetaTrackReadyRoundEvidenceV352(nodes []v5.NodePlan) (map[string]a
 	influenceArbitrationDecisionCount := 0
 	influenceChangedChoiceCount := 0
 	readyRoundEventDrainSkipCount := 0
+	// MBE_MT_DYN_FASTPATH_V24: isolated candidate actual executor evidence.
+	dynExpectedBlocks, dynPresentBlocks := 0, 0
+	dynVersion := ""
+	dynTotals := map[string]int{"metatrack_dynamic_risk_signal_tx_count": 0, "metatrack_dynamic_normal_dispatch_count": 0, "metatrack_dynamic_risk_dispatch_count": 0, "metatrack_dynamic_risk_contended_dispatch_count": 0, "metatrack_dynamic_normal_protection_count": 0, "metatrack_dynamic_uncontended_dispatch_count": 0, "metatrack_unlock_arbitration_count": 0, "metatrack_unlock_changed_choice_count": 0, "metatrack_unlock_selected_opportunity_count": 0}
 	crossRoundBypassCount := 0
 	singleFIFOHOLEnabled := false
 	singleFIFOBypassPreventedCount := 0
@@ -2691,6 +2695,51 @@ func aggregateMetaTrackReadyRoundEvidenceV352(nodes []v5.NodePlan) (map[string]a
 			influenceArbitrationDecisionCount += readyRoundMetricIntV352(block["influence_arbitration_decision_count"])
 			influenceChangedChoiceCount += readyRoundMetricIntV352(block["influence_changed_choice_count"])
 			readyRoundEventDrainSkipCount += readyRoundMetricIntV352(block["ready_round_event_drain_skip_count"])
+			if readyRoundMetricBoolV352(block["metatrack_dynamic_resource_lane_enabled"]) {
+				dynExpectedBlocks++
+				version := readyRoundMetricStringV352(block["metatrack_dynamic_lane_runtime_version"])
+				allPresent := version == "risk_resource_lane_v24"
+				if _, ok := block["metatrack_dynamic_risk_signal_tx_count"].(float64); !ok {
+					allPresent = false
+				}
+				if _, ok := block["metatrack_dynamic_normal_dispatch_count"].(float64); !ok {
+					allPresent = false
+				}
+				if _, ok := block["metatrack_dynamic_risk_dispatch_count"].(float64); !ok {
+					allPresent = false
+				}
+				if _, ok := block["metatrack_dynamic_risk_contended_dispatch_count"].(float64); !ok {
+					allPresent = false
+				}
+				if _, ok := block["metatrack_dynamic_normal_protection_count"].(float64); !ok {
+					allPresent = false
+				}
+				if _, ok := block["metatrack_dynamic_uncontended_dispatch_count"].(float64); !ok {
+					allPresent = false
+				}
+				if _, ok := block["metatrack_unlock_arbitration_count"].(float64); !ok {
+					allPresent = false
+				}
+				if _, ok := block["metatrack_unlock_changed_choice_count"].(float64); !ok {
+					allPresent = false
+				}
+				if _, ok := block["metatrack_unlock_selected_opportunity_count"].(float64); !ok {
+					allPresent = false
+				}
+				if allPresent {
+					dynPresentBlocks++
+					dynVersion = version
+					dynTotals["metatrack_dynamic_risk_signal_tx_count"] += readyRoundMetricIntV352(block["metatrack_dynamic_risk_signal_tx_count"])
+					dynTotals["metatrack_dynamic_normal_dispatch_count"] += readyRoundMetricIntV352(block["metatrack_dynamic_normal_dispatch_count"])
+					dynTotals["metatrack_dynamic_risk_dispatch_count"] += readyRoundMetricIntV352(block["metatrack_dynamic_risk_dispatch_count"])
+					dynTotals["metatrack_dynamic_risk_contended_dispatch_count"] += readyRoundMetricIntV352(block["metatrack_dynamic_risk_contended_dispatch_count"])
+					dynTotals["metatrack_dynamic_normal_protection_count"] += readyRoundMetricIntV352(block["metatrack_dynamic_normal_protection_count"])
+					dynTotals["metatrack_dynamic_uncontended_dispatch_count"] += readyRoundMetricIntV352(block["metatrack_dynamic_uncontended_dispatch_count"])
+					dynTotals["metatrack_unlock_arbitration_count"] += readyRoundMetricIntV352(block["metatrack_unlock_arbitration_count"])
+					dynTotals["metatrack_unlock_changed_choice_count"] += readyRoundMetricIntV352(block["metatrack_unlock_changed_choice_count"])
+					dynTotals["metatrack_unlock_selected_opportunity_count"] += readyRoundMetricIntV352(block["metatrack_unlock_selected_opportunity_count"])
+				}
+			}
 			crossRoundBypassCount += readyRoundMetricIntV352(block["cross_round_bypass_count"])
 			singleFIFOHOLEnabled = singleFIFOHOLEnabled || readyRoundMetricBoolV352(block["metatrack_single_fifo_hol_enabled"])
 			singleFIFOBypassPreventedCount += readyRoundMetricIntV352(block["metatrack_single_fifo_bypass_prevented_count"])
@@ -2708,7 +2757,7 @@ func aggregateMetaTrackReadyRoundEvidenceV352(nodes []v5.NodePlan) (map[string]a
 	if priorityCandidateSetWeightedSamples > 0 {
 		priorityCandidateSetMean = priorityCandidateSetWeightedSum / float64(priorityCandidateSetWeightedSamples)
 	}
-	return map[string]any{
+	result := map[string]any{
 		"metatrack_ready_round_metrics_available":          true,
 		"metatrack_ready_priority_policy":                  singleMapKey(policies),
 		"metatrack_dependency_influence_scheduler_enabled": dependencyInfluenceEnabled,
@@ -2731,7 +2780,38 @@ func aggregateMetaTrackReadyRoundEvidenceV352(nodes []v5.NodePlan) (map[string]a
 		"ready_round_metric_truth_scope":                   "canonical_node_per_shard_from_block_execution_summary",
 		"ready_round_canonical_node_by_shard":              canonicalNodeByShard,
 		"ready_round_observed_block_count":                 observedBlockCount,
-	}, nil
+	}
+	if dynExpectedBlocks > 0 {
+		complete := dynExpectedBlocks == dynPresentBlocks
+		result["metatrack_dynamic_resource_lane_enabled"] = true
+		result["metatrack_dynamic_lane_metric_complete"] = complete
+		result["metatrack_dynamic_lane_expected_block_count"] = dynExpectedBlocks
+		result["metatrack_dynamic_lane_present_block_count"] = dynPresentBlocks
+		if complete {
+			result["metatrack_dynamic_lane_runtime_version"] = dynVersion
+			result["metatrack_dynamic_risk_signal_tx_count"] = dynTotals["metatrack_dynamic_risk_signal_tx_count"]
+			result["metatrack_dynamic_normal_dispatch_count"] = dynTotals["metatrack_dynamic_normal_dispatch_count"]
+			result["metatrack_dynamic_risk_dispatch_count"] = dynTotals["metatrack_dynamic_risk_dispatch_count"]
+			result["metatrack_dynamic_risk_contended_dispatch_count"] = dynTotals["metatrack_dynamic_risk_contended_dispatch_count"]
+			result["metatrack_dynamic_normal_protection_count"] = dynTotals["metatrack_dynamic_normal_protection_count"]
+			result["metatrack_dynamic_uncontended_dispatch_count"] = dynTotals["metatrack_dynamic_uncontended_dispatch_count"]
+			result["metatrack_unlock_arbitration_count"] = dynTotals["metatrack_unlock_arbitration_count"]
+			result["metatrack_unlock_changed_choice_count"] = dynTotals["metatrack_unlock_changed_choice_count"]
+			result["metatrack_unlock_selected_opportunity_count"] = dynTotals["metatrack_unlock_selected_opportunity_count"]
+		} else {
+			result["metatrack_dynamic_lane_runtime_version"] = "mixed_or_missing"
+			result["metatrack_dynamic_risk_signal_tx_count"] = nil
+			result["metatrack_dynamic_normal_dispatch_count"] = nil
+			result["metatrack_dynamic_risk_dispatch_count"] = nil
+			result["metatrack_dynamic_risk_contended_dispatch_count"] = nil
+			result["metatrack_dynamic_normal_protection_count"] = nil
+			result["metatrack_dynamic_uncontended_dispatch_count"] = nil
+			result["metatrack_unlock_arbitration_count"] = nil
+			result["metatrack_unlock_changed_choice_count"] = nil
+			result["metatrack_unlock_selected_opportunity_count"] = nil
+		}
+	}
+	return result, nil
 }
 func writeMechanismAggregates(dataDir string, summaries []v5NodeSummary, nodes []v5.NodePlan, remoteState map[string]any) (map[string]any, error) {
 	aggregateDir := filepath.Join(dataDir, "aggregate")

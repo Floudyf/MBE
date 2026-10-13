@@ -520,62 +520,9 @@ func txalloAppendMappingEpochHistoryV229(path string, snapshot txalloMappingSnap
 	}
 	txalloMappingEpochHistoryMu.Lock()
 	defer txalloMappingEpochHistoryMu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	if raw, err := txalloReadFileStable(path); err == nil {
-		maxEpoch := uint64(0)
-		haveEpoch := false
-		sameEpoch := false
-		for _, line := range strings.Split(string(raw), "\n") {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			var row txalloMappingEpochRowV229
-			if err := json.Unmarshal([]byte(line), &row); err != nil {
-				return fmt.Errorf("TxAllo mapping epoch history decode: %w", err)
-			}
-			if row.SchemaVersion != txalloDynamicMappingSchema || row.StateDigest == "" {
-				return fmt.Errorf("TxAllo mapping epoch history contains invalid row")
-			}
-			if row.Epoch == snapshot.Epoch {
-				if row.StateDigest != snapshot.StateDigest {
-					return fmt.Errorf("TxAllo mapping epoch history conflicts at epoch %d", snapshot.Epoch)
-				}
-				sameEpoch = true
-			}
-			if !haveEpoch || row.Epoch > maxEpoch {
-				maxEpoch = row.Epoch
-				haveEpoch = true
-			}
-		}
-		if haveEpoch && snapshot.Epoch < maxEpoch {
-			return fmt.Errorf("TxAllo mapping epoch history regressed: got=%d latest=%d", snapshot.Epoch, maxEpoch)
-		}
-		if sameEpoch {
-			return nil
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	row := txalloMappingEpochRowV229{SchemaVersion: snapshot.SchemaVersion, Epoch: snapshot.Epoch, Mapping: copyMapping(snapshot.Mapping), Aliases: copyMapping(snapshot.Aliases), MappingDigest: snapshot.MappingDigest, AliasesDigest: snapshot.AliasesDigest, StateDigest: snapshot.StateDigest, SourceEpoch: sourceEpoch, UpdateAlgorithm: algorithm, TimestampMS: time.Now().UnixMilli()}
-	payload, err := json.Marshal(row)
-	if err != nil {
-		return err
-	}
-	f, err := txalloOpenAppendFileStable(path, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(append(payload, '\n')); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	return f.Close()
+	// First append/restart validates the complete on-disk history; subsequent
+	// appends validate the durable tail under the SAME existing mutex.
+	return txalloAppendMappingEpochHistoryFastV1(path, snapshot, sourceEpoch, algorithm)
 }
 
 // uniqueStringsFromMappingV229 returns the declared shard domain needed by the

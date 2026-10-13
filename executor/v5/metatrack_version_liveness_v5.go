@@ -317,6 +317,9 @@ func (r *NodeRuntime) newMetaTrackVersionPublishBuffer(block realblock.Block) *m
 	}
 	if r.metaTrackBlockExecutorFlag("dependency_closed_consensus") && r.metaTrackBlockExecutorFlag("batch_remote_writeback") {
 		buffer.asyncV640 = newMetaTrackAsyncVersionPublisherV640()
+		if r.mtResourceCandidateV2() || r.mtHomeTraceEnabledV1() {
+			buffer.asyncV640.ctx = mtHomeTagContextV1(buffer.asyncV640.ctx, "background")
+		}
 		r.incrementFullLocalityMetric("metatrack_async_version_writeback_v640_block_count", 1)
 	}
 	if r.metaTrackBlockExecutorFlag("version_liveness_indexed") {
@@ -733,7 +736,7 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 					return items[i].Key < items[j].Key
 				})
 				started := time.Now()
-				if err := r.applyRemoteStateDeltaBatch(ctx, block, home, items, immediateUnqualified, []execution.TxDelta{delta}); err != nil {
+				if err := r.applyRemoteStateDeltaBatch(mtHomeTagContextV1(ctx, "critical"), block, home, items, immediateUnqualified, []execution.TxDelta{delta}); err != nil {
 					return err
 				}
 				r.incrementFullLocalityMetric("metatrack_critical_version_publish_wait_ms", time.Since(started).Milliseconds())

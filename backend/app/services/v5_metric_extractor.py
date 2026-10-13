@@ -71,6 +71,8 @@ METATRACK_READY_ROUND_REQUIRED_METRICS = [
     "ready_round_metric_truth_scope",
 ]
 
+METATRACK_DYNAMIC_V24_REQUIRED_METRICS = ['metatrack_dynamic_resource_lane_enabled', 'metatrack_dynamic_lane_metric_complete', 'metatrack_dynamic_lane_runtime_version', 'metatrack_dynamic_lane_expected_block_count', 'metatrack_dynamic_lane_present_block_count', 'metatrack_dynamic_risk_signal_tx_count', 'metatrack_dynamic_normal_dispatch_count', 'metatrack_dynamic_risk_dispatch_count', 'metatrack_dynamic_risk_contended_dispatch_count', 'metatrack_dynamic_normal_protection_count', 'metatrack_dynamic_uncontended_dispatch_count', 'metatrack_unlock_arbitration_count', 'metatrack_unlock_changed_choice_count', 'metatrack_unlock_selected_opportunity_count']
+
 BATCH_SI_REQUIRED_METRICS = [
     "configured_worker_count",
     "maximum_parallel_width",
@@ -2510,6 +2512,21 @@ def _apply_mechanism_metrics(metrics: dict[str, Any], run_dir: Path) -> None:
                 "metatrack_single_serial_dispatch_limit": metatrack.get("metatrack_single_serial_dispatch_limit"),
                 "ready_round_metric_truth_scope": metatrack.get("ready_round_metric_truth_scope"),
                 "ready_round_observed_block_count": metatrack.get("ready_round_observed_block_count"),
+                "metatrack_dynamic_resource_lane_enabled": metatrack.get("metatrack_dynamic_resource_lane_enabled"),
+                "metatrack_dynamic_lane_metric_complete": metatrack.get("metatrack_dynamic_lane_metric_complete"),
+                "metatrack_dynamic_lane_expected_block_count": metatrack.get("metatrack_dynamic_lane_expected_block_count"),
+                "metatrack_dynamic_lane_present_block_count": metatrack.get("metatrack_dynamic_lane_present_block_count"),
+                "metatrack_dynamic_lane_runtime_version": metatrack.get("metatrack_dynamic_lane_runtime_version"),
+                "metatrack_dynamic_risk_signal_tx_count": metatrack.get("metatrack_dynamic_risk_signal_tx_count"),
+                "metatrack_dynamic_normal_dispatch_count": metatrack.get("metatrack_dynamic_normal_dispatch_count"),
+                "metatrack_dynamic_risk_dispatch_count": metatrack.get("metatrack_dynamic_risk_dispatch_count"),
+                "metatrack_dynamic_risk_contended_dispatch_count": metatrack.get("metatrack_dynamic_risk_contended_dispatch_count"),
+                "metatrack_dynamic_normal_protection_count": metatrack.get("metatrack_dynamic_normal_protection_count"),
+                "metatrack_dynamic_uncontended_dispatch_count": metatrack.get("metatrack_dynamic_uncontended_dispatch_count"),
+                "metatrack_unlock_arbitration_count": metatrack.get("metatrack_unlock_arbitration_count"),
+                "metatrack_unlock_changed_choice_count": metatrack.get("metatrack_unlock_changed_choice_count"),
+                "metatrack_unlock_selected_opportunity_count": metatrack.get("metatrack_unlock_selected_opportunity_count"),
+
             }
         )
     block_stm = mechanism.get("block_stm") if isinstance(mechanism.get("block_stm"), dict) else {}
@@ -2603,6 +2620,8 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         required.extend(METATRACK_REQUIRED_METRICS)
     if normalized_method_id in {"metatrack_ready_round_control", "metatrack_influence"}:
         required.extend(METATRACK_READY_ROUND_REQUIRED_METRICS)
+    if normalized_method_id == "metatrack_dyntrack":
+        required.extend(METATRACK_DYNAMIC_V24_REQUIRED_METRICS)
     if uses_batch_si:
         required.extend(BATCH_SI_REQUIRED_METRICS)
     if uses_groundhog:
@@ -2622,6 +2641,7 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
         + BLOCK_STM_REQUIRED_METRICS
         + METATRACK_REQUIRED_METRICS
         + METATRACK_READY_ROUND_REQUIRED_METRICS
+        + METATRACK_DYNAMIC_V24_REQUIRED_METRICS
         + BATCH_SI_REQUIRED_METRICS
         + LITERATURE_GRAPH_REQUIRED_METRICS
         + GROUNDHOG_REQUIRED_METRICS
@@ -2637,6 +2657,11 @@ def _apply_metric_completeness(metrics: dict[str, Any], *, method_id: str | None
     for name in required:
         if statuses.get(name) == "missing":
             metric_missing.append(f"metric:{name}")
+    if normalized_method_id == "metatrack_dyntrack":
+        if metrics.get("metatrack_dynamic_lane_metric_complete") is not True:
+            metric_missing.append("evidence:dynamic_lane_incomplete")
+        if metrics.get("metatrack_dynamic_lane_runtime_version") != "risk_resource_lane_v24":
+            metric_missing.append("evidence:dynamic_lane_wrong_runtime_version")
 
     metrics["metric_required"] = required
     metrics["metric_statuses"] = statuses

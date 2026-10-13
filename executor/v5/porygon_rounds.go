@@ -154,7 +154,9 @@ func (r *NodeRuntime) porygonPaperRecordCertifiedDelta(height uint64, delta []st
 		if item.Key == "" {
 			continue
 		}
-		base[item.Key] = item.Value
+		if err := porygonApplyCanonicalKVV1(base, item); err != nil {
+			return nil, "", fmt.Errorf("Porygon canonical certified delta at height %d: %w", height, err)
+		}
 	}
 	partitionRoots := copyRegistryStringMap(state.certifiedPartitionRoots[baseHeight])
 	if partitionRoots == nil {
@@ -313,7 +315,7 @@ func (r *NodeRuntime) porygonPaperUpdatesForProposal(height uint64) []PorygonPro
 	return rows
 }
 
-func porygonPaperStateUpdates(delta execution.TxDelta, shardCount int) []PorygonStateUpdate {
+func porygonPaperStateUpdates(delta execution.TxDelta, shardCount int, accesses ...[]tx.AccessItem) []PorygonStateUpdate {
 	if !delta.Success || len(delta.WriteSet) == 0 {
 		return nil
 	}
@@ -324,7 +326,11 @@ func porygonPaperStateUpdates(delta execution.TxDelta, shardCount int) []Porygon
 	sort.Strings(keys)
 	out := make([]PorygonStateUpdate, 0, len(keys))
 	for _, key := range keys {
-		out = append(out, PorygonStateUpdate{TxID: delta.TxID, OriginalIndex: delta.OriginalIndex, Key: key, Value: delta.WriteSet[key]})
+		update := PorygonStateUpdate{TxID: delta.TxID, OriginalIndex: delta.OriginalIndex, Key: key, Value: delta.WriteSet[key]}
+		if len(accesses) > 0 {
+			update = porygonTypedUpdateV1(update, accesses[0])
+		}
+		out = append(out, update)
 	}
 	return porygonCanonicalStateUpdates(out)
 }
@@ -552,7 +558,7 @@ func (r *NodeRuntime) porygonPaperPendingEvidenceForProposal(proposalHeight uint
 		}
 		out = append(out, porygonPendingTransactionEvidence{
 			TxID: lifecycle.TxID, Height: lifecycle.OriginHeight,
-			Accesses: append([]tx.AccessItem(nil), lifecycle.Accesses...),
+			Accesses:   append([]tx.AccessItem(nil), lifecycle.Accesses...),
 			LockedKeys: append([]string(nil), lifecycle.LockedKeys...),
 		})
 	}
@@ -665,9 +671,9 @@ func (r *NodeRuntime) porygonPaperLifecycleMetrics() map[string]any {
 	}
 	return map[string]any{
 		"pending_transaction_count": pending,
-		"itx_committed_count": itxCommitted,
-		"ctx_committed_count": ctxCommitted,
-		"ctx_rolled_back_count": ctxRolledBack,
+		"itx_committed_count":       itxCommitted,
+		"ctx_committed_count":       ctxCommitted,
+		"ctx_rolled_back_count":     ctxRolledBack,
 	}
 }
 

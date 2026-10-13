@@ -481,22 +481,22 @@ type BlockExecutionInput struct {
 	MetaTrackExactAccessPolicy       string
 }
 type BlockExecutionResult struct {
-	ExecutionResult           execution.Result                `json:"execution_result"`
-	PorygonCertifiedExecution *PorygonCertifiedExecutionTruth `json:"porygon_certified_execution,omitempty"`
-	StateDelta                []state.StateKV                 `json:"state_delta"`
-	PlanDigest                string                          `json:"execution_plan_digest"`
-	WorkerCount               int                             `json:"worker_count"`
-	BlockExecutionMS          int64                           `json:"block_execution_ms"`
-	TransactionExecutionMS    int64                           `json:"transaction_execution_ms"`
-	DeterministicApplyMS      int64                           `json:"deterministic_apply_ms"`
-	StateDBApplyMS            int64                           `json:"state_db_apply_ms"`
-	StateCommitmentMS         int64                           `json:"state_commitment_ms"`
-	StateRootVersion          string                          `json:"state_root_version"`
-	PersistenceMetrics        map[string]any                  `json:"persistence_metrics,omitempty"`
-	ScheduleEvents            []ScheduleEvent                 `json:"schedule_events,omitempty"`
-	ActualMetrics             map[string]any                  `json:"actual_metrics,omitempty"`
-	MetaTrackObservedClassification *BatchClassificationResult `json:"-"` // transient: no persisted/consensus payload
-	BusinessAttempts          []BusinessExecutionAttempt
+	ExecutionResult                 execution.Result                `json:"execution_result"`
+	PorygonCertifiedExecution       *PorygonCertifiedExecutionTruth `json:"porygon_certified_execution,omitempty"`
+	StateDelta                      []state.StateKV                 `json:"state_delta"`
+	PlanDigest                      string                          `json:"execution_plan_digest"`
+	WorkerCount                     int                             `json:"worker_count"`
+	BlockExecutionMS                int64                           `json:"block_execution_ms"`
+	TransactionExecutionMS          int64                           `json:"transaction_execution_ms"`
+	DeterministicApplyMS            int64                           `json:"deterministic_apply_ms"`
+	StateDBApplyMS                  int64                           `json:"state_db_apply_ms"`
+	StateCommitmentMS               int64                           `json:"state_commitment_ms"`
+	StateRootVersion                string                          `json:"state_root_version"`
+	PersistenceMetrics              map[string]any                  `json:"persistence_metrics,omitempty"`
+	ScheduleEvents                  []ScheduleEvent                 `json:"schedule_events,omitempty"`
+	ActualMetrics                   map[string]any                  `json:"actual_metrics,omitempty"`
+	MetaTrackObservedClassification *BatchClassificationResult      `json:"-"` // transient: no persisted/consensus payload
+	BusinessAttempts                []BusinessExecutionAttempt
 }
 type BusinessExecutionAttempt struct {
 	BlockHeight          uint64
@@ -787,15 +787,15 @@ type BatchClassificationResult struct {
 	EffectiveFrontierTrackDemotionCount   int
 }
 type ScheduleResult struct {
-	Ordered                      []tx.SignedTransaction
-	Events                       []ScheduleEvent
+	Ordered                         []tx.SignedTransaction
+	Events                          []ScheduleEvent
 	MetaTrackPreparedClassification *BatchClassificationResult `json:"-"` // per-call, never persisted
-	ReadyPriorityPolicy          string
-	DependencyInfluenceTailDepth map[string]int
-	DependencyInfluenceDescCount map[string]int
-	DependencyInfluenceOrdinal   map[string]uint64
-	DependencyInfluenceValid     bool
-	DependencyInfluenceError     string
+	ReadyPriorityPolicy             string
+	DependencyInfluenceTailDepth    map[string]int
+	DependencyInfluenceDescCount    map[string]int
+	DependencyInfluenceOrdinal      map[string]uint64
+	DependencyInfluenceValid        bool
+	DependencyInfluenceError        string
 }
 type ScheduleEvent struct {
 	TxID                   string
@@ -2673,6 +2673,9 @@ func (p builtinScheduler) Schedule(items []tx.SignedTransaction, execution Execu
 		}
 		result.Events = append(result.Events, ScheduleEvent{TxID: item.TxID, Track: decision.Track, QueueName: queueNameForTrack(decision.Track), DecisionReason: "enqueue:" + decision.Reason, LocalExecution: true, ReadyQueueDepth: fastDepth + conservativeDepth, FastQueueDepth: fastDepth, ConservativeQueueDepth: conservativeDepth})
 	}
+	if p.ID() == metaTrackUnlockReadySchedulerID && execution != nil {
+		return scheduleMetaTrackUnlockReady(ordered, execution, classification, result)
+	}
 	if p.ID() == metaTrackReadyRoundControlSchedulerID && execution != nil {
 		return scheduleMetaTrackReadyRoundControl(ordered, execution, classification, result)
 	}
@@ -3743,16 +3746,16 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		observedClassificationV1 = &classification
 	}
 	return BlockExecutionResult{
-		ExecutionResult:        result,
-		StateDelta:             stateKVsFromExecutionDelta(result.StateDelta),
-		PlanDigest:             result.PlanDigest,
-		WorkerCount:            workerCount,
-		TransactionExecutionMS: result.TransactionExecutionMS,
-		DeterministicApplyMS:   result.DeterministicMaterializationMS,
-		ScheduleEvents:         planEvents,
-		ActualMetrics:          actualMetrics,
+		ExecutionResult:                 result,
+		StateDelta:                      stateKVsFromExecutionDelta(result.StateDelta),
+		PlanDigest:                      result.PlanDigest,
+		WorkerCount:                     workerCount,
+		TransactionExecutionMS:          result.TransactionExecutionMS,
+		DeterministicApplyMS:            result.DeterministicMaterializationMS,
+		ScheduleEvents:                  planEvents,
+		ActualMetrics:                   actualMetrics,
 		MetaTrackObservedClassification: observedClassificationV1,
-		BusinessAttempts:       attempts,
+		BusinessAttempts:                attempts,
 	}, nil
 }
 
@@ -3865,7 +3868,8 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	// control and H/D candidate to share one runtime/worker model.
 	dependencyInfluencePriority := schedule.ReadyPriorityPolicy == metaTrackDependencyInfluencePriorityPolicy
 	readyRoundControl := schedule.ReadyPriorityPolicy == metaTrackReadyRoundControlPriorityPolicy
-	readyRoundArbitration := dependencyInfluencePriority || readyRoundControl
+	dynamicUnlockPriority := schedule.ReadyPriorityPolicy == metaTrackUnlockReadyPriorityPolicy
+	readyRoundArbitration := dependencyInfluencePriority || readyRoundControl || dynamicUnlockPriority
 	if readyRoundArbitration && !schedule.DependencyInfluenceValid {
 		return nil, nil, nil, nil, fmt.Errorf("metatrack ready-round schedule invalid: policy=%q valid=%t error=%q", schedule.ReadyPriorityPolicy, schedule.DependencyInfluenceValid, schedule.DependencyInfluenceError)
 	}
@@ -3948,6 +3952,17 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 
 	reverse := map[string][]string{}
 	depCount := map[string]int{}
+	// MBE_MT_DUAL_READY_V1: live count of children with only this predecessor outstanding.
+	unlockCount := map[string]int{}
+	// Dynamic resource lanes are independent from the immutable semantic safety class.
+	dynamicRiskByTx := map[string]bool{}
+	riskInFlightByTx := map[string]bool{}
+	riskInFlight := 0
+	if dynamicUnlockPriority {
+		for txID, item := range byID {
+			dynamicRiskByTx[txID] = metaTrackPotentialRemotePublishRisk(item)
+		}
+	}
 	fastReady := []string{}
 	conservativeReady := []string{}
 	blocked := map[string]bool{}
@@ -4146,9 +4161,21 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			}
 			return
 		}
+		// Candidate-only fair Ready-Round membership, assigned on actual eligibility.
+		if dynamicUnlockPriority {
+			readyRoundByTx[txID] = openReadyRound
+		}
 		readyQueueStarted[txID] = time.Now()
 		queueName := queueNameForTrack(decision.Track)
-		if singleReadyQueueV661 {
+		if dynamicUnlockPriority {
+			if dynamicRiskByTx[txID] {
+				conservativeReady = append(conservativeReady, txID)
+				queueName = "dynamic_resource_risk_ready"
+			} else {
+				fastReady = append(fastReady, txID)
+				queueName = "dynamic_normal_ready"
+			}
+		} else if singleReadyQueueV661 {
 			conservativeReady = append(conservativeReady, txID)
 			queueName = "unified_ready_queue_v661"
 		} else if decision.Track == "fast" {
@@ -4303,6 +4330,16 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			continue
 		}
 		enqueueReady(txID, "actual_ready_initial", false)
+	}
+	// Initialize live unlock opportunities after the complete dependency graph is known.
+	if dynamicUnlockPriority {
+		for _, predecessors := range deps {
+			if len(predecessors) == 1 {
+				if _, exists := byID[predecessors[0]]; exists {
+					unlockCount[predecessors[0]]++
+				}
+			}
+		}
 	}
 	recordDepths()
 	type versionPublishTask struct {
@@ -4731,9 +4768,26 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	influenceArbitrationDecisionCount := 0
 	influenceChangedChoiceCount := 0
 	readyRoundEventDrainSkipCount := 0
+	// MBE_MT_DYN_FASTPATH_V24: no global Ready scans when every candidate fits.
+	dynamicUncontendedDispatchCount := 0
+	dynamicRiskSignalTxCount := 0
+	if dynamicUnlockPriority {
+		for _, risky := range dynamicRiskByTx {
+			if risky {
+				dynamicRiskSignalTxCount++
+			}
+		}
+	}
+	dynamicNormalDispatchCount := 0
+	dynamicRiskDispatchCount := 0
+	dynamicContendedRiskDispatchCount := 0
+	dynamicNormalProtectionCount := 0
+	unlockArbitrationCount := 0
+	unlockChangedChoiceCount := 0
+	unlockSelectedOpportunityCount := 0
 	seenReadyRounds := map[uint64]bool{}
 	seenMultiCandidateReadyRounds := map[uint64]bool{}
-	nextReady := func(useInfluence bool) string {
+	nextReady := func(useInfluence, useUnlock bool) string {
 		if singleReadyQueueV661 {
 			if len(conservativeReady) == 0 {
 				return ""
@@ -4743,6 +4797,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			return txID
 		}
 		if readyRoundArbitration {
+			if dynamicUnlockPriority && !useUnlock {
+				return metaTrackPopDynamicUncontendedReady(&fastReady, &conservativeReady, readyRoundByTx, schedule)
+			}
+			if useUnlock {
+				return metaTrackPopDynamicRiskReady(&fastReady, &conservativeReady, readyRoundByTx, schedule, unlockCount, riskInFlight, workerCount)
+			}
 			return metaTrackPopReadyRoundChoice(&fastReady, &conservativeReady, readyRoundByTx, schedule, useInfluence)
 		}
 		if len(fastReady) > 0 {
@@ -4765,12 +4825,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		// Do not sleep or wait for future work. If completion/StateReady events are
 		// already buffered, let the main loop consume them first so all currently
 		// available releases join the same Ready Round.
-		if readyRoundArbitration && (len(completions) > 0 || len(remoteStateCompletions) > 0) {
+		if readyRoundArbitration && !dynamicUnlockPriority && (len(completions) > 0 || len(remoteStateCompletions) > 0) {
 			readyRoundEventDrainSkipCount++
 			return nil
 		}
 		dispatchedThisPass := 0
-		if readyRoundArbitration {
+		if readyRoundArbitration && (!dynamicUnlockPriority || len(fastReady)+len(conservativeReady) > singleSerialDispatchLimit-inFlight) {
 			round, hasRound := metaTrackOldestReadyRound(fastReady, conservativeReady, readyRoundByTx)
 			if hasRound && !seenReadyRounds[round] {
 				seenReadyRounds[round] = true
@@ -4793,10 +4853,23 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		}
 		for inFlight < singleSerialDispatchLimit {
 			influenceApplied := false
+			unlockApplied := false
 			if readyRoundArbitration {
-				candidates := metaTrackReadyRoundCandidateCount(fastReady, conservativeReady, readyRoundByTx)
 				capacity := singleSerialDispatchLimit - inFlight
+				candidates := 0
+				if !dynamicUnlockPriority || len(fastReady)+len(conservativeReady) > capacity {
+					candidates = metaTrackReadyRoundCandidateCount(fastReady, conservativeReady, readyRoundByTx)
+				}
 				influenceApplied = dependencyInfluencePriority && candidates > capacity && capacity > 0
+				unlockApplied = dynamicUnlockPriority && candidates > capacity && capacity > 0
+				if unlockApplied {
+					unlockArbitrationCount++
+					control := metaTrackPeekReadyRoundChoice(fastReady, conservativeReady, readyRoundByTx, schedule, false)
+					chosen := metaTrackPeekDynamicRiskReady(fastReady, conservativeReady, readyRoundByTx, schedule, unlockCount, riskInFlight, workerCount)
+					if control != "" && chosen != "" && control != chosen {
+						unlockChangedChoiceCount++
+					}
+				}
 				if influenceApplied {
 					influenceArbitrationDecisionCount++
 					controlChoice := metaTrackPeekReadyRoundChoice(fastReady, conservativeReady, readyRoundByTx, schedule, false)
@@ -4806,7 +4879,7 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 					}
 				}
 			}
-			txID := nextReady(influenceApplied)
+			txID := nextReady(influenceApplied, unlockApplied)
 			if txID == "" {
 				break
 			}
@@ -4815,6 +4888,14 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			dispatchReason := "actual_dispatch"
 			if readyRoundControl {
 				dispatchReason = fmt.Sprintf("actual_dispatch_ready_round_control:round=%d", selectedRound)
+			}
+			if dynamicUnlockPriority {
+				if unlockApplied {
+					dispatchReason = fmt.Sprintf("actual_dispatch_dynamic_risk_unlock:round=%d:unblock=%d:risk=%t", selectedRound, unlockCount[txID], dynamicRiskByTx[txID])
+					unlockSelectedOpportunityCount += unlockCount[txID]
+				} else {
+					dispatchReason = fmt.Sprintf("actual_dispatch_dynamic_unlock_uncontended:round=%d", selectedRound)
+				}
 			}
 			if dependencyInfluencePriority {
 				if influenceApplied {
@@ -4830,6 +4911,24 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: dispatchQueueName, DecisionReason: dispatchReason, LocalExecution: true, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
 			if err := dispatch(txID); err != nil {
 				return err
+			}
+			if dynamicUnlockPriority {
+				if !unlockApplied {
+					dynamicUncontendedDispatchCount++
+				}
+				if dynamicRiskByTx[txID] {
+					riskInFlightByTx[txID] = true
+					riskInFlight++
+					dynamicRiskDispatchCount++
+					if unlockApplied {
+						dynamicContendedRiskDispatchCount++
+					}
+				} else {
+					dynamicNormalDispatchCount++
+					if unlockApplied && riskInFlight >= workerCount-1 {
+						dynamicNormalProtectionCount++
+					}
+				}
 			}
 			if readyRoundArbitration {
 				delete(readyRoundByTx, txID)
@@ -4887,7 +4986,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				if !completed[txID] {
 					delete(blocked, txID)
 					decision := decisionByID[txID]
-					conservativeReady = append(conservativeReady, txID)
+					if dynamicUnlockPriority && !dynamicRiskByTx[txID] {
+						fastReady = append(fastReady, txID)
+					} else {
+						conservativeReady = append(conservativeReady, txID)
+					}
 					if readyRoundArbitration {
 						readyRoundByTx[txID] = openReadyRound
 					}
@@ -4941,6 +5044,10 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			continue
 		}
 		inFlight--
+		if dynamicUnlockPriority && riskInFlightByTx[done.outcome.TxID] {
+			riskInFlight--
+			delete(riskInFlightByTx, done.outcome.TxID)
+		}
 		if done.err != nil {
 			closeWorkers()
 			wg.Wait()
@@ -4970,7 +5077,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				sojournNS, stateWaitNS, dependencyWaitNS, queueWaitNS := attemptTiming(doneID)
 				attempts = append(attempts, BusinessExecutionAttempt{BlockHeight: block.Height, TxID: doneID, Track: "fast", Attempt: done.outcome.Attempt, Reason: "fast_fallback:" + reason, Success: done.outcome.Receipt.Success, FinalCompletion: false, DurationUS: done.outcome.DurationUS, DurationNS: done.outcome.DurationNS, SojournNS: sojournNS, StateWaitNS: stateWaitNS, DependencyWaitNS: dependencyWaitNS, QueueWaitNS: queueWaitNS, AttemptStartOffsetNS: done.outcome.AttemptStartOffsetNS, AttemptEndOffsetNS: done.outcome.AttemptEndOffsetNS, FIFOReadyOffsetNS: singleFIFOReadyOffsetNSByTx[doneID], FIFOReleaseOffsetNS: singleFIFOReleaseOffsetNSByTx[doneID], FIFOReadyBlockedNS: singleFIFOReadyBlockedNSByTx[doneID], FIFOInitialHeadTxID: singleFIFOInitialHeadByTx[doneID]})
 				resetTrackAttemptTiming(doneID)
-				conservativeReady = append(conservativeReady, doneID)
+				if dynamicUnlockPriority && !dynamicRiskByTx[doneID] {
+					fastReady = append(fastReady, doneID)
+				} else {
+					conservativeReady = append(conservativeReady, doneID)
+				}
 				readyQueueStarted[doneID] = time.Now()
 				if readyRoundArbitration {
 					readyRoundByTx[doneID] = openReadyRound
@@ -5073,6 +5184,14 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 				continue
 			}
 			depCount[dependent]--
+			if dynamicUnlockPriority && depCount[dependent] == 1 {
+				for _, remaining := range deps[dependent] {
+					if !completed[remaining] {
+						unlockCount[remaining]++
+						break
+					}
+				}
+			}
 			if depCount[dependent] > 0 {
 				continue
 			}
@@ -5145,6 +5264,11 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		workerQueueModel = "per_worker_unified_ready_round_lane"
 		stealPolicy = "same_shard_unified_ready_round_lane"
 	}
+	if dynamicUnlockPriority {
+		readyPriorityPolicy = metaTrackUnlockReadyPriorityPolicy
+		workerQueueModel = "per_worker_unified_ready_round_lane"
+		stealPolicy = "same_shard_unified_ready_round_lane"
+	}
 	if dependencyInfluencePriority {
 		readyPriorityPolicy = metaTrackDependencyInfluencePriorityPolicy
 		workerQueueModel = "per_worker_unified_ready_round_lane"
@@ -5170,37 +5294,54 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		return values[index]
 	}
 	metrics := map[string]any{
-		"configured_worker_count":                               workerCount,
-		"metatrack_commutative_dependency_suppressed_count":     classification.CommutativeDependencySuppressedCount,
-		"metatrack_transaction_snapshot_total_key_count":        transactionSnapshotTotalKeys,
-		"metatrack_version_publish_async_enqueued_count":        versionPublishEnqueued,
-		"metatrack_version_publish_policy":                      "completion_triggered_independent_v1",
-		"max_ready_queue_depth":                                 maxReadyQueueDepth,
-		"max_fast_ready_queue_depth":                            maxFastReadyQueueDepth,
-		"max_conservative_ready_queue_depth":                    maxConservativeReadyQueueDepth,
-		"max_dependency_frontier_width":                         maxDependencyFrontierWidth,
-		"max_inflight_business_executions":                      int(atomic.LoadInt64(&maxInflightBusiness)),
-		"worker_execution_count":                                workerCounts,
-		"steal_attempt_count":                                   int(atomic.LoadInt64(&stealAttemptCount)),
-		"steal_success_count":                                   int(atomic.LoadInt64(&stealSuccessCount)),
-		"stolen_task_count":                                     int(atomic.LoadInt64(&stolenTaskCount)),
-		"submitted_logical_tx_count":                            len(ordered),
-		"scheduler_dispatch_event_count":                        dispatchCount,
-		"blocked_event_count":                                   blockedCount,
-		"wakeup_event_count":                                    wakeupCount,
-		"completion_channel_event_count":                        completionChannelCount,
-		"completion_processing_policy":                          "dependency_ready_completion_order_deterministic_final_merge",
-		"worker_queue_model":                                    workerQueueModel,
-		"metatrack_ready_priority_policy":                       readyPriorityPolicy,
-		"metatrack_single_fifo_hol_enabled":                     singleConservativeSerialV675,
-		"metatrack_single_fifo_bypass_prevented_count":          singleFIFOBypassPreventedCount,
-		"metatrack_single_fifo_head_block_count":                singleFIFOHeadBlockCount,
-		"metatrack_single_fifo_ready_blocked_duration_count":    singleFIFOReadyBlockedDurationCount,
-		"metatrack_single_fifo_ready_blocked_sum_ms":            float64(singleFIFOReadyBlockedSumNS) / float64(time.Millisecond),
-		"metatrack_single_fifo_ready_blocked_max_ms":            float64(singleFIFOReadyBlockedMaxNS) / float64(time.Millisecond),
-		"metatrack_single_serial_execution_enabled":             singleConservativeSerialV675,
-		"metatrack_diag_single_business_execution_v28":          diagnosticSingleBusinessV28,
-		"metatrack_single_serial_dispatch_limit":                singleSerialDispatchLimit,
+		"configured_worker_count":                            workerCount,
+		"metatrack_commutative_dependency_suppressed_count":  classification.CommutativeDependencySuppressedCount,
+		"metatrack_transaction_snapshot_total_key_count":     transactionSnapshotTotalKeys,
+		"metatrack_version_publish_async_enqueued_count":     versionPublishEnqueued,
+		"metatrack_version_publish_policy":                   "completion_triggered_independent_v1",
+		"max_ready_queue_depth":                              maxReadyQueueDepth,
+		"max_fast_ready_queue_depth":                         maxFastReadyQueueDepth,
+		"max_conservative_ready_queue_depth":                 maxConservativeReadyQueueDepth,
+		"max_dependency_frontier_width":                      maxDependencyFrontierWidth,
+		"max_inflight_business_executions":                   int(atomic.LoadInt64(&maxInflightBusiness)),
+		"worker_execution_count":                             workerCounts,
+		"steal_attempt_count":                                int(atomic.LoadInt64(&stealAttemptCount)),
+		"steal_success_count":                                int(atomic.LoadInt64(&stealSuccessCount)),
+		"stolen_task_count":                                  int(atomic.LoadInt64(&stolenTaskCount)),
+		"submitted_logical_tx_count":                         len(ordered),
+		"scheduler_dispatch_event_count":                     dispatchCount,
+		"blocked_event_count":                                blockedCount,
+		"wakeup_event_count":                                 wakeupCount,
+		"completion_channel_event_count":                     completionChannelCount,
+		"completion_processing_policy":                       "dependency_ready_completion_order_deterministic_final_merge",
+		"worker_queue_model":                                 workerQueueModel,
+		"metatrack_ready_priority_policy":                    readyPriorityPolicy,
+		"metatrack_single_fifo_hol_enabled":                  singleConservativeSerialV675,
+		"metatrack_single_fifo_bypass_prevented_count":       singleFIFOBypassPreventedCount,
+		"metatrack_single_fifo_head_block_count":             singleFIFOHeadBlockCount,
+		"metatrack_single_fifo_ready_blocked_duration_count": singleFIFOReadyBlockedDurationCount,
+		"metatrack_single_fifo_ready_blocked_sum_ms":         float64(singleFIFOReadyBlockedSumNS) / float64(time.Millisecond),
+		"metatrack_single_fifo_ready_blocked_max_ms":         float64(singleFIFOReadyBlockedMaxNS) / float64(time.Millisecond),
+		"metatrack_single_serial_execution_enabled":          singleConservativeSerialV675,
+		"metatrack_diag_single_business_execution_v28":       diagnosticSingleBusinessV28,
+		"metatrack_single_serial_dispatch_limit":             singleSerialDispatchLimit,
+		"metatrack_dynamic_resource_lane_enabled":            dynamicUnlockPriority,
+		"metatrack_dynamic_lane_runtime_version": func() string {
+			if dynamicUnlockPriority {
+				return "risk_resource_lane_v24"
+			}
+			return ""
+		}(),
+		"metatrack_dynamic_risk_signal_tx_count":                dynamicRiskSignalTxCount,
+		"metatrack_dynamic_uncontended_dispatch_count":          dynamicUncontendedDispatchCount,
+		"metatrack_dynamic_normal_dispatch_count":               dynamicNormalDispatchCount,
+		"metatrack_dynamic_risk_dispatch_count":                 dynamicRiskDispatchCount,
+		"metatrack_dynamic_risk_contended_dispatch_count":       dynamicContendedRiskDispatchCount,
+		"metatrack_dynamic_normal_protection_count":             dynamicNormalProtectionCount,
+		"metatrack_dynamic_unlock_scheduler_enabled":            dynamicUnlockPriority,
+		"metatrack_unlock_arbitration_count":                    unlockArbitrationCount,
+		"metatrack_unlock_changed_choice_count":                 unlockChangedChoiceCount,
+		"metatrack_unlock_selected_opportunity_count":           unlockSelectedOpportunityCount,
 		"metatrack_dependency_influence_scheduler_enabled":      dependencyInfluencePriority,
 		"metatrack_ready_round_scheduler_enabled":               readyRoundArbitration,
 		"metatrack_ready_round_control_enabled":                 readyRoundControl,
@@ -6407,6 +6548,9 @@ func BuiltinRegistry() *Registry {
 	})
 	register("scheduler", "fast_first_scheduler", func(c map[string]any) (Plugin, error) {
 		return builtinScheduler{makeBasic("scheduler", "fast_first_scheduler", c)}, nil
+	})
+	register("scheduler", metaTrackUnlockReadySchedulerID, func(c map[string]any) (Plugin, error) {
+		return builtinScheduler{makeBasic("scheduler", metaTrackUnlockReadySchedulerID, c)}, nil
 	})
 	register("scheduler", metaTrackReadyRoundControlSchedulerID, func(c map[string]any) (Plugin, error) {
 		return builtinScheduler{makeBasic("scheduler", metaTrackReadyRoundControlSchedulerID, c)}, nil

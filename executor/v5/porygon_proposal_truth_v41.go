@@ -88,7 +88,7 @@ func (r *NodeRuntime) porygonPaperCertifiedUpdatesForProposal(height uint64) ([]
 			// delta and therefore must not create a future U entry.
 			continue
 		}
-		updates := porygonPaperStateUpdates(delta, plan.ExecutionShardCount)
+		updates := porygonPaperStateUpdates(delta, plan.ExecutionShardCount, assignment.Accesses)
 		update := PorygonProposalUpdate{
 			TxID:           assignment.TxID,
 			OriginHeight:   originHeight,

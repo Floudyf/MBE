@@ -693,12 +693,11 @@ func porygonECName(height uint64, count int) string {
 }
 
 func porygonAssignmentsConflict(previous, current porygonTxAssignment, previousItem, currentItem tx.SignedTransaction) bool {
-	// One ESC is modeled as a sequential execution lane. Independent ESCs may
-	// execute concurrently when their declared state locks do not conflict.
+	// One ESC retains its sequential lane. Across ESCs, signed AccessList
+	// read/write conflicts are authoritative: shared read-only keys do not
+	// imply an exclusive lock. The OC's cross-round Pending, CTx/CTx and
+	// post-execution CTx/ITx checks all retain their existing call sites.
 	if previous.ExecutionShard == current.ExecutionShard {
-		return true
-	}
-	if (previous.CrossShard || current.CrossShard) && porygonStringSetsOverlap(previous.LockedKeys, current.LockedKeys) {
 		return true
 	}
 	for _, left := range porygonCanonicalAccesses(previousItem) {

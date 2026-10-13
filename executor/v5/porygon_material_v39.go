@@ -3,6 +3,7 @@ package v5
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"metaverse-chainlab/executor/realism/execution"
@@ -21,6 +22,38 @@ func porygonPaperCollapseOrderedStateUpdates(ordered []PorygonStateUpdate) []Por
 			continue
 		}
 		update.Key = key
+		previous, exists := last[key]
+		if exists && update.UpdateSemantics == porygonDeltaSemanticV1 {
+			switch previous.UpdateSemantics {
+			case porygonDeltaSemanticV1:
+				next, err := porygonCheckedAddV1(previous.Delta, update.Delta)
+				if err != nil {
+					update.UpdateSemantics = porygonInvalidSemanticV1
+				} else {
+					update.Delta = next
+				}
+			case "", "set":
+				// A prior absolute write followed by an increment has a known
+				// intermediate value; fold to one final absolute write.
+				base, err := strconv.ParseInt(previous.Value, 10, 64)
+				if err == nil {
+					var next int64
+					next, err = porygonCheckedAddV1(base, update.Delta)
+					if err == nil {
+						update.Value = strconv.FormatInt(next, 10)
+						update.UpdateSemantics = ""
+						update.Delta = 0
+					}
+				}
+				if err != nil {
+					update.UpdateSemantics = porygonInvalidSemanticV1
+				}
+			default:
+				update.UpdateSemantics = porygonInvalidSemanticV1
+			}
+		}
+		// Absolute assignments (including certified rollbacks) replace all
+		// preceding values; pure incremental groups are summed exactly once.
 		last[key] = update
 	}
 	keys := make([]string, 0, len(last))
@@ -57,6 +90,9 @@ func porygonPaperValidateCollapsedStateUpdates(updates []PorygonStateUpdate) err
 		key := strings.TrimSpace(update.Key)
 		if key == "" {
 			return fmt.Errorf("Porygon Paper2 materialization contains empty state key")
+		}
+		if update.UpdateSemantics != "" && update.UpdateSemantics != "set" && update.UpdateSemantics != porygonDeltaSemanticV1 {
+			return fmt.Errorf("Porygon invalid certified materialization semantics %q on %s", update.UpdateSemantics, key)
 		}
 		if seen[key] {
 			return fmt.Errorf("Porygon Paper2 materialization contains duplicate state key %s after ordered collapse", key)

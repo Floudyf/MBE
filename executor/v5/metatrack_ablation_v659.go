@@ -136,10 +136,135 @@ func metaTrackAblationCoaccessLocalityV661(ignoreCoaccess bool, keys []string, s
 // intentionally stays inside metaTrackRouting so signed execution-routing,
 // projection metadata, dependency closure, StateReady and Version Liveness keep
 // exactly the same MetaTrack capability contract.
+// MBE_MT_FLOW_ABL_V1: routing-only fixed hash replacement for the complete
+// dependency-aware incremental execution-sharding mechanism. Keep MetaTrack's
+// signed placement/version carrier, state ownership and PBFT untouched.
+// Deterministic capacity is shared across RouteBatches, just as in Full.
 func (p *metaTrackRouting) planHashBaselineAblationV662(input BatchRoutingInput) BatchRoutingPlan {
-	baseline := statelessHashRouting{basicPlugin: p.basicPlugin}.PlanBatch(input)
-	baseline.PlacementPolicy = "metatrack_deterministic_hash_ablation_v662"
-	baseline.TransactionPolicy = "source_hash_or_state_hash_v2"
-	baseline.PlanDigest = routingPlanDigest(baseline)
-	return baseline
+	p.incrementalMu.Lock()
+	defer p.incrementalMu.Unlock()
+
+	newRun := input.BatchIndex == 0 && p.incrementalV650 != nil && p.incrementalV650.Processed > 0
+	if p.incrementalV650 == nil || !p.incrementalV650.compatible(input) || newRun {
+		p.incrementalV650 = newMetaTrackIncrementalRoutingStateV650(input)
+	}
+	state := p.incrementalV650
+	base := statelessHashRouting{basicPlugin: p.basicPlugin}.PlanBatch(input)
+	base.StateStorageUnitCount = p.StateStorageUnitCount(input.ShardIDs)
+	base.PlacementPolicy = "metatrack_deterministic_hash_ablation_v662"
+	base.TransactionPolicy = "source_hash_or_state_hash_capacity_v662"
+	base.IncrementalRoutingPolicy = "metatrack_capacity_hash_routing_ablation_v662"
+	base.IncrementalExpectedTransactionCount = input.ExpectedTransactionCount
+	base.IncrementalExecutionShardCapacity = state.Capacity
+	base.IncrementalHistoryTransactionCountBefore = state.Processed
+	base.IncrementalHistoryDigestBefore = state.HistoryDigest
+	base.IncrementalBatchPartitionInvariant = true
+	if policy, ok := p.config["control_policy"].(string); ok {
+		base.ControlPolicy = policy
+	}
+	base.ShardLoadBefore = make(map[string]int, len(input.ShardIDs))
+	for _, shard := range input.ShardIDs {
+		base.ShardLoadBefore[shard] = state.ShardLoad[shard]
+	}
+
+	placementIndex := make(map[int]int, len(base.TransactionPlacements))
+	for i, placement := range base.TransactionPlacements {
+		placementIndex[placement.TxIndex] = i
+	}
+	base.RemoteAccessEstimate = 0
+	for _, record := range input.Records {
+		index, ok := placementIndex[record.Index]
+		if !ok {
+			continue
+		}
+		placement := base.TransactionPlacements[index]
+		chosen := placement.ExecutionShard // Deterministic source/state hash only.
+		preferred := -1
+		for i, shard := range input.ShardIDs {
+			if shard == chosen {
+				preferred = i
+				break
+			}
+		}
+		if preferred < 0 && len(input.ShardIDs) > 0 {
+			preferred = 0
+			chosen = input.ShardIDs[0]
+		}
+		if state.Capacity > 0 && state.ShardLoad[chosen] >= state.Capacity {
+			for offset := 1; offset < len(input.ShardIDs); offset++ {
+				candidate := input.ShardIDs[(preferred+offset)%len(input.ShardIDs)]
+				if state.ShardLoad[candidate] < state.Capacity {
+					chosen = candidate
+					base.IncrementalCapacityForcedChoiceCount++
+					break
+				}
+			}
+		}
+		placement.ExecutionShard = chosen
+		if chosen == input.ShardIDs[preferred] {
+			placement.Reason = "deterministic_hash_execution_v662"
+		} else {
+			placement.Reason = "deterministic_hash_capacity_probe_v662"
+		}
+		placement.QueueLoadBefore = state.ShardLoad[chosen]
+		ctx := metaTrackBuildRoutingRecordContextV669(p, record, input.Sharding, input.ShardIDs, state)
+		reads, writes := metaTrackRemoteCountsFromContextV669(ctx, chosen)
+		placement.PredictedRemoteReads = reads
+		placement.PredictedRemoteWrites = writes
+		placement.RemoteAccessCount = reads + writes
+		base.RemoteAccessEstimate += reads + writes
+		base.TransactionPlacements[index] = placement
+
+		seenPred := map[uint64]bool{}
+		for _, dep := range ctx.ExactDeps {
+			base.IncrementalExactStateEdgeCount++
+			if dep.Producer.Shard == chosen {
+				base.IncrementalExactLocalStateEdgeCount++
+			} else {
+				base.IncrementalExactCrossShardStateEdgeCount++
+			}
+			if !seenPred[dep.Producer.Ordinal] {
+				seenPred[dep.Producer.Ordinal] = true
+				base.IncrementalExactPredecessorEdgeCount++
+				if dep.Producer.Shard == chosen {
+					base.IncrementalExactLocalPredecessorCount++
+				} else {
+					base.IncrementalExactCrossShardPredecessorCount++
+				}
+			}
+		}
+		state.ShardLoad[chosen]++
+		state.Processed++
+		for _, version := range record.StateVersions {
+			if version.Key != "" && version.ProducedVersion > 0 {
+				state.ProducerByVersion[metaTrackIncrementalVersionSlotV650{Key: version.Key, Version: version.ProducedVersion}] = metaTrackIncrementalProducerV650{
+					Shard: chosen, Ordinal: record.RoutingOrdinal,
+				}
+			}
+		}
+		state.HistoryDigest = stableDigest(struct {
+			Previous       string `json:"previous"`
+			Ordinal        uint64 `json:"ordinal"`
+			LogicalID      string `json:"logical_id"`
+			ExecutionShard string `json:"execution_shard"`
+		}{state.HistoryDigest, record.RoutingOrdinal, placement.LogicalID, chosen})
+	}
+	base.ShardLoadAfter = make(map[string]int, len(input.ShardIDs))
+	for _, shard := range input.ShardIDs {
+		base.ShardLoadAfter[shard] = state.ShardLoad[shard]
+	}
+	base.IncrementalExecutionShardSwitchCount = base.IncrementalExactCrossShardPredecessorCount
+	base.PlacementCapacity = state.Capacity
+	base.PlacementMinBudget = 1
+	base.PlacementBudget = len(base.StatePlacements)
+	base.IncrementalHistoryTransactionCountAfter = state.Processed
+	base.IncrementalHistoryDigestAfter = state.HistoryDigest
+	base.RoutingOverhead = base.RemoteAccessEstimate + base.IncrementalExactStateEdgeCount
+	if !input.DeferFinalSeal {
+		if metaTrackDeclaredAccessFrontierPolicyEnabled(p.config) {
+			applyMetaTrackDeclaredAccessFrontierV2(&base, input.Records)
+		}
+		base.PlanDigest = routingPlanDigest(base)
+	}
+	return base
 }

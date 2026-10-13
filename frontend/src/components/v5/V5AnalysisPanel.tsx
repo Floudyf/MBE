@@ -9,6 +9,8 @@ const height = 286;
 const chartPadding = { top: 30, right: 24, bottom: 88, left: 58 };
 const methodOrder = [
   "metatrack_latest",
+  "metatrack_sh_noco",
+  "metatrack_ab_flow",
   "metatrack_ab_route",
   "metatrack_ab_track",
   "metatrack_ab_cons",
@@ -47,6 +49,8 @@ const methodLabels: Record<string, string[]> = {
   metatrack_serial: ["MetaTrack", "初始版"],
   metatrack_full_locality: ["MetaTrack", "当前版"],
   metatrack_latest: ["Metatrack"],
+  metatrack_sh_noco: ["去共现矩阵分片"],
+  metatrack_ab_flow: ["去依赖感知增量分流"],
   metatrack_ab_route: ["历史子消融", "无局部性放置"],
   metatrack_ab_track: ["去掉双轨"],
   metatrack_ab_cons: ["去掉共识聚合"],

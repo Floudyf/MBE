@@ -136,6 +136,7 @@ func (r *NodeRuntime) enqueueMetaTrackAsyncFinalV640(block realblock.Block, buff
 		publisherState.lanes[task.HomeShard] = lane
 	}
 	lane.finals = append(lane.finals, task)
+	traceQueueDepthV1 := len(lane.finals)
 	publisherState.backgroundFinalEnqueued++
 	if depth := metaTrackAsyncQueueDepthV640(publisherState); depth > publisherState.maxQueueDepth {
 		publisherState.maxQueueDepth = depth
@@ -147,6 +148,10 @@ func (r *NodeRuntime) enqueueMetaTrackAsyncFinalV640(block realblock.Block, buff
 	}
 	publisherState.mu.Unlock()
 
+	if r.mtHomeTraceEnabledV1() {
+		finishEnqueueTrace := r.mtHomeTraceSpanV1("background_enqueue", task.HomeShard, block.BlockHash, "", block.Height, 1, traceQueueDepthV1)
+		finishEnqueueTrace(nil)
+	}
 	if startDrain {
 		go r.drainMetaTrackAsyncFinalLaneV640(block, publisherState, task.HomeShard)
 	}
@@ -240,6 +245,8 @@ func (r *NodeRuntime) joinMetaTrackAsyncVersionsV640(ctx context.Context, buffer
 	publisherState.mu.Unlock()
 
 	started := time.Now()
+	finishJoinTrace := r.mtHomeTraceSpanV1("background_commit_join", "", "", "", 0, 0, -1)
+	defer func() { finishJoinTrace(publisherState.err) }()
 	done := make(chan struct{})
 	go func() {
 		publisherState.wg.Wait()

@@ -68,7 +68,8 @@ def test_legacy_scheduler_diagnostics_hidden_and_old_routing_preset_removed():
     assert 'v5-metatrack-shard4-preset' not in page
     assert 'metatrack_diag_parallel" ? "metatrack_diag_ready8"' in page
     assert 'metatrack_diag_serial" ? "metatrack_diag_dual1"' in page
-    assert '"metatrack_sh_noco"].includes(item) ? "metatrack_latest"' in page
+    assert '"metatrack_sh_noco"].includes(item) ? "metatrack_latest"' not in page
+    assert 'item === "metatrack_sh_noco"' in page
 
 
 def test_runtime_semantics_not_just_four_frontend_titles():
