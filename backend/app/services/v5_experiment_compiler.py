@@ -338,18 +338,33 @@ def _compile_workload_plan(spec: V5ExperimentSpec, profile: dict[str, dict], run
     topology_preview_cross_shard_ratio = None
     topology_preview_status = "unavailable"
     try:
-        topology_preview = workload_plane.preview_workload(request, shards=spec.topology.shards)
-        selected_preview = topology_preview.selected_window_preview or {}
-        preview_count = selected_preview.get("cross_shard_count")
-        preview_ratio = selected_preview.get("cross_shard_ratio")
-        if isinstance(preview_count, (int, float)) and not isinstance(preview_count, bool):
-            topology_preview_cross_shard_count = int(preview_count)
-            topology_preview_cross_shard_ratio = float(preview_ratio or 0.0)
-            topology_preview_status = "topology_specific_preview"
+        # MBE_FW_RUNPREP_V1_TOPOLOGY: compute from exact materialized output;
+        # never re-scan the original million-record source after materialization.
+        path = workload_plane.materialized_absolute_path(materialized.materialized_relative_path)
+        if workload_plane.sha256_file(path) != materialized.materialized_sha256:
+            raise workload_plane.WorkloadDataError("topology input SHA256 mismatch")
+        shards = max(1, spec.topology.shards)
+        crossing = 0
+        inspected = 0
+        for item in workload_plane._iter_canonical(path):
+            source_id = workload_plane._stable_shard(
+                item.get("routing_source_key") or item.get("sender_id"), shards
+            )
+            target_id = workload_plane._stable_shard(
+                item.get("routing_target_key") or item.get("receiver_id") or
+                item.get("routing_source_key"), shards
+            )
+            crossing += int(source_id != target_id)
+            inspected += 1
+        if inspected != int(materialized.actual_tx_count):
+            raise workload_plane.WorkloadDataError("topology input record count mismatch")
+        topology_preview_cross_shard_count = crossing
+        topology_preview_cross_shard_ratio = crossing / inspected if inspected else 0.0
+        topology_preview_status = "topology_specific_materialized_exact"
     except Exception:
-        # The exact Go preflight runs before node process creation and remains
-        # authoritative when a raw source is absent but materialization is cached.
-        topology_preview_status = "deferred_to_go_preflight"
+        # MBE_FW_RUNPREP_V1_FAIL_CLOSED: SHA/count corruption is an error,
+        # not a reason to pretend a valid topology preview was unavailable.
+        raise
     manifest = workload_plane.load_manifest(source.dataset_id or "")
     artifacts = workload_plane.workload_artifact_snapshots(source.model_dump(), materialized.summary | materialized.model_dump(), manifest)
     run_dir.mkdir(parents=True, exist_ok=True)

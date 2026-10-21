@@ -332,6 +332,26 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
+  // MBE_MT_NOEXACT_ABL_V1: extra routing-only treatment; original four ablations retained.
+  {
+    method_id: "metatrack_ab_exact",
+    display_name: "去精确版本感知分片",
+    role: "ablation",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "dual_track_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_local_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true, ablation_no_exact_version_routing_v1: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
+    },
+  },
   // MBE_METATRACK_EXEC4_V1: four-run scheduler control (current Full clone)
   {
     method_id: "metatrack_diag_ready8",
@@ -396,8 +416,12 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
 const mtObsParityFullV1 = V5_BUILTIN_METHODS.find((item) => item.method_id === "metatrack_latest");
 if (!mtObsParityFullV1) throw new Error("MetaTrack Full profile unavailable for parity diagnostics");
 for (const [id, name, scheduler] of [
-  ["metatrack_diag_rr", "诊断：等配置就绪轮次", "ready_round_control_scheduler"],
-  ["metatrack_diag_hd", "诊断：等配置依赖影响", "dependency_influence_scheduler"],
+  // MBE_MT_SLOW_LANE_V1: candidate-only, old diag IDs retained for history.
+  // MBE_MT_WAIT_READY_V1: two matched Waiting/Ready scheduler candidates; Full remains unchanged.
+  ["metatrack_slowstate", "就绪驱动双轨（候选）", "metatrack_slow_state_scheduler"],
+  ["metatrack_waitfifo", "消融：禁止未就绪绕行（FIFO 并行）", "metatrack_wait_fifo_scheduler"],
+  // MBE_MT_DUALPRIO_V1: new candidate, old historical candidate untouched.
+  ["metatrack_dualprio", "关键前驱＋状态供应优先（候选）", "metatrack_hd_state_scheduler"],
 ] as const) {
   V5_BUILTIN_METHODS.push({
     ...mtObsParityFullV1,
@@ -408,6 +432,31 @@ for (const [id, name, scheduler] of [
     plugin_config_overrides: Object.fromEntries(
       Object.entries(mtObsParityFullV1.plugin_config_overrides ?? {}).map(([key, settings]) => [key, { ...settings }]),
     ),
+  });
+}
+
+// MBE_MT_BLOCKLANE_V1: new candidate and independent fair 8-Worker no-bypass comparison.
+// Historical dual-priority and dynamic-risk method IDs remain unchanged for old result files.
+const mtBlockLaneFullV1 = V5_BUILTIN_METHODS.find((v) => v.method_id === "metatrack_latest");
+if (!mtBlockLaneFullV1) throw new Error("MetaTrack Full profile missing for block-lane candidates");
+for (const [id, title, noBypass] of [
+  ["metatrack_blocklane", "Ready/StateReady 阻塞隔离双轨（候选）", false],
+  ["metatrack_blockfifo", "去阻塞绕行（消融·8 Worker）", true],
+] as const) {
+  V5_BUILTIN_METHODS.push({
+    ...mtBlockLaneFullV1,
+    method_id: id,
+    display_name: title,
+    role: "custom",
+    plugin_overrides: {...mtBlockLaneFullV1.plugin_overrides},
+    plugin_config_overrides: {
+      ...Object.fromEntries(Object.entries(mtBlockLaneFullV1.plugin_config_overrides ?? {}).map(([k,v]) => [k,{...v}])),
+      block_executor: {
+        ...(mtBlockLaneFullV1.plugin_config_overrides?.block_executor ?? {}),
+        blocking_lane_candidate_v1: true,
+        blocking_lane_no_bypass_v1: noBypass,
+      },
+    },
   });
 }
 

@@ -872,8 +872,53 @@ def build_validated_prefix_canonical(
         shutil.rmtree(temporary, ignore_errors=True)
         raise
 
+
+# MBE_FW_RUNPREP_V1_CACHE: safely reuse complete canonical files only after
+# both the live source bytes and cached canonical bytes pass SHA256 checks.
+def _fw_runprep_cached_canonical(csv_path: Path, cache_root: Path, manifest: dict[str, Any]) -> dict[str, Any] | None:
+    ids = {
+        "farmersworld_20260908_v4", "fw_20260908_roles_v2",
+        "henesys_20250612_v4", "henesys_20250824_v4",
+        "hene_20250612_calls_v2", "hene_20250824_calls_v2",
+    }
+    if str(manifest.get("dataset_id") or "") not in ids:
+        return None
+    expected = str(manifest.get("source_sha256") or "").lower()
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        return None
+    content_id = hashlib.sha256(json.dumps({
+        "dataset_id": manifest["dataset_id"],
+        "adapter_id": manifest.get("adapter_id") or "decentraland_sales_v1",
+        "source_file_sha256": expected,
+        "generator_version": GENERATOR_VERSION,
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    target = cache_root / "canonical" / content_id
+    source = target / "workload.jsonl.gz"
+    summary = target / "canonical_summary.json"
+    if not source.is_file() or not summary.is_file():
+        return None
+    data = json.loads(summary.read_text(encoding="utf-8"))
+    if (data.get("dataset_id") != manifest["dataset_id"] or
+            data.get("generator_version") != GENERATOR_VERSION or
+            str(data.get("source_file_sha256") or "").lower() != expected or
+            data.get("canonical_relative_path") != f"canonical/{content_id}/workload.jsonl.gz" or
+            int(data.get("row_count") or 0) != int(manifest.get("row_count") or 0)):
+        raise WorkloadDataError("cached canonical manifest mismatch")
+    source_size = int(manifest.get("source_size_bytes") or 0)
+    if source_size and source_size != csv_path.stat().st_size:
+        raise WorkloadDataError("cached canonical source size mismatch")
+    if sha256_file(csv_path).lower() != expected:
+        raise WorkloadDataError("cached canonical source SHA256 mismatch")
+    if sha256_file(source).lower() != str(data.get("canonical_sha256") or "").lower():
+        raise WorkloadDataError("cached canonical data SHA256 mismatch")
+    return dict(data,cache_hit=True,cache_attestation="live_source_and_canonical_sha256")
+
 def build_canonical(csv_path: Path, cache_root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     """Build a deterministic canonical JSONL.GZ file and atomically publish it."""
+    # MBE_FW_RUNPREP_V1_EARLY_CACHE: do not re-project 1.2M verified rows.
+    cached = _fw_runprep_cached_canonical(csv_path, cache_root, manifest)
+    if cached is not None:
+        return cached
     try:
         adapter = adapter_for_manifest(manifest)
         expected_file_hash = manifest.get("source_sha256") or None
@@ -1323,6 +1368,98 @@ def _validated_prefix_streaming_preview(
         "formal_materialization_revalidates_full_source": True,
     }
 
+
+# MBE_FW_PICKERFIX_V1_CACHE: reuse only exact source-verified, content-addressed MBE materialization.
+# No new sampling policy, no projection change, no trust in unverified metadata.
+def _fw_verified_preview_cache(
+    csv_path: Path, manifest: dict[str, Any], *,
+    requested_tx_count: int, seed: int, variant_mode: str, target_alpha: float | None,
+    skew_axis: str | None, shards: int, selection_mode: str,
+    supported_counts: set[int] | frozenset[int] | None,
+    variant_parameters: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    allowed = {
+        "farmersworld_20260908_v4", "fw_20260908_roles_v2",
+        "henesys_20250612_v4", "henesys_20250824_v4",
+        "hene_20250612_calls_v2", "hene_20250824_calls_v2",
+    }
+    if (str(manifest.get("dataset_id")) not in allowed or
+            requested_tx_count > 100_000 or
+            variant_mode != "original_window" or selection_mode != "contiguous_window" or
+            shards != 4 or target_alpha is not None or skew_axis is not None or
+            str(manifest.get("source_layout") or "single_file") != "single_file"):
+        return None
+    expected_sha = str(manifest.get("source_sha256") or "").lower()
+    if len(expected_sha) != 64:
+        return None
+    content_id = hashlib.sha256(json.dumps({
+        "dataset_id": manifest["dataset_id"],
+        "adapter_id": manifest.get("adapter_id") or "decentraland_sales_v1",
+        "source_file_sha256": expected_sha,
+        "generator_version": GENERATOR_VERSION,
+    }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    root = WORKLOAD_CACHE_ROOT / "canonical" / content_id
+    meta_path = root / "canonical_summary.json"
+    canon_path = root / "workload.jsonl.gz"
+    if not meta_path.is_file() or not canon_path.is_file():
+        return None  # First preview follows the unmodified, full verification path.
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if (meta.get("dataset_id") != manifest["dataset_id"] or
+            meta.get("generator_version") != GENERATOR_VERSION or
+            meta.get("source_file_sha256", "").lower() != expected_sha or
+            int(meta.get("row_count") or 0) != int(manifest.get("row_count") or 0) or
+            meta.get("canonical_relative_path") != f"canonical/{content_id}/workload.jsonl.gz"):
+        raise WorkloadDataError("FW fast preview canonical metadata mismatch")
+    if int(manifest.get("source_size_bytes") or 0) not in (0, csv_path.stat().st_size):
+        raise WorkloadDataError("FW fast preview source size mismatch")
+    # Verifying both compressed byte streams is substantially cheaper than 3 full Python projections.
+    if sha256_file(csv_path).lower() != expected_sha:
+        raise WorkloadDataError("FW fast preview source SHA256 mismatch")
+    canonical_sha = str(meta.get("canonical_sha256") or "")
+    if len(canonical_sha) != 64 or sha256_file(canon_path) != canonical_sha:
+        raise WorkloadDataError("FW fast preview canonical SHA256 mismatch")
+    identity_sha = str(manifest.get("dataset_source_sha256") or expected_sha)
+    spec,count,_,_ = _selection_spec(
+        dataset_id=manifest["dataset_id"], source_sha256=identity_sha,
+        canonical_sha256=canonical_sha,
+        requested_tx_count=requested_tx_count, seed=seed,
+        total=int(meta["row_count"]),variant_mode=variant_mode,
+        target_alpha=target_alpha,skew_axis=skew_axis,
+        selection_mode=selection_mode,supported_counts=supported_counts,
+        variant_parameters=variant_parameters)
+    start=_selection_start(spec,int(meta["row_count"]),count)
+    mid=hashlib.sha256(json.dumps(spec,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
+    material_root=WORKLOAD_CACHE_ROOT / "materialized" / mid
+    material_meta=material_root / "materialization_summary.json"
+    material_file=material_root / "workload.jsonl.gz"
+    if material_meta.is_file() and material_file.is_file():
+        mm=json.loads(material_meta.read_text(encoding="utf-8"))
+        candidate=mm.get("selected_window_preview") or {}
+        if (mm.get("materialized_id")==mid and mm.get("canonical_sha256")==canonical_sha and
+                int(mm.get("actual_tx_count") or 0)==count and
+                candidate.get("start_offset")==start and
+                candidate.get("end_offset")==start+count-1 and
+                candidate.get("actual_selected_count")==count and
+                mm.get("selection_digest")==candidate.get("selection_digest") and
+                candidate.get("selection_digest")==_selection_digest(
+                    spec,start=start,count=count,base_window_sha256=candidate.get("base_window_sha256") or "") and
+                mm.get("materialized_sha256")==sha256_file(material_file)):
+            return dict(candidate,preview_cache_policy="source_and_canonical_and_materialized_sha256")
+    # A canonical cache may exist without the same materialization/seed.
+    # Preserve the exact selection window, digest, and operation statistics.
+    rows=list(_window(canon_path,start,count))
+    if len(rows)!=count:
+        raise WorkloadDataError("FW fast preview selected cache window too short")
+    h=hashlib.sha256()
+    for record in rows:h.update(_canonical_bytes(record))
+    result=_selected_window_preview(
+        spec, rows, start=start,count=count,
+        selected_start_ms=rows[0]["timestamp_ms"],selected_end_ms=rows[-1]["timestamp_ms"],
+        base_window_sha256=h.hexdigest(),shards=shards)
+    result["preview_cache_policy"]="source_and_canonical_sha256_exact_window"
+    return result
+
+
 def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, shards: int = 4, selection_mode: str = "contiguous_window", supported_counts: set[int] | frozenset[int] | None = None, variant_parameters: dict[str, Any] | None = None) -> dict[str, Any]:
     # MBE_MV_UIFIX_V1 exact-window preverified sparse preview. Full SHA and
     # the original canonical projection still run before real materialization.
@@ -1334,6 +1471,14 @@ def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, 
                             variant_mode=variant_mode, target_alpha=target_alpha,
                             skew_axis=skew_axis, shards=shards, selection_mode=selection_mode,
                             supported_counts=supported_counts, variant_parameters=variant_parameters)
+    # MBE_FW_PICKERFIX_V1_CACHE_CALL
+    cached = _fw_verified_preview_cache(
+        csv_path, manifest, requested_tx_count=requested_tx_count, seed=seed,
+        variant_mode=variant_mode, target_alpha=target_alpha, skew_axis=skew_axis,
+        shards=shards, selection_mode=selection_mode, supported_counts=supported_counts,
+        variant_parameters=variant_parameters)
+    if cached is not None:
+        return cached
     adapter = adapter_for_manifest(manifest)
     if (
         str(manifest.get("preview_policy") or "") == "validated_prefix_streaming_v1"
@@ -1437,8 +1582,20 @@ def _selected_window_preview(spec: dict[str, Any], selected: list[dict[str, Any]
 
 
 def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, source_sha256: str, requested_tx_count: int, seed: int, variant_mode: str = "original_window", target_alpha: float | None = None, skew_axis: str | None = None, selection_mode: str = "contiguous_window", supported_counts: set[int] | frozenset[int] | None = None, variant_parameters: dict[str, Any] | None = None, truth_label: str = "real_observed", source_file_sha256: str | None = None, audit_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    total = _canonical_count(canonical_path)
+    # MBE_FW_RUNPREP_V1_COUNT: canonical bytes are verified against a complete receipt.
     canonical_hash = sha256_file(canonical_path)
+    meta_path = canonical_path.parent / "canonical_summary.json"
+    if dataset_id in {
+        "farmersworld_20260908_v4", "fw_20260908_roles_v2",
+        "henesys_20250612_v4", "henesys_20250824_v4",
+        "hene_20250612_calls_v2", "hene_20250824_calls_v2",
+    } and meta_path.is_file():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if meta.get("canonical_sha256") != canonical_hash or int(meta.get("row_count") or 0) <= 0:
+            raise WorkloadDataError("canonical row-count receipt SHA256 mismatch")
+        total = int(meta["row_count"])
+    else:
+        total = _canonical_count(canonical_path)
     spec, count, variant_mode, skew_axis = _selection_spec(
         dataset_id=dataset_id,
         source_sha256=source_sha256,
@@ -1482,6 +1639,15 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
     start = _selection_start(spec, total, count)
     base_hash_builder = hashlib.sha256()
     base_records: list[dict[str, Any]] | None = [] if _is_derived_variant(variant_mode) else None
+    # MBE_FW_RUNPREP_V1_WINDOW: identical records, offsets, and V4 digests.
+    fast_exact = (
+        dataset_id in {"farmersworld_20260908_v4", "fw_20260908_roles_v2",
+                       "henesys_20250612_v4", "henesys_20250824_v4",
+                       "hene_20250612_calls_v2", "hene_20250824_calls_v2"}
+        and variant_mode == "original_window" and count <= 100_000
+    )
+    if fast_exact:
+        base_records = []
     selected_start_ms: int | None = None
     selected_end_ms: int | None = None
     for record in _window(canonical_path, start, count):
@@ -1492,23 +1658,33 @@ def materialize(canonical_path: Path, cache_root: Path, *, dataset_id: str, sour
             base_records.append(record)
     base_hash = base_hash_builder.hexdigest()
     selected: Iterator[dict[str, Any]] | list[dict[str, Any]]
-    if base_records is None:
-        selected = _window(canonical_path, start, count)
+    if fast_exact:
+        if base_records is None or len(base_records) != count:
+            raise WorkloadDataError("bounded window selection incomplete")
+        selected = iter(base_records)
+        selected_preview = _selected_window_preview(
+            spec, base_records, start=start, count=count,
+            selected_start_ms=selected_start_ms, selected_end_ms=selected_end_ms,
+            base_window_sha256=base_hash, shards=4,
+        )
     else:
-        selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{dataset_id}|{source_sha256}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}")
-    selected_preview = _selection_preview(
-        canonical_path,
-        dataset_id=dataset_id,
-        source_sha256=source_sha256,
-        requested_tx_count=requested_tx_count,
-        seed=seed,
-        variant_mode=variant_mode,
-        target_alpha=target_alpha,
-        skew_axis=skew_axis,
-        selection_mode=selection_mode,
-        supported_counts=supported_counts,
-        variant_parameters=variant_parameters,
-    )
+        if base_records is None:
+            selected = _window(canonical_path, start, count)
+        else:
+            selected = _zipf_records(base_records, float(target_alpha), str(skew_axis), f"{dataset_id}|{source_sha256}|{base_hash}|{skew_axis}|{target_alpha}|{seed}|{GENERATOR_VERSION}")
+        selected_preview = _selection_preview(
+            canonical_path,
+            dataset_id=dataset_id,
+            source_sha256=source_sha256,
+            requested_tx_count=requested_tx_count,
+            seed=seed,
+            variant_mode=variant_mode,
+            target_alpha=target_alpha,
+            skew_axis=skew_axis,
+            selection_mode=selection_mode,
+            supported_counts=supported_counts,
+            variant_parameters=variant_parameters,
+        )
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{materialized_id}.", dir=target.parent))
     try:

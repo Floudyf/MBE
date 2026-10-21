@@ -2029,6 +2029,27 @@ var dualTrackSupportedOrdinaryWriteSemantics = map[string]bool{
 	"account_rmw":                          true,
 }
 
+// MBE_HENE_GUARD_V1: only a proven account-nonce key in canonical scheduling
+// may use deterministic per-account nonce sequencing. Intent-only transfers are
+// deliberately NOT admitted as Safe ordinary writes.
+func heneGuardNonceSemanticV1(item tx.SignedTransaction, key string) bool {
+    const prefix = "henesys_nonce:"
+    if item.SourceKind != "canonical_trace_replay" || len(item.SchedulingAccessList) == 0 ||
+        !strings.HasPrefix(key, prefix) {
+        return false
+    }
+    address := strings.TrimPrefix(key, prefix)
+    if len(address) != 42 || !strings.HasPrefix(address, "0x") {
+        return false
+    }
+    for _, ch := range address[2:] {
+        if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+            return false
+        }
+    }
+    return true
+}
+
 func dualTrackSemanticSafety(item tx.SignedTransaction) (bool, string) {
 	for _, access := range classificationAccessItems(item) {
 		key := strings.TrimSpace(access.Key)
@@ -2051,6 +2072,13 @@ func dualTrackSemanticSafety(item tx.SignedTransaction) (bool, string) {
 				return false, "unsupported_commutative_semantics:" + key + ":" + semantics
 			}
 		case tx.AccessWrite, tx.AccessReadWrite:
+            // MBE_HENE_GUARD_V1: safe nonce namespace only; token transfer intents stay conservative.
+            if semantics == "henesys_sender_nonce_sequence" {
+                if heneGuardNonceSemanticV1(item, key) {
+                    continue
+                }
+                return false, "unverified_henesys_nonce_sequence:" + key
+            }
 			if semantics == "" {
 				return false, "missing_update_semantics:" + key
 			}
@@ -2678,6 +2706,18 @@ func (p builtinScheduler) Schedule(items []tx.SignedTransaction, execution Execu
 	}
 	if p.ID() == metaTrackReadyRoundControlSchedulerID && execution != nil {
 		return scheduleMetaTrackReadyRoundControl(ordered, execution, classification, result)
+	}
+	// MBE_MT_DUALPRIO_V1: candidate-only scheduler, retaining signed/classification state.
+	if p.ID() == metaTrackHDStateSchedulerID && execution != nil {
+		return scheduleMetaTrackHDState(ordered, execution, classification, result)
+	}
+	// MBE_MT_SLOW_LANE_V1: scheduler selector only; other candidates unchanged.
+	if p.ID() == metaTrackSlowStateSchedulerID && execution != nil {
+		return scheduleMetaTrackSlowState(ordered, execution, classification, result)
+	}
+	// MBE_MT_WAIT_READY_V1: FIFO control uses the same prepared classification.
+	if p.ID() == metaTrackWaitFIFOSchedulerID && execution != nil {
+		return scheduleMetaTrackWaitFIFO(ordered, execution, classification, result)
 	}
 	if p.ID() == metaTrackDependencyInfluenceSchedulerID && execution != nil {
 		return scheduleMetaTrackDependencyInfluence(ordered, execution, classification, result)
@@ -3615,14 +3655,23 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	if diagnosticUnifiedReadyV1 && diagnosticSingleBusinessV28 {
 		return BlockExecutionResult{}, fmt.Errorf("metatrack exec4 conflicting diagnostic dispatch modes")
 	}
-	singleReadyQueueV661 := singleConservativeSerialV675 || diagnosticUnifiedReadyV1 || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) // legacy flag fallback only
+	// MBE_MT_WAIT_READY_V1: matched candidates only differ in canonical-prefix admission.
+	waitReadyCandidate := schedule.ReadyPriorityPolicy == metaTrackWaitReadyPolicy || schedule.ReadyPriorityPolicy == metaTrackWaitFIFOControlPolicy
+	singleReadyQueueV661 := singleConservativeSerialV675 || diagnosticUnifiedReadyV1 || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) || waitReadyCandidate // existing unified Ready worker implementation
+	// MBE_MT_BLOCKLANE_V1: no changes to Full or existing official ablations.
+	blockLaneCandidateV1 := boolFromAny(p.config["blocking_lane_candidate_v1"])
+	blockLaneNoBypassV1 := blockLaneCandidateV1 && boolFromAny(p.config["blocking_lane_no_bypass_v1"])
+	if blockLaneCandidateV1 && (singleConservativeSerialV675 || diagnosticUnifiedReadyV1 || diagnosticSingleBusinessV28) {
+		return BlockExecutionResult{}, fmt.Errorf("blocking-lane candidate cannot combine with diagnostic serial/unified policy")
+	}
+
 	onDemandStateFetchV661 := boolFromAny(p.config[metaTrackAblationOnDemandStateFetchV661])
 	var batchFetch RemoteStateBatchFetchFunc
 	if batchEntryStatePrefetch && !onDemandStateFetchV661 {
 		batchFetch = input.RemoteStateBatchFetch
 	}
 	executionStarted := time.Now()
-	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661)
+	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithBlockingLaneV1(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661, blockLaneNoBypassV1)
 	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -3631,7 +3680,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		actualMetrics[key] = value
 	}
 	actualMetrics["metatrack_structural_classification_reused_v1"] = classificationReusedV1
-	dualTrackRuntimeV663 := executionPlugin.ID() == "dual_track_execution" && !diagnosticUnifiedReadyV1
+	dualTrackRuntimeV663 := executionPlugin.ID() == "dual_track_execution" && !diagnosticUnifiedReadyV1 && !waitReadyCandidate // MBE_MT_WAIT_READY_V1 two stage candidate has no physical Fast/Conservative Ready split
 	actualMetrics["metatrack_diag_unified_ready_v1"] = diagnosticUnifiedReadyV1
 	actualMetrics["metatrack_diag_single_business_execution_v1"] = boolFromAny(p.config["diagnostic_single_business_execution_v1"])
 	actualMetrics["metatrack_diag_single_business_execution_v28"] = boolFromAny(p.config[metaTrackDiagnosticSingleBusinessExecutionV28])
@@ -3646,13 +3695,24 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	} else if singleConservativeSerialV675 {
 		exec4Mode = "strict_fifo_single"
 	}
+	if waitReadyCandidate {
+		if schedule.ReadyPriorityPolicy == metaTrackWaitFIFOControlPolicy { exec4Mode = "waiting_ready_fifo_parallel" } else { exec4Mode = "waiting_ready_bypass_parallel" }
+	} // MBE_MT_WAIT_READY_V1
 	actualMetrics["metatrack_exec4_mode"] = exec4Mode
+	// MBE_MT_BLOCKLANE_V1: candidate-only metrics; original Full's metric map remains byte-equivalent.
+	if blockLaneCandidateV1 {
+		actualMetrics["metatrack_blocklane_candidate_enabled"] = true
+		actualMetrics["metatrack_blocklane_no_bypass_enabled"] = blockLaneNoBypassV1
+		actualMetrics["metatrack_blocklane_worker_limit"] = workerCount
+	}
 	unifiedReadyRuntimeV667 := executionPlugin.ID() == metaTrackSingleExecutionID
 	actualMetrics["metatrack_actual_dual_track_runtime"] = dualTrackRuntimeV663
 	actualMetrics["metatrack_single_conservative_runtime_v663"] = executionPlugin.ID() == metaTrackSingleConservativeExecutionID
 	actualMetrics["metatrack_unified_ready_runtime_v667"] = unifiedReadyRuntimeV667
 	actualMetrics["metatrack_single_track_fifo_runtime_v674"] = singleConservativeSerialV675
-	if diagnosticUnifiedReadyV1 {
+	if waitReadyCandidate {
+		actualMetrics["metatrack_scheduler_evidence_scope"] = schedule.ReadyPriorityPolicy // MBE_MT_WAIT_READY_V1
+	} else if diagnosticUnifiedReadyV1 {
 		actualMetrics["metatrack_scheduler_evidence_scope"] = "diagnostic_unified_ready_parallel_v1"
 	} else if dualTrackRuntimeV663 {
 		actualMetrics["metatrack_scheduler_evidence_scope"] = "actual_dual_track_runtime"
@@ -3858,7 +3918,12 @@ func executeMetaTrackScheduleWithOptions(ctx context.Context, schedule ScheduleR
 	return executeMetaTrackScheduleWithFullLocality(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, nil, versionPublish, strictFrontier, localExactVersionHandoff, false, false, false, false)
 }
 
+// MBE_MT_BLOCKLANE_V1: compatibility wrapper preserving every existing test and method.
 func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+	return executeMetaTrackScheduleWithBlockingLaneV1(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, batchFetch, versionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661, false)
+}
+
+func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661, blockLaneNoBypassV1 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
 	ordered := append([]tx.SignedTransaction(nil), schedule.Ordered...)
 	if singleReadyQueueV661 {
 		ordered = append([]tx.SignedTransaction(nil), block.TxList...)
@@ -3866,8 +3931,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	// MBE_METATRACK_READY_ROUND_SCHEDULER_V35
 	// Preserve the historical helper signature while allowing the Ready-Round
 	// control and H/D candidate to share one runtime/worker model.
-	dependencyInfluencePriority := schedule.ReadyPriorityPolicy == metaTrackDependencyInfluencePriorityPolicy
+	criticalStateFetchPriority := schedule.ReadyPriorityPolicy == metaTrackHDStatePriorityPolicy // MBE_MT_DUALPRIO_V1
+	dependencyInfluencePriority := schedule.ReadyPriorityPolicy == metaTrackDependencyInfluencePriorityPolicy || criticalStateFetchPriority
 	readyRoundControl := schedule.ReadyPriorityPolicy == metaTrackReadyRoundControlPriorityPolicy
+	// MBE_MT_WAIT_READY_V1: Waiting/Ready is a runtime dispatch state, not semantic Fast/Conservative.
+	waitingReadyLane := schedule.ReadyPriorityPolicy == metaTrackWaitReadyPolicy || schedule.ReadyPriorityPolicy == metaTrackWaitFIFOControlPolicy
+	fifoNoBypass := schedule.ReadyPriorityPolicy == metaTrackWaitFIFOControlPolicy
 	dynamicUnlockPriority := schedule.ReadyPriorityPolicy == metaTrackUnlockReadyPriorityPolicy
 	readyRoundArbitration := dependencyInfluencePriority || readyRoundControl || dynamicUnlockPriority
 	if readyRoundArbitration && !schedule.DependencyInfluenceValid {
@@ -4072,6 +4141,25 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			sort.Strings(localVersionTokensByProducer[producer])
 		}
 	}
+	// MBE_MT_BLOCKLANE_V1: gate only the candidate ablation, never Full.
+	blockLaneOrderV1 := []string{}
+	if blockLaneNoBypassV1 {
+		gateDepsV1 := make(map[string][]string, len(deps))
+		for txID, prereqs := range deps { gateDepsV1[txID] = append([]string(nil), prereqs...) }
+		for _, target := range localVersionHandoffByToken {
+			gateDepsV1[target.consumer.TxID] = append(gateDepsV1[target.consumer.TxID], target.producerTxID)
+		}
+		var gateErr error
+		blockLaneOrderV1, gateErr = metaTrackBlockingOrderV1(ordered, gateDepsV1)
+		if gateErr != nil { return nil, nil, nil, nil, gateErr }
+	}
+	blockLaneGateReadyV1 := map[string]bool{}
+	blockLaneGateSinceV1 := map[string]time.Time{}
+	blockLaneGateCursorV1 := 0
+	blockLaneHeldV1 := 0
+	blockLaneHeldSumNSV1 := int64(0)
+	blockLaneHeldMaxNSV1 := int64(0)
+	blockLaneHeldReleaseV1 := 0
 	events := []ScheduleEvent{}
 	maxReadyQueueDepth := 0
 	maxFastReadyQueueDepth := 0
@@ -4098,7 +4186,36 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	}
 	enqueueReady := func(txID, reason string, wakeup bool) {
 		decision := decisionByID[txID]
-		if singleConservativeSerialV675 {
+		// MBE_MT_BLOCKLANE_V1: still accept Ready events, but do not release
+		// independent suffix work across an earlier unready FIFO head.
+		if blockLaneNoBypassV1 {
+			if blockLaneGateReadyV1[txID] { return }
+			blockLaneGateReadyV1[txID] = true
+			blockLaneGateSinceV1[txID] = time.Now()
+			readyQueueStarted[txID] = blockLaneGateSinceV1[txID]
+			if blockLaneGateCursorV1 < len(blockLaneOrderV1) && blockLaneOrderV1[blockLaneGateCursorV1] != txID {
+				blockLaneHeldV1++
+				events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "blocklane_fifo_gate_v1", DecisionReason: "blocklane_wait_for:"+blockLaneOrderV1[blockLaneGateCursorV1], LocalExecution: true, Blocked: true})
+			}
+			for blockLaneGateCursorV1 < len(blockLaneOrderV1) {
+				head := blockLaneOrderV1[blockLaneGateCursorV1]
+				if !blockLaneGateReadyV1[head] { break }
+				waitNS := time.Since(blockLaneGateSinceV1[head]).Nanoseconds()
+				if waitNS > 0 {
+					blockLaneHeldSumNSV1 += waitNS
+					if waitNS > blockLaneHeldMaxNSV1 { blockLaneHeldMaxNSV1 = waitNS }
+				}
+				blockLaneHeldReleaseV1++
+				track := decisionByID[head].Track
+				if track == "fast" { fastReady = append(fastReady, head) } else { conservativeReady = append(conservativeReady, head) }
+				events = append(events, ScheduleEvent{TxID: head, Track: track, QueueName: queueNameForTrack(track), DecisionReason: "blocklane_fifo_release:"+reason, LocalExecution: true, Wakeup: head != txID, ReadyQueueDepth: len(fastReady)+len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+				blockLaneGateCursorV1++
+			}
+			recordDepths()
+			return
+		}
+		if waitingReadyLane && !fifoNoBypass { singleFIFOReady[txID] = true } // MBE_MT_WAIT_READY_V1 observe real Ready admission, no extra queue
+		if singleConservativeSerialV675 || fifoNoBypass {
 			if _, exists := readyQueueStarted[txID]; !exists {
 				readyQueueStarted[txID] = time.Now()
 			}
@@ -4200,7 +4317,17 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	startRemoteFetch := func(item tx.SignedTransaction, access tx.AccessItem) {
 		remoteFetchCount++
 		go func(item tx.SignedTransaction, access tx.AccessItem) {
+            // MBE_HENE_GUARD_V1: record real request/return wall time without changing retries.
+            heneStart := time.Now()
 			event, err := remoteFetch(ctx, item, access)
+            heneEnd := time.Now()
+            if heneEnd.Sub(heneStart) >= time.Second || event.LatencyMS >= 1000 {
+                fmt.Printf("[HENE_SLOW_REMOTE_V1] tx=%q key=%q token=%q home=%q required=%q returned_version=%d start=%s end=%s wall_ms=%d remote_ms=%d error=%q\n",
+                    txIdentifier(item), access.Key, stateReadinessToken(item, access),
+                    event.HomeShard, stateReadinessToken(item, access), event.StateVersion,
+                    heneStart.UTC().Format(time.RFC3339Nano), heneEnd.UTC().Format(time.RFC3339Nano),
+                    heneEnd.Sub(heneStart).Milliseconds(), event.LatencyMS, fmt.Sprint(err))
+            }
 			select {
 			case remoteStateCompletions <- remoteStateCompletion{event: event, err: err}:
 			case <-ctx.Done():
@@ -4246,6 +4373,19 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 					}
 				}
 				candidate := RemoteStateBatchFetchItem{Token: key, Item: item, Access: access}
+			// MBE_MT_DUALPRIO_V1: score is known BEFORE execution, and is
+			// maximized across all signed consumers of the same exact token.
+			if criticalStateFetchPriority {
+				candidate.CandidateStatePriority = true
+				candidate.PriorityWaiters = len(stateWaitersByToken[key])
+				for _, consumer := range stateWaitersByToken[key] {
+					h := schedule.DependencyInfluenceTailDepth[consumer]
+					d := schedule.DependencyInfluenceDescCount[consumer]
+					if h > candidate.PriorityH || (h == candidate.PriorityH && d > candidate.PriorityD) {
+						candidate.PriorityH, candidate.PriorityD = h, d
+					}
+				}
+			}
 				if onDemandStateFetchV661 {
 					onDemandCandidatesV661[key] = candidate
 					continue
@@ -4593,6 +4733,8 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			}
 		}(workerID)
 	}
+	// MBE_MT_WAIT_READY_V1: count dispatches past an earlier NOT-READY canonical transaction.
+	readyBypassDispatchCount := 0
 	dispatchSeq := 0
 	fastDispatchSeq := 0
 	conservativeDispatchSeq := 0
@@ -4620,6 +4762,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		delete(readyQueueStarted, txID)
 	}
 	dispatch := func(txID string) error {
+		if waitingReadyLane && !fifoNoBypass {
+			for _, predecessor := range singleFIFOOrder {
+				if predecessor == txID { break }
+				if !singleFIFOReady[predecessor] { readyBypassDispatchCount++; break }
+			}
+		} // MBE_MT_WAIT_READY_V1: no false claim for simply having an uncompleted but Ready predecessor.
 		attemptByID[txID]++
 		if started, ok := readyQueueStarted[txID]; ok {
 			waited := time.Since(started)
@@ -4736,6 +4884,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 	}
 	handleRemoteStateCompletion := func(completion remoteStateCompletion) error {
 		remoteFetchCompleted++
+        // MBE_HENE_GUARD_V1: include batch completions with measured remote latency.
+        if completion.event.LatencyMS >= 1000 {
+            fmt.Printf("[HENE_SLOW_STATE_READY_V1] tx=%q key=%q token=%q home=%q state_version=%d remote_ms=%d\n",
+                completion.event.TxID, completion.event.Key, completion.event.ReadinessToken,
+                completion.event.HomeShard, completion.event.StateVersion, completion.event.LatencyMS)
+        }
 		if completion.err != nil {
 			return completion.err
 		}
@@ -5270,9 +5424,14 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		stealPolicy = "same_shard_unified_ready_round_lane"
 	}
 	if dependencyInfluencePriority {
-		readyPriorityPolicy = metaTrackDependencyInfluencePriorityPolicy
+		readyPriorityPolicy = schedule.ReadyPriorityPolicy
 		workerQueueModel = "per_worker_unified_ready_round_lane"
 		stealPolicy = "same_shard_unified_ready_round_lane"
+	}
+	if waitingReadyLane {
+		readyPriorityPolicy = schedule.ReadyPriorityPolicy // MBE_MT_WAIT_READY_V1
+		workerQueueModel = "per_worker_unified_ready_lane"
+		stealPolicy = "same_shard_single_ready_lane_v661"
 	}
 	priorityCandidateSetMean := float64(0)
 	if priorityCandidateSetSamples > 0 {
@@ -5316,7 +5475,12 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 		"completion_processing_policy":                       "dependency_ready_completion_order_deterministic_final_merge",
 		"worker_queue_model":                                 workerQueueModel,
 		"metatrack_ready_priority_policy":                    readyPriorityPolicy,
-		"metatrack_single_fifo_hol_enabled":                  singleConservativeSerialV675,
+		// MBE_MT_WAIT_READY_V1: actual bypass dispatch, not just classification.
+		"metatrack_candidate_waiting_ready_enabled": waitingReadyLane,
+		"metatrack_candidate_fifo_no_bypass": fifoNoBypass,
+		"metatrack_candidate_ready_bypass_dispatch_count": readyBypassDispatchCount,
+		"metatrack_candidate_critical_state_fetch_enabled": criticalStateFetchPriority, // MBE_MT_DUALPRIO_V1
+		"metatrack_single_fifo_hol_enabled":                  singleConservativeSerialV675 || fifoNoBypass, // MBE_MT_WAIT_READY_V1 FIFO parallel differs from official serial A2
 		"metatrack_single_fifo_bypass_prevented_count":       singleFIFOBypassPreventedCount,
 		"metatrack_single_fifo_head_block_count":             singleFIFOHeadBlockCount,
 		"metatrack_single_fifo_ready_blocked_duration_count": singleFIFOReadyBlockedDurationCount,
@@ -5408,6 +5572,13 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 			return "legacy_remote_state_ready_v1"
 		}(),
 		"state_ready_scheduler_mode": "transaction_level_suspend_resume",
+	}
+	if blockLaneNoBypassV1 { // MBE_MT_BLOCKLANE_V1
+		metrics["metatrack_blocklane_fifo_gate_enabled"] = true
+		metrics["metatrack_blocklane_gate_delayed_ready_count"] = blockLaneHeldV1
+		metrics["metatrack_blocklane_gate_released_count"] = blockLaneHeldReleaseV1
+		metrics["metatrack_blocklane_gate_cumulative_ms"] = float64(blockLaneHeldSumNSV1)/float64(time.Millisecond)
+		metrics["metatrack_blocklane_gate_max_ms"] = float64(blockLaneHeldMaxNSV1)/float64(time.Millisecond)
 	}
 	for key, value := range metaTrackTrackMetricsFromAttemptsV31(attempts) {
 		metrics[key] = value
@@ -6554,6 +6725,18 @@ func BuiltinRegistry() *Registry {
 	})
 	register("scheduler", metaTrackReadyRoundControlSchedulerID, func(c map[string]any) (Plugin, error) {
 		return builtinScheduler{makeBasic("scheduler", metaTrackReadyRoundControlSchedulerID, c)}, nil
+	})
+	// MBE_MT_DUALPRIO_V1: candidate registration only.
+	register("scheduler", metaTrackHDStateSchedulerID, func(c map[string]any) (Plugin, error) {
+		return builtinScheduler{makeBasic("scheduler", metaTrackHDStateSchedulerID, c)}, nil
+	})
+	// MBE_MT_SLOW_LANE_V1: explicit candidate scheduler registration, Full untouched.
+	register("scheduler", metaTrackSlowStateSchedulerID, func(c map[string]any) (Plugin, error) {
+		return builtinScheduler{makeBasic("scheduler", metaTrackSlowStateSchedulerID, c)}, nil
+	})
+	// MBE_MT_WAIT_READY_V1: separate FIFO scheduler ID, no new execution machinery.
+	register("scheduler", metaTrackWaitFIFOSchedulerID, func(c map[string]any) (Plugin, error) {
+		return builtinScheduler{makeBasic("scheduler", metaTrackWaitFIFOSchedulerID, c)}, nil
 	})
 	register("scheduler", metaTrackDependencyInfluenceSchedulerID, func(c map[string]any) (Plugin, error) {
 		return builtinScheduler{makeBasic("scheduler", metaTrackDependencyInfluenceSchedulerID, c)}, nil

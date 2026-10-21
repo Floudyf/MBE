@@ -11,6 +11,7 @@ const methodOrder = [
   "metatrack_latest",
   "metatrack_sh_noco",
   "metatrack_ab_flow",
+  "metatrack_ab_exact", // MBE_MT_NOEXACT_ABL_V1
   "metatrack_ab_route",
   "metatrack_ab_track",
   "metatrack_ab_cons",
@@ -31,6 +32,7 @@ const methodColors: Record<string, string> = {
   metatrack_serial: "#FA8095",
   metatrack_full_locality: "#E06F9E",
   metatrack_latest: "#C95C8D",
+  metatrack_ab_exact: "#6B7EC3",
   metatrack_exp50: "#A84D7D",
   metatrack_exp200: "#8E5CA8",
   metatrack_block_stm: "#56B76A",
@@ -51,6 +53,7 @@ const methodLabels: Record<string, string[]> = {
   metatrack_latest: ["Metatrack"],
   metatrack_sh_noco: ["去共现矩阵分片"],
   metatrack_ab_flow: ["去依赖感知增量分流"],
+  metatrack_ab_exact: ["去精确版本感知分片"],
   metatrack_ab_route: ["历史子消融", "无局部性放置"],
   metatrack_ab_track: ["去掉双轨"],
   metatrack_ab_cons: ["去掉共识聚合"],

@@ -1,0 +1,60 @@
+{
+  "schema_version": "mbe_dataset_manifest_v2",
+  "dataset_id": "fw_20260908_roles_v2",
+  "display_name": "Farmers World 玩家/资产角色投影 V2（实验性）",
+  "description": "来自真实 WAX action 参数的独立角色投影；非合约 storage R/W 真值，不覆盖旧版。",
+  "source_platform": "farmers_world",
+  "source_chain": "wax_mainnet",
+  "dataset_type": "wax_transaction_actor_semantic_projection_v4",
+  "adapter_id": "fw_role_semv2",
+  "source_layout": "single_file",
+  "local_raw_relative_path": "dataset/FarmersWorld/farmersworld_20260908_roles_v2.jsonl.gz",
+  "source_sha256": "033e93f3c65627fc97ee4271da00a9a46d1a1b75de2e170969cd7a28c5852411",
+  "source_size_bytes": 220906291,
+  "row_count": 1247653,
+  "truth_label": "real_replay_projected",
+  "catalog_validation": "file_metadata",
+  "allow_full_dataset": false,
+  "supported_tx_counts": [
+    100,
+    1000,
+    10000,
+    50000,
+    100000,
+    250000,
+    1000000
+  ],
+  "supported_variants": [
+    "original_window"
+  ],
+  "variant_definitions": [
+    {
+      "variant_mode": "original_window",
+      "display_name": "真实交易时间连续窗口（非全日完整声明）",
+      "kind": "original",
+      "selection_mode": "contiguous_window",
+      "parameters": []
+    }
+  ],
+  "generator_version": "fw_semantic_role_v2_v1",
+  "verification_method": "raw_crawl_identity_anchored_tx_hash_alignment_and_v4_digest",
+  "source_collection_date_utc": "2026-09-08",
+  "source_actions_log_count": 3305605,
+  "source_transactions_log_count": 1247653,
+  "reported_complete_windows": 708,
+  "source_coverage_note": "上游记录 708 complete windows；尚不可断言所有 1440 分钟均为完整覆盖，也不可将 action 数作为交易数。",
+  "warnings": [
+    "真实 WAX action/trx 身份不等于链上完整 storage read/write 轨迹。",
+    "actor-key 属于访问声明建模，不能用于声称原链的热点冲突或真实存储状态。",
+    "源排序证据缺失回退交易数 0；这些交易的同时间戳顺序不是原链顺序证明。",
+    "本数据是非全天完整声明的真实抓取窗口集；请审计抓取覆盖率，论文须报告完整窗口和遗漏区间。",
+    "正常化交易数 1247653 与爬虫日志 1,247,653 是否一致必须根据去重/无actor排除记录解释。",
+    "ROLE-V2 是原始字段约束的建模反事实对照，不是链上真实读写集合；不可将性能增益解释为确证的实际并行性。",
+    "未识别或混合动作回退到原 V4 actor 访问模型；logger 授权角色不被视为单独可证明的可写 storage。",
+    "旧 V4 保留为原始论文实验基准；新模型单独识别。"
+  ],
+  "usage_note": "Only semantic-projection benchmarking; preserve raw receipts and original source logs for audits.",
+  "semantic_v2_parent_dataset": "farmersworld_20260908_v4",
+  "semantic_v2_parent_sha256": "cac6466c9a1ce904a1671147ba0e7ffdfcb6969d1c3ce9b88ff4f6eeab6a23f3",
+  "semantic_v2_model": "role_keys_for_whitelisted_actions_with_unknown_action_fallback"
+}

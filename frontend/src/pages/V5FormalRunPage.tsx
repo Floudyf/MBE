@@ -27,7 +27,7 @@ import {
   type V5WorkloadSourceSpec,
 } from "../api";
 import WorkloadPreviewPanel from "../components/v5/WorkloadPreviewPanel";
-import WorkloadSourceEditor, { publishedWorkloadDatasets, type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
+import WorkloadSourceEditor, { publishedWorkloadDatasets, canonicalFormalDatasetId, type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
 import { backendLabel, blockerLabel, faultModeLabel, statusLabel, suiteLabel } from "../v5Labels";
 import { BATCH_SI_ABLATION_METHOD_IDS, METATRACK_ABLATION_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
 import { V5_BUILTIN_METHODS, V5_DEFAULT_METHOD_IDS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
@@ -245,6 +245,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   const [workloadPreview, setWorkloadPreview] = useState<V5WorkloadPreview | null>(null);
   const [workloadPreviewDirty, setWorkloadPreviewDirty] = useState(true);
   const [workloadPreviewError, setWorkloadPreviewError] = useState("");
+  const [previewStatus, setPreviewStatus] = useState("");
   const [preview, setPreview] = useState<V5FormalPreviewResponse | null>(null);
   const [previewRequest, setPreviewRequest] = useState<V5FormalRunRequest | null>(null);
   const [methodCompatibility, setMethodCompatibility] = useState<Record<string, V5CompatibilityResult>>({});
@@ -332,8 +333,9 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       setWorkload((current) => {
         if (current.mode === "synthetic") return current;
         const visible = publishedWorkloadDatasets(datasetResponse, current.mode).filter((item) => item.selectable);
-        if (visible.some((item) => item.dataset_id === current.datasetId)) return current;
-        const next = visible[0];
+        const mappedId = canonicalFormalDatasetId(current.datasetId); // MBE_FW_PICKERFIX_V1_PAGE
+        if (mappedId === current.datasetId && visible.some((item) => item.dataset_id === mappedId)) return current;
+        const next = visible.find((item) => item.dataset_id === mappedId) ?? visible[0];
         if (!next) return current;
         const desired = current.mode === "dataset_original" ? "original" : "derived";
         const definition = (next.variant_definitions ?? []).find((item) => (item.kind ?? "original") === desired);
@@ -385,6 +387,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
 
   function invalidateAll() {
     formRevision.current += 1;
+    setPreviewStatus("");
+    if (previewStatus) setBusy(false); // old preview response is revision-guarded
     setWorkloadPreviewDirty(true);
     setPreview(null);
     setPreviewRequest(null);
@@ -592,26 +596,32 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   }
 
   async function previewWorkload() {
+    const revision = formRevision.current; // MBE_FW_PICKERFIX_V1_PREVIEW_RACE
+    setPreviewStatus("正在检查真实负载窗口；大型数据集可能需要扫描，请勿重复点击。");
     const source = currentWorkloadSource();
     if (!source) { setWorkloadPreviewError("workload_source 无法构造，请检查数据集可用性和 seed。"); return; }
     setBusy(true);
     try {
       const response = await previewV5Workload(source);
+      if (revision !== formRevision.current) return;
       setWorkloadPreview(response);
       setWorkloadPreviewError("");
       setWorkloadPreviewDirty(Boolean(response.blockers.length));
       setPreview(null);
       setPreviewRequest(null);
     } catch (caught) {
+      if (revision !== formRevision.current) return;
       setWorkloadPreview(null);
       setWorkloadPreviewError(errorMessage(caught));
       setWorkloadPreviewDirty(true);
     } finally {
-      setBusy(false);
+      if (revision === formRevision.current) { setBusy(false); setPreviewStatus(""); }
     }
   }
 
   async function previewMatrix() {
+    const revision = formRevision.current; // MBE_FW_PICKERFIX_V1_MATRIX_RACE
+    setPreviewStatus("正在预检负载和实验矩阵；大型数据集可能耗时较长。");
     const request = buildRequest();
     const source = currentWorkloadSource();
     let localWorkloadRunnable = workloadRunnable;
@@ -619,11 +629,13 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       setBusy(true);
       try {
         const nextPreview = await previewV5Workload(source);
+        if (revision !== formRevision.current) return;
         setWorkloadPreview(nextPreview);
         setWorkloadPreviewError("");
         setWorkloadPreviewDirty(Boolean(nextPreview.blockers.length));
         localWorkloadRunnable = !nextPreview.blockers.length;
       } catch (caught) {
+        if (revision !== formRevision.current) return;
         setWorkloadPreview(null);
         setWorkloadPreviewError(errorMessage(caught));
         setWorkloadPreviewDirty(true);
@@ -640,17 +652,20 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         const spec = methodSpec(method, request.plan.base_spec.workload_source ?? currentWorkloadSource()!);
         return [method.method_id, await validateV5ExperimentSpec(spec)] as const;
       })));
+      if (revision !== formRevision.current) return;
       setMethodCompatibility(compatibility);
       const response = await previewV5FormalRun(request);
+      if (revision !== formRevision.current) return;
       setPreview(response);
       setPreviewRequest(request);
       setError("");
     } catch (caught) {
+      if (revision !== formRevision.current) return;
       setPreview(null);
       setPreviewRequest(null);
       setError(errorMessage(caught));
     } finally {
-      setBusy(false);
+      if (revision === formRevision.current) { setBusy(false); setPreviewStatus(""); }
     }
   }
 
@@ -766,7 +781,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     <article className="final-card wide">
       <div className="section-heading"><div><h3>② 选择实验对象</h3><p className="muted">{FORMAL_SUITE_DEFINITIONS.find((item) => item.id === selectedSuite)?.description}</p></div></div>
       {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_latest"]))}>MetaTrack 对照组</button>{/* MBE_METATRACK_UI_RETIRE_V1: obsolete four-routing preset removed; Full and official ablation suites unaffected. */}</div>}
-      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 四项正式消融。</small></button></div>}
+      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 原四项正式消融 + 去精确版本感知分片。</small></button></div>}
       <div className="formal-method-groups">
         {(["stateful", "batch_si", "stateless", "metatrack"] as const).map((family) => {
           const definitions = FORMAL_METHOD_DEFINITIONS.filter((definition) => definition.family === family && (selectedSuite === "ablation_experiment" ? definition.ablationTarget === (selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack" : "batch_si") : selectedSuite === "main_experiment" ? definition.mainVisible : definition.comparisonVisible));
@@ -869,6 +884,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         <PreflightItem ok={topology.nodes === topology.shards * topology.validators_per_shard} text={`拓扑：${topology.nodes} 节点 / ${topology.shards} 分片 / 每片 ${topology.validators_per_shard} 节点；${workerCount} Workers`} />
         <PreflightItem ok={Boolean(preview && previewRequest && previewRunnable)} text={preview && previewRequest ? `正式矩阵：${preview.rows.length} 行${previewRunnable ? "，全部可运行" : "，存在阻断"}` : "正式矩阵尚未生成"} />
       </div>
+      {busy && previewStatus && <p role="status" aria-live="polite" data-testid="v5-large-dataset-preview-status">{previewStatus}</p>}
       <div className="button-row"><button type="button" data-testid="v5-formal-preview-button" onClick={() => void previewMatrix()} disabled={busy || !catalogReady || !selected.length}>预览正式实验矩阵</button><button type="button" data-testid="v5-start-run-group-button" className="v3-secondary-button" onClick={() => void startGroup()} disabled={busy || Boolean(startBlocker)}>启动真实集群实验组</button></div>
       {startBlocker && <p className="file-error" data-testid="v5-start-blocker">无法启动：{startBlocker}</p>}
       {preview && !previewRunnable && <p className="file-error" data-testid="v5-formal-preview-blockers">启动被预览阻断：{previewBlockers.join("；") || "存在不可运行的矩阵行。"}</p>}

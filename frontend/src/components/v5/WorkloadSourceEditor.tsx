@@ -49,12 +49,38 @@ const PUBLISHED_V5_DATASETS = new Set([
   "dcl_sales_layered_v4",
   "axie_infinity_controlled_prefix_rmw_v1",
   "tapos_layered_v4", // MBE_MV_TAPOS_V4_V1
+  "henesys_20250612_v4",
+  "henesys_20250824_v4",
 
+
+  // MBE_FW_UIACCESS_V1 six independent real replay projections
+  "farmersworld_20260908_v4",
+  "fw_20260908_roles_v2",
+  "hene_20250612_calls_v2",
+  "hene_20250824_calls_v2",
 ]);
+
+// MBE_FW_PICKERFIX_V1_EDITOR: internal alternative projections stay in the backend/library, not the formal picker.
+const FORMAL_HIDDEN_SEMANTIC = new Set([
+  "farmersworld_20260908_v4", "hene_20250612_calls_v2", "hene_20250824_calls_v2",
+]);
+const FORMAL_DATASET_LABELS: Record<string, string> = {
+  "fw_20260908_roles_v2": "Farmers World（WAX · 2026-09-08 · 真实交易访问建模）",
+  "henesys_20250612_v4": "MapleStory N · Henesys（2025-06-12 · 真实交易访问建模）",
+  "henesys_20250824_v4": "MapleStory N · Henesys（2025-08-24 · 真实交易访问建模）",
+};
+const FORMAL_SEMANTIC_FALLBACK: Record<string, string> = {
+  "farmersworld_20260908_v4": "fw_20260908_roles_v2",
+  "hene_20250612_calls_v2": "henesys_20250612_v4",
+  "hene_20250824_calls_v2": "henesys_20250824_v4",
+};
+export function canonicalFormalDatasetId(id: string): string {
+  return FORMAL_SEMANTIC_FALLBACK[id] ?? id;
+}
 
 export function publishedWorkloadDatasets(datasets: V5WorkloadDatasetSummary[], mode: WorkloadMode): V5WorkloadDatasetSummary[] {
   if (mode === "synthetic") return [];
-  return datasets.filter((dataset) => PUBLISHED_V5_DATASETS.has(dataset.dataset_id) && definitionsForMode(dataset, mode).length > 0);
+  return datasets.filter((dataset) => PUBLISHED_V5_DATASETS.has(dataset.dataset_id) && !FORMAL_HIDDEN_SEMANTIC.has(dataset.dataset_id) && definitionsForMode(dataset, mode).length > 0);
 }
 
 export default function WorkloadSourceEditor({ state, datasets, onChange }: { state: WorkloadEditorState; datasets: V5WorkloadDatasetSummary[]; onChange: (state: WorkloadEditorState) => void }) {
@@ -134,7 +160,7 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
     </div>
 
     {state.mode !== "synthetic" && <div className="experiment-condition-grid">
-      <label><span>数据集</span><select aria-label="dataset_id" value={state.datasetId} onChange={(event) => selectDataset(event.target.value)}>{visibleDatasets.map((item) => <option key={item.dataset_id} value={item.dataset_id} disabled={!item.selectable}>{item.display_name} / {item.selectable ? "selectable" : "unavailable"}</option>)}</select></label>
+      <label><span>数据集</span><select aria-label="dataset_id" value={state.datasetId} onChange={(event) => selectDataset(event.target.value)}>{visibleDatasets.map((item) => <option key={item.dataset_id} value={item.dataset_id} disabled={!item.selectable}>{FORMAL_DATASET_LABELS[item.dataset_id] ?? item.display_name} / {item.selectable ? "可用" : "不可用"}</option>)}</select></label>
       <label><span>数据来源平台</span><input value={dataset?.source_platform ?? "registry"} readOnly /></label>
       <label><span>数据来源链</span><input value={dataset?.source_chain ?? "registry"} readOnly /></label>
       {modeDefinitions.length > 1 && <label><span>负载模式</span><select aria-label="variant_mode" value={selectedDefinition?.variant_mode ?? ""} onChange={(event) => selectVariant(event.target.value)}>{modeDefinitions.map((item) => <option key={item.variant_mode} value={item.variant_mode}>{item.display_name ?? item.variant_mode}</option>)}</select></label>}

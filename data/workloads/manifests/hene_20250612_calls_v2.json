@@ -1,0 +1,63 @@
+{
+  "schema_version": "mbe_dataset_manifest_v2",
+  "dataset_id": "hene_20250612_calls_v2",
+  "display_name": "MapleStory N Henesys 2025-06-12 真实链上交易（静态语义重放） · 调用证据 V2",
+  "description": "在原静态 R/W 列表完全不变的前提下附加可观察 to + calldata 4-byte 分组；不包含函数名、ABI 或 storage 真值。",
+  "source_platform": "maplestory_n_henesys",
+  "source_chain": "henesys_evm_68414",
+  "dataset_type": "evm_transaction_nonce_and_abi_intent_replay_projection",
+  "adapter_id": "hene_call_semv2",
+  "source_layout": "single_file",
+  "source_day": "2025-06-12",
+  "local_raw_relative_path": "dataset/Henesys/source/henesys_2025-06-12.source.jsonl.gz",
+  "source_sha256": "74e0a19a59401e6cbfeb78a9a4a0279bc34e932b2b78e56271fc708064007082",
+  "source_size_bytes": 125688955,
+  "row_count": 1342241,
+  "truth_label": "real_replay_projected",
+  "catalog_validation": "file_metadata",
+  "allow_full_dataset": false,
+  "supported_tx_counts": [
+    100,
+    1000,
+    2500,
+    5000,
+    10000,
+    50000,
+    100000,
+    250000,
+    500000,
+    1000000
+  ],
+  "supported_skew_axes": [
+    "sender_nonce",
+    "call_contract",
+    "asset_hint"
+  ],
+  "default_skew_axis": "sender_nonce",
+  "supported_variants": [
+    "original_window"
+  ],
+  "variant_definitions": [
+    {
+      "variant_mode": "original_window",
+      "display_name": "真实交易顺序校验前缀",
+      "kind": "original",
+      "selection_mode": "validated_prefix",
+      "parameters": []
+    }
+  ],
+  "generator_version": "hene_call_evidence_v2_v1",
+  "verification_method": "full_chain_block_order_and_exact_tx_receipt_hash_join_plus_manifest_sha256",
+  "warnings": [
+    "只保留预执行可知的发送者nonce与标准ABI调用意图；其他合约存储读写未观测、不会伪造。",
+    "Receipt仅用于原始采集完整性校验，不用于生成调度读写集合。",
+    "ABI方法选择器不是合约类型的强证明，ABI推导状态键属于语义模型，不能声称是链上真实storage槽。",
+    "不同方法使用相同预执行静态模型；实验解释限于该模型。",
+    "两个日期单独注册；每个采样数选各日期最早的连续N笔交易。",
+    "V2 中的 contract/selector 分组仅是原始调用证据；原 V4 scheduling/access_list 与状态键完全保留。",
+    "没有经历史部署 ABI 及执行轨迹证明的函数名，不生成新的资产写入键。"
+  ],
+  "usage_note": "MBE semantic projected replay, not native smart contract reexecution or observed complete storage read/write.",
+  "semantic_parent_dataset_id": "henesys_20250612_v4",
+  "semantic_parent_adapter_id": "mv_henesys_layered_v4"
+}

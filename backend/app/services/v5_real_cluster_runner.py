@@ -571,10 +571,39 @@ def run(
     run_dir = RUNS_ROOT / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     _ensure_start_disk_capacity(run_dir, run_id)
+    # MBE_FW_RUNPREP_V1_HEARTBEAT: the Go watchdog starts after compile_plan,
+    # so keep worker heartbeat fresh and write a separate preparation receipt.
+    prep_started = datetime.now(UTC).isoformat()
+    prep_file = run_dir / "preparation_stage.json"
+    prep_file.write_text(json.dumps({"stage": "data_preparation", "started_at": prep_started,
+                                     "status": "running"}, indent=2) + "\n", encoding="utf-8")
+    stop_prep = threading.Event()
+    def _pulse_preparation() -> None:
+        while not stop_prep.is_set():
+            if heartbeat_callback is not None:
+                try:
+                    heartbeat_callback()
+                except Exception:
+                    pass
+            if stop_prep.wait(max(1.0, float(heartbeat_interval_seconds))):
+                return
+    prep_thread = threading.Thread(target=_pulse_preparation, daemon=True)
+    prep_thread.start()
     try:
         plan = compile_plan(spec, run_dir, source_saved_config_id=spec.saved_config_id)
-    except ValueError:
+    except BaseException:
+        prep_file.write_text(json.dumps({"stage": "data_preparation",
+                                         "started_at": prep_started,
+                                         "finished_at": datetime.now(UTC).isoformat(),
+                                         "status": "failed_or_interrupted"}, indent=2) + "\n", encoding="utf-8")
         raise
+    finally:
+        stop_prep.set()
+        prep_thread.join(timeout=2.0)
+    prep_file.write_text(json.dumps({"stage": "data_preparation",
+                                     "started_at": prep_started,
+                                     "finished_at": datetime.now(UTC).isoformat(),
+                                     "status": "completed"}, indent=2) + "\n", encoding="utf-8")
     plan_path = run_dir / "compiled_run_plan.json"
     plan_path.write_text(json.dumps(plan.model_dump(), indent=2) + "\n", encoding="utf-8")
     command = ["go", "run", "./cmd/mbe-supervisor", "--mode", "v5-real-cluster", "--plan", str(plan_path), "--data-dir", str(run_dir)]

@@ -1,0 +1,60 @@
+{
+  "schema_version": "mbe_dataset_manifest_v2",
+  "dataset_id": "henesys_20250824_v4",
+  "display_name": "MapleStory N Henesys 2025-08-24 真实链上交易（静态语义重放）",
+  "description": "真实 Henesys (chain_id 68414) 交易+区块顺序；发送者 nonce 为可确认的协议依赖，已知标准 ABI 调用仅作为执行意图模型；不声称复现完整 EVM 合约存储冲突。",
+  "source_platform": "maplestory_n_henesys",
+  "source_chain": "henesys_evm_68414",
+  "dataset_type": "evm_transaction_nonce_and_abi_intent_replay_projection",
+  "adapter_id": "mv_henesys_layered_v4",
+  "source_layout": "single_file",
+  "source_day": "2025-08-24",
+  "local_raw_relative_path": "dataset/Henesys/source/henesys_2025-08-24.source.jsonl.gz",
+  "source_sha256": "5b7e66f0a2cfbaf85f8738942859f8bf4612994f006382aeabc8ecfe6d8e1d07",
+  "source_size_bytes": 68062016,
+  "row_count": 757664,
+  "truth_label": "real_replay_projected",
+  "catalog_validation": "file_metadata",
+  "allow_full_dataset": false,
+  "supported_tx_counts": [
+    100,
+    1000,
+    2500,
+    5000,
+    10000,
+    50000,
+    100000,
+    250000,
+    500000
+  ],
+  "supported_skew_axes": [
+    "sender_nonce",
+    "call_contract",
+    "asset_hint"
+  ],
+  "default_skew_axis": "sender_nonce",
+  "supported_variants": [
+    "original_window"
+  ],
+  "variant_definitions": [
+    {
+      "variant_mode": "original_window",
+      "display_name": "真实交易顺序校验前缀",
+      "kind": "original",
+      "selection_mode": "validated_prefix",
+      "parameters": []
+    }
+  ],
+  "generator_version": "henesys_raw_nonce_abi_intent_v1",
+  "materialization_policy": "validated_prefix_attested_prefix_v1",
+  "preview_policy": "validated_prefix_streaming_v1",
+  "verification_method": "full_chain_block_order_and_exact_tx_receipt_hash_join_plus_manifest_sha256",
+  "warnings": [
+    "只保留预执行可知的发送者nonce与标准ABI调用意图；其他合约存储读写未观测、不会伪造。",
+    "Receipt仅用于原始采集完整性校验，不用于生成调度读写集合。",
+    "ABI方法选择器不是合约类型的强证明，ABI推导状态键属于语义模型，不能声称是链上真实storage槽。",
+    "不同方法使用相同预执行静态模型；实验解释限于该模型。",
+    "两个日期单独注册；每个采样数选各日期最早的连续N笔交易。"
+  ],
+  "usage_note": "MBE semantic projected replay, not native smart contract reexecution or observed complete storage read/write."
+}

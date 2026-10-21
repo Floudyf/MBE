@@ -378,7 +378,7 @@ func (r *NodeRuntime) validateMetaTrackStreamingTransactionFrontierV24(block rea
 					return nil, fmt.Errorf("metatrack v2.4 ordering predecessor not earlier")
 				}
 			} else if !committed[pred] {
-				return nil, fmt.Errorf("metatrack v2.4 omitted ordering predecessor ordinal=%d", pred)
+				return nil, fmt.Errorf("metatrack v2.4 omitted ordering predecessor ordinal=%d shard=%s block_height=%d current_ordinal=%d known_committed=%d in_block=%d", pred, block.ShardID, block.Height, routing.RoutingOrdinal, len(committed), len(inBlock)) // MBE_HENE_GUARD_V1
 			}
 		}
 		for _, pred := range routing.ConsensusExecutionPredecessorOrdinals {
@@ -396,7 +396,7 @@ func (r *NodeRuntime) validateMetaTrackStreamingTransactionFrontierV24(block rea
 					candidateBatchDepth = batchDepths[pred] + 1
 				}
 			} else if !committed[pred] {
-				return nil, fmt.Errorf("metatrack v2.4 omitted execution predecessor ordinal=%d", pred)
+				return nil, fmt.Errorf("metatrack v2.4 omitted execution predecessor ordinal=%d shard=%s block_height=%d current_ordinal=%d known_committed=%d in_block=%d", pred, block.ShardID, block.Height, routing.RoutingOrdinal, len(committed), len(inBlock)) // MBE_HENE_GUARD_V1
 			}
 		}
 		if candidateBatchDepth > routing.ConsensusExecutionDepth {

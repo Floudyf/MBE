@@ -23,6 +23,11 @@ type RemoteStateBatchFetchItem struct {
 	Token  string
 	Item   tx.SignedTransaction
 	Access tx.AccessItem
+	// MBE_MT_DUALPRIO_V1: candidate advisory, not serialized to PBFT.
+	CandidateStatePriority bool
+	PriorityH int
+	PriorityD int
+	PriorityWaiters int
 }
 
 type RemoteStateBatchFetchOutcome struct {
@@ -111,7 +116,11 @@ func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteSt
 			access  tx.AccessItem
 			request StateFetchRequest
 			waiter  chan StateFetchResponse
+			priorityH int
+			priorityD int
+			priorityWaiters int
 		}
+		criticalPriority := false // MBE_MT_DUALPRIO_V1
 		groups := map[string][]prepared{}
 		localOrUnsupported := map[string]bool{}
 		seenToken := map[string]bool{}
@@ -120,6 +129,7 @@ func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteSt
 				continue
 			}
 			seenToken[entry.Token] = true
+			if entry.CandidateStatePriority { criticalPriority = true }
 			homeShard := r.stateHomeShardForKey(entry.Access.Key, shardIDs)
 			if homeShard == "" || homeShard == r.node.ShardID {
 				localOrUnsupported[entry.Token] = true
@@ -140,7 +150,7 @@ func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteSt
 			}
 			r.stateFetchWaiters[requestID] = waiter
 			r.mu.Unlock()
-			groups[homeShard] = append(groups[homeShard], prepared{token: entry.Token, item: entry.Item, access: entry.Access, request: request, waiter: waiter})
+			groups[homeShard] = append(groups[homeShard], prepared{token: entry.Token, item: entry.Item, access: entry.Access, request: request, waiter: waiter, priorityH: entry.PriorityH, priorityD: entry.PriorityD, priorityWaiters: entry.PriorityWaiters})
 		}
 		defer func() {
 			r.mu.Lock()
@@ -156,9 +166,32 @@ func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteSt
 			homes = append(homes, home)
 		}
 		sort.Strings(homes)
+		// MBE_MT_DUALPRIO_V1: only the candidate changes StateFetch batch order.
+		if criticalPriority {
+			for _, home := range homes {
+				items := groups[home]
+				sort.SliceStable(items, func(i, j int) bool {
+					return metaTrackHDStatePrefetchBefore(items[i].priorityH, items[i].priorityD, items[i].priorityWaiters, items[i].request.RequestID, items[j].priorityH, items[j].priorityD, items[j].priorityWaiters, items[j].request.RequestID)
+				})
+				groups[home] = items
+			}
+			// Favor the Home of the highest-impact pending consumer first.
+			sort.SliceStable(homes, func(i, j int) bool {
+				a, b := groups[homes[i]][0], groups[homes[j]][0]
+				return metaTrackHDStatePrefetchBefore(a.priorityH, a.priorityD, a.priorityWaiters, homes[i], b.priorityH, b.priorityD, b.priorityWaiters, homes[j])
+			})
+		}
 		for _, home := range homes {
 			items := groups[home]
-			sort.SliceStable(items, func(i, j int) bool { return items[i].request.RequestID < items[j].request.RequestID })
+			if !criticalPriority { sort.SliceStable(items, func(i, j int) bool { return items[i].request.RequestID < items[j].request.RequestID }) }
+			if criticalPriority {
+				r.incrementFullLocalityMetric("metatrack_candidate_state_priority_items", int64(len(items)))
+				legacy := append([]prepared(nil), items...)
+				sort.SliceStable(legacy, func(i, j int) bool { return legacy[i].request.RequestID < legacy[j].request.RequestID })
+				changed := int64(0)
+				for i := range items { if items[i].token != legacy[i].token { changed++ } }
+				r.incrementFullLocalityMetric("metatrack_candidate_state_priority_reordered_items", changed)
+			}
 			target := r.stateAccessLeaderID(home)
 			if target == "" {
 				return outcome, fmt.Errorf("batch entry state home leader missing for %s", home)

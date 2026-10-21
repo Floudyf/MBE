@@ -391,7 +391,8 @@ export default function V5MechanismAnalysis({ children }: { children: V5FormalCh
       : [];
   const projectionFrontierDefinitions = metrics.metatrack_projection_frontier_policy ? METATRACK_PROJECTION_FRONTIER_V612 : [];
   const consensusWindowDefinitions = metrics.metatrack_consensus_window_observability_available ? METATRACK_CONSENSUS_WINDOW_V656813 : [];
-  const currentMetaTrack = ["metatrack_latest", "metatrack_unified", "metatrack_ab_route", "metatrack_ab_track", "metatrack_ab_cons", "metatrack_ab_state"].includes(active);
+  // MBE_MT_NOEXACT_ABL_V1: treat NoExact as the same MetaTrack observability family.
+  const currentMetaTrack = ["metatrack_latest", "metatrack_unified", "metatrack_ab_exact", "metatrack_ab_route", "metatrack_ab_track", "metatrack_ab_cons", "metatrack_ab_state"].includes(active);
   const boundaryBatchDefinitions = currentMetaTrack && metrics.metatrack_closure_boundary_batch_policy ? METATRACK_BOUNDARY_BATCH_V621 : [];
   const asyncWritebackDefinitions = currentMetaTrack && metrics.metatrack_async_version_writeback_policy ? METATRACK_ASYNC_WRITEBACK_V640 : [];
   const incrementalRoutingDefinitions = currentMetaTrack && metrics.metatrack_incremental_routing_policy ? METATRACK_INCREMENTAL_ROUTING_V650 : [];
@@ -491,6 +492,7 @@ function formatMetric(value: number, unit?: string): string { if (unit === "B") 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();
   if (id === "metatrack_latest") return "Metatrack";
+  if (id === "metatrack_ab_exact") return "去精确版本感知分片";
   if (id === "metatrack_ab_route") return "历史子消融-无局部性放置";
   if (id === "metatrack_ab_track") return "去掉双轨";
   if (id === "metatrack_ab_cons") return "去掉共识聚合";

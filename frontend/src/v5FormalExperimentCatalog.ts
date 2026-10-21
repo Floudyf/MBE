@@ -57,8 +57,12 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 { methodId: "metatrack_latest", title: "Metatrack", description: "完整版本：增量依赖/局部性感知分流 + 有效独立前沿双轨 + V669 依赖闭包安全门下的 N/L 自适应完整 RouteBatch 共识聚合 + 执行域本地 exact-version；正式消融统一固定 RouteBatch=100，保持已验证的流水线工作点。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
   { methodId: "metatrack_ab_flow", title: "去依赖感知增量分流", description: "以同容量约束的确定性哈希执行分片替代依赖感知增量分流；保留精确版本依赖图、双轨、共识聚合、状态供应及全部 PBFT 参数。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  // MBE_MT_NOEXACT_ABL_V1: keep existing four, append the version-specific fifth ablation.
+  { methodId: "metatrack_ab_exact", title: "去精确版本感知分片", description: "仅从增量执行位置选择评分中删除 ReadyRank 和 ExactCross；其余远程状态成本、共现局部性、分片负载、容量上限、精确版本正确性、StateReady、PBFT 和共识窗口与 Full 相同。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   // MBE_MT_DUAL_READY_V1: candidate in MetaTrack method family, not formal ablation
-  { methodId: "metatrack_dyntrack", title: "动态阻塞隔离双轨（候选）", description: "保留 Full 的分片、PBFT、精确版本就绪与语义双轨，复用原语义约束及 StateReady，运行时按远程关键版本发布风险分为正常与风险资源轨；仅在 Worker 竞争时采用有界正常轨保护和即时依赖解锁仲裁，禁止跨轮饥饿；仍属待验证候选，不进入四项正式消融。", family: "metatrack", comparisonVisible: true, mainVisible: true },
+  { methodId: "metatrack_dyntrack", title: "动态阻塞隔离双轨（候选）", description: "保留 Full 的分片、PBFT、精确版本就绪与语义双轨，复用原语义约束及 StateReady，运行时按远程关键版本发布风险分为正常与风险资源轨；仅在 Worker 竞争时采用有界正常轨保护和即时依赖解锁仲裁，禁止跨轮饥饿；仍属待验证候选，不进入四项正式消融。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  // MBE_MT_DUALPRIO_V1: visible replacement; old run ID remains stable.
+  { methodId: "metatrack_dualprio", title: "关键前驱＋状态供应优先（候选）", description: "仅实验候选。原Fast/Conservative安全分类及StateReady门不变；在有竞争的Ready轮次优先较长依赖尾链H和更多后继D，并对批量远程状态请求采用相同关键性排序。Home精确版本校验不变，批次预取整批等待屏障未改变。与Full和既有H/D单机制进行同条件对照。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_unified", title: "历史实验版（V668）", description: "历史兼容：保留原 V668 N/L-only 自适应共识实验及固定100笔 RouteBatch 配置；不进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_ab_route", title: "历史子消融-无局部性放置", description: "状态局部化内部子消融：只把依赖/共现 placement 替换为历史 frequency/load-only 放置，仍保留预取与本地 exact；不进入正式三机制主矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_ab_track", title: "去掉双轨", description: "只去掉 Fast/Conservative 双轨：严格按 canonical 顺序执行，一次只允许 1 个 business execution in-flight；即使后续交易已 ready，也必须等待前一交易完成。依赖 DAG、StateReady、分流、V669 共识、状态访问与配置 worker_count 保持不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
@@ -74,9 +78,16 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_diag_ready8", title: "② 统一单轨并行", description: "沿用本次 Full 的依赖图、版本与状态机制；移除 Fast/Conservative 调度分轨，Ready 交易可以绕行，业务并发上限仍为配置的 Worker 数。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_diag_dual1", title: "③ 双轨单业务", description: "沿用 Full 的双轨判定、Fast 优先及 Ready 绕行，但任一时刻仅运行一笔业务交易；Worker 配置不改变。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_diag_fifo1", title: "④ 严格 FIFO", description: "与正式去双轨 A2 的执行插件完全一致：不做双轨分类、不允许已 Ready 的后继绕过队首，同时只运行一笔业务交易。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  // MBE_MT_BLOCKLANE_V1: comparable isolated candidates; NOT among four official ablations.
+  { methodId: "metatrack_blocklane", title: "Ready/StateReady 阻塞隔离双轨（候选）", description: "将现有依赖挂起、精确版本 StateReady 和独立交易绕行明确归为动态阻塞隔离双轨；执行算法与 Full 现有 Ready/StateReady 行为相同，不添加 H/D 或状态请求重排。保持原 Fast/Conservative 安全分类、8 Worker 和 PBFT。", family: "metatrack", comparisonVisible: true, mainVisible: true },
+  { methodId: "metatrack_blockfifo", title: "去阻塞绕行（消融·8 Worker）", description: "仅移除被阻塞队首后的独立 Ready 交易绕行：采用依赖安全的稳定拓扑 FIFO 门控，同时保持 8 Worker 并发、精确版本 StateReady、Fast/Conservative 安全判定、共识、分片、状态供应完全一致。仅为候选消融，不替代正式四消融。", family: "metatrack", comparisonVisible: true, mainVisible: true },
   // MBE_MT_OBS_PARITY_V1: scheduler-only clones of Full, diagnostics not ablations
-  { methodId: "metatrack_diag_rr", title: "诊断：等配置就绪轮次", description: "诊断专用；完整复制 Full 的 V669 出块、增量路由、StateReady、状态访问与 Worker 设置，仅替换就绪轮次调度器。", family: "metatrack", comparisonVisible: true, mainVisible: false },
-  { methodId: "metatrack_diag_hd", title: "诊断：等配置依赖影响", description: "诊断专用；完整复制 Full 的非调度设置，仅替换为已有 H/D 依赖影响调度器。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_diag_rr", title: "诊断：等配置就绪轮次", description: "诊断专用；完整复制 Full 的 V669 出块、增量路由、StateReady、状态访问与 Worker 设置，仅替换就绪轮次调度器。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  { methodId: "metatrack_diag_hd", title: "诊断：等配置依赖影响", description: "诊断专用；完整复制 Full 的非调度设置，仅替换为已有 H/D 依赖影响调度器。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  // MBE_MT_SLOW_LANE_V1: experimental runtime-state-risk lane; not a Full/ablation.
+  // MBE_MT_WAIT_READY_V1: matched candidate and parallel FIFO control; NOT formal four-ablation.
+  { methodId: "metatrack_slowstate", title: "就绪驱动双轨（候选）", description: "直接复用既有 blocked/stateBlocked、精确版本 StateReady、统一 Ready Worker；未就绪交易挂起，独立 Ready 交易绕行并行执行。保留原 Fast/Conservative 语义安全判定，但不再据此进行二次 Ready 排队。非正式四消融。", family: "metatrack", comparisonVisible: true, mainVisible: true },
+  { methodId: "metatrack_waitfifo", title: "消融：禁止未就绪绕行（FIFO 并行）", description: "与就绪驱动双轨完全相同的依赖 DAG、StateReady、语义安全和 Worker 上限；仅要求按共识原顺序放行就绪前缀，后续 Ready 不得绕过未就绪队首。前缀可并行派发，不强制单业务串行；独立候选对照，非正式四消融。", family: "metatrack", comparisonVisible: true, mainVisible: true },
 ];
 
 export const BATCH_SI_ABLATION_METHOD_IDS = [
@@ -91,6 +102,7 @@ export const BATCH_SI_ABLATION_METHOD_IDS = [
 export const METATRACK_ABLATION_METHOD_IDS = [
   "metatrack_latest",
   "metatrack_ab_flow",
+  "metatrack_ab_exact",
   "metatrack_ab_track",
   "metatrack_ab_state",
   "metatrack_ab_cons",
@@ -98,7 +110,7 @@ export const METATRACK_ABLATION_METHOD_IDS = [
 
 // MBE_METATRACK_UI_RETIRE_V1: retired the obsolete routing-only four-way UI preset; old method profiles remain compatible.
 
-export const METATRACK_SCHEDULER_DIAG_METHOD_IDS = ["metatrack_latest", "metatrack_diag_ready8", "metatrack_diag_dual1", "metatrack_diag_fifo1", "metatrack_diag_rr", "metatrack_diag_hd"] as const;
+export const METATRACK_SCHEDULER_DIAG_METHOD_IDS = ["metatrack_latest", "metatrack_diag_ready8", "metatrack_diag_dual1", "metatrack_diag_fifo1"] as const; // MBE_MT_SLOW_LANE_V1 two obsolete diagnostics hidden
 
 export const PARALLEL_WORKER_OPTIONS = [1, 2, 4, 8] as const;
 

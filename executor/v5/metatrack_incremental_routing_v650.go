@@ -376,6 +376,21 @@ func metaTrackIncrementalRankCandidatesV651(candidates []metaTrackIncrementalCan
 	return ranked
 }
 
+// MBE_MT_NOEXACT_ABL_V1: same admissible candidates and full history; only
+// remote accesses, coaccess and load participate in the ablation selector.
+// ReadyRank/ExactCross remain measured and signed dependencies remain enforced.
+func metaTrackRankWithoutExactV1(candidates []metaTrackIncrementalCandidateV650) []metaTrackIncrementalCandidateV650 {
+    ranked := append([]metaTrackIncrementalCandidateV650(nil), candidates...)
+    for i := range ranked {
+        remote := metaTrackIncrementalCriterionRankV651(ranked, i, func(a,b metaTrackIncrementalCandidateV650) bool { return a.RemoteCost < b.RemoteCost })
+        coaccess := metaTrackIncrementalCriterionRankV651(ranked, i, func(a,b metaTrackIncrementalCandidateV650) bool { return a.CoaccessLocality > b.CoaccessLocality })
+        load := metaTrackIncrementalCriterionRankV651(ranked, i, func(a,b metaTrackIncrementalCandidateV650) bool { return a.Load < b.Load })
+        ranked[i].WorstRank = maxInt(remote,maxInt(coaccess,load))
+        ranked[i].RankSum = remote + coaccess + load
+    }
+    return ranked
+}
+
 func metaTrackIncrementalCandidateLessV650(left, right metaTrackIncrementalCandidateV650) bool {
 	if left.WorstRank != right.WorstRank {
 		return left.WorstRank < right.WorstRank
@@ -420,6 +435,9 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 	}
 	state := p.incrementalV650
 	ignoreCoaccessV661 := boolFromAny(p.config[metaTrackAblationIgnoreCoaccessRoutingV661])
+	noExactV1 := boolFromAny(p.config["ablation_no_exact_version_routing_v1"]) // MBE_MT_NOEXACT_ABL_V1
+	selector := metaTrackIncrementalRankCandidatesV651
+	if noExactV1 { selector = metaTrackRankWithoutExactV1 }
 	plan := BatchRoutingPlan{
 		BatchIndex:                               input.BatchIndex,
 		ShardingPluginID:                         shardingPluginID(input.Sharding),
@@ -436,6 +454,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		IncrementalHistoryDigestBefore:           state.HistoryDigest,
 		IncrementalBatchPartitionInvariant:       true,
 	}
+	if noExactV1 { plan.TransactionPolicy = "remote_coaccess_load_minimax_noexact_v1" }
 	for _, shard := range input.ShardIDs {
 		plan.ShardLoadBefore[shard] = state.ShardLoad[shard]
 		plan.ShardLoadAfter[shard] = state.ShardLoad[shard]
@@ -507,7 +526,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		} else {
 			filtered = append(filtered, candidates...)
 		}
-		filtered = metaTrackIncrementalRankCandidatesV651(filtered)
+		filtered = selector(filtered)
 		sort.Slice(filtered, func(i, j int) bool { return metaTrackIncrementalCandidateLessV650(filtered[i], filtered[j]) })
 		selected := filtered[0]
 
@@ -515,7 +534,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		// the rank-balanced answer, compute the same ordinal selector without the
 		// capacity filter. No empirical threshold is used.
 		if anyAdmissible {
-			unconstrained := metaTrackIncrementalRankCandidatesV651(candidates)
+			unconstrained := selector(candidates)
 			sort.Slice(unconstrained, func(i, j int) bool { return metaTrackIncrementalCandidateLessV650(unconstrained[i], unconstrained[j]) })
 			if !unconstrained[0].Admissible && unconstrained[0].Shard != selected.Shard {
 				plan.IncrementalCapacityForcedChoiceCount++
@@ -524,7 +543,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		// Legacy counters remain as compatibility observability, but no criterion
 		// has absolute priority in v6.5.1. Each counter records a uniquely best
 		// criterion that is also chosen by the rank-balanced selector.
-		if metaTrackIncrementalUniqueBestV651(filtered, selected, func(left, right metaTrackIncrementalCandidateV650) bool { return left.ExactCross < right.ExactCross }) {
+		if !noExactV1 && metaTrackIncrementalUniqueBestV651(filtered, selected, func(left, right metaTrackIncrementalCandidateV650) bool { return left.ExactCross < right.ExactCross }) {
 			plan.IncrementalExactFirstChoiceCount++
 		}
 		if metaTrackIncrementalUniqueBestV651(filtered, selected, func(left, right metaTrackIncrementalCandidateV650) bool {

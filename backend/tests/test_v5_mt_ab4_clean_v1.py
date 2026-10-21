@@ -4,7 +4,7 @@ Does not touch real cluster or use synthetic performance claims.
 from pathlib import Path
 from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS
 ROOT=Path(__file__).resolve().parents[2]
-IDS=['metatrack_latest','metatrack_ab_flow','metatrack_ab_track','metatrack_ab_state','metatrack_ab_cons']
+IDS=['metatrack_latest','metatrack_ab_flow','metatrack_ab_exact','metatrack_ab_track','metatrack_ab_state','metatrack_ab_cons'] # MBE_MT_NOEXACT_ABL_V1
 
 def load(path):return (ROOT/path).read_text(encoding='utf-8-sig')
 
@@ -13,7 +13,7 @@ def test_exact_formal_ablation_set_and_real_role():
     s=cat.split('export const METATRACK_ABLATION_METHOD_IDS = [',1)[1].split('] as const;',1)[0]
     import re
     assert set(re.findall(r'"([^"]+)"',s))==set(IDS)
-    assert len(re.findall(r'"([^"]+)"',s))==5
+    assert len(re.findall(r'"([^"]+)"',s))==6
     assert BUILTIN_METHODS['metatrack_sh_noco'].role=='ablation'
     assert BUILTIN_METHODS['metatrack_latest'].role=='main'
     for mid in IDS[1:]:assert BUILTIN_METHODS[mid].role=='ablation'

@@ -132,6 +132,7 @@ _MANIFESTS = [
             "micro_batch_size": {"type": "integer", "minimum": 0, "maximum": 5000, "default": 0},
             "incremental_exact_continuity_routing_v65": {"type": "boolean", "default": False},
             "ablation_ignore_exact_ready_routing_v660": {"type": "boolean", "default": False},
+            "ablation_no_exact_version_routing_v1": {"type": "boolean", "default": False}, # MBE_MT_NOEXACT_ABL_V1
             "ablation_ignore_coaccess_routing_v661": {"type": "boolean", "default": False},
             "ablation_no_coaccess_sharding_v675": {"type": "boolean", "default": False},
             "ablation_hash_routing_v662": {"type": "boolean", "default": False},
@@ -232,6 +233,12 @@ _MANIFESTS = [
     _manifest("scheduler", "dependency_influence_scheduler", "Dependency-influence Scheduler", "Among already-ready MetaTrack transactions, prioritizes larger tail depth H, then larger descendant count D, then canonical routing ordinal.", requirements=["execution:dual_track_execution"], capabilities=["metatrack_dependency_influence_priority"], source={"type": "mbe_mechanism_candidate", "evidence": "metatrack_dependency_structure_v33"}),
     _manifest("scheduler", "ready_round_control_scheduler", "Ready-round Control Scheduler", "Uses non-waiting Ready Rounds and the same unified worker-lane model as the dependency-influence candidate, but preserves fast-first then canonical ordering within the oldest round.", requirements=["execution:dual_track_execution"], capabilities=["metatrack_ready_round_arbitration", "bounded_cross_round_bypass"]),
     # MBE_MT_DUAL_READY_V1: real scheduler plugin for isolated candidate
+    # MBE_MT_DUALPRIO_V1: candidate-only H/D Ready + critical remote fetch ordering.
+    _manifest("scheduler", "metatrack_hd_state_scheduler", "MetaTrack HD and Critical State Priority", "Candidate only: oldest Ready Round H/D arbitration and critical StateFetch batch ordering; exact versions, PBFT and Full unchanged.", requirements=["execution:dual_track_execution"], capabilities=["metatrack_hd_priority", "metatrack_critical_state_fetch_priority"], source={"type": "mbe_mechanism_candidate", "evidence": "hd_and_state_batch_order_v1"}),
+    # MBE_MT_SLOW_LANE_V1: runtime state wait lane; immutable safety track unchanged.
+    # MBE_MT_WAIT_READY_V1: existing StateReady and Ready worker only, no second suspension implementation.
+    _manifest("scheduler", "metatrack_slow_state_scheduler", "MetaTrack Waiting/Ready Candidate", "Use existing dependency/StateReady suspension and unified Ready worker lane; permit ready work to bypass unrelated blocked transactions without altering safety class.", requirements=["execution:dual_track_execution"], capabilities=["metatrack_waiting_ready_bypass_candidate"], source={"type":"mbe_mechanism_candidate","evidence":"waiting_ready_v1"}),
+    _manifest("scheduler", "metatrack_wait_fifo_scheduler", "MetaTrack Waiting/Ready FIFO Parallel Control", "Identical state and safety gates; restrict admission to the canonical eligible prefix, retaining the same worker parallelism.", requirements=["execution:dual_track_execution"], capabilities=["metatrack_waiting_ready_fifo_parallel_control"], source={"type":"mbe_mechanism_candidate","evidence":"waiting_ready_v1"}),
     _manifest("scheduler", "metatrack_unlock_scheduler", "MetaTrack Dynamic Unlock Dual Track", "Preserves signed dependency/StateReady gates and dual-track semantics; under oldest Ready-Round contention, favors transactions with more direct dependents whose last unfinished predecessor is the candidate; otherwise normal Ready-Round arbitration.", requirements=["execution:dual_track_execution"], capabilities=["metatrack_dynamic_unlock_priority", "metatrack_ready_round_arbitration"], source={"type": "mbe_mechanism_candidate", "evidence": "dynamic_remaining_predecessor_count_v1"}),
     _manifest(
         "scheduler", "batch_si_scheduler", "Batch-SI Batch Planner",

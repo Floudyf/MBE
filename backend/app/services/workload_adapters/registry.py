@@ -12,9 +12,22 @@ from backend.app.services.workload_adapters.axie_controlled_rmw_v1 import AxieCo
 from backend.app.services.workload_adapters.tapos_exact_write_set_v1 import TaposExactWriteSetAdapter
 # MBE_MV_TAPOS_V4_V1
 from backend.app.services.workload_adapters.tapos_layered_v4 import TaposLayeredV4Adapter
+# MBE_HENESYS_INTEGRATION_V1
+from backend.app.services.workload_adapters.henesys_layered_v4 import HenesysLayeredV4Adapter
 
+
+# MBE_FW_HENE_IN_V1
+from backend.app.services.workload_adapters.fw_tx_v4 import FarmersWorldTxV4Adapter
+
+
+# MBE_FW_HENE_SEMV2_V1
+from backend.app.services.workload_adapters.sem_v2_adapter import FarmersRoleV2Adapter, HeneCallV2Adapter
 
 _ADAPTERS: dict[str, DatasetAdapter] = {
+    FarmersRoleV2Adapter.adapter_id: FarmersRoleV2Adapter(),
+    HeneCallV2Adapter.adapter_id: HeneCallV2Adapter(),
+    FarmersWorldTxV4Adapter.adapter_id: FarmersWorldTxV4Adapter(),
+
     DecentralandSalesAdapter.adapter_id: DecentralandSalesAdapter(),
     CanonicalCSVAdapter.adapter_id: CanonicalCSVAdapter(),
     AlienWorldsRMWAdapter.adapter_id: AlienWorldsRMWAdapter(),
@@ -25,6 +38,7 @@ _ADAPTERS: dict[str, DatasetAdapter] = {
     DCLLayeredV4Adapter.adapter_id: DCLLayeredV4Adapter(),
     TaposExactWriteSetAdapter.adapter_id: TaposExactWriteSetAdapter(),
     TaposLayeredV4Adapter.adapter_id: TaposLayeredV4Adapter(),
+    HenesysLayeredV4Adapter.adapter_id: HenesysLayeredV4Adapter(),
 }
 
 

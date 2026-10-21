@@ -319,6 +319,26 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
+    # MBE_MT_NOEXACT_ABL_V1: fifth ablation; exact dependency safety metadata unchanged.
+    "metatrack_ab_exact": V5FormalMethod(
+        method_id="metatrack_ab_exact",
+        display_name="去精确版本感知分片",
+        role="ablation",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "ablation_no_exact_version_routing_v1": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
     # MBE_METATRACK_EXEC4_V1: comparison-only variants cloned from CURRENT Full
     "metatrack_diag_ready8": V5FormalMethod(
         method_id="metatrack_diag_ready8",
@@ -770,9 +790,34 @@ def _mt_obs_parity_v1_variant(method_id: str, name: str, scheduler_id: str) -> V
 MT_OBS_PARITY_V1_METHODS: dict[str, V5FormalMethod] = {
     "metatrack_diag_rr": _mt_obs_parity_v1_variant("metatrack_diag_rr", "诊断：等配置就绪轮次", "ready_round_control_scheduler"),
     "metatrack_diag_hd": _mt_obs_parity_v1_variant("metatrack_diag_hd", "诊断：等配置依赖影响", "dependency_influence_scheduler"),
+    # MBE_MT_SLOW_LANE_V1: candidate method parity with Full except scheduler.
+    # MBE_MT_WAIT_READY_V1: both use the Full parity helper, no formal Full or four-ablation edits.
+    "metatrack_slowstate": _mt_obs_parity_v1_variant("metatrack_slowstate", "就绪驱动双轨（候选）", "metatrack_slow_state_scheduler"),
+    "metatrack_waitfifo": _mt_obs_parity_v1_variant("metatrack_waitfifo", "消融：禁止未就绪绕行（FIFO 并行）", "metatrack_wait_fifo_scheduler"),
+    # MBE_MT_DUALPRIO_V1: scheduler-only clone of Full, old dyntrack ID retained.
+    "metatrack_dualprio": _mt_obs_parity_v1_variant("metatrack_dualprio", "关键前驱＋状态供应优先（候选）", "metatrack_hd_state_scheduler"),
 }
 
-ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **CALVIN_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS, **OPTME_TXALLO_BUILTIN_METHODS, **MT_OBS_PARITY_V1_METHODS}
+# MBE_MT_BLOCKLANE_V1: preserve Full and all official ablations byte-for-byte.
+def _mt_blocklane_variant_v1(method_id: str, display: str, no_bypass: bool) -> V5FormalMethod:
+    full = BUILTIN_METHODS["metatrack_latest"]
+    config = {key: dict(value) for key, value in full.plugin_config_overrides.items()}
+    block_config = dict(config.get("block_executor", {}))
+    block_config["blocking_lane_candidate_v1"] = True
+    block_config["blocking_lane_no_bypass_v1"] = no_bypass
+    config["block_executor"] = block_config
+    return full.model_copy(deep=True, update={
+        "method_id": method_id, "display_name": display, "role": "custom",
+        "plugin_overrides": dict(full.plugin_overrides),
+        "plugin_config_overrides": config,
+    })
+
+MT_BLOCKLANE_V1_METHODS: dict[str, V5FormalMethod] = {
+    "metatrack_blocklane": _mt_blocklane_variant_v1("metatrack_blocklane", "Ready/StateReady 阻塞隔离双轨（候选）", False),
+    "metatrack_blockfifo": _mt_blocklane_variant_v1("metatrack_blockfifo", "去阻塞绕行（消融·8 Worker）", True),
+}
+
+ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **CALVIN_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS, **OPTME_TXALLO_BUILTIN_METHODS, **MT_OBS_PARITY_V1_METHODS, **MT_BLOCKLANE_V1_METHODS}
 
 
 
@@ -912,6 +957,7 @@ def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:
                 official_metatrack_ids = {
                     "metatrack_latest",
                     "metatrack_ab_flow",
+                    "metatrack_ab_exact",
                     "metatrack_ab_track",
                     "metatrack_ab_cons",
                     "metatrack_ab_state",
@@ -920,7 +966,7 @@ def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:
                 if unexpected_metatrack_methods:
                     raise FormalPlanValidationError(
                         "formal MetaTrack ablation_experiment accepts only Full + "
-                        "w/o Incremental Flow + w/o Dual Track + w/o Consensus Aggregation + w/o State Locality; "
+                        "w/o Incremental Flow + w/o Exact-Version-Aware Placement + w/o Dual Track + w/o Consensus Aggregation + w/o State Locality; "
                         f"unexpected methods: {unexpected_metatrack_methods}"
                     )
             mains = [method for method in plan.methods if method.role == "main"]
