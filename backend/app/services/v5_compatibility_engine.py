@@ -7,6 +7,8 @@ from backend.app.services.v5_plugin_manifest_store import CATEGORIES, STORE
 
 
 REQUIRED_CATEGORIES = set(CATEGORIES)
+# MT_COUNT_FIX_V2: dataset-run policy is separate from synthetic smoke-run policy.
+REAL_DATASET_MAX_TX_COUNT = 1_000_000
 RESOURCE_POLICY = {
     "max_nodes": 64,
     "max_total_processes": 64,
@@ -17,6 +19,21 @@ RESOURCE_POLICY = {
     "forced_kill_timeout": 5,
     "max_concurrent_real_clusters": 1,
 }
+
+
+def max_tx_count_for_spec(spec: V5ExperimentSpec) -> int:
+    """Permit large *real_cluster* dataset replays, not larger synthetic/smoke runs.
+
+    Workload preview/materialization still enforce each manifest's row_count,
+    supported_tx_counts, full-dataset policy, source SHA and schema.
+    """
+    source = spec.workload_source
+    if (spec.execution_backend == "real_cluster"
+        and source is not None
+        and source.source_type == "dataset"
+        and source.plugin_id == "canonical_trace_replay"):
+        return REAL_DATASET_MAX_TX_COUNT
+    return RESOURCE_POLICY["max_tx_count"]
 
 
 class V5CompatibilityError(ValueError):
@@ -96,7 +113,8 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
         blockers.append("nodes must equal shards * validators_per_shard for V5 committee topology")
     if spec.topology.nodes > RESOURCE_POLICY["max_nodes"]:
         blockers.append("topology exceeds max_nodes resource policy")
-    if spec.tx_count > RESOURCE_POLICY["max_tx_count"]:
+    tx_count_limit = max_tx_count_for_spec(spec)
+    if spec.tx_count > tx_count_limit:
         blockers.append("tx_count exceeds max_tx_count resource policy")
     if spec.duration_ms > RESOURCE_POLICY["max_runtime_seconds"] * 1000:
         blockers.append("duration exceeds max_runtime_seconds resource policy")
@@ -406,6 +424,17 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
                 blockers.append('TxAllo MBE event-order extension requires original_window + contiguous_window; Zipf/reordered source events are not eligible')
         if source_id == 'axie_day_layered_v4' and str(getattr(source, 'variant_mode', '') or 'original_window') != 'original_window':
             blockers.append('TxAllo Axie V4 requires original_window: resampled Zipf events are not observed source blocks')
+        # MBE_HENE_TXALLO_PREFLIGHT_V1: catch absent pre-evaluation history before launching child processes.
+        if source_id in {'hene_20250612_calls_v2', 'hene_20250824_calls_v2', 'henesys_20250612_v4', 'henesys_20250824_v4'}:
+            variant = str(getattr(source, "variant_mode", "") or "original_window")
+            selection = str(getattr(source, "selection_mode", "") or "")
+            if variant != "historical_window" or selection != "contiguous_window":
+                blockers.append("Henesys TxAllo requires historical_window + contiguous_window: "
+                                "original validated_prefix starts at zero and has no prior training history; "
+                                "select historical_window for EVERY comparison method")
+            else:
+                warnings.append("Henesys TxAllo uses real preceding history; check exact start_offset, "
+                                "observed source blocks and history/evaluation separation during materialization")
         txallo_routing_id = routing.plugin_id if routing else ""
         if txallo_routing_id not in {"txallo_routing", "stateless_txallo_routing"}:
             blockers.append("TxAllo requires routing:txallo_routing or routing:stateless_txallo_routing")
@@ -433,7 +462,7 @@ def validate(spec: V5ExperimentSpec) -> V5CompatibilityResult:
 
     if spec.execution_backend == "real_cluster" and blockers:
         warnings.append("real_cluster is blocked and will not fall back to simulation or V4 smoke")
-    estimate = {**RESOURCE_POLICY, "estimated_processes": spec.topology.nodes, "estimated_ports": spec.topology.nodes, "estimate_only": True}
+    estimate = {**RESOURCE_POLICY, "max_tx_count": tx_count_limit, "estimated_processes": spec.topology.nodes, "estimated_ports": spec.topology.nodes, "estimate_only": True}
     return V5CompatibilityResult(valid=not blockers, blockers=blockers, warnings=warnings, resolved_plugins=list(by_category.values()), resource_estimate=estimate)
 
 

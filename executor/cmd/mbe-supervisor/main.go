@@ -849,6 +849,10 @@ func stringSlice(value any) []string {
 }
 
 func hasPendingInfrastructureWork(status map[string]any) bool {
+	// MBE_PORYGON_DRAIN_GATE_V1: do not quiesce while paper-required Porygon rounds remain.
+	if boolValue(status["porygon_pending_protocol_work"]) {
+		return true
+	}
 	for _, key := range []string{"pending_commit_count", "pending_future_block_count", "pending_cross_shard_count", "pending_state_delta_count", "pending_state_delta_key_count", "ready_state_delta_count", "pending_state_fetch_count", "pending_state_version_subscription_count", "pending_version_admission_watch_count"} {
 		if number(status[key]) != 0 {
 			return true

@@ -138,6 +138,24 @@ def compute_business_state_evidence_v17(run_dir: Path | str, method_id: str, met
             "truth_boundary": "legacy_evidence_not_reinterpreted_as_cross_semantic_truth",
         }
 
+    # MBE_OPTME_V17_HOME_PROOF_V1: PBFT ordering domain != persistent Home partition.
+    # The mapping comes solely from the verified compiled node inventory.
+    optme_home = None
+    if _is_optme(method_id) and semantic == "stateless_global_home":
+        # Already Home-labeled v17 fixtures retain the original v17 path.
+        # Only optme-global legacy labels need disambiguation via compiled plan.
+        reported_domains = {str((d if isinstance(d, dict) else {}).get("shard_id") or "").strip()
+                            for d in (_read_json(p) for p in paths)}
+        if "optme-global" in reported_domains:
+            from backend.app.services.optme_home_v1 import verified_home_map
+            try:
+                optme_home = verified_home_map(root, paths)
+            except (ValueError, OSError, TypeError) as exc:
+                return {"status":"home_partition_provenance_invalid",
+                        "semantic_class":semantic, "replica_consistent":False,
+                        "global_logical_business_projection_status":"unavailable",
+                        "provenance_error":str(exc), "source_files":[]}
+
     by_shard: dict[str, list[tuple[set[tuple[str, str]], set[tuple[str, str]]]]] = {}
     malformed: list[str] = []
     files: list[str] = []
@@ -148,6 +166,13 @@ def compute_business_state_evidence_v17(run_dir: Path | str, method_id: str, met
         shard = str(data.get("shard_id") or "").strip()
         if not shard:
             malformed.append(str(p.relative_to(root)).replace("\\", "/")); continue
+        if optme_home is not None:
+            # Legacy v17 files label consensus shard as optme-global.
+            # Old evidence is preserved; only the verifier uses Home ID.
+            physical_home = optme_home[p.parent.name]
+            if shard not in ("optme-global", physical_home):
+                malformed.append(str(p.relative_to(root)).replace("\\", "/")); continue
+            shard = physical_home
         partition_pairs: set[tuple[str, str]] = set()
         logical_pairs: set[tuple[str, str]] = set()
         ok = True
@@ -209,6 +234,7 @@ def compute_business_state_evidence_v17(run_dir: Path | str, method_id: str, met
         "shard_count": len(agreed_partition),
         "source_files": sorted(files),
         "truth_boundary": "partition_aware_storage_plus_stateless_global_projection_v17",
+        "home_grouping_provenance": "compiled_run_plan.execution_shard_id" if optme_home is not None else "original_v17_shard_id",
     }
 
 

@@ -688,6 +688,21 @@ def run(
     # protocol/system keys when investigating a mismatch.
     summary["global_business_state_digest"] = _global_business_state_digest(summary)
     summary.update(_metatrack_control_plane_evidence(run_dir, summary))
+    # MBE_MT_ONLINE_FIX_V1: surface online effectiveness in the durable child
+    # summary as well as the cold archive. This is post-run read-only evidence.
+    online_evidence_path = run_dir / "client" / "metatrack_online_summary.json"
+    if online_evidence_path.is_file():
+        try:
+            online_data = json.loads(online_evidence_path.read_text(encoding="utf-8"))
+            if online_data.get("schema_version") == "mbe_metatrack_online_feedback_v2":
+                keys = ("route_batches", "online_observed_batches", "feedback_fallback_batches", "online_decision_transactions", "feedback_fallback_transactions", "online_changed_placement_transactions")
+                valid_counts = all(type(online_data.get(k)) is int and online_data[k] >= 0 for k in keys)
+                if valid_counts:
+                    summary["metatrack_online_effectiveness"] = {k: online_data[k] for k in keys}
+                    summary["metatrack_online_effectiveness"]["feedback_source"] = online_data.get("feedback_source", "")
+        except (OSError, ValueError, TypeError):
+            pass
+
     timeout_extrapolation = analyze_run_timeout_extrapolation(run_dir)
     if timeout_extrapolation:
         summary["timeout_extrapolation"] = timeout_extrapolation

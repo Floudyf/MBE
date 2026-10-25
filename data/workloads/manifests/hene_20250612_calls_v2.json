@@ -35,7 +35,8 @@
   ],
   "default_skew_axis": "sender_nonce",
   "supported_variants": [
-    "original_window"
+    "original_window",
+    "historical_window"
   ],
   "variant_definitions": [
     {
@@ -43,6 +44,13 @@
       "display_name": "真实交易顺序校验前缀",
       "kind": "original",
       "selection_mode": "validated_prefix",
+      "parameters": []
+    },
+    {
+      "variant_mode": "historical_window",
+      "display_name": "有真实前置历史的连续评测窗口（所有方法使用同一窗口）",
+      "kind": "original",
+      "selection_mode": "contiguous_window",
       "parameters": []
     }
   ],
@@ -55,7 +63,9 @@
     "不同方法使用相同预执行静态模型；实验解释限于该模型。",
     "两个日期单独注册；每个采样数选各日期最早的连续N笔交易。",
     "V2 中的 contract/selector 分组仅是原始调用证据；原 V4 scheduling/access_list 与状态键完全保留。",
-    "没有经历史部署 ABI 及执行轨迹证明的函数名，不生成新的资产写入键。"
+    "没有经历史部署 ABI 及执行轨迹证明的函数名，不生成新的资产写入键。",
+    "TxAllo 严格禁止使用原 validated_prefix 零起点训练自身；选择 historical_window 时必须对所有对照方法统一使用该窗口。",
+    "historical_window 是 MBE 的真实历史连续窗口对照，原完整前缀实验保持不变。"
   ],
   "usage_note": "MBE semantic projected replay, not native smart contract reexecution or observed complete storage read/write.",
   "semantic_parent_dataset_id": "henesys_20250612_v4",

@@ -397,7 +397,7 @@ func (r *NodeRuntime) porygonBatchExchange(ctx context.Context, local PorygonESC
 	}
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
-	recovery := time.NewTicker(50 * time.Millisecond)
+	recovery := time.NewTicker(250 * time.Millisecond)
 	defer recovery.Stop()
 	for {
 		state := r.porygonBatchState()
@@ -431,11 +431,21 @@ func (r *NodeRuntime) porygonBatchExchange(ctx context.Context, local PorygonESC
 			return PorygonESCBatchCertificate{}, ctx.Err()
 		case <-ticker.C:
 		case <-recovery.C:
+			// MBE_PORYGON_CERT_PEER_RECOVERY_V1: a lagging validator can
+			// recover an authenticated certificate from any validator replica.
+			// The sender still validates the certificate; the receiver also
+			// checks all ESC signatures and thresholds before proceeding.
 			if !r.isCurrentLeader() {
-				leader := r.leaderID(r.node.ShardID)
-				req := map[string]any{"block_hash": local.BlockHash, "height": local.Height}
-				env, _ := p2p.NewEnvelope(porygonESCBatchCertificateRequestMessage, r.node.NodeID, leader, r.node.ShardID, local.Height, r.currentPBFTView(), local.Height, req)
-				_ = r.sendToNode(ctx, leader, env)
+				for _, peer := range r.node.Validators {
+					if peer == "" || peer == r.node.NodeID {
+						continue
+					}
+					req := map[string]any{"block_hash": local.BlockHash, "height": local.Height}
+					env, err := p2p.NewEnvelope(porygonESCBatchCertificateRequestMessage, r.node.NodeID, peer, r.node.ShardID, local.Height, r.currentPBFTView(), local.Height, req)
+					if err == nil {
+						_ = r.sendToNode(ctx, peer, env)
+					}
+				}
 			}
 		}
 	}
@@ -485,9 +495,20 @@ func (r *NodeRuntime) handlePorygonESCBatchCertificate(msg p2p.MessageEnvelope) 
 	state.certs[cert.BlockHash] = cert
 	return nil
 }
+
+// MBE_PORYGON_CERT_PEER_RECOVERY_V1: exact certified shard list for read-only retransmission.
+func porygonBatchCertificateShards(cert PorygonESCBatchCertificate) []string {
+	shards := make([]string, 0, len(cert.Entries))
+	for _, entry := range cert.Entries {
+		shards = append(shards, entry.ExecutionShardID)
+	}
+	return shards
+}
+
 func (r *NodeRuntime) handlePorygonESCBatchCertificateRequest(ctx context.Context, msg p2p.MessageEnvelope) error {
-	if !r.isCurrentLeader() {
-		return nil
+	// MBE_PORYGON_CERT_PEER_RECOVERY_V1: any validator may resend a cached, verified certificate.
+	if !containsString(r.node.Validators, msg.FromNode) {
+		return fmt.Errorf("Porygon batch certificate recovery requester is not a validator")
 	}
 	type requestBody struct {
 		BlockHash string `json:"block_hash"`
@@ -501,8 +522,11 @@ func (r *NodeRuntime) handlePorygonESCBatchCertificateRequest(ctx context.Contex
 	state.mu.Lock()
 	cert, ok := state.certs[req.BlockHash]
 	state.mu.Unlock()
-	if !ok {
+	if !ok || cert.Height != req.Height {
 		return nil
+	}
+	if err := r.validatePorygonBatchCertificate(cert, porygonBatchCertificateShards(cert)); err != nil {
+		return err
 	}
 	return r.sendPorygonBatchCertificate(ctx, msg.FromNode, cert)
 }

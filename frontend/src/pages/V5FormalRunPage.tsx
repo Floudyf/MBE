@@ -27,7 +27,7 @@ import {
   type V5WorkloadSourceSpec,
 } from "../api";
 import WorkloadPreviewPanel from "../components/v5/WorkloadPreviewPanel";
-import WorkloadSourceEditor, { publishedWorkloadDatasets, canonicalFormalDatasetId, type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
+import WorkloadSourceEditor, { publishedWorkloadDatasets, canonicalFormalDatasetId, validDatasetCounts, chooseDatasetCount, type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
 import { backendLabel, blockerLabel, faultModeLabel, statusLabel, suiteLabel } from "../v5Labels";
 import { BATCH_SI_ABLATION_METHOD_IDS, METATRACK_ABLATION_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
 import { V5_BUILTIN_METHODS, V5_DEFAULT_METHOD_IDS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
@@ -39,6 +39,18 @@ const formalRunDraftKey = "mbe.v5FormalRunDraft.v1";
 const groundhogMethodId = "hash_groundhog";
 const alphaValues = [0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4];
 const MAX_FORMAL_CHILD_RUNS = 1024;
+
+// MBE_MT_METHODSEL_V1: the visible/allowed list is the single source of truth
+// for ordinary method suites; hidden registered methods remain available for
+// old RunGroups and dedicated ablation plans, not ordinary comparisons.
+function effectiveRunMethodIdsV1(suite: V5FormalSuite, methodIds: readonly string[]): string[] {
+  const ids = Array.from(new Set(methodIds));
+  if (suite === "ablation_experiment") return ids;
+  return ids.filter((id) => {
+    const definition = methodDefinition(id);
+    return Boolean(definition && (suite === "main_experiment" ? definition.mainVisible : definition.comparisonVisible));
+  });
+}
 
 type Topology = { nodes: number; shards: number; validators_per_shard: number };
 type TopologyPoint = Topology & { worker_count?: number };
@@ -176,7 +188,7 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
     const metaTrackDraft = methods.some((item) => item === "metatrack_latest" || item === "metatrack_sh_noco" || item.startsWith("metatrack_ab_"));
     const migratedMethods = suite === "ablation_experiment" && metaTrackDraft ? [...METATRACK_ABLATION_METHOD_IDS] : methods;
     // MBE_METATRACK_DIAG_V28_UI_MIGRATION
-    const migratedDiagnosticMethods = Array.from(new Set(migratedMethods.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item).map((item) => ["metatrack_diag_ready8", "metatrack_diag_dual1", "metatrack_diag_fifo1", "metatrack_sh_hash", "metatrack_sh_coacc"].includes(item) ? "metatrack_latest" : item)));
+    const migratedDiagnosticMethods = Array.from(new Set(migratedMethods.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item).map((item) => ["metatrack_diag_dual1", "metatrack_diag_fifo1", "metatrack_sh_hash", "metatrack_sh_coacc"].includes(item) ? "metatrack_latest" : item)));
     const topologyRaw = isRecord(parsed.topology) ? parsed.topology : {};
     const blockRaw = isRecord(parsed.blockProduction) ? parsed.blockProduction : {};
     const workloadRaw = isRecord(parsed.workload) ? parsed.workload : {};
@@ -188,7 +200,9 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
     return {
       schema_version: "mbe_v5_formal_run_draft_v1",
       saved_at: typeof parsed.saved_at === "string" ? parsed.saved_at : "",
-      selectedMethods: migratedDiagnosticMethods.length ? migratedDiagnosticMethods : [...V5_DEFAULT_METHOD_IDS],
+      selectedMethods: effectiveRunMethodIdsV1(suite, migratedDiagnosticMethods).length
+        ? effectiveRunMethodIdsV1(suite, migratedDiagnosticMethods)
+        : effectiveRunMethodIdsV1(suite, V5_DEFAULT_METHOD_IDS),
       selectedSuite: suite,
       workerCount: positiveInteger(parsed.workerCount, 4, 8),
       topology: {
@@ -274,8 +288,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   }, [catalog]);
   const effectiveSelectedMethodIds = selectedSuite === "ablation_experiment" && selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))
     ? [...METATRACK_ABLATION_METHOD_IDS]
-    : selectedMethods;
-  const diagnosticMigratedSelectedMethodIds = Array.from(new Set(effectiveSelectedMethodIds.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item).map((item) => ["metatrack_diag_ready8", "metatrack_diag_dual1", "metatrack_diag_fifo1", "metatrack_sh_hash", "metatrack_sh_coacc"].includes(item) ? "metatrack_latest" : item)));
+    : effectiveRunMethodIdsV1(selectedSuite, selectedMethods);
+  const diagnosticMigratedSelectedMethodIds = Array.from(new Set(effectiveSelectedMethodIds.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item).map((item) => ["metatrack_diag_dual1", "metatrack_diag_fifo1", "metatrack_sh_hash", "metatrack_sh_coacc"].includes(item) ? "metatrack_latest" : item)));
   const selectedRaw = methods.filter((method) => diagnosticMigratedSelectedMethodIds.includes(method.method_id));
   const selected = selectedRaw;
   const groundhogSelected = diagnosticMigratedSelectedMethodIds.includes(groundhogMethodId);
@@ -285,7 +299,15 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   const resources = estimateFormalResources(selectedSuite, selected.length, seeds.length, repeats, topology, workload.txCount, workloadPoints, topologyPoints, faultPoints);
   const estimatedPrimaryBlockCount = Math.max(1, Math.ceil(workload.txCount / Math.max(1, blockProduction.block_size)));
   const currentSource = currentWorkloadSource();
-  const configurationBlocker = formError({
+  // MT_COUNT_UI_V1: reject out-of-range restored drafts and workload sweep points before preview/launch.
+  const datasetForBounds = datasets.find((d) => d.dataset_id === workload.datasetId);
+  const datasetCounts = validDatasetCounts(datasetForBounds);
+  const scopeBlocker = workload.mode !== "synthetic" && datasetForBounds && (
+    (workload.useFullDataset && datasetForBounds.allow_full_dataset === false) ||
+    (!workload.useFullDataset && !datasetCounts.includes(workload.txCount)) ||
+    (selectedSuite === "workload_sensitivity" && workloadPoints.some((p) => !datasetCounts.includes(p.tx_count)))
+  ) ? `交易规模不在该数据集允许范围内（总计 ${datasetForBounds.row_count.toLocaleString("en-US")} 笔）；请重新选择有效规模。` : null;
+  const configurationBlocker = scopeBlocker ?? formError({
     catalogReady,
     selected,
     selectedSuite,
@@ -334,16 +356,26 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         if (current.mode === "synthetic") return current;
         const visible = publishedWorkloadDatasets(datasetResponse, current.mode).filter((item) => item.selectable);
         const mappedId = canonicalFormalDatasetId(current.datasetId); // MBE_FW_PICKERFIX_V1_PAGE
-        if (mappedId === current.datasetId && visible.some((item) => item.dataset_id === mappedId)) return current;
+        if (mappedId === current.datasetId && visible.some((item) => item.dataset_id === mappedId)) {
+          const active = visible.find((item) => item.dataset_id === mappedId)!;
+          const repairedCount = chooseDatasetCount(active, current.txCount);
+          const repairedFull = current.useFullDataset && active.allow_full_dataset !== false;
+          if (repairedCount === current.txCount && repairedFull === current.useFullDataset) return current;
+          return { ...current, useFullDataset: repairedFull, txCount: repairedFull ? active.row_count : repairedCount };
+        }
         const next = visible.find((item) => item.dataset_id === mappedId) ?? visible[0];
         if (!next) return current;
         const desired = current.mode === "dataset_original" ? "original" : "derived";
-        const definition = (next.variant_definitions ?? []).find((item) => (item.kind ?? "original") === desired);
+        // MBE_HENE_PAGE_DEFAULT_V1: new/migrated Henesys original selections use real prehistory by default.
+        const hene = new Set(["hene_20250612_calls_v2","hene_20250824_calls_v2","henesys_20250612_v4","henesys_20250824_v4"]);
+        const definition = (current.mode === "dataset_original" && hene.has(next.dataset_id)
+          ? (next.variant_definitions ?? []).find((item) => item.variant_mode === "historical_window") : undefined)
+          ?? (next.variant_definitions ?? []).find((item) => (item.kind ?? "original") === desired);
         if (!definition) return current;
         const parameters = Object.fromEntries((definition.parameters ?? []).flatMap((field) => field.default === undefined || field.default === null ? [] : [[field.name, field.default]]));
         return { ...current, datasetId: next.dataset_id, variantMode: definition.variant_mode,
           variantParameters: parameters, useFullDataset: false,
-          txCount: next.supported_tx_counts?.includes(current.txCount) ? current.txCount : (next.supported_tx_counts?.find((n) => n >= 1000) ?? current.txCount) };
+          txCount: chooseDatasetCount(next, current.txCount) };
       });
       const categories = new Set(pluginResponse.map((item) => item.category));
       setCatalogError(pluginResponse.length > 0 && defaultV5PluginSelections(pluginResponse).length === categories.size ? "" : "真实集群插件目录不完整。");
@@ -353,7 +385,9 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       if (preferredMethodResolved && available.includes(preferredMethodResolved)) { setSelectedMethods([preferredMethodResolved]); preferredConsumed.current = true; onPreferredMethodConsumed?.(); }
       else {
         setSelectedMethods((current) => {
-          const filtered = Array.from(new Set(current.map((methodId) => ["metatrack_sh_hash", "metatrack_sh_coacc"].includes(methodId) ? "metatrack_latest" : methodId))).filter((methodId) => available.includes(methodId));
+          const filtered = effectiveRunMethodIdsV1(selectedSuite,
+            Array.from(new Set(current.map((methodId) => ["metatrack_sh_hash", "metatrack_sh_coacc"].includes(methodId) ? "metatrack_latest" : methodId))))
+            .filter((methodId) => available.includes(methodId));
           return filtered.length ? filtered : V5_DEFAULT_METHOD_IDS.filter((methodId) => available.includes(methodId));
         });
         if (preferredMethodId && !preferredConsumed.current) { preferredConsumed.current = true; onPreferredMethodUnavailable?.(preferredMethodId); }
@@ -475,7 +509,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         return next.includes(fullMethodId) ? next : [fullMethodId, ...next];
       });
     } else {
-      setSelectedMethods((current) => toggle(methodId, current));
+      setSelectedMethods((current) => toggle(methodId, effectiveRunMethodIdsV1(selectedSuite, current)));
     }
     invalidateAll();
   }
@@ -490,6 +524,10 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     }
     const dataset = datasets.find((item) => item.dataset_id === workload.datasetId);
     if (!dataset?.selectable) return null;
+    if (!Number.isSafeInteger(dataset.row_count) || dataset.row_count <= 0) return null;
+    if (workload.useFullDataset) {
+      if (dataset.allow_full_dataset === false) return null;
+    } else if (!validDatasetCounts(dataset).includes(workload.txCount)) return null;
     const definitions = dataset.variant_definitions ?? [];
     const expectedKind = workload.mode === "dataset_derived" ? "derived" : "original";
     const definition = definitions.find((item) => item.variant_mode === workload.variantMode) ?? definitions.find((item) => (item.kind ?? "original") === expectedKind);
@@ -671,6 +709,13 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
 
   async function startGroup() {
     if (!previewRequest || !previewRunnable || workloadPreviewDirty) { setError("配置已变化，请重新预览。"); return; }
+    // MBE_MT_METHODSEL_V1: never launch a frozen preview with extra/hidden methods.
+    const planIds = previewRequest.plan.methods.map((method) => method.method_id);
+    const currentIds = selected.map((method) => method.method_id);
+    if (planIds.length !== currentIds.length || planIds.some((id, index) => id !== currentIds[index])) {
+      setError("方法选择与矩阵预览不一致，请重新预览；已阻止隐藏方法被执行。");
+      return;
+    }
     setBusy(true);
     try {
       const group = await createV5FormalRunGroup(previewRequest);
@@ -781,7 +826,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     <article className="final-card wide">
       <div className="section-heading"><div><h3>② 选择实验对象</h3><p className="muted">{FORMAL_SUITE_DEFINITIONS.find((item) => item.id === selectedSuite)?.description}</p></div></div>
       {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_latest"]))}>MetaTrack 对照组</button>{/* MBE_METATRACK_UI_RETIRE_V1: obsolete four-routing preset removed; Full and official ablation suites unaffected. */}</div>}
-      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 原四项正式消融 + 去精确版本感知分片。</small></button></div>}
+      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 三项主要机制对照（状态供应暂为局部 exact/预取对照）。</small></button></div>}
       <div className="formal-method-groups">
         {(["stateful", "batch_si", "stateless", "metatrack"] as const).map((family) => {
           const definitions = FORMAL_METHOD_DEFINITIONS.filter((definition) => definition.family === family && (selectedSuite === "ablation_experiment" ? definition.ablationTarget === (selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack" : "batch_si") : selectedSuite === "main_experiment" ? definition.mainVisible : definition.comparisonVisible));
@@ -790,7 +835,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
           return <section key={family} className="method-family"><h4>{familyTitle}</h4><div className="selectable-card-grid">{definitions.map((definition) => {
             const method = methods.find((item) => item.method_id === definition.methodId);
             if (!method) return null;
-            const checked = selectedMethods.includes(method.method_id);
+            const checked = selected.some((item) => item.method_id === method.method_id);
             const forced = selectedSuite === "ablation_experiment" && definition.isFullVariant;
             return <button type="button" key={method.method_id} data-testid={`v5-run-method-${method.method_id}`} aria-pressed={checked} className={`method-choice-card ${checked ? "selected" : ""}`} onClick={() => toggleMethodSelection(method.method_id)} disabled={forced}>
               <input className="compatibility-checkbox" type="checkbox" aria-label={`${definition.title} ${method.method_id}`} checked={checked} disabled={forced} onClick={(event) => event.stopPropagation()} onChange={() => toggleMethodSelection(method.method_id)} />
@@ -800,7 +845,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         })}
       </div>
       {!selected.length && <p className="file-error">尚未选择执行方法。</p>}
-      {selectedSuite === "ablation_experiment" && <p className="notice">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "完整 MetaTrack 始终作为主方法；四项正式消融分别为去依赖感知增量分流（固定哈希替代）、去双轨、去共识聚合、去状态预取；除对应机制外，精确版本正确性和 PBFT 均保持不变。" : "完整 Batch-SI 始终作为主方法；消融变体只复用 Batch-SI 自己的实现，不调用其他方案算法代码。"}</p>}
+      {selectedSuite === "ablation_experiment" && <p className="notice">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "完整 MetaTrack 始终作为主方法；三项主对照为去依赖感知增量执行分片、去本地 exact 状态供应与预取、去临界宽度共识窗口。当前状态对照仍保留版本生存期和可靠写回机制，不代表完整移除状态供应；双轨仍作为 Full 内部优化，历史双轨方法可用于单独诊断。" : "完整 Batch-SI 始终作为主方法；消融变体只复用 Batch-SI 自己的实现，不调用其他方案算法代码。"}</p>}
       {groundhogSelected && <p className="notice" data-testid="v5-groundhog-topology-notice">Groundhog 使用当前选择的节点数、分片数和每片验证节点数。核心复现要求跨片交易比例为 0；多分片时，各分片独立运行 Groundhog。</p>}
     </article>
 
@@ -885,6 +930,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         <PreflightItem ok={Boolean(preview && previewRequest && previewRunnable)} text={preview && previewRequest ? `正式矩阵：${preview.rows.length} 行${previewRunnable ? "，全部可运行" : "，存在阻断"}` : "正式矩阵尚未生成"} />
       </div>
       {busy && previewStatus && <p role="status" aria-live="polite" data-testid="v5-large-dataset-preview-status">{previewStatus}</p>}
+      <p className="muted" data-testid="v5-selected-method-count">本次实际选中 {selected.length} 个方法：{selected.map((method) => method.display_name).join("、") || "无"}</p>
       <div className="button-row"><button type="button" data-testid="v5-formal-preview-button" onClick={() => void previewMatrix()} disabled={busy || !catalogReady || !selected.length}>预览正式实验矩阵</button><button type="button" data-testid="v5-start-run-group-button" className="v3-secondary-button" onClick={() => void startGroup()} disabled={busy || Boolean(startBlocker)}>启动真实集群实验组</button></div>
       {startBlocker && <p className="file-error" data-testid="v5-start-blocker">无法启动：{startBlocker}</p>}
       {preview && !previewRunnable && <p className="file-error" data-testid="v5-formal-preview-blockers">启动被预览阻断：{previewBlockers.join("；") || "存在不可运行的矩阵行。"}</p>}
@@ -1228,7 +1274,7 @@ function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; s
   if (!globalThis.Number.isInteger(input.repeats) || input.repeats < 1 || input.repeats > 20) return "重复次数必须是 1 到 20 的整数。";
   if (!globalThis.Number.isInteger(input.blockProduction.block_size) || input.blockProduction.block_size < 10 || input.blockProduction.block_size > 5000) return "block_size 必须是 10 到 5000 的整数。";
   if (!globalThis.Number.isInteger(input.blockProduction.block_interval_ms) || input.blockProduction.block_interval_ms < 25 || input.blockProduction.block_interval_ms > 5000) return "block_interval_ms 必须是 25 到 5000 的整数。";
-  if (input.selectedSuite === "comparison_experiment" && input.selected.length < 2) return "方法对比实验至少需要两个方法。";
+  // MBE_MT_ONE_METHOD_V1: comparison allows one or more methods; zero remains rejected above.
   if (input.selectedSuite === "ablation_experiment") {
     const mains = input.selected.filter((method) => method.role === "main");
     const variants = input.selected.filter((method) => method.role === "ablation" || method.role === "baseline");

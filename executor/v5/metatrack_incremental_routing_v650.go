@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"metaverse-chainlab/executor/realism/tx"
 )
@@ -380,15 +381,15 @@ func metaTrackIncrementalRankCandidatesV651(candidates []metaTrackIncrementalCan
 // remote accesses, coaccess and load participate in the ablation selector.
 // ReadyRank/ExactCross remain measured and signed dependencies remain enforced.
 func metaTrackRankWithoutExactV1(candidates []metaTrackIncrementalCandidateV650) []metaTrackIncrementalCandidateV650 {
-    ranked := append([]metaTrackIncrementalCandidateV650(nil), candidates...)
-    for i := range ranked {
-        remote := metaTrackIncrementalCriterionRankV651(ranked, i, func(a,b metaTrackIncrementalCandidateV650) bool { return a.RemoteCost < b.RemoteCost })
-        coaccess := metaTrackIncrementalCriterionRankV651(ranked, i, func(a,b metaTrackIncrementalCandidateV650) bool { return a.CoaccessLocality > b.CoaccessLocality })
-        load := metaTrackIncrementalCriterionRankV651(ranked, i, func(a,b metaTrackIncrementalCandidateV650) bool { return a.Load < b.Load })
-        ranked[i].WorstRank = maxInt(remote,maxInt(coaccess,load))
-        ranked[i].RankSum = remote + coaccess + load
-    }
-    return ranked
+	ranked := append([]metaTrackIncrementalCandidateV650(nil), candidates...)
+	for i := range ranked {
+		remote := metaTrackIncrementalCriterionRankV651(ranked, i, func(a, b metaTrackIncrementalCandidateV650) bool { return a.RemoteCost < b.RemoteCost })
+		coaccess := metaTrackIncrementalCriterionRankV651(ranked, i, func(a, b metaTrackIncrementalCandidateV650) bool { return a.CoaccessLocality > b.CoaccessLocality })
+		load := metaTrackIncrementalCriterionRankV651(ranked, i, func(a, b metaTrackIncrementalCandidateV650) bool { return a.Load < b.Load })
+		ranked[i].WorstRank = maxInt(remote, maxInt(coaccess, load))
+		ranked[i].RankSum = remote + coaccess + load
+	}
+	return ranked
 }
 
 func metaTrackIncrementalCandidateLessV650(left, right metaTrackIncrementalCandidateV650) bool {
@@ -437,7 +438,24 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 	ignoreCoaccessV661 := boolFromAny(p.config[metaTrackAblationIgnoreCoaccessRoutingV661])
 	noExactV1 := boolFromAny(p.config["ablation_no_exact_version_routing_v1"]) // MBE_MT_NOEXACT_ABL_V1
 	selector := metaTrackIncrementalRankCandidatesV651
-	if noExactV1 { selector = metaTrackRankWithoutExactV1 }
+	if noExactV1 {
+		selector = metaTrackRankWithoutExactV1
+	}
+	// MBE_MT_ONLINE_V1: only candidate ordering changes. No new signed
+	// state readiness token and no modification to exact dependency metadata.
+	onlineConfiguredV1 := boolFromAny(p.config["online_state_ready_routing_v1"])
+	onlineUsedV1 := false // MBE_MT_ONLINE_FIX_V1 reset per candidate selection
+	if onlineConfiguredV1 {
+		observed := input.OnlineFeedback
+		nowMS := time.Now().UnixMilli()
+		selector = func(candidates []metaTrackIncrementalCandidateV650) []metaTrackIncrementalCandidateV650 {
+			if ranked, valid := mtOnlineRankCandidatesV1(candidates, observed, nowMS); valid {
+				onlineUsedV1 = true
+				return ranked
+			}
+			return metaTrackIncrementalRankCandidatesV651(candidates)
+		}
+	}
 	plan := BatchRoutingPlan{
 		BatchIndex:                               input.BatchIndex,
 		ShardingPluginID:                         shardingPluginID(input.Sharding),
@@ -454,7 +472,13 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		IncrementalHistoryDigestBefore:           state.HistoryDigest,
 		IncrementalBatchPartitionInvariant:       true,
 	}
-	if noExactV1 { plan.TransactionPolicy = "remote_coaccess_load_minimax_noexact_v1" }
+	if noExactV1 {
+		plan.TransactionPolicy = "remote_coaccess_load_minimax_noexact_v1"
+	}
+	if onlineConfiguredV1 {
+		plan.IncrementalRoutingPolicy = mtOnlinePolicyV1
+		plan.TransactionPolicy = "online_joint_ready_with_explicit_legacy_fallback_v1"
+	}
 	for _, shard := range input.ShardIDs {
 		plan.ShardLoadBefore[shard] = state.ShardLoad[shard]
 		plan.ShardLoadAfter[shard] = state.ShardLoad[shard]
@@ -526,9 +550,22 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		} else {
 			filtered = append(filtered, candidates...)
 		}
+		// Capture the original five-criterion decision before the online
+		// selector mutates ranking fields, for true same-input counterfactual.
+		legacyShardV1 := ""
+		if onlineConfiguredV1 {
+			legacy := metaTrackIncrementalRankCandidatesV651(filtered)
+			sort.Slice(legacy, func(i, j int) bool { return metaTrackIncrementalCandidateLessV650(legacy[i], legacy[j]) })
+			legacyShardV1 = legacy[0].Shard
+		}
+		onlineUsedV1 = false
 		filtered = selector(filtered)
+		// The unconstrained diagnostic calls selector again below; preserve
+		// the decision made with the actual capacity filter.
+		selectedOnlineV1 := onlineUsedV1
 		sort.Slice(filtered, func(i, j int) bool { return metaTrackIncrementalCandidateLessV650(filtered[i], filtered[j]) })
 		selected := filtered[0]
+		selectedChangedV1 := selectedOnlineV1 && selected.Shard != legacyShardV1
 
 		// Capacity remains the only hard constraint. To observe when it changes
 		// the rank-balanced answer, compute the same ordinal selector without the
@@ -558,6 +595,9 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 			plan.IncrementalLoadTiebreakCount++
 		}
 
+		if onlineConfiguredV1 && selectedOnlineV1 {
+			plan.TransactionPolicy = "online_joint_readiness_observed_v1"
+		}
 		remoteReads, remoteWrites := selected.RemoteReads, selected.RemoteWrites
 		plan.RemoteAccessEstimate += remoteReads + remoteWrites
 		homeShard := firstNonEmpty(record.SourceShard, shardFor(input.Sharding, record.StateKeys, input.ShardIDs))
@@ -574,7 +614,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 			ExecutionShard:        selected.Shard,
 			TargetShard:           targetShard,
 			CoaccessGroup:         strings.Join(keys, "+"),
-			Reason:                fmt.Sprintf("incremental_exact_ready_balanced:ready_rank=%d:exact_cross=%d:coaccess=%d:remote=%d:load=%d:worst_rank=%d:rank_sum=%d", selected.ReadyRank, selected.ExactCross, selected.CoaccessLocality, selected.RemoteCost, selected.Load, selected.WorstRank, selected.RankSum),
+			Reason:                mtOnlinePlacementReasonFixedV1(onlineConfiguredV1, selectedOnlineV1, selectedChangedV1, selected),
 			PredictedRemoteReads:  remoteReads,
 			PredictedRemoteWrites: remoteWrites,
 			RemoteAccessCount:     remoteReads + remoteWrites,
@@ -688,3 +728,15 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 // Compile-time use of tx documents that v6.5.1 operates on the same signed
 // StateVersionDependency contract as existing MetaTrack routing.
 var _ = tx.StateVersionDependency{}
+
+// MBE_MT_ONLINE_FIX_V1: evidence is scoped to each actually selected tx.
+func mtOnlinePlacementReasonFixedV1(enabled, used, changed bool, c metaTrackIncrementalCandidateV650) string {
+	reason := mtOnlinePlacementReasonV1(enabled, used, c)
+	if enabled && used {
+		if changed {
+			return reason + ":legacy_switch=1"
+		}
+		return reason + ":legacy_switch=0"
+	}
+	return reason
+}

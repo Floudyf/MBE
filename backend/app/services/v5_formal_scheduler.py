@@ -1991,6 +1991,14 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
         if item.category == "block_executor" and item.category not in overrides and method.get("method_id") != "v5_catalog_default":
             config["migrated_default"] = True
         config |= dict(config_overrides.get(item.category, {}))
+        # MBE_MT_100K_INGRESS_V1: real-dataset runs must not overrun an unacknowledged 10K FIFO pool.
+        # Same admission capacity for every formal method (Full and ablations).
+        # Larger runs require a real node-acceptance ACK and bounded backpressure protocol.
+        if (item.category == "txpool" and plugin_id == "fifo_per_node_mempool"
+                and source_type == "dataset" and spec.execution_backend == "real_cluster"):
+            if spec.tx_count > 100_000:
+                raise ValueError("dataset replay above 100000 tx requires admission ACK/backpressure; safe 100K bound")
+            config["capacity"] = max(int(config.get("capacity") or 0), spec.tx_count)
         if item.category == "block_executor" and worker_count_override is not None:
             # worker_count is the MBE execution-resource dimension. Nezha CG's
             # planner remains fixed at one planning worker, while its MBE

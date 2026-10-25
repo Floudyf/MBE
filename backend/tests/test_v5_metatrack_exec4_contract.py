@@ -57,8 +57,12 @@ def test_legacy_scheduler_diagnostics_hidden_and_old_routing_preset_removed():
         assert method_id in catalog and method_id in profile
     for method_id in IDS[1:]:
         row = next(row for row in catalog.splitlines() if f'methodId: "{method_id}"' in row)
-        assert 'comparisonVisible: false' in row
-        assert 'mainVisible: false' in row
+        if method_id == 'metatrack_diag_ready8':
+            assert 'comparisonVisible: true' in row
+            assert 'mainVisible: true' in row
+        else:
+            assert 'comparisonVisible: false' in row
+            assert 'mainVisible: false' in row
         assert 'ablationTarget' not in row
         assert method_id not in ablations
     for retired_id in ('metatrack_diag_parallel','metatrack_diag_serial'):

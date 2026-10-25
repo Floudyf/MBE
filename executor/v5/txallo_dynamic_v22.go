@@ -191,6 +191,14 @@ func txalloLoadDynamicBlockIndexV222(dataDir string, plan WorkloadPlan) (*txallo
 	if !ok {
 		return nil, fmt.Errorf("TxAllo dynamic block sidecar metadata invalid")
 	}
+	// MBE_TXALLO_SINGLETON_V2: missing observed receiver is permitted ONLY for reviewed sidecar provenance.
+	allowSenderOnly, _ := meta["allow_sender_only_account_records"].(bool)
+	if allowSenderOnly {
+		semantics, _ := meta["accounts_semantics"].(string)
+		if semantics != "observed_sender_optional_observed_receiver_v2" {
+			return nil, fmt.Errorf("TxAllo singleton sidecar provenance invalid")
+		}
+	}
 	rel := strings.TrimSpace(fmt.Sprint(meta["relative_path"]))
 	expectedSHA := strings.ToLower(strings.TrimSpace(fmt.Sprint(meta["sha256"])))
 	expectedCount := intValue(meta["selected_count"])
@@ -264,7 +272,7 @@ func txalloLoadDynamicBlockIndexV222(dataDir string, plan WorkloadPlan) (*txallo
 		if row.GlobalSequence <= lastSeq {
 			return nil, fmt.Errorf("TxAllo dynamic block sidecar global sequence invalid")
 		}
-		if strings.TrimSpace(row.TransactionID) == "" || strings.TrimSpace(row.SenderID) == "" || strings.TrimSpace(row.ReceiverID) == "" {
+		if strings.TrimSpace(row.TransactionID) == "" || strings.TrimSpace(row.SenderID) == "" || (strings.TrimSpace(row.ReceiverID) == "" && !allowSenderOnly) {
 			return nil, fmt.Errorf("TxAllo dynamic block sidecar identity incomplete")
 		}
 		lastBlock = coordinate
@@ -291,7 +299,7 @@ func (index *txalloDynamicBlockIndexV222) BlockForRecord(record WorkloadRecord) 
 	}
 	sender := strings.ToLower(strings.TrimSpace(record.SenderID))
 	receiver := strings.ToLower(strings.TrimSpace(record.ReceiverID))
-	if sender == "" || receiver == "" || sender != index.Senders[record.Index] || receiver != index.Receivers[record.Index] {
+	if sender == "" || sender != index.Senders[record.Index] || receiver != index.Receivers[record.Index] {
 		return 0, fmt.Errorf("TxAllo dynamic block sidecar account alignment mismatch at materialized index %d", record.Index)
 	}
 	return index.Blocks[record.Index], nil

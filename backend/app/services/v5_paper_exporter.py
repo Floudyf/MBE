@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.app.services.v5_statistics_service import summarize
 from backend.app.services.v5_timeout_extrapolation import write_timeout_tps_exports
+from backend.app.services.v5_paper_views_v1 import export_views as export_method_views_v1
 
 
 GROUP_FIELDS = [
@@ -26,6 +27,13 @@ PAPER_ANALYSIS_FIELDS = [
     "observed_sample_count", "valid_sample_count", "excluded_sample_count", "sample_status_counts",
     "mean", "median", "std", "cv", "cv_percent", "min", "max", "ci95_low", "ci95_high", "statistical_note", "source_child_ids",
 ]
+
+# MBE_MT3_FORMAL_V1: main three-mechanism matrix uses supply-combination P1.
+# Not a proof of strict global serializability or fault recovery.
+# Do not merge historical ab_state and new ab_supply samples into one series.
+METATRACK_THREE_CORE_PRIMARY_IDS = frozenset({
+    "metatrack_latest", "metatrack_ab_flow", "metatrack_ab_supply", "metatrack_ab_cons",
+})
 
 _RAW_IDENTITY_FIELDS = [
     "child_run_id", "suite_type", "method_config_id", "method_name", "method_role", "seed", "repeat_index",
@@ -56,6 +64,11 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     _write(group_dir / "confidence_interval.csv", grouped, GROUP_FIELDS)
     _write(group_dir / "comparison_summary.csv", _suite(grouped, "comparison_experiment"), GROUP_FIELDS)
     _write(group_dir / "ablation_summary.csv", _suite(grouped, "ablation_experiment"), GROUP_FIELDS)
+    # Additive three-core view: historical ablations remain in the original CSV.
+    # GROUPED/OBSERVED results are not a claim of paper eligibility.
+    primary_observed = [row for row in _suite(grouped, "ablation_experiment")
+                        if row.get("method_config_id") in METATRACK_THREE_CORE_PRIMARY_IDS]
+    _write(group_dir / "metatrack_three_core_observed_summary.csv", primary_observed, GROUP_FIELDS)
     _write(group_dir / "sensitivity_summary.csv", _suite(grouped, "workload_sensitivity"), GROUP_FIELDS)
     _write(group_dir / "scaling_summary.csv", _suite(grouped, "topology_scaling"), GROUP_FIELDS)
     _write(group_dir / "fault_recovery_summary.csv", _suite(grouped, "fault_recovery_experiment"), GROUP_FIELDS)
@@ -76,6 +89,20 @@ def export(group_dir: Path, group: dict, children: list[dict]) -> dict:
     _write(group_dir / "observed_results.csv", raw_rows, raw_fields)
     valid_rows = [_raw_row(item) for item in paper_valid]
     _write(group_dir / "paper_valid_results.csv", valid_rows, raw_fields)
+    primary_paper_rows = [row for item, row in zip(paper_valid, valid_rows)
+                          if item.get("suite_type") == "ablation_experiment"
+                          and item.get("method_config_id") in METATRACK_THREE_CORE_PRIMARY_IDS]
+    _write(group_dir / "metatrack_three_core_paper_valid_raw.csv", primary_paper_rows, raw_fields)
+    # MBE_PAPER_METHOD_VIEWS_V1: additive views; original strict paper table/figure gates unchanged.
+    try:
+        export_method_views_v1(group_dir, group, children)
+    except Exception as view_error:
+        # Supplemental export must not falsify or abort an already completed real run.
+        (group_dir / "paper_method_views_v1.error.json").write_text(
+            json.dumps({"schema_version": "mbe_paper_method_view_error_v1",
+                        "error_type": type(view_error).__name__, "error": str(view_error)[:1024],
+                        "original_export_eligibility_affected": False},
+                       sort_keys=True, indent=2) + "\n", encoding="utf-8")
     write_timeout_tps_exports(group_dir, group, children)
     effective = [(item, _effective_metrics(item)) for item in children]
     (group_dir / "missing_metrics.csv").write_text(

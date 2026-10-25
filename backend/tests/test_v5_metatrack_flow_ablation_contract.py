@@ -1,4 +1,4 @@
-"""Official four-mechanism MetaTrack routing-only ablation contract."""
+"""Three-core MetaTrack routing-only ablation contract."""
 from pathlib import Path
 import re
 
@@ -30,19 +30,19 @@ def test_official_flow_hash_replaces_only_full_routing_choice():
     assert full.plugin_overrides['state_access'] == 'metatrack_local_exact_access'
 
 
-def test_official_five_members_and_history_preserved():
+def test_official_three_core_members_and_history_preserved():
     catalog = read('frontend/src/v5FormalExperimentCatalog.ts')
     start = catalog.index('export const METATRACK_ABLATION_METHOD_IDS = [')
     ids = catalog[start:].split('] as const;',1)[0]
     assert re.findall(r'"metatrack_[^"]+"', ids) == [
-        '"metatrack_latest"', '"metatrack_ab_flow"', '"metatrack_ab_exact"', '"metatrack_ab_track"',
-        '"metatrack_ab_state"', '"metatrack_ab_cons"'
+        '"metatrack_latest"', '"metatrack_ab_flow"',
+        '"metatrack_ab_supply"', '"metatrack_ab_cons"'
     ]
     assert '"metatrack_ab_route"' not in ids
     assert '"metatrack_ab_handoff"' not in ids
     formal = read('backend/app/services/v5_formal_plan_validator.py')
     allowed = formal.split('official_metatrack_ids = {',1)[1].split('}',1)[0]
-    for name in ('metatrack_latest','metatrack_ab_flow','metatrack_ab_exact','metatrack_ab_track','metatrack_ab_cons','metatrack_ab_state'):
+    for name in ('metatrack_latest','metatrack_ab_flow','metatrack_ab_supply','metatrack_ab_cons'):
         assert f'"{name}"' in allowed
     assert '"metatrack_ab_route"' not in allowed
     assert 'metatrack_ab_route' in BUILTIN_METHODS

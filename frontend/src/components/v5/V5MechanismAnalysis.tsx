@@ -75,7 +75,7 @@ const METATRACK_INCREMENTAL_ROUTING_V650: MetricDef[] = [
 ];
 
 const METATRACK_NATURAL_WINDOW_V657: MetricDef[] = [
-  { key: "metatrack_natural_window_fixed_micro_batch_enabled", label: "固定100笔路由批次", help: "正式 Full 与四个正式消融统一保持 micro_batch_size=100；这是前序规模敏感性实验确定并固定的实验工作点，不作为算法阈值参与 N/L 判定。" },
+  { key: "metatrack_natural_window_fixed_micro_batch_enabled", label: "固定100笔路由批次", help: "正式 Full 与三个主机制消融统一保持 micro_batch_size=100；这是前序规模敏感性实验确定并固定的实验工作点，不作为算法阈值参与 N/L 判定。" },
   { key: "metatrack_natural_window_block_size", label: "复用块容量", help: "直接复用本次实验已有 block_size，不引入新的 MetaTrack 容量阈值。" },
   { key: "metatrack_natural_window_block_interval_ms", label: "复用出块间隔", unit: "ms", help: "直接复用本次实验已有 block_interval_ms；固定速率回放按确定性的逻辑释放时间形成自然时间边界。" },
   { key: "metatrack_natural_window_window_count", label: "自然路由窗口数", help: "本次实验最终形成的自然 RouteBatch/封签窗口数量。" },
@@ -392,7 +392,7 @@ export default function V5MechanismAnalysis({ children }: { children: V5FormalCh
   const projectionFrontierDefinitions = metrics.metatrack_projection_frontier_policy ? METATRACK_PROJECTION_FRONTIER_V612 : [];
   const consensusWindowDefinitions = metrics.metatrack_consensus_window_observability_available ? METATRACK_CONSENSUS_WINDOW_V656813 : [];
   // MBE_MT_NOEXACT_ABL_V1: treat NoExact as the same MetaTrack observability family.
-  const currentMetaTrack = ["metatrack_latest", "metatrack_unified", "metatrack_ab_exact", "metatrack_ab_route", "metatrack_ab_track", "metatrack_ab_cons", "metatrack_ab_state"].includes(active);
+  const currentMetaTrack = ["metatrack_latest", "metatrack_ab_flow", "metatrack_ab_supply", "metatrack_ab_state", "metatrack_ab_cons", "metatrack_sh_noco", "metatrack_unified", "metatrack_ab_exact", "metatrack_ab_route", "metatrack_ab_track"].includes(active);
   const boundaryBatchDefinitions = currentMetaTrack && metrics.metatrack_closure_boundary_batch_policy ? METATRACK_BOUNDARY_BATCH_V621 : [];
   const asyncWritebackDefinitions = currentMetaTrack && metrics.metatrack_async_version_writeback_policy ? METATRACK_ASYNC_WRITEBACK_V640 : [];
   const incrementalRoutingDefinitions = currentMetaTrack && metrics.metatrack_incremental_routing_policy ? METATRACK_INCREMENTAL_ROUTING_V650 : [];
@@ -492,11 +492,12 @@ function formatMetric(value: number, unit?: string): string { if (unit === "B") 
 function shortMethodName(methodId: string, value: string): string {
   const id = methodId.toLowerCase();
   if (id === "metatrack_latest") return "Metatrack";
+  if (id === "metatrack_ab_flow") return "去依赖感知增量分流";
   if (id === "metatrack_ab_exact") return "去精确版本感知分片";
   if (id === "metatrack_ab_route") return "历史子消融-无局部性放置";
-  if (id === "metatrack_ab_track") return "去掉双轨";
+  if (id === "metatrack_ab_track") return "历史诊断：去双轨（串行）";
   if (id === "metatrack_ab_cons") return "去掉共识聚合";
-  if (id === "metatrack_ab_state") return "去掉状态局部化";
+  if (id === "metatrack_ab_state") return "去本地 exact 状态供应与预取";
   if (id === "metatrack_ab_handoff") return "历史子消融-无本地版本交接";
   if (id === "metatrack_exp") return "实验版（旧）";
   if (id === "metatrack_full_locality") return "MetaTrack（当前版）";

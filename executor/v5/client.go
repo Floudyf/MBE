@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv" // MBE_MT_ONLINE_FIX_V1 read per-tx evidence counts
 	"strings"
 	"time"
 
@@ -130,6 +131,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	// MBE_METATRACK_VARIANCE_DIAG_V30_CLIENT
 	// Observation only: one compact row per completed client RouteBatch.
 	metatrackRouteBatchTimelineRowsV30 := [][]string{}
+	// MBE_MT_ONLINE_V1: non-blocking, real node-process feedback sidecar.
+	onlineFeedbackRowsV1 := [][]string{}
+	var onlineSamplerV1 *mtOnlineSamplerV1
 	txalloPlacementRows := [][]string{}
 	var txalloBootstrapEvidence map[string]any
 	var txalloBootstrapMapping map[string]string
@@ -219,6 +223,10 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	if batchSize < 1 {
 		batchSize = 1
+	}
+	if cfg := metaTrackRoutingConfig(plugins.Routing); cfg != nil && boolFromAny(cfg["online_state_ready_routing_v1"]) {
+		onlineSamplerV1 = newMTOnlineSamplerV1(plan.NodeConfigs)
+		defer onlineSamplerV1.close()
 	}
 	batchIndex := 0
 	batch := []WorkloadRecord{}
@@ -433,9 +441,43 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				}
 			}
 			deferFinalSeal := bindExecutionRouting && versionLivenessEnabled && singleFinalSeal && isMetaTrackRoutingPlugin(plugins.Routing)
+			var observedV1 *mtOnlineFeedbackV1
+			if onlineSamplerV1 != nil {
+				observedV1 = onlineSamplerV1.snapshot()
+			}
 			routePlanStarted := time.Now()
-			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding, DeferFinalSeal: deferFinalSeal, ExpectedTransactionCount: plan.WorkloadPlan.TxCount})
+			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding, DeferFinalSeal: deferFinalSeal, ExpectedTransactionCount: plan.WorkloadPlan.TxCount, OnlineFeedback: observedV1})
+			if onlineSamplerV1 != nil {
+				fresh := 0
+				if observedV1 != nil {
+					for _, sh := range shardIDs {
+						if _, ok := observedV1.valid(sh, time.Now().UnixMilli()); ok {
+							fresh++
+						}
+					}
+				}
+				// MBE_MT_ONLINE_FIX_V1: derive counts from each finalized
+				// decision, never a sticky batch-level bool.
+				onlineTxV1, changedTxV1, fallbackTxV1 := 0, 0, 0
+				for _, placement := range routePlan.TransactionPlacements {
+					if strings.HasPrefix(placement.Reason, "online_joint_ready:") {
+						onlineTxV1++
+						if strings.Contains(placement.Reason, ":legacy_switch=1") {
+							changedTxV1++
+						}
+					} else if strings.HasPrefix(placement.Reason, "online_feedback_fallback:") {
+						fallbackTxV1++
+					}
+				}
+				if onlineTxV1+fallbackTxV1 != len(records) {
+					return fmt.Errorf("online route decision accounting mismatch: online=%d fallback=%d records=%d", onlineTxV1, fallbackTxV1, len(records))
+				}
+				onlineFeedbackRowsV1 = append(onlineFeedbackRowsV1, []string{fmt.Sprint(batchIndex), fmt.Sprint(len(records)), fmt.Sprint(fresh), fmt.Sprint(len(shardIDs)), routePlan.TransactionPolicy, fmt.Sprint(routePlanUS), fmt.Sprint(onlineTxV1), fmt.Sprint(fallbackTxV1), fmt.Sprint(changedTxV1)})
+			}
 			routePlanUS = time.Since(routePlanStarted).Microseconds()
+			if onlineSamplerV1 != nil && len(onlineFeedbackRowsV1) > 0 {
+				onlineFeedbackRowsV1[len(onlineFeedbackRowsV1)-1][5] = fmt.Sprint(routePlanUS)
+			}
 			if bindExecutionRouting && versionLivenessEnabled && isMetaTrackRoutingPlugin(plugins.Routing) {
 				var finalized BatchRoutingPlan
 				var ok bool
@@ -631,9 +673,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 		txalloObsStartV1 := time.Now()
 		txalloObsTraceV1 := txalloEpochTimingV1{
-			SchemaVersion: txalloEpochTimingSchemaV1,
-			SourceEpoch: epoch,
-			TransactionCount: len(records),
+			SchemaVersion:      txalloEpochTimingSchemaV1,
+			SourceEpoch:        epoch,
+			TransactionCount:   len(records),
 			RoutingEpochBefore: txalloDynamic.TxAlloMappingEpoch(),
 		}
 		defer func() {
@@ -825,6 +867,42 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	if len(txalloPlacementRows) > 0 {
 		if err := metrics.WriteCSV(filepath.Join(outDir, "txallo_transaction_placement.csv"), []string{"batch_index", "logical_id", "tx_index", "sender_account", "receiver_account", "sender_mapping_source", "receiver_mapping_source", "sender_shard", "receiver_shard", "involved_shards", "home_shard", "execution_shard", "target_shard", "txallo_cross_shard", "cross_shard_edge_count", "routing_epoch", "mapping_digest", "mapping_state_digest", "reason", "plan_digest"}, txalloPlacementRows); err != nil {
+			return err
+		}
+	}
+	if onlineSamplerV1 != nil {
+		if err := metrics.WriteCSV(filepath.Join(outDir, "metatrack_online_feedback.csv"),
+			[]string{"batch_index", "tx_count", "fresh_shards", "total_shards", "selection_policy", "route_plan_us", "online_tx_count", "fallback_tx_count", "changed_tx_count"}, onlineFeedbackRowsV1); err != nil {
+			return err
+		}
+		onlineApplied, onlineTxCount, fallbackTxCount, changedTxCount := 0, 0, 0, 0
+		for _, row := range onlineFeedbackRowsV1 {
+			if len(row) != 9 {
+				return fmt.Errorf("malformed online row")
+			}
+			onlineN, _ := strconv.Atoi(row[6])
+			fallbackN, _ := strconv.Atoi(row[7])
+			changedN, _ := strconv.Atoi(row[8])
+			if onlineN > 0 {
+				onlineApplied++
+			}
+			onlineTxCount += onlineN
+			fallbackTxCount += fallbackN
+			changedTxCount += changedN
+		}
+		if err := SaveJSON(filepath.Join(outDir, "metatrack_online_summary.json"), map[string]any{
+			"schema_version":                        "mbe_metatrack_online_feedback_v2",
+			"route_batches":                         len(onlineFeedbackRowsV1),
+			"online_observed_batches":               onlineApplied,
+			"online_decision_transactions":          onlineTxCount,
+			"feedback_fallback_transactions":        fallbackTxCount,
+			"online_changed_placement_transactions": changedTxCount,
+			"online_changed_placement_rate":         float64(changedTxCount) / float64(maxInt(1, onlineTxCount)),
+			"feedback_source":                       "metatrack_online_runtime.json",
+			"feedback_fallback_batches":             len(onlineFeedbackRowsV1) - onlineApplied,
+			"feedback_is_runtime_hint_only":         true,
+			"per_exact_version_ready_observed":      false,
+		}); err != nil {
 			return err
 		}
 	}

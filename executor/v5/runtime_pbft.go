@@ -1149,7 +1149,11 @@ func (r *NodeRuntime) handleCertifiedCatchupBlock(ctx context.Context, fromNode 
 		return nil
 	}
 	r.mu.Unlock()
-	if err := r.validateConsensusBlockBody(item.Block); err != nil {
+	// MBE_MT_CATCHFIX_V1: a certified range may arrive while earlier heights
+	// are still in the commit mailbox. Inspect signed immutable block structure
+	// at ingress; complete signed-frontier validation happens inside commitOnce
+	// for this catch-up block after all preceding heights are durable.
+	if err := r.validateConsensusBlockStructuralV1(item.Block); err != nil {
 		r.mu.Lock()
 		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
 		r.incrementRuntimeMetricLocked("pbft_catchup_block_body_failure_count")

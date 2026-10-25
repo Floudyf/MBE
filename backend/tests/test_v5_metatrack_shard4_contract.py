@@ -61,7 +61,11 @@ def test_retired_routing_comparison_cards_hidden_and_preset_removed():
     for mid in LEGACY:
         matches=[row for row in catalog.splitlines() if f'methodId: "{mid}"' in row]
         assert len(matches)==1
-        assert 'comparisonVisible: false' in matches[0]
+        if mid == 'metatrack_diag_ready8':
+            assert 'comparisonVisible: true' in matches[0]
+            assert 'mainVisible: true' in matches[0]
+        else:
+            assert 'comparisonVisible: false' in matches[0]
         assert mid in BUILTIN_METHODS  # old artifact compatibility
     assert 'export const METATRACK_SHARD4_METHOD_IDS' not in catalog
     assert 'MetaTrack 四组执行分片' not in page

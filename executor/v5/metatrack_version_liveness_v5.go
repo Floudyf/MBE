@@ -16,6 +16,22 @@ import (
 
 const metaTrackVersionLivenessPolicyV5 = "dependency_graph_version_liveness_v5"
 
+// MBE_MT3_P1_V1: experimental Home-publication control. Keep signed
+// Version Liveness metadata, dependency-closed consensus and reliable ACKs.
+// The flag is NEVER set on Full or on existing historical ablations.
+const metaTrackAblationConservativeHomeV1 = "ablation_conservative_home_publish_v1"
+
+// metaTrackConservativeHomeClassV1 changes physical Home publication only.
+// Signed liveness classes and exact-version predecessor metadata are untouched.
+// All non-final versions are transported individually; final versions use the
+// same reliable single Home ACK path instead of final/batch buffering.
+func metaTrackConservativeHomeClassV1(enabled bool, effectiveClass string) string {
+	if !enabled || effectiveClass == metaTrackVersionClassFinalPersistent {
+		return effectiveClass
+	}
+	return metaTrackVersionClassRemoteLive
+}
+
 const (
 	metaTrackVersionClassLocalTransient   = "local_transient"
 	metaTrackVersionClassRemoteLive       = "remote_live"
@@ -553,6 +569,19 @@ func (r *NodeRuntime) deleteMetaTrackTransientVersion(key string, version uint64
 func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) StateVersionPublishFunc {
 	buffer := r.newMetaTrackVersionPublishBuffer(block)
 	forceHomeExactV660 := metaTrackForceHomeExactAccess(r.plugins.StateAccess) || r.metaTrackBlockExecutorFlag(metaTrackAblationForceHomeExactV660) // legacy flag fallback only
+	conservativeHomeV1 := r.metaTrackBlockExecutorFlag(metaTrackAblationConservativeHomeV1)
+	// Fail closed on incompatible profiles instead of silently changing
+	// Home transport or PBFT semantics. Full never enters this branch.
+	if conservativeHomeV1 && (!forceHomeExactV660 ||
+		!r.metaTrackBlockExecutorFlag("version_liveness") ||
+		!r.metaTrackBlockExecutorFlag("dependency_closed_consensus") ||
+		r.metaTrackBlockExecutorFlag("batch_entry_state_prefetch") ||
+		r.metaTrackBlockExecutorFlag("batch_remote_writeback") ||
+		r.metaTrackBlockExecutorFlag("final_version_batch_writeback")) {
+		return func(context.Context, tx.SignedTransaction, execution.TxDelta, map[string]string) error {
+			return fmt.Errorf("metatrack experimental conservative Home profile violates reliable single-ACK/no-prefetch constraints")
+		}
+	}
 	return func(ctx context.Context, item tx.SignedTransaction, delta execution.TxDelta, exactSnapshot map[string]string) error {
 		if item.ExecutionRouting == nil || len(item.ExecutionRouting.StateVersions) == 0 {
 			return nil
@@ -662,6 +691,14 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 				r.incrementFullLocalityMetric("metatrack_ablation_force_home_exact_publish_count_v660", 1)
 				effectiveClass = ablationClass
 			}
+			// P1 pilot: override only the physical Home-side retention rule.
+			// No signed dependencies, placement, Ready, StateReady or PBFT logic
+			// is changed; no version is eligible for Home-elision in this mode.
+			conservativeClass := metaTrackConservativeHomeClassV1(conservativeHomeV1, effectiveClass)
+			if conservativeClass != effectiveClass {
+				r.incrementFullLocalityMetric("metatrack_ab_supply_forced_home_publish_count", 1)
+				effectiveClass = conservativeClass
+			}
 			switch effectiveClass {
 			case metaTrackVersionClassLocalTransient, metaTrackVersionClassDeadIntermediate:
 				if effectiveClass == metaTrackVersionClassDeadIntermediate {
@@ -714,6 +751,12 @@ func (r *NodeRuntime) metaTrackVersionLivenessPublisher(block realblock.Block) S
 			}
 			for _, ack := range acks {
 				r.recordRemoteStateApply(block, versionItem, dependency.Key, ack, latency)
+			}
+			// An elided dead intermediate had no downstream user. After its
+			// conservative Home ACK, reclaim the execution-shard copy as Full
+			// would, avoiding a pilot-only memory leak.
+			if conservativeHomeV1 && dependency.LivenessClass == metaTrackVersionClassDeadIntermediate {
+				r.deleteMetaTrackTransientVersion(dependency.Key, dependency.ProducedVersion)
 			}
 			if effectiveClass == metaTrackVersionClassRemoteLive {
 				r.incrementFullLocalityMetric("metatrack_version_remote_live_immediate_publish_count", 1)

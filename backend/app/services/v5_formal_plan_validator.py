@@ -222,6 +222,26 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         },
     ),
     # MBE_MT_DUAL_READY_V1: independent candidate; not an official ablation
+    # MBE_MT_ONLINE_V1: same Full mechanisms; only online router flag differs.
+    "metatrack_online": V5FormalMethod(
+        method_id="metatrack_online",
+        display_name="MetaTrack（在线协同分片）",
+        role="main",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "online_state_ready_routing_v1": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
     "metatrack_dyntrack": V5FormalMethod(
         method_id="metatrack_dyntrack",
         display_name="动态阻塞隔离双轨（候选）",
@@ -479,7 +499,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     # MBE_MT_TAPOS_V1: prefetch-only ablation with Full Home writeback and version durability.
     "metatrack_ab_state": V5FormalMethod(
         method_id="metatrack_ab_state",
-        display_name="去掉状态局部化",
+        display_name="去本地 exact 状态供应与预取",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -494,6 +514,26 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
         plugin_config_overrides={
             "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": False, "ablation_on_demand_state_fetch_v661": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
+    # MBE_MT3_FORMAL_V1: formal no-fault ablation; runtime P1 flags remain byte-for-byte unchanged.
+    "metatrack_ab_supply": V5FormalMethod(
+        method_id="metatrack_ab_supply",
+        display_name="去状态供应组合优化",
+        role="ablation",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_home_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": False, "ablation_on_demand_state_fetch_v661": True, "batch_remote_writeback": False, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": False, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True, "ablation_conservative_home_publish_v1": True},
         },
     ),
     "metatrack_ab_handoff": V5FormalMethod(
@@ -945,28 +985,27 @@ def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:
     if len(set(method_ids)) != len(method_ids):
         raise FormalPlanValidationError("formal methods must be unique")
     for suite in plan.suites:
-        if suite == "comparison_experiment" and len(plan.methods) < 2:
-            raise FormalPlanValidationError("comparison_experiment requires at least two methods")
+        # MBE_MT_ONE_METHOD_V1: comparison_experiment accepts one or more methods.
+        # Keep the nonempty, uniqueness, and ablation suite guards intact.
         if suite == "ablation_experiment":
             # MBE_METATRACK_MECHPACK_V24_FORMAL_MATRIX
-            # The public MetaTrack paper matrix has exactly four primary
-            # mechanism ablations. Historical placement/handoff sub-ablations
-            # remain registered for diagnostics but are forbidden in a formal
-            # MetaTrack ablation suite even if a stale frontend sends them.
+            # MBE_MT3_P0_V1: Full + 3 primary treatments. Legacy exact, dual-track,
+            # placement and handoff IDs remain registered for historical parsing
+            # and independent diagnostic runs, but not new formal paper suites.
+            # The formal state treatment is the conservative Home-supply P1 combination.
+            # Old ab_state stays registered for historical comparison/sub-ablation.
             if "metatrack_latest" in method_ids:
                 official_metatrack_ids = {
                     "metatrack_latest",
                     "metatrack_ab_flow",
-                    "metatrack_ab_exact",
-                    "metatrack_ab_track",
+                    "metatrack_ab_supply",
                     "metatrack_ab_cons",
-                    "metatrack_ab_state",
                 }
                 unexpected_metatrack_methods = sorted(set(method_ids) - official_metatrack_ids)
                 if unexpected_metatrack_methods:
                     raise FormalPlanValidationError(
                         "formal MetaTrack ablation_experiment accepts only Full + "
-                        "w/o Incremental Flow + w/o Exact-Version-Aware Placement + w/o Dual Track + w/o Consensus Aggregation + w/o State Locality; "
+                        "w/o Incremental Sharding + w/o State Supply Combination + w/o Consensus Window; "
                         f"unexpected methods: {unexpected_metatrack_methods}"
                     )
             mains = [method for method in plan.methods if method.role == "main"]

@@ -221,6 +221,15 @@ def compile_v4_txallo_inputs(*, run_dir: Path, manifest: dict[str, Any],
 _axie_observed_source_block_compile = compile_v4_txallo_inputs
 
 def compile_v4_txallo_inputs(*, run_dir, manifest, workload_plan, profile, cache_root, project_root):
+    # MBE_NEW_TXALLO_DATA_V1: exact-preceding history from a verified canonical window.
+    if str(workload_plan.get('dataset_id') or '') in {
+        'farmersworld_20260908_v4','fw_20260908_roles_v2',
+        'henesys_20250612_v4','henesys_20250824_v4',
+        'hene_20250612_calls_v2','hene_20250824_calls_v2',
+    } and (profile.get('sharding') or {}).get('plugin_id') == 'txallo_account_sharding':
+        from backend.app.services.mv_txallo_new_v1 import compile_new_txallo_inputs
+        return compile_new_txallo_inputs(run_dir=run_dir,manifest=manifest,workload_plan=workload_plan,
+            profile=profile,cache_root=cache_root,project_root=project_root)
     if (str(workload_plan.get('dataset_id') or '') in {'dcl_sales_layered_v4', 'tapos_layered_v4'}
             and (profile.get('sharding') or {}).get('plugin_id') == 'txallo_account_sharding'):
         from backend.app.services.mv_txallo_event_v1 import compile_event_inputs

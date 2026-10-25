@@ -416,7 +416,11 @@ def dataset_summary(manifest: dict[str, Any]) -> DatasetSummaryDTO:
     available, status, blockers, _ = dataset_status(manifest)
     operations = dict(manifest.get("operation_counts") or manifest.get("category_counts") or {})
     definitions = _variant_definitions(manifest)
-    counts = sorted({int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()})
+    # MT_COUNT_UI_V1: never advertise a count beyond the manifest's declared total.
+    total_rows = int(manifest.get("row_count") or 0)
+    counts = sorted({int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()
+                     if int(item) > 0 and int(item) <= total_rows
+                     and (manifest.get("allow_full_dataset", True) or int(item) < total_rows)})
     warnings = list(manifest.get("warnings") or [])
     if status == "present_unvalidated":
         warnings.append("catalog checks file presence/size; full hash and schema validation runs before materialization")
@@ -497,9 +501,12 @@ def preview_workload(request: WorkloadPreviewRequest, *, shards: int = 4) -> Wor
             if not manifest.get("allow_full_dataset", True):
                 raise WorkloadDataError("full dataset mode is not supported")
             tx_count = int(manifest.get("row_count") or 0)
-        supported_counts = {int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()}
+        total_rows = int(manifest.get("row_count") or 0)
+        supported_counts = {int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()
+                            if 0 < int(item) <= total_rows
+                            and (manifest.get("allow_full_dataset", True) or int(item) < total_rows)}
         if not request.use_full_dataset and tx_count not in supported_counts:
-            raise WorkloadDataError("requested tx count is not supported by this dataset")
+            raise WorkloadDataError(f"requested tx count {tx_count} is not supported; dataset total is {total_rows}")
         path, selected_manifest, definition, resolved = resolve_dataset_source(manifest, request.model_copy(update={"requested_tx_count": tx_count}))
         parameters = dict(resolved.get("variant_parameters") or {})
         selected_window_preview = _selection_preview_from_source(
@@ -1385,8 +1392,10 @@ def _fw_verified_preview_cache(
     }
     if (str(manifest.get("dataset_id")) not in allowed or
             requested_tx_count > 100_000 or
-            variant_mode != "original_window" or selection_mode != "contiguous_window" or
-            shards != 4 or target_alpha is not None or skew_axis is not None or
+            not (variant_mode == "original_window" or (variant_mode == "historical_window" and
+                 str(manifest.get("dataset_id") or "") in {'hene_20250612_calls_v2', 'hene_20250824_calls_v2', 'henesys_20250612_v4', 'henesys_20250824_v4'})) or
+            selection_mode != "contiguous_window" or
+            shards < 1 or target_alpha is not None or skew_axis is not None or
             str(manifest.get("source_layout") or "single_file") != "single_file"):
         return None
     expected_sha = str(manifest.get("source_sha256") or "").lower()
@@ -1432,7 +1441,7 @@ def _fw_verified_preview_cache(
     material_root=WORKLOAD_CACHE_ROOT / "materialized" / mid
     material_meta=material_root / "materialization_summary.json"
     material_file=material_root / "workload.jsonl.gz"
-    if material_meta.is_file() and material_file.is_file():
+    if shards == 4 and material_meta.is_file() and material_file.is_file():
         mm=json.loads(material_meta.read_text(encoding="utf-8"))
         candidate=mm.get("selected_window_preview") or {}
         if (mm.get("materialized_id")==mid and mm.get("canonical_sha256")==canonical_sha and
@@ -1465,7 +1474,7 @@ def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, 
     # the original canonical projection still run before real materialization.
     if str(manifest.get("preview_policy") or "") == "mv_verified_window_index_v1":
         from backend.app.services.mv_window_preview_v1 import fast_preview
-        from backend.app.services.v5_workload_data_plane import WORKLOAD_CACHE_ROOT
+        # MBE_HENE_PREVIEW_SCOPEFIX_V2: use module-level WORKLOAD_CACHE_ROOT; do not shadow it locally
         return fast_preview(csv_path=csv_path, manifest=manifest, cache_root=WORKLOAD_CACHE_ROOT,
                             requested_tx_count=requested_tx_count, seed=seed,
                             variant_mode=variant_mode, target_alpha=target_alpha,
@@ -1479,6 +1488,22 @@ def _selection_preview_from_source(csv_path: Path, manifest: dict[str, Any], *, 
         variant_parameters=variant_parameters)
     if cached is not None:
         return cached
+    # MBE_HENE_HISTORY_PREVIEW_CACHE_V1: materialize the verified full Canonical once on a cold
+    # historical preview, then compute only the selected real window.
+    # Source hashes, canonical hashes and materialized window SHA stay unchanged.
+    if (str(manifest.get("dataset_id") or "") in {'hene_20250612_calls_v2', 'hene_20250824_calls_v2', 'henesys_20250612_v4', 'henesys_20250824_v4'} and
+            variant_mode == "historical_window" and selection_mode == "contiguous_window"):
+        if target_alpha is not None or skew_axis is not None:
+            raise WorkloadDataError("Henesys historical_window cannot use derived Zipf axes")
+        build_canonical(csv_path, WORKLOAD_CACHE_ROOT, manifest)
+        cached = _fw_verified_preview_cache(
+            csv_path, manifest, requested_tx_count=requested_tx_count, seed=seed,
+            variant_mode=variant_mode, target_alpha=target_alpha, skew_axis=skew_axis,
+            shards=shards, selection_mode=selection_mode, supported_counts=supported_counts,
+            variant_parameters=variant_parameters)
+        if cached is None:
+            raise WorkloadDataError("verified Henesys historical Canonical cache unavailable after build")
+        return dict(cached, preview_cache_policy="hene_historical_verified_full_canonical_v1")
     adapter = adapter_for_manifest(manifest)
     if (
         str(manifest.get("preview_policy") or "") == "validated_prefix_streaming_v1"
@@ -1767,7 +1792,12 @@ def materialize_request(request: WorkloadPreviewRequest) -> WorkloadMaterializeD
     target_alpha = float(parameters["target_alpha"]) if "target_alpha" in parameters else request.target_alpha
     skew_axis = str(parameters["skew_axis"]) if "skew_axis" in parameters else request.skew_axis
     selection_mode = str(definition.get("selection_mode") or request.selection_mode)
-    supported_counts = {int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()}
+    total_rows = int(manifest.get("row_count") or 0)
+    supported_counts = {int(item) for item in manifest.get("supported_tx_counts") or supported_workload_counts()
+                        if 0 < int(item) <= total_rows
+                        and (manifest.get("allow_full_dataset", True) or int(item) < total_rows)}
+    if not request.use_full_dataset and requested not in supported_counts:
+        raise WorkloadDataError(f"requested tx count {requested} is not supported; dataset total is {total_rows}")
     if (
         selection_mode == "validated_prefix"
         and str(selected_manifest.get("source_layout") or "single_file") == "single_file"

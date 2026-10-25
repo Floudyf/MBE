@@ -74,7 +74,7 @@ def test_v675_state_access_remains_modular_and_no_coaccess_sharding_is_the_only_
 def test_v663_ui_has_exactly_three_official_ablations():
     catalog=read("frontend/src/v5FormalExperimentCatalog.ts")
     ids=catalog.split("export const METATRACK_ABLATION_METHOD_IDS = [",1)[1].split("] as const;",1)[0]
-    for mid in ["metatrack_latest","metatrack_ab_track","metatrack_ab_state","metatrack_ab_cons"]: assert f'"{mid}"' in ids
+    for mid in ["metatrack_latest","metatrack_ab_flow","metatrack_ab_supply","metatrack_ab_cons"]: assert f'"{mid}"' in ids
     assert '"metatrack_ab_route"' not in ids
     assert '"metatrack_ab_handoff"' not in ids
 

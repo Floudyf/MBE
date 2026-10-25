@@ -9,13 +9,16 @@ const height = 286;
 const chartPadding = { top: 30, right: 24, bottom: 88, left: 58 };
 const methodOrder = [
   "metatrack_latest",
-  "metatrack_sh_noco",
   "metatrack_ab_flow",
-  "metatrack_ab_exact", // MBE_MT_NOEXACT_ABL_V1
+  "metatrack_ab_supply",
+  "metatrack_ab_cons",
+  // Limited/local-only state treatment kept as sub-ablation in existing results.
+  "metatrack_ab_state",
+  // Retain the following historical/sub-ablation series for old artifacts.
+  "metatrack_sh_noco",
+  "metatrack_ab_exact",
   "metatrack_ab_route",
   "metatrack_ab_track",
-  "metatrack_ab_cons",
-  "metatrack_ab_state",
   "metatrack_block_stm",
 ];
 const methodColors: Record<string, string> = {
@@ -55,9 +58,10 @@ const methodLabels: Record<string, string[]> = {
   metatrack_ab_flow: ["去依赖感知增量分流"],
   metatrack_ab_exact: ["去精确版本感知分片"],
   metatrack_ab_route: ["历史子消融", "无局部性放置"],
-  metatrack_ab_track: ["去掉双轨"],
+  metatrack_ab_track: ["历史诊断", "去双轨(串行)"],
   metatrack_ab_cons: ["去掉共识聚合"],
-  metatrack_ab_state: ["去掉状态局部化"],
+  metatrack_ab_supply: ["去状态供应", "组合优化"],
+  metatrack_ab_state: ["子消融：去本地", "exact/预取"],
   metatrack_ab_handoff: ["历史子消融", "无本地版本交接"],
   metatrack_block_stm: ["MetaTrack", "Block-STM（历史）"],
 };

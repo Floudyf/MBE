@@ -219,7 +219,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   {
     // MBE_MT_TAPOS_V1: disable fetch preloading only; preserve Full reliable Home writeback.
     method_id: "metatrack_ab_state",
-    display_name: "去掉状态局部化",
+    display_name: "去本地 exact 状态供应与预取",
     role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -234,6 +234,26 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
     plugin_config_overrides: {
       routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: false, ablation_on_demand_state_fetch_v661: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
+    },
+  },
+  // MBE_MT3_FORMAL_V1: formally selectable normal-execution ablation; Go flags unchanged.
+  {
+    method_id: "metatrack_ab_supply",
+    display_name: "去状态供应组合优化",
+    role: "ablation",
+    plugin_overrides: {
+      transaction_admission: "metatrack_strict_admission_v1",
+      routing: "metatrack_coaccess_routing",
+      block_producer: "metatrack_nl_window_v669",
+      execution: "dual_track_execution",
+      scheduler: "fast_first_scheduler",
+      block_executor: "metatrack_block_executor",
+      state_access: "metatrack_home_exact_access",
+      commit: "commutative_hot_update_aggregation",
+    },
+    plugin_config_overrides: {
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
+      block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: false, ablation_on_demand_state_fetch_v661: true, batch_remote_writeback: false, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: false, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true, ablation_conservative_home_publish_v1: true },
     },
   },
   {
@@ -332,7 +352,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
-  // MBE_MT_NOEXACT_ABL_V1: extra routing-only treatment; original four ablations retained.
+  // MBE_MT3_P0_V1: routing-only exact-version sub-ablation retained for historical/diagnostic runs.
   {
     method_id: "metatrack_ab_exact",
     display_name: "去精确版本感知分片",
@@ -411,6 +431,24 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
     },
   },
 ];
+
+// MBE_MT_ONLINE_V1: method cloned from original; only router policy differs.
+const mtOnlineOriginalV1 = V5_BUILTIN_METHODS.find((m) => m.method_id === "metatrack_latest");
+if (!mtOnlineOriginalV1) throw new Error("MetaTrack original missing for online clone");
+V5_BUILTIN_METHODS.push({
+  ...mtOnlineOriginalV1,
+  method_id: "metatrack_online",
+  display_name: "MetaTrack（在线协同分片）",
+  role: "main",
+  plugin_config_overrides: {
+    ...mtOnlineOriginalV1.plugin_config_overrides,
+    routing: {
+      ...mtOnlineOriginalV1.plugin_config_overrides?.routing,
+      incremental_exact_continuity_routing_v65: true,
+      online_state_ready_routing_v1: true,
+    },
+  },
+});
 
 // MBE_MT_OBS_PARITY_V1: scheduler-only diagnostic methods copied from current Full.
 const mtObsParityFullV1 = V5_BUILTIN_METHODS.find((item) => item.method_id === "metatrack_latest");

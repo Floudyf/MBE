@@ -30,11 +30,12 @@ def test_v2_official_matrix_is_three_mechanisms():
     catalog = read("frontend/src/v5FormalExperimentCatalog.ts")
     ids = catalog.split("export const METATRACK_ABLATION_METHOD_IDS = [", 1)[1].split("] as const;", 1)[0]
     assert '"metatrack_latest"' in ids
-    assert '"metatrack_ab_track"' in ids
-    assert '"metatrack_ab_state"' in ids
+    assert '"metatrack_ab_track"' not in ids
+    assert '"metatrack_ab_flow"' in ids
+    assert '"metatrack_ab_supply"' in ids
     assert '"metatrack_ab_cons"' in ids
     assert '"metatrack_ab_route"' not in ids
-    assert "去掉状态局部化" in catalog
+    assert "去本地 exact 状态供应与预取" in catalog
     assert "历史子消融-无局部性放置" in catalog
 
 
@@ -148,7 +149,7 @@ def test_v24_backend_guards_official_three_mechanism_matrix_from_stale_ui():
     formal = read("backend/app/services/v5_formal_plan_validator.py")
     assert "MBE_METATRACK_MECHPACK_V24_FORMAL_MATRIX" in formal
     guard = formal.split("MBE_METATRACK_MECHPACK_V24_FORMAL_MATRIX", 1)[1].split('mains = [method for method in plan.methods if method.role == "main"]', 1)[0]
-    for mid in ("metatrack_latest", "metatrack_ab_track", "metatrack_ab_cons", "metatrack_ab_state"):
+    for mid in ("metatrack_latest", "metatrack_ab_flow", "metatrack_ab_cons", "metatrack_ab_supply"):
         assert f'"{mid}"' in guard
     assert "unexpected_metatrack_methods" in guard
     assert "formal MetaTrack ablation_experiment accepts only Full" in guard

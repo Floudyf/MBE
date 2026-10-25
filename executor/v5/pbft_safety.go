@@ -386,7 +386,10 @@ func (r *NodeRuntime) verifyPBFTNewViewAuthentication(msg pbft.NewView) error {
 // pass its client Ed25519 signature. Empty-plan unit fixtures retain the legacy
 // unsigned placeholder allowance so old focused state-machine tests do not turn
 // into production authentication bypasses.
-func (r *NodeRuntime) validateConsensusBlockBody(block realblock.Block) error {
+// MBE_MT_CATCHFIX_V1: network ingress verifies immutable block structure and
+// signed transaction bodies. Dependency/committed-frontier checks are
+// performed before ordered durable commit, not on a future-height arrival.
+func (r *NodeRuntime) validateConsensusBlockStructuralV1(block realblock.Block) error {
 	if block.BlockHash == "" {
 		return fmt.Errorf("consensus block has empty block hash")
 	}
@@ -417,6 +420,13 @@ func (r *NodeRuntime) validateConsensusBlockBody(block realblock.Block) error {
 				return fmt.Errorf("consensus block transaction %s failed signature/body verification: %w", item.TxID, err)
 			}
 		}
+	}
+	return nil
+}
+
+func (r *NodeRuntime) validateConsensusBlockBody(block realblock.Block) error {
+	if err := r.validateConsensusBlockStructuralV1(block); err != nil {
+		return err
 	}
 	if r.metaTrackPartitionInvariantConsensusV658Enabled() && len(block.TxList) > 0 {
 		if _, err := r.validateMetaTrackPartitionInvariantFrontierV658(block); err != nil {

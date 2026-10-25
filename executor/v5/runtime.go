@@ -499,6 +499,13 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 	defer ticker.Stop()
 	statusInterval := runtimeStatusWriteInterval(interval)
 	lastStatusWrite := time.Time{}
+	lastOnlineTelemetryV1 := time.Time{} // MBE_MT_ONLINE_FIX_V1 lightweight sidecar
+	onlineTelemetryEnabledV1 := false
+	if r.node.Leader {
+		if cfg := metaTrackRoutingConfig(r.plugins.Routing); cfg != nil {
+			onlineTelemetryEnabledV1 = boolFromAny(cfg["online_state_ready_routing_v1"])
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -533,6 +540,10 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 				// catch-up completion, and the one-shot replay hooks.
 				r.replayDeferredPrePrepare(ctx)
 				r.requestCatchup(ctx)
+			}
+			if onlineTelemetryEnabledV1 && (lastOnlineTelemetryV1.IsZero() || time.Since(lastOnlineTelemetryV1) >= time.Second) {
+				_ = r.mtOnlineWriteTelemetryV1() // errors never block PBFT or transaction work
+				lastOnlineTelemetryV1 = time.Now()
 			}
 			if lastStatusWrite.IsZero() || time.Since(lastStatusWrite) >= statusInterval {
 				_ = r.writeRuntimeStatus()
@@ -3665,6 +3676,7 @@ func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Bloc
 
 func (r *NodeRuntime) drainPendingCommits(ctx context.Context, next realblock.Block, origin CommitOrigin) {
 	for next.BlockHash != "" {
+		committedBlock := next
 		result, err := r.commitOnce(ctx, next, origin)
 		if err != nil {
 			r.mu.Lock()
@@ -3684,6 +3696,9 @@ func (r *NodeRuntime) drainPendingCommits(ctx context.Context, next realblock.Bl
 			r.mu.Unlock()
 			return
 		}
+		// MBE_MT_CATCHFIX_V1: record the just-applied block, not
+		// the next pending block carried in result.Block.
+		r.recordMetaTrackCommittedRoutingOrdinalsV656(committedBlock)
 		if origin == CommitOriginConsensus || origin == CommitOriginCatchUp || origin == CommitOriginRecoveryReplay {
 			r.porygonMarkPBFTDurableWhenSafe(next)
 			r.maybeBroadcastPBFTCheckpoint(ctx, next)
@@ -3746,6 +3761,22 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		r.mu.Unlock()
 		r.setCommitPhase("rejected_parent_hash", block)
 		return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("parent hash mismatch at height %d", block.Height)
+	}
+	if origin == CommitOriginCatchUp {
+		// MBE_MT_CATCHFIX_V1: the full signed-frontier validator consumes
+		// committed ordinal state. Run it at the actual durable height,
+		// before state snapshots, execution, or WAL persistence. commitMu
+		// serializes commitOnce; release mu to avoid validator deadlock.
+		r.mu.Unlock()
+		if err := r.validateConsensusBlockBody(block); err != nil {
+			r.setCommitPhase("catchup_block_body_validation_error", block)
+			return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("certified catch-up ordered block body: %w", err)
+		}
+		r.mu.Lock()
+		if block.Height != r.committedHeight+1 || block.PreviousHash != r.committedHash {
+			r.mu.Unlock()
+			return CommitResult{Disposition: CommitRejected, Block: block}, fmt.Errorf("catch-up committed head changed during body validation at height %d", block.Height)
+		}
 	}
 	r.committing[block.BlockHash] = true
 	defer func() {
@@ -7851,6 +7882,11 @@ func (r *NodeRuntime) writeRuntimeStatus() error {
 	mempoolIDs := r.pool.IDs()
 	sort.Strings(mempoolIDs)
 	status := map[string]any{"node_id": r.node.NodeID, "shard_id": r.node.ShardID, "execution_shard_id": effectiveExecutionShardID(r.node), "consensus_domain_id": effectiveConsensusDomainID(r.node), "role": r.node.Role, "committed_height": committedHeight, "committed_block_hash": committedHash, "mempool_depth": r.pool.Len(), "mempool_logical_tx_ids": mempoolIDs, "reserved_tx_count": r.pool.ReservedCount(), "proposal_in_flight": proposalInFlight, "proposal_in_flight_hash": proposalInFlightHash, "proposal_work_details_available": proposalWorkDetailsAvailable, "proposal_logical_tx_ids": proposalLogicalTxIDs, "proposal_system_state_delta_count": proposalSystemStateDeltaCount, "proposal_validation_work_units": proposalWorkUnits, "proposal_timeout_ms": proposalTimeoutMS, "proposal_planning_in_flight": proposalPlanningInFlight, "proposal_planning_view": proposalPlanningView, "proposal_planning_height": proposalPlanningHeight, "proposal_planning_algorithm_id": proposalPlanningAlgorithmID, "proposal_planning_phase": proposalPlanningPhase, "proposal_planning_started_at_ms": proposalPlanningStartedAtMS, "proposal_planning_progress_at_ms": proposalPlanningProgressAtMS, "proposal_planning_work_units": proposalPlanningWorkUnits, "proposal_planning_detail_count": proposalPlanningDetailCount, "proposal_planning_cancel_reason": proposalPlanningCancelReason, "proposal_vote_count": proposalVoteCount, "proposal_quorum": proposalQuorum, "proposal_quorum_reached": proposalQuorumReached, "proposal_age_ms": proposalAgeMS, "proposal_committing": proposalCommitting, "proposal_finalize_queued": proposalFinalizeQueued, "pbft_quorum_finalize_retry_count": pbftQuorumFinalizeRetryCount, "pbft_view": pbftSnapshot.View, "pbft_current_leader": pbftSnapshot.LeaderID, "pbft_stage": pbftSnapshot.Stage, "pbft_prepare_vote_count": pbftPrepareVoteCount, "pbft_prepare_quorum": pbftSnapshot.PrepareQuorum, "pbft_commit_vote_count": pbftCommitVoteCount, "pbft_commit_quorum": pbftSnapshot.CommitQuorum, "pbft_commit_certificate_count": pbftSnapshot.CommitCertificateCount, "pbft_last_consensus_progress_at_ms": pbftSnapshot.LastProgressAtMS, "pbft_preprepare_retransmit_count": proposalRetransmitCount, "pbft_view_change_target": viewChangeTarget, "pbft_view_change_vote_count": pbftViewChangeVoteCount, "pbft_low_watermark": pbftSnapshot.LowWatermark, "pbft_high_watermark": pbftSnapshot.HighWatermark, "pbft_stable_checkpoint_height": pbftSnapshot.StableCheckpointHeight, "pbft_catchup_target_height": catchupTargetHeight, "pbft_catchup_metrics": pbftCatchupMetrics, "commit_worker_running": commitWorkerRunning, "commit_task_queue_depth": commitTaskQueueDepth, "commit_task_queue_capacity": commitTaskQueueCapacity, "commit_phase": commitPhase, "commit_phase_height": commitPhaseHeight, "commit_phase_hash": commitPhaseHash, "last_proposal_error": lastProposalError, "last_commit_failure": lastCommitFailure, "last_state_fetch": lastStateFetch, "pending_state_fetch_count": len(pendingStateFetches), "pending_state_version_subscription_count": pendingStateVersionSubscriptionCount, "pending_version_admission_watch_count": pendingVersionAdmissionWatchCount, "pending_state_fetches": pendingStateFetches, "state_fetch_failures": stateFetchFailures, "last_state_fetch_service": lastStateFetchService, "state_fetch_service_errors": stateFetchServiceErrors, "fatal_persistence_error": fatalPersistenceError, "fatal_execution_error": fatalExecutionError, "fatal_planning_error": fatalPlanningError, "block_execution_progress": blockExecutionProgress, "block_execution_height": blockExecutionProgress.BlockHeight, "block_execution_progress_at_ms": blockExecutionProgress.LastProgressAtMS, "block_execution_validated_count": blockExecutionProgress.ValidatedCount, "block_execution_task_count": blockExecutionProgress.ExecutionTaskCount, "block_validation_task_count": blockExecutionProgress.ValidationTaskCount, "block_execution_abort_count": blockExecutionProgress.AbortCount, "block_execution_reexecution_count": blockExecutionProgress.ReexecutionCount, "block_execution_scheduler_queue_length": blockExecutionProgress.SchedulerQueueLen, "pending_commit_count": pendingCommitCount, "pending_commit_heights": pendingCommitHeights, "pending_commit_errors": pendingCommitErrors, "pending_future_block_count": pendingFutureBlockCount, "pending_future_block_heights": pendingFutureBlockHeights, "pending_cross_shard_count": pendingCrossShardCount, "pending_cross_shard_ids": pendingCrossShardIDs, "pending_relay_source_count": pendingRelaySourceCount, "pending_relay_source_ids": pendingRelaySourceIDs, "pending_outbound_relay_count": pendingOutboundRelayCount, "pending_outbound_relay_ids": pendingOutboundRelayIDs, "pending_finalize_message_count": pendingFinalizeMessageCount, "pending_finalize_message_ids": pendingFinalizeMessageIDs, "outbound_relay_send_errors": outboundRelaySendErrors, "finalize_send_errors": finalizeSendErrors, "state_fetch_request_queue_depth": stateFetchRequestQueueDepth, "state_fetch_request_queue_capacity": stateFetchMailboxCapacity, "state_fetch_response_queue_depth": stateFetchResponseQueueDepth, "state_fetch_response_queue_capacity": stateFetchResponseMailboxCapacity, "pending_state_delta_count": pendingStateDeltaCount, "pending_state_delta_key_count": pendingStateDeltaKeyCount, "ready_state_delta_count": readyStateDeltaCount, "method_preserving_blocked_home_version_count": blockedMethodVersionCount, "relay_admission_failures": relayAdmissionFailures, "terminal_count": len(lifecycleSets.terminal), "terminal_logical_tx_ids": terminalIDs, "durable_committed_logical_tx_ids": durableIDs, "source_finalized_logical_tx_ids": sourceFinalizedIDs, "refunded_logical_tx_ids": refundedIDs, "failed_logical_tx_ids": failedIDs, "execution_failed_logical_tx_ids": executionFailedIDs, "admission_rejected_logical_tx_ids": admissionRejectedIDs, "last_progress_at": lastProgressAt, "ready": true, "stopping": false}
+	// MBE_PORYGON_DRAIN_GATE_V1: expose the existing, certified maintenance gate; no
+	// change to OC/ESC scheduling, CTx/ITx or Proposal.U is made here.
+	if r.plugins.BlockProducer != nil && r.plugins.BlockProducer.ID() == porygonBlockProducerID {
+		status["porygon_pending_protocol_work"] = r.porygonPaperMaintenanceReady(committedHeight + 1)
+	}
 	return SaveJSON(filepath.Join(r.node.DataDir, "node_runtime_status.json"), status)
 }
 func mapIDs(items map[string]bool) []string {

@@ -634,6 +634,7 @@ type BatchRoutingInput struct {
 	Sharding                 ShardingPlugin
 	DeferFinalSeal           bool
 	ExpectedTransactionCount int
+	OnlineFeedback           *mtOnlineFeedbackV1 // MBE_MT_ONLINE_V1 read-only, unsigned hint
 }
 type BatchRoutingPlan struct {
 	BatchIndex                                 int
@@ -2033,21 +2034,21 @@ var dualTrackSupportedOrdinaryWriteSemantics = map[string]bool{
 // may use deterministic per-account nonce sequencing. Intent-only transfers are
 // deliberately NOT admitted as Safe ordinary writes.
 func heneGuardNonceSemanticV1(item tx.SignedTransaction, key string) bool {
-    const prefix = "henesys_nonce:"
-    if item.SourceKind != "canonical_trace_replay" || len(item.SchedulingAccessList) == 0 ||
-        !strings.HasPrefix(key, prefix) {
-        return false
-    }
-    address := strings.TrimPrefix(key, prefix)
-    if len(address) != 42 || !strings.HasPrefix(address, "0x") {
-        return false
-    }
-    for _, ch := range address[2:] {
-        if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
-            return false
-        }
-    }
-    return true
+	const prefix = "henesys_nonce:"
+	if item.SourceKind != "canonical_trace_replay" || len(item.SchedulingAccessList) == 0 ||
+		!strings.HasPrefix(key, prefix) {
+		return false
+	}
+	address := strings.TrimPrefix(key, prefix)
+	if len(address) != 42 || !strings.HasPrefix(address, "0x") {
+		return false
+	}
+	for _, ch := range address[2:] {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+			return false
+		}
+	}
+	return true
 }
 
 func dualTrackSemanticSafety(item tx.SignedTransaction) (bool, string) {
@@ -2072,13 +2073,13 @@ func dualTrackSemanticSafety(item tx.SignedTransaction) (bool, string) {
 				return false, "unsupported_commutative_semantics:" + key + ":" + semantics
 			}
 		case tx.AccessWrite, tx.AccessReadWrite:
-            // MBE_HENE_GUARD_V1: safe nonce namespace only; token transfer intents stay conservative.
-            if semantics == "henesys_sender_nonce_sequence" {
-                if heneGuardNonceSemanticV1(item, key) {
-                    continue
-                }
-                return false, "unverified_henesys_nonce_sequence:" + key
-            }
+			// MBE_HENE_GUARD_V1: safe nonce namespace only; token transfer intents stay conservative.
+			if semantics == "henesys_sender_nonce_sequence" {
+				if heneGuardNonceSemanticV1(item, key) {
+					continue
+				}
+				return false, "unverified_henesys_nonce_sequence:" + key
+			}
 			if semantics == "" {
 				return false, "missing_update_semantics:" + key
 			}
@@ -3696,7 +3697,11 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		exec4Mode = "strict_fifo_single"
 	}
 	if waitReadyCandidate {
-		if schedule.ReadyPriorityPolicy == metaTrackWaitFIFOControlPolicy { exec4Mode = "waiting_ready_fifo_parallel" } else { exec4Mode = "waiting_ready_bypass_parallel" }
+		if schedule.ReadyPriorityPolicy == metaTrackWaitFIFOControlPolicy {
+			exec4Mode = "waiting_ready_fifo_parallel"
+		} else {
+			exec4Mode = "waiting_ready_bypass_parallel"
+		}
 	} // MBE_MT_WAIT_READY_V1
 	actualMetrics["metatrack_exec4_mode"] = exec4Mode
 	// MBE_MT_BLOCKLANE_V1: candidate-only metrics; original Full's metric map remains byte-equivalent.
@@ -4145,13 +4150,17 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 	blockLaneOrderV1 := []string{}
 	if blockLaneNoBypassV1 {
 		gateDepsV1 := make(map[string][]string, len(deps))
-		for txID, prereqs := range deps { gateDepsV1[txID] = append([]string(nil), prereqs...) }
+		for txID, prereqs := range deps {
+			gateDepsV1[txID] = append([]string(nil), prereqs...)
+		}
 		for _, target := range localVersionHandoffByToken {
 			gateDepsV1[target.consumer.TxID] = append(gateDepsV1[target.consumer.TxID], target.producerTxID)
 		}
 		var gateErr error
 		blockLaneOrderV1, gateErr = metaTrackBlockingOrderV1(ordered, gateDepsV1)
-		if gateErr != nil { return nil, nil, nil, nil, gateErr }
+		if gateErr != nil {
+			return nil, nil, nil, nil, gateErr
+		}
 	}
 	blockLaneGateReadyV1 := map[string]bool{}
 	blockLaneGateSinceV1 := map[string]time.Time{}
@@ -4189,32 +4198,44 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 		// MBE_MT_BLOCKLANE_V1: still accept Ready events, but do not release
 		// independent suffix work across an earlier unready FIFO head.
 		if blockLaneNoBypassV1 {
-			if blockLaneGateReadyV1[txID] { return }
+			if blockLaneGateReadyV1[txID] {
+				return
+			}
 			blockLaneGateReadyV1[txID] = true
 			blockLaneGateSinceV1[txID] = time.Now()
 			readyQueueStarted[txID] = blockLaneGateSinceV1[txID]
 			if blockLaneGateCursorV1 < len(blockLaneOrderV1) && blockLaneOrderV1[blockLaneGateCursorV1] != txID {
 				blockLaneHeldV1++
-				events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "blocklane_fifo_gate_v1", DecisionReason: "blocklane_wait_for:"+blockLaneOrderV1[blockLaneGateCursorV1], LocalExecution: true, Blocked: true})
+				events = append(events, ScheduleEvent{TxID: txID, Track: decision.Track, QueueName: "blocklane_fifo_gate_v1", DecisionReason: "blocklane_wait_for:" + blockLaneOrderV1[blockLaneGateCursorV1], LocalExecution: true, Blocked: true})
 			}
 			for blockLaneGateCursorV1 < len(blockLaneOrderV1) {
 				head := blockLaneOrderV1[blockLaneGateCursorV1]
-				if !blockLaneGateReadyV1[head] { break }
+				if !blockLaneGateReadyV1[head] {
+					break
+				}
 				waitNS := time.Since(blockLaneGateSinceV1[head]).Nanoseconds()
 				if waitNS > 0 {
 					blockLaneHeldSumNSV1 += waitNS
-					if waitNS > blockLaneHeldMaxNSV1 { blockLaneHeldMaxNSV1 = waitNS }
+					if waitNS > blockLaneHeldMaxNSV1 {
+						blockLaneHeldMaxNSV1 = waitNS
+					}
 				}
 				blockLaneHeldReleaseV1++
 				track := decisionByID[head].Track
-				if track == "fast" { fastReady = append(fastReady, head) } else { conservativeReady = append(conservativeReady, head) }
-				events = append(events, ScheduleEvent{TxID: head, Track: track, QueueName: queueNameForTrack(track), DecisionReason: "blocklane_fifo_release:"+reason, LocalExecution: true, Wakeup: head != txID, ReadyQueueDepth: len(fastReady)+len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
+				if track == "fast" {
+					fastReady = append(fastReady, head)
+				} else {
+					conservativeReady = append(conservativeReady, head)
+				}
+				events = append(events, ScheduleEvent{TxID: head, Track: track, QueueName: queueNameForTrack(track), DecisionReason: "blocklane_fifo_release:" + reason, LocalExecution: true, Wakeup: head != txID, ReadyQueueDepth: len(fastReady) + len(conservativeReady), FastQueueDepth: len(fastReady), ConservativeQueueDepth: len(conservativeReady)})
 				blockLaneGateCursorV1++
 			}
 			recordDepths()
 			return
 		}
-		if waitingReadyLane && !fifoNoBypass { singleFIFOReady[txID] = true } // MBE_MT_WAIT_READY_V1 observe real Ready admission, no extra queue
+		if waitingReadyLane && !fifoNoBypass {
+			singleFIFOReady[txID] = true
+		} // MBE_MT_WAIT_READY_V1 observe real Ready admission, no extra queue
 		if singleConservativeSerialV675 || fifoNoBypass {
 			if _, exists := readyQueueStarted[txID]; !exists {
 				readyQueueStarted[txID] = time.Now()
@@ -4317,17 +4338,17 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 	startRemoteFetch := func(item tx.SignedTransaction, access tx.AccessItem) {
 		remoteFetchCount++
 		go func(item tx.SignedTransaction, access tx.AccessItem) {
-            // MBE_HENE_GUARD_V1: record real request/return wall time without changing retries.
-            heneStart := time.Now()
+			// MBE_HENE_GUARD_V1: record real request/return wall time without changing retries.
+			heneStart := time.Now()
 			event, err := remoteFetch(ctx, item, access)
-            heneEnd := time.Now()
-            if heneEnd.Sub(heneStart) >= time.Second || event.LatencyMS >= 1000 {
-                fmt.Printf("[HENE_SLOW_REMOTE_V1] tx=%q key=%q token=%q home=%q required=%q returned_version=%d start=%s end=%s wall_ms=%d remote_ms=%d error=%q\n",
-                    txIdentifier(item), access.Key, stateReadinessToken(item, access),
-                    event.HomeShard, stateReadinessToken(item, access), event.StateVersion,
-                    heneStart.UTC().Format(time.RFC3339Nano), heneEnd.UTC().Format(time.RFC3339Nano),
-                    heneEnd.Sub(heneStart).Milliseconds(), event.LatencyMS, fmt.Sprint(err))
-            }
+			heneEnd := time.Now()
+			if heneEnd.Sub(heneStart) >= time.Second || event.LatencyMS >= 1000 {
+				fmt.Printf("[HENE_SLOW_REMOTE_V1] tx=%q key=%q token=%q home=%q required=%q returned_version=%d start=%s end=%s wall_ms=%d remote_ms=%d error=%q\n",
+					txIdentifier(item), access.Key, stateReadinessToken(item, access),
+					event.HomeShard, stateReadinessToken(item, access), event.StateVersion,
+					heneStart.UTC().Format(time.RFC3339Nano), heneEnd.UTC().Format(time.RFC3339Nano),
+					heneEnd.Sub(heneStart).Milliseconds(), event.LatencyMS, fmt.Sprint(err))
+			}
 			select {
 			case remoteStateCompletions <- remoteStateCompletion{event: event, err: err}:
 			case <-ctx.Done():
@@ -4373,19 +4394,19 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 					}
 				}
 				candidate := RemoteStateBatchFetchItem{Token: key, Item: item, Access: access}
-			// MBE_MT_DUALPRIO_V1: score is known BEFORE execution, and is
-			// maximized across all signed consumers of the same exact token.
-			if criticalStateFetchPriority {
-				candidate.CandidateStatePriority = true
-				candidate.PriorityWaiters = len(stateWaitersByToken[key])
-				for _, consumer := range stateWaitersByToken[key] {
-					h := schedule.DependencyInfluenceTailDepth[consumer]
-					d := schedule.DependencyInfluenceDescCount[consumer]
-					if h > candidate.PriorityH || (h == candidate.PriorityH && d > candidate.PriorityD) {
-						candidate.PriorityH, candidate.PriorityD = h, d
+				// MBE_MT_DUALPRIO_V1: score is known BEFORE execution, and is
+				// maximized across all signed consumers of the same exact token.
+				if criticalStateFetchPriority {
+					candidate.CandidateStatePriority = true
+					candidate.PriorityWaiters = len(stateWaitersByToken[key])
+					for _, consumer := range stateWaitersByToken[key] {
+						h := schedule.DependencyInfluenceTailDepth[consumer]
+						d := schedule.DependencyInfluenceDescCount[consumer]
+						if h > candidate.PriorityH || (h == candidate.PriorityH && d > candidate.PriorityD) {
+							candidate.PriorityH, candidate.PriorityD = h, d
+						}
 					}
 				}
-			}
 				if onDemandStateFetchV661 {
 					onDemandCandidatesV661[key] = candidate
 					continue
@@ -4764,8 +4785,13 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 	dispatch := func(txID string) error {
 		if waitingReadyLane && !fifoNoBypass {
 			for _, predecessor := range singleFIFOOrder {
-				if predecessor == txID { break }
-				if !singleFIFOReady[predecessor] { readyBypassDispatchCount++; break }
+				if predecessor == txID {
+					break
+				}
+				if !singleFIFOReady[predecessor] {
+					readyBypassDispatchCount++
+					break
+				}
 			}
 		} // MBE_MT_WAIT_READY_V1: no false claim for simply having an uncompleted but Ready predecessor.
 		attemptByID[txID]++
@@ -4884,12 +4910,12 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 	}
 	handleRemoteStateCompletion := func(completion remoteStateCompletion) error {
 		remoteFetchCompleted++
-        // MBE_HENE_GUARD_V1: include batch completions with measured remote latency.
-        if completion.event.LatencyMS >= 1000 {
-            fmt.Printf("[HENE_SLOW_STATE_READY_V1] tx=%q key=%q token=%q home=%q state_version=%d remote_ms=%d\n",
-                completion.event.TxID, completion.event.Key, completion.event.ReadinessToken,
-                completion.event.HomeShard, completion.event.StateVersion, completion.event.LatencyMS)
-        }
+		// MBE_HENE_GUARD_V1: include batch completions with measured remote latency.
+		if completion.event.LatencyMS >= 1000 {
+			fmt.Printf("[HENE_SLOW_STATE_READY_V1] tx=%q key=%q token=%q home=%q state_version=%d remote_ms=%d\n",
+				completion.event.TxID, completion.event.Key, completion.event.ReadinessToken,
+				completion.event.HomeShard, completion.event.StateVersion, completion.event.LatencyMS)
+		}
 		if completion.err != nil {
 			return completion.err
 		}
@@ -5453,33 +5479,33 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 		return values[index]
 	}
 	metrics := map[string]any{
-		"configured_worker_count":                            workerCount,
-		"metatrack_commutative_dependency_suppressed_count":  classification.CommutativeDependencySuppressedCount,
-		"metatrack_transaction_snapshot_total_key_count":     transactionSnapshotTotalKeys,
-		"metatrack_version_publish_async_enqueued_count":     versionPublishEnqueued,
-		"metatrack_version_publish_policy":                   "completion_triggered_independent_v1",
-		"max_ready_queue_depth":                              maxReadyQueueDepth,
-		"max_fast_ready_queue_depth":                         maxFastReadyQueueDepth,
-		"max_conservative_ready_queue_depth":                 maxConservativeReadyQueueDepth,
-		"max_dependency_frontier_width":                      maxDependencyFrontierWidth,
-		"max_inflight_business_executions":                   int(atomic.LoadInt64(&maxInflightBusiness)),
-		"worker_execution_count":                             workerCounts,
-		"steal_attempt_count":                                int(atomic.LoadInt64(&stealAttemptCount)),
-		"steal_success_count":                                int(atomic.LoadInt64(&stealSuccessCount)),
-		"stolen_task_count":                                  int(atomic.LoadInt64(&stolenTaskCount)),
-		"submitted_logical_tx_count":                         len(ordered),
-		"scheduler_dispatch_event_count":                     dispatchCount,
-		"blocked_event_count":                                blockedCount,
-		"wakeup_event_count":                                 wakeupCount,
-		"completion_channel_event_count":                     completionChannelCount,
-		"completion_processing_policy":                       "dependency_ready_completion_order_deterministic_final_merge",
-		"worker_queue_model":                                 workerQueueModel,
-		"metatrack_ready_priority_policy":                    readyPriorityPolicy,
+		"configured_worker_count":                           workerCount,
+		"metatrack_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
+		"metatrack_transaction_snapshot_total_key_count":    transactionSnapshotTotalKeys,
+		"metatrack_version_publish_async_enqueued_count":    versionPublishEnqueued,
+		"metatrack_version_publish_policy":                  "completion_triggered_independent_v1",
+		"max_ready_queue_depth":                             maxReadyQueueDepth,
+		"max_fast_ready_queue_depth":                        maxFastReadyQueueDepth,
+		"max_conservative_ready_queue_depth":                maxConservativeReadyQueueDepth,
+		"max_dependency_frontier_width":                     maxDependencyFrontierWidth,
+		"max_inflight_business_executions":                  int(atomic.LoadInt64(&maxInflightBusiness)),
+		"worker_execution_count":                            workerCounts,
+		"steal_attempt_count":                               int(atomic.LoadInt64(&stealAttemptCount)),
+		"steal_success_count":                               int(atomic.LoadInt64(&stealSuccessCount)),
+		"stolen_task_count":                                 int(atomic.LoadInt64(&stolenTaskCount)),
+		"submitted_logical_tx_count":                        len(ordered),
+		"scheduler_dispatch_event_count":                    dispatchCount,
+		"blocked_event_count":                               blockedCount,
+		"wakeup_event_count":                                wakeupCount,
+		"completion_channel_event_count":                    completionChannelCount,
+		"completion_processing_policy":                      "dependency_ready_completion_order_deterministic_final_merge",
+		"worker_queue_model":                                workerQueueModel,
+		"metatrack_ready_priority_policy":                   readyPriorityPolicy,
 		// MBE_MT_WAIT_READY_V1: actual bypass dispatch, not just classification.
-		"metatrack_candidate_waiting_ready_enabled": waitingReadyLane,
-		"metatrack_candidate_fifo_no_bypass": fifoNoBypass,
-		"metatrack_candidate_ready_bypass_dispatch_count": readyBypassDispatchCount,
-		"metatrack_candidate_critical_state_fetch_enabled": criticalStateFetchPriority, // MBE_MT_DUALPRIO_V1
+		"metatrack_candidate_waiting_ready_enabled":          waitingReadyLane,
+		"metatrack_candidate_fifo_no_bypass":                 fifoNoBypass,
+		"metatrack_candidate_ready_bypass_dispatch_count":    readyBypassDispatchCount,
+		"metatrack_candidate_critical_state_fetch_enabled":   criticalStateFetchPriority,                   // MBE_MT_DUALPRIO_V1
 		"metatrack_single_fifo_hol_enabled":                  singleConservativeSerialV675 || fifoNoBypass, // MBE_MT_WAIT_READY_V1 FIFO parallel differs from official serial A2
 		"metatrack_single_fifo_bypass_prevented_count":       singleFIFOBypassPreventedCount,
 		"metatrack_single_fifo_head_block_count":             singleFIFOHeadBlockCount,
@@ -5577,8 +5603,8 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 		metrics["metatrack_blocklane_fifo_gate_enabled"] = true
 		metrics["metatrack_blocklane_gate_delayed_ready_count"] = blockLaneHeldV1
 		metrics["metatrack_blocklane_gate_released_count"] = blockLaneHeldReleaseV1
-		metrics["metatrack_blocklane_gate_cumulative_ms"] = float64(blockLaneHeldSumNSV1)/float64(time.Millisecond)
-		metrics["metatrack_blocklane_gate_max_ms"] = float64(blockLaneHeldMaxNSV1)/float64(time.Millisecond)
+		metrics["metatrack_blocklane_gate_cumulative_ms"] = float64(blockLaneHeldSumNSV1) / float64(time.Millisecond)
+		metrics["metatrack_blocklane_gate_max_ms"] = float64(blockLaneHeldMaxNSV1) / float64(time.Millisecond)
 	}
 	for key, value := range metaTrackTrackMetricsFromAttemptsV31(attempts) {
 		metrics[key] = value

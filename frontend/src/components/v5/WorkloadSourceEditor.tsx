@@ -28,6 +28,15 @@ function definitionsForMode(dataset: V5WorkloadDatasetSummary | undefined, mode:
   return (dataset?.variant_definitions ?? []).filter((item) => variantKind(item) === kind);
 }
 
+// MBE_HENE_WINDOW_UI_V1: prefer a historical original window on NEW Henesys selections.
+// Previously saved original_window drafts are never silently changed.
+const HENE_HISTORY_DATASETS = new Set(["hene_20250612_calls_v2","hene_20250824_calls_v2","henesys_20250612_v4","henesys_20250824_v4"]);
+function preferredHeneDefinition(dataset: V5WorkloadDatasetSummary | undefined, mode: WorkloadMode): V5WorkloadVariantDefinition | undefined {
+  const definitions = definitionsForMode(dataset, mode);
+  return (mode === "dataset_original" && HENE_HISTORY_DATASETS.has(dataset?.dataset_id ?? "")
+    ? definitions.find((item) => item.variant_mode === "historical_window") : undefined) ?? definitions[0];
+}
+
 function initialParameters(definition: V5WorkloadVariantDefinition | undefined): Record<string, WorkloadParameterValue> {
   return Object.fromEntries((definition?.parameters ?? []).flatMap((field) => field.default === undefined || field.default === null ? [] : [[field.name, field.default as WorkloadParameterValue]]));
 }
@@ -36,9 +45,22 @@ function optionLabel(field: V5WorkloadVariantParameter, value: WorkloadParameter
   return field.option_labels?.[String(value)] ?? String(value);
 }
 
+// MT_COUNT_UI_V1: manifest is the only source of permissible real replay counts.
+export function validDatasetCounts(dataset: V5WorkloadDatasetSummary | undefined): number[] {
+  if (!dataset || !Number.isSafeInteger(dataset.row_count) || dataset.row_count <= 0) return [];
+  return [...new Set(dataset.supported_tx_counts ?? [])]
+    .filter((n) => Number.isSafeInteger(n) && n > 0 && n <= dataset.row_count && (dataset.allow_full_dataset !== false || n < dataset.row_count))
+    .sort((a, b) => a - b);
+}
+
+export function chooseDatasetCount(dataset: V5WorkloadDatasetSummary | undefined, current: number): number {
+  const valid = validDatasetCounts(dataset);
+  if (valid.includes(current)) return current;
+  return valid.includes(10_000) ? 10_000 : (valid.find((n) => n >= 1_000) ?? valid[0] ?? 0);
+}
+
 function countLabel(value: number): string {
-  if (value >= 1000 && value % 1000 === 0) return `${value / 1000}K`;
-  return String(value);
+  return `${value.toLocaleString("en-US")} 笔${value >= 1_000 && value % 1_000 === 0 ? `（${value / 1_000}K）` : ""}`;
 }
 
 // MBE_MV_UIFIX_V1 formal-run catalog visibility only.
@@ -90,10 +112,13 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
   const selectedDefinition = modeDefinitions.find((item) => item.variant_mode === state.variantMode) ?? modeDefinitions[0];
   const hasOriginalDataset = publishedWorkloadDatasets(datasets, "dataset_original").some((item) => item.selectable);
   const hasDerivedDataset = publishedWorkloadDatasets(datasets, "dataset_derived").some((item) => item.selectable);
-  const datasetDisabled = state.mode !== "synthetic" && (!dataset || !dataset.selectable || !selectedDefinition);
-  const supportedCounts = (dataset?.supported_tx_counts?.length ? dataset.supported_tx_counts : [1_000, 10_000, 50_000, 100_000, 250_000])
-    .filter((value) => value >= 1_000 || value === state.txCount)
-    .sort((a, b) => a - b);
+  const datasetDisabled = state.mode !== "synthetic" && (!dataset || !dataset.selectable || !selectedDefinition || !(state.useFullDataset ? (dataset.allow_full_dataset !== false) : validDatasetCounts(dataset).includes(state.txCount)));
+  const supportedCounts = validDatasetCounts(dataset);
+  const supportsFull = Boolean(dataset && dataset.allow_full_dataset !== false && dataset.row_count > 0);
+  const visibleNumericCounts = supportedCounts.filter((n) => !supportsFull || n !== dataset?.row_count);
+  const shownCount = supportsFull && (state.useFullDataset || state.txCount === dataset?.row_count)
+    ? "Full" : String(state.txCount);
+  const formatTotal = (n: number | undefined) => Number.isSafeInteger(n) && (n ?? 0) > 0 ? (n as number).toLocaleString("en-US") : "未知";
 
   function patch(next: Partial<WorkloadEditorState>) { onChange({ ...state, ...next }); }
 
@@ -101,7 +126,7 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
     if (mode === "synthetic") { patch({ mode, useFullDataset: false }); return; }
     const choices = publishedWorkloadDatasets(datasets, mode);
     const candidateDataset = choices.find((item) => item.dataset_id === state.datasetId && item.selectable) ?? choices.find((item) => item.selectable);
-    const definition = definitionsForMode(candidateDataset, mode)[0];
+    const definition = preferredHeneDefinition(candidateDataset, mode);
     const parameters = initialParameters(definition);
     patch({
       mode,
@@ -109,7 +134,7 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
       variantMode: definition?.variant_mode ?? "",
       variantParameters: parameters,
       useFullDataset: false,
-      txCount: candidateDataset?.supported_tx_counts?.includes(state.txCount) ? state.txCount : (candidateDataset?.supported_tx_counts?.find((value) => value >= 1_000) ?? state.txCount),
+      txCount: chooseDatasetCount(candidateDataset, state.txCount),
       targetAlpha: typeof parameters.target_alpha === "number" ? parameters.target_alpha : state.targetAlpha,
       skewAxis: typeof parameters.skew_axis === "string" ? parameters.skew_axis : state.skewAxis,
     });
@@ -118,14 +143,14 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
   function selectDataset(datasetId: string) {
     const nextDataset = visibleDatasets.find((item) => item.dataset_id === datasetId);
     if (!nextDataset) return;
-    const definition = definitionsForMode(nextDataset, state.mode)[0];
+    const definition = preferredHeneDefinition(nextDataset, state.mode);
     const parameters = initialParameters(definition);
     patch({
       datasetId,
       variantMode: definition?.variant_mode ?? "",
       variantParameters: parameters,
       useFullDataset: false,
-      txCount: nextDataset?.supported_tx_counts?.includes(state.txCount) ? state.txCount : (nextDataset?.supported_tx_counts?.find((value) => value >= 1_000) ?? state.txCount),
+      txCount: chooseDatasetCount(nextDataset, state.txCount),
       targetAlpha: typeof parameters.target_alpha === "number" ? parameters.target_alpha : state.targetAlpha,
       skewAxis: typeof parameters.skew_axis === "string" ? parameters.skew_axis : state.skewAxis,
     });
@@ -165,7 +190,13 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
       <label><span>数据来源链</span><input value={dataset?.source_chain ?? "registry"} readOnly /></label>
       {modeDefinitions.length > 1 && <label><span>负载模式</span><select aria-label="variant_mode" value={selectedDefinition?.variant_mode ?? ""} onChange={(event) => selectVariant(event.target.value)}>{modeDefinitions.map((item) => <option key={item.variant_mode} value={item.variant_mode}>{item.display_name ?? item.variant_mode}</option>)}</select></label>}
       {modeDefinitions.length <= 1 && <label><span>负载模式</span><input aria-label="variant_mode" value={selectedDefinition?.variant_mode ?? "未提供"} readOnly /></label>}
-      <label><span>交易规模</span><select aria-label="dataset tx count" value={state.useFullDataset ? "Full" : String(state.txCount)} onChange={(event) => event.target.value === "Full" ? patch({ useFullDataset: true, txCount: dataset?.row_count ?? state.txCount }) : patch({ useFullDataset: false, txCount: globalThis.Number(event.target.value) })}>{supportedCounts.map((value) => <option key={value} value={value}>{countLabel(value)}</option>)}{dataset?.allow_full_dataset !== false && <option value="Full">Full</option>}</select></label>
+      <div className="readonly-field" data-testid="dataset-total-tx-count"><span>数据集总交易数</span><strong>{formatTotal(dataset?.row_count)} 笔</strong></div>
+      <div className="readonly-field" data-testid="dataset-max-tx-count"><span>最大可选规模</span><strong>{formatTotal(supportsFull ? dataset?.row_count : supportedCounts[supportedCounts.length - 1])} 笔</strong></div>
+      <label><span>交易规模</span><select aria-label="dataset tx count" value={shownCount} disabled={datasetDisabled || (!supportsFull && supportedCounts.length === 0)} onChange={(event) => event.target.value === "Full" ? patch({ useFullDataset: true, txCount: dataset?.row_count ?? 0 }) : patch({ useFullDataset: false, txCount: globalThis.Number(event.target.value) })}>
+        {[["小规模 / 调试", visibleNumericCounts.filter((n) => n < 10_000)], ["正式实验", visibleNumericCounts.filter((n) => n >= 10_000 && n <= 100_000)], ["大规模 / 扩展性", visibleNumericCounts.filter((n) => n > 100_000)]] .map(([group, values]) => (values as number[]).length > 0 && <optgroup key={group as string} label={group as string}>{(values as number[]).map((value) => <option key={value} value={value}>{countLabel(value)}</option>)}</optgroup>)}
+        {supportsFull && <option value="Full">完整数据集：{countLabel(dataset!.row_count)}</option>}
+      </select></label>
+      {dataset && !supportsFull && <div className="readonly-field" data-testid="dataset-full-mode-note"><span>全量执行</span><strong>未开放；仅使用已验证规模</strong></div>}
       <label><span>seed</span><input aria-label="dataset seed" value={state.seedText} onChange={(event) => patch({ seedText: event.target.value })} /></label>
       {(selectedDefinition?.parameters ?? []).map((field) => {
         const value = state.variantParameters[field.name] ?? field.default ?? "";
@@ -175,6 +206,10 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
       })}
       <label><span>truth label</span><input value={dataset?.truth_label ?? "未提供"} readOnly /></label>
       <label><span>selection_mode</span><input value={selectedDefinition?.selection_mode ?? "contiguous_window"} readOnly /></label>
+      {HENE_HISTORY_DATASETS.has(dataset?.dataset_id ?? "") && selectedDefinition?.variant_mode === "original_window" &&
+        <div role="alert">原始前缀从第 0 行开始，没有 TxAllo 所需的评测前历史。若包含 TxAllo，请在“负载模式”选择 historical_window，并为所有对照方法使用同一窗口。</div>}
+      {HENE_HISTORY_DATASETS.has(dataset?.dataset_id ?? "") && selectedDefinition?.variant_mode === "historical_window" &&
+        <div role="status">历史连续窗口：请确认所有对照方法的交易范围、seed 和物化摘要相同；TxAllo 只使用该窗口之前的真实历史。</div>}
     </div>}
 
     {state.mode === "synthetic" && <div className="experiment-condition-grid">

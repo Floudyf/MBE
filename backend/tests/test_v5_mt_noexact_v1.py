@@ -1,4 +1,4 @@
-"""Routing-only fifth ablation: no safety/runtime or original four changes."""
+"""Routing-only exact-version sub-ablation retained outside three-core paper matrix."""
 from pathlib import Path
 from backend.app.services.v5_formal_plan_validator import BUILTIN_METHODS
 
@@ -19,14 +19,15 @@ def test_noexact_is_full_plus_only_routing_flag():
     assert 'ablation_ignore_coaccess_routing_v661' not in cut.plugin_config_overrides['routing']
 
 
-def test_catalog_contains_exact_six_and_legacy_four():
+def test_catalog_excludes_exact_from_primary_but_preserves_legacy_method():
     catalog=(ROOT/'frontend/src/v5FormalExperimentCatalog.ts').read_text('utf-8-sig')
     s=catalog.split('export const METATRACK_ABLATION_METHOD_IDS = [',1)[1].split('] as const;',1)[0]
     import re
     assert re.findall(r'"(metatrack_[^"]+)"',s)==[
-       'metatrack_latest','metatrack_ab_flow',MID,
-       'metatrack_ab_track','metatrack_ab_state','metatrack_ab_cons']
-    for expected in ('metatrack_ab_flow','metatrack_ab_track','metatrack_ab_state','metatrack_ab_cons'):
+       'metatrack_latest','metatrack_ab_flow','metatrack_ab_supply','metatrack_ab_cons']
+    assert MID not in s
+    assert f'methodId: "{MID}"' in catalog
+    for expected in ('metatrack_ab_flow','metatrack_ab_supply','metatrack_ab_cons'):
         assert expected in s
     assert 'metatrack_sh_noco' not in s
 

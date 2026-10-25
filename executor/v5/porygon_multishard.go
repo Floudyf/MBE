@@ -512,8 +512,9 @@ func (r *NodeRuntime) sendPorygonMultiShardCertificate(ctx context.Context, node
 }
 
 func (r *NodeRuntime) handlePorygonMultiShardUpdateCertificateRequest(ctx context.Context, msg p2p.MessageEnvelope) error {
-	if !r.isCurrentLeader() {
-		return nil
+	// MBE_PORYGON_CERT_PEER_RECOVERY_V1: authenticated state-root certs can be recovered from validator peers.
+	if !containsString(r.node.Validators, msg.FromNode) {
+		return fmt.Errorf("Porygon state-root certificate recovery requester is not a validator")
 	}
 	type requestBody struct {
 		BlockHash string `json:"block_hash"`
@@ -529,6 +530,9 @@ func (r *NodeRuntime) handlePorygonMultiShardUpdateCertificateRequest(ctx contex
 	state.mu.Unlock()
 	if !ok || cert.Height != req.Height {
 		return nil
+	}
+	if err := r.validatePorygonMultiShardCertificate(cert); err != nil {
+		return err
 	}
 	return r.sendPorygonMultiShardCertificate(ctx, msg.FromNode, cert)
 }
@@ -638,7 +642,7 @@ func (r *NodeRuntime) porygonMultiShardUpdate(ctx context.Context, blockHash str
 	}
 	ticker := time.NewTicker(2 * time.Millisecond)
 	defer ticker.Stop()
-	recovery := time.NewTicker(50 * time.Millisecond)
+	recovery := time.NewTicker(250 * time.Millisecond)
 	defer recovery.Stop()
 	for {
 		state := r.porygonMultiShardState()
@@ -657,12 +661,16 @@ func (r *NodeRuntime) porygonMultiShardUpdate(ctx context.Context, blockHash str
 			return PorygonMultiShardUpdateCertificate{}, ctx.Err()
 		case <-ticker.C:
 		case <-recovery.C:
-			leader := r.leaderID(r.node.ShardID)
-			if leader != "" {
+			// MBE_PORYGON_CERT_PEER_RECOVERY_V1: peers may already
+			// hold the verified M-stage proof after OC leader rotation.
+			for _, peer := range r.node.Validators {
+				if peer == "" || peer == r.node.NodeID {
+					continue
+				}
 				req := map[string]any{"block_hash": blockHash, "height": height}
-				env, err := p2p.NewEnvelope(porygonMultiShardUpdateCertificateRequestMessage, r.node.NodeID, leader, r.node.ShardID, height, r.currentPBFTView(), height, req)
+				env, err := p2p.NewEnvelope(porygonMultiShardUpdateCertificateRequestMessage, r.node.NodeID, peer, r.node.ShardID, height, r.currentPBFTView(), height, req)
 				if err == nil {
-					_ = r.sendToNode(ctx, leader, env)
+					_ = r.sendToNode(ctx, peer, env)
 				}
 			}
 		}
