@@ -79,7 +79,7 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_sh_coacc", title: "③ 原始共现矩阵", description: "调用原 frequency_coaccess_admissible_v2 共现状态关联放置与覆盖度分流；其他执行、共识和状态机制沿用 Full。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_sh_noco", title: "去共现矩阵分片", description: "保持 Full 增量分片及其版本就绪、跨域依赖、远程代价、容量与负载规则，仅将共现评分置零；共现历史统计仍运行。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   // MBE_METATRACK_EXEC4_V1: separate scheduler diagnostics, not official ablations
-  { methodId: "metatrack_diag_ready8", title: "② 统一单轨并行", description: "沿用本次 Full 的依赖图、版本与状态机制；移除 Fast/Conservative 调度分轨，Ready 交易可以绕行，业务并发上限仍为配置的 Worker 数。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  { methodId: "metatrack_diag_ready8", title: "② 统一单轨并行", description: "沿用本次 Full 的依赖图、版本与状态机制；移除 Fast/Conservative 调度分轨，Ready 交易可以绕行，业务并发上限仍为配置的 Worker 数。", family: "metatrack", comparisonVisible: true, mainVisible: true },
   { methodId: "metatrack_diag_dual1", title: "③ 双轨单业务", description: "沿用 Full 的双轨判定、Fast 优先及 Ready 绕行，但任一时刻仅运行一笔业务交易；Worker 配置不改变。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_diag_fifo1", title: "④ 严格 FIFO", description: "与正式去双轨 A2 的执行插件完全一致：不做双轨分类、不允许已 Ready 的后继绕过队首，同时只运行一笔业务交易。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   // MBE_MT_BLOCKLANE_V1: comparable isolated candidates; NOT among four official ablations.

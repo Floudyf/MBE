@@ -36,7 +36,7 @@ def test_v2_official_matrix_is_three_mechanisms():
     assert '"metatrack_ab_supply"' in ids
     assert '"metatrack_ab_cons"' in ids
     assert '"metatrack_ab_route"' not in ids
-    assert "去本地 exact 状态供应与预取" in catalog
+    assert "状态供应子消融：去本地 exact/预取" in catalog
     assert "历史子消融-无局部性放置" in catalog
 
 

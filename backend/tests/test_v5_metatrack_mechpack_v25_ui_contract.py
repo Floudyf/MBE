@@ -7,7 +7,9 @@ def test_ablation_draft_migration_still_uses_formal_four_group():
     page=read('frontend/src/pages/V5FormalRunPage.tsx')
     assert 'MBE_METATRACK_MECHPACK_V25_UI_MIGRATION' in page
     assert 'const migratedMethods = suite === "ablation_experiment" && metaTrackDraft ? [...METATRACK_ABLATION_METHOD_IDS] : methods;' in page
-    assert 'selectedMethods: migratedDiagnosticMethods.length ? migratedDiagnosticMethods : [...V5_DEFAULT_METHOD_IDS]' in page
+    assert 'selectedMethods: effectiveRunMethodIdsV1(suite, migratedDiagnosticMethods).length' in page
+    assert '? effectiveRunMethodIdsV1(suite, migratedDiagnosticMethods)' in page
+    assert ': effectiveRunMethodIdsV1(suite, V5_DEFAULT_METHOD_IDS)' in page
     assert 'methods.filter((method) => diagnosticMigratedSelectedMethodIds.includes(method.method_id))' in page
 
 def test_formal_ablation_ids_frozen():
