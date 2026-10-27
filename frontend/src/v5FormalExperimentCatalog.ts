@@ -56,8 +56,15 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_serial", title: "MetaTrack（初始版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 { methodId: "metatrack_latest", title: "Metatrack", description: "三项核心机制：依赖感知增量执行分片、版本生存期感知状态供应、V669 依赖闭包与 N/L 共识窗口；Fast/Conservative 双轨保留为内部执行调度优化。正式实验固定 RouteBatch=100。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
-  { methodId: "metatrack_online", title: "MetaTrack（在线协同分片）", description: "在线联合评估 exact 版本前驱、Home 状态供应与节点队列反馈；缺失反馈时回退原版五指标排序。StateReady、Version Liveness、共识窗口及 PBFT 均不改变。", family: "metatrack", comparisonVisible: true, mainVisible: true },
+  // MBE_MT_ONLINE_DUAL_V1: candidate experiments; Full and Online original unchanged.
+  { methodId: "metatrack_online_feed", title: "Online：仅反馈冷启动", description: "候选；无 RTT 时使用透明代理，其余为原版排序。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  { methodId: "metatrack_online_balance", title: "Online：仅负载保护", description: "候选；保留反馈门槛，预测完成序位与分片负载序位组合。", family: "metatrack", comparisonVisible: false, mainVisible: false },
+  { methodId: "metatrack_online_dual", title: "Online：反馈与负载联合", description: "候选；同时启用透明冷启动代理及负载保护。", family: "metatrack", comparisonVisible: true, mainVisible: true },
+  { methodId: "metatrack_online", title: "MetaTrack（在线协同分片）", description: "在线联合评估 exact 版本前驱、Home 状态供应与节点队列反馈；缺失反馈时回退原版五指标排序。StateReady、Version Liveness、共识窗口及 PBFT 均不改变。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 
+  // MBE_MT_NOCAP_SOLO_V1: two separately selectable NoCap variants; original Full/Online unchanged.
+  { methodId: "metatrack_nocap_full", title: "Full-NoCap（独立实验）", description: "仅取消每片累计 N/分片数硬上限，沿用原 Full 路由；一次只运行本方法，不会联动启动 Online-NoCap。", family: "metatrack", comparisonVisible: true, mainVisible: false },
+  { methodId: "metatrack_nocap_online", title: "Online-NoCap（独立实验）", description: "沿用保护型 Online 反馈与 exact 依赖保护，仅取消累计 N/分片数硬上限；单独选择、单独运行。", family: "metatrack", comparisonVisible: true, mainVisible: false },
   { methodId: "metatrack_ab_flow", title: "去依赖感知增量分流", description: "以同容量约束的确定性哈希执行分片替代依赖感知增量分流；保留精确版本依赖图、双轨、共识聚合、状态供应及全部 PBFT 参数。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   // MBE_MT3_P0_V1: exact-version placement is a retained routing sub-ablation, not a primary paper ablation.
   { methodId: "metatrack_ab_exact", title: "分片子消融：去精确版本评分", description: "仅从增量执行位置选择评分中删除 ReadyRank 和 ExactCross；保留精确版本正确性、StateReady 与共识。历史/分片子实验保留，不进入三创新主矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },

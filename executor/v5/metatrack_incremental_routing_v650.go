@@ -435,6 +435,12 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		p.incrementalV650 = newMetaTrackIncrementalRoutingStateV650(input)
 	}
 	state := p.incrementalV650
+	// MBE_MT_NOCAP_V1: experimental method only. Zero disables the
+	// arbitrary N/shards cumulative admission ceiling; it does NOT remove
+	// structural load ranking, worker limits, or per-block PBFT capacity.
+	if boolFromAny(p.config["experimental_no_global_capacity_v1"]) {
+		state.Capacity = 0
+	}
 	ignoreCoaccessV661 := boolFromAny(p.config[metaTrackAblationIgnoreCoaccessRoutingV661])
 	noExactV1 := boolFromAny(p.config["ablation_no_exact_version_routing_v1"]) // MBE_MT_NOEXACT_ABL_V1
 	selector := metaTrackIncrementalRankCandidatesV651
@@ -444,16 +450,32 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 	// MBE_MT_ONLINE_V1: only candidate ordering changes. No new signed
 	// state readiness token and no modification to exact dependency metadata.
 	onlineConfiguredV1 := boolFromAny(p.config["online_state_ready_routing_v1"])
+	feedbackColdstartV1 := onlineConfiguredV1 && boolFromAny(p.config["online_feedback_coldstart_v2"])
+	capacityGuardV1 := onlineConfiguredV1 && boolFromAny(p.config["online_capacity_guard_v2"])
 	onlineUsedV1 := false // MBE_MT_ONLINE_FIX_V1 reset per candidate selection
+	onlineProxyV1 := false // MBE_MT_ONLINE_DUAL_V1: reset per candidate selection
 	if onlineConfiguredV1 {
 		observed := input.OnlineFeedback
 		nowMS := time.Now().UnixMilli()
 		selector = func(candidates []metaTrackIncrementalCandidateV650) []metaTrackIncrementalCandidateV650 {
-			if ranked, valid := mtOnlineRankCandidatesV1(candidates, observed, nowMS); valid {
-				onlineUsedV1 = true
-				return ranked
+			var ranked []metaTrackIncrementalCandidateV650
+			var valid bool
+			var proxy bool
+			if feedbackColdstartV1 {
+				ranked, valid, proxy = mtOnlineRankCandidatesColdstartV1(candidates, observed, nowMS)
+			} else {
+				ranked, valid = mtOnlineRankCandidatesV1(candidates, observed, nowMS)
 			}
-			return metaTrackIncrementalRankCandidatesV651(candidates)
+			if valid {
+				onlineUsedV1 = true
+				onlineProxyV1 = proxy
+			} else {
+				ranked = metaTrackIncrementalRankCandidatesV651(candidates)
+				onlineProxyV1 = false
+			}
+			// V2: keep the measured/proxy completion ranking intact. An
+			// independent, guarded choice is made after the candidate sort.
+			return ranked
 		}
 	}
 	plan := BatchRoutingPlan{
@@ -492,6 +514,8 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 	batchKeys := map[string]bool{}
 	routingEpoch := uint64(maxInt(0, intValue(p.config["routing_epoch"])))
 
+	// MBE_MT_ONLINE_PROTECT_V1: Full and protected Online use the same
+	// incremental history; only committed placement updates it.
 	for _, record := range input.Records {
 		routingCtx := metaTrackBuildRoutingRecordContextV669(p, record, input.Sharding, input.ShardIDs, state)
 		accesses := routingCtx.Accesses
@@ -563,8 +587,22 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		// The unconstrained diagnostic calls selector again below; preserve
 		// the decision made with the actual capacity filter.
 		selectedOnlineV1 := onlineUsedV1
+		selectedProxyV1 := onlineProxyV1
 		sort.Slice(filtered, func(i, j int) bool { return metaTrackIncrementalCandidateLessV650(filtered[i], filtered[j]) })
 		selected := filtered[0]
+		protectedDecisionV1 := ""
+		if capacityGuardV1 && selectedOnlineV1 {
+			if feedbackColdstartV1 {
+				// MBE_MT_ONLINE_PROTECT_V1: joint Online only. No V3 post-score
+				// capacity override or same-batch override can bypass this gate.
+				// The Full candidate is from the SAME incremental prefix,
+				// evaluated before any Online score mutation.
+				selected, protectedDecisionV1 = mtOnlineProtectedChoiceV1(filtered, legacyShardV1, routingCtx.ExactDeps, input.OnlineFeedback, time.Now().UnixMilli())
+			} else {
+				// Preserve the independently selectable balance-only method.
+				selected = mtOnlineBalanceChooseV2(filtered, len(input.Records), input.OnlineFeedback)
+			}
+		}
 		selectedChangedV1 := selectedOnlineV1 && selected.Shard != legacyShardV1
 
 		// Capacity remains the only hard constraint. To observe when it changes
@@ -573,7 +611,11 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		if anyAdmissible {
 			unconstrained := selector(candidates)
 			sort.Slice(unconstrained, func(i, j int) bool { return metaTrackIncrementalCandidateLessV650(unconstrained[i], unconstrained[j]) })
-			if !unconstrained[0].Admissible && unconstrained[0].Shard != selected.Shard {
+			unconstrainedChoiceV2 := unconstrained[0]
+			if capacityGuardV1 && onlineUsedV1 {
+				unconstrainedChoiceV2 = mtOnlineBalanceChooseV2(unconstrained, len(input.Records), input.OnlineFeedback)
+			}
+			if !unconstrainedChoiceV2.Admissible && unconstrainedChoiceV2.Shard != selected.Shard {
 				plan.IncrementalCapacityForcedChoiceCount++
 			}
 		}
@@ -614,7 +656,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 			ExecutionShard:        selected.Shard,
 			TargetShard:           targetShard,
 			CoaccessGroup:         strings.Join(keys, "+"),
-			Reason:                mtOnlinePlacementReasonFixedV1(onlineConfiguredV1, selectedOnlineV1, selectedChangedV1, selected),
+			Reason:                mtOnlineProtectedReasonV1(mtOnlineDualReasonV1(mtOnlinePlacementReasonFixedV1(onlineConfiguredV1, selectedOnlineV1, selectedChangedV1, selected), selectedProxyV1, capacityGuardV1), protectedDecisionV1),
 			PredictedRemoteReads:  remoteReads,
 			PredictedRemoteWrites: remoteWrites,
 			RemoteAccessCount:     remoteReads + remoteWrites,

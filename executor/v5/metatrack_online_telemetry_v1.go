@@ -23,6 +23,8 @@ func (r *NodeRuntime) mtOnlineWriteTelemetryV1() error {
 	pendingVersion := len(r.stateVersionRemoteSubscriptions)
 	pendingCommit := len(r.pendingCommits)
 	queue := r.blockExecutionProgress.SchedulerQueueLen
+	activeTasks := r.blockExecutionProgress.ActiveTaskCount
+	requestQueue := len(r.stateFetchTasks)
 	r.mu.Unlock()
 
 	// Request-side success is the only valid duration source. The service
@@ -43,6 +45,9 @@ func (r *NodeRuntime) mtOnlineWriteTelemetryV1() error {
 	if queue < 0 {
 		queue = 0
 	}
+	if activeTasks < 0 {
+		activeTasks = 0
+	}
 	status := map[string]any{
 		"schema_version":                           "mbe_metatrack_online_runtime_v1",
 		"node_id":                                  r.node.NodeID,
@@ -51,9 +56,9 @@ func (r *NodeRuntime) mtOnlineWriteTelemetryV1() error {
 		"committed_height":                         committedHeight,
 		"mempool_depth":                            r.pool.Len(),
 		"pending_state_fetch_count":                pendingFetch,
-		"state_fetch_request_queue_depth":          0,
+		"state_fetch_request_queue_depth":          requestQueue,
 		"pending_state_version_subscription_count": pendingVersion,
-		"block_execution_progress":                 map[string]any{"scheduler_queue_length": queue},
+		"block_execution_progress":                 map[string]any{"scheduler_queue_length": queue, "active_task_count": activeTasks},
 		"pending_commit_count":                     pendingCommit,
 		"remote_latency_valid":                     good,
 		"remote_latency_ms":                        remote,

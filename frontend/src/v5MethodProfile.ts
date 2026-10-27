@@ -450,6 +450,30 @@ V5_BUILTIN_METHODS.push({
   },
 });
 
+// MBE_MT_ONLINE_DUAL_V1: three isolated experimental profiles; original unchanged.
+for (const [methodId, name, coldstart, balance] of [
+  ["metatrack_online_feed", "Online：仅修复反馈冷启动", true, false],
+  ["metatrack_online_balance", "Online：仅分片负载保护", false, true],
+  ["metatrack_online_dual", "Online：反馈＋负载联合修复", true, true],
+] as const) {
+  V5_BUILTIN_METHODS.push({
+    ...mtOnlineOriginalV1,
+    method_id: methodId,
+    display_name: name,
+    role: "custom",
+    plugin_config_overrides: {
+      ...mtOnlineOriginalV1.plugin_config_overrides,
+      routing: {
+        ...mtOnlineOriginalV1.plugin_config_overrides?.routing,
+        incremental_exact_continuity_routing_v65: true,
+        online_state_ready_routing_v1: true,
+        online_feedback_coldstart_v2: coldstart,
+        online_capacity_guard_v2: balance,
+      },
+    },
+  });
+}
+
 // MBE_MT_OBS_PARITY_V1: scheduler-only diagnostic methods copied from current Full.
 const mtObsParityFullV1 = V5_BUILTIN_METHODS.find((item) => item.method_id === "metatrack_latest");
 if (!mtObsParityFullV1) throw new Error("MetaTrack Full profile unavailable for parity diagnostics");
@@ -510,6 +534,30 @@ export function defaultV5PluginSelections(catalog: V5PluginManifest[]): V5Plugin
 
 export function v5MethodSelectionsFromCatalog(catalog: V5PluginManifest[]): V5PluginSelection[] {
   return defaultV5PluginSelections(catalog).filter((item) => !V5_METHOD_EXCLUDED_CATEGORIES.has(item.category));
+}
+
+// MBE_MT_NOCAP_V1: two independent internal methods, selectable as one UI card.
+// Original Full and protected Online profiles are never mutated.
+for (const [sourceId, methodId, display] of [
+  ["metatrack_latest", "metatrack_nocap_full", "MetaTrack Full-NoCap"],
+  ["metatrack_online_dual", "metatrack_nocap_online", "MetaTrack Online-NoCap"],
+] as const) {
+  const original = V5_BUILTIN_METHODS.find((item) => item.method_id === sourceId);
+  if (!original) throw new Error(`NoCap source method missing: ${sourceId}`);
+  V5_BUILTIN_METHODS.push({
+    ...original,
+    method_id: methodId,
+    display_name: display,
+    role: "custom",
+    plugin_overrides: { ...original.plugin_overrides },
+    plugin_config_overrides: {
+      ...original.plugin_config_overrides,
+      routing: {
+        ...original.plugin_config_overrides?.routing,
+        experimental_no_global_capacity_v1: true,
+      },
+    },
+  });
 }
 
 export function parseSavedV5Method(saved: V3SavedConfig, catalog: V5PluginManifest[]): V5FormalMethod | null {

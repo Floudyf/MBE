@@ -497,6 +497,13 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     invalidateAll();
   }
 
+  // MBE_MT_NOCAP_SOLO_V1: selecting a NoCap card replaces the method selection,
+  // so one click never starts the two NoCap variants together.
+  function toggleNoCapSoloV1(methodId: string) {
+    setSelectedMethods((current) => current.length === 1 && current[0] === methodId ? [] : [methodId]);
+    invalidateAll();
+  }
+
   function toggleMethodSelection(methodId: string) {
     const mode = FORMAL_SUITE_DEFINITIONS.find((item) => item.id === selectedSuite)?.methodMode ?? "multiple";
     if (mode === "single") {
@@ -837,8 +844,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
             if (!method) return null;
             const checked = selected.some((item) => item.method_id === method.method_id);
             const forced = selectedSuite === "ablation_experiment" && definition.isFullVariant;
-            return <button type="button" key={method.method_id} data-testid={`v5-run-method-${method.method_id}`} aria-pressed={checked} className={`method-choice-card ${checked ? "selected" : ""}`} onClick={() => toggleMethodSelection(method.method_id)} disabled={forced}>
-              <input className="compatibility-checkbox" type="checkbox" aria-label={`${definition.title} ${method.method_id}`} checked={checked} disabled={forced} onClick={(event) => event.stopPropagation()} onChange={() => toggleMethodSelection(method.method_id)} />
+            return <button type="button" key={method.method_id} data-testid={`v5-run-method-${method.method_id}`} aria-pressed={checked} className={`method-choice-card ${checked ? "selected" : ""}`} onClick={() => ["metatrack_nocap_full", "metatrack_nocap_online"].includes(method.method_id) ? toggleNoCapSoloV1(method.method_id) : toggleMethodSelection(method.method_id)} disabled={forced}>
+              <input className="compatibility-checkbox" type="checkbox" aria-label={`${definition.title} ${method.method_id}`} checked={checked} disabled={forced} onClick={(event) => event.stopPropagation()} onChange={() => ["metatrack_nocap_full", "metatrack_nocap_online"].includes(method.method_id) ? toggleNoCapSoloV1(method.method_id) : toggleMethodSelection(method.method_id)} />
               <span className="choice-check">{checked ? "✓" : ""}</span><strong>{definition.title}</strong><small>{definition.description}</small>{forced && <em>完整版本（强制对照）</em>}
             </button>;
           })}</div></section>;

@@ -242,6 +242,64 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
+    # MBE_MT_ONLINE_DUAL_V1: candidate-only variants. Original unchanged.
+    "metatrack_online_feed": V5FormalMethod(
+        method_id="metatrack_online_feed",
+        display_name="Online：仅修复反馈冷启动",
+        role="custom",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "online_state_ready_routing_v1": True, "online_feedback_coldstart_v2": True, "online_capacity_guard_v2": False},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
+    "metatrack_online_balance": V5FormalMethod(
+        method_id="metatrack_online_balance",
+        display_name="Online：仅分片负载保护",
+        role="custom",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "online_state_ready_routing_v1": True, "online_feedback_coldstart_v2": False, "online_capacity_guard_v2": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
+    "metatrack_online_dual": V5FormalMethod(
+        method_id="metatrack_online_dual",
+        display_name="Online：反馈＋负载联合修复",
+        role="custom",
+        plugin_overrides={
+            "transaction_admission": "metatrack_strict_admission_v1",
+            "routing": "metatrack_coaccess_routing",
+            "block_producer": "metatrack_nl_window_v669",
+            "execution": "dual_track_execution",
+            "scheduler": "fast_first_scheduler",
+            "block_executor": "metatrack_block_executor",
+            "state_access": "metatrack_local_exact_access",
+            "commit": "commutative_hot_update_aggregation",
+        },
+        plugin_config_overrides={
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "online_state_ready_routing_v1": True, "online_feedback_coldstart_v2": True, "online_capacity_guard_v2": True},
+            "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
+        },
+    ),
     "metatrack_dyntrack": V5FormalMethod(
         method_id="metatrack_dyntrack",
         display_name="动态阻塞隔离双轨（候选）",
@@ -859,6 +917,24 @@ MT_BLOCKLANE_V1_METHODS: dict[str, V5FormalMethod] = {
 
 ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **CALVIN_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS, **OPTME_TXALLO_BUILTIN_METHODS, **MT_OBS_PARITY_V1_METHODS, **MT_BLOCKLANE_V1_METHODS}
 
+
+
+# MBE_MT_NOCAP_V1: experimental clones. Do not modify registered originals.
+for _source, _new_id, _label in (
+    ("metatrack_latest", "metatrack_nocap_full", "MetaTrack Full-NoCap"),
+    ("metatrack_online_dual", "metatrack_nocap_online", "MetaTrack Online-NoCap"),
+):
+    if _source not in ALL_BUILTIN_METHODS:
+        raise RuntimeError(f"NoCap source method missing: {_source}")
+    _original = ALL_BUILTIN_METHODS[_source]
+    _configs = {category: dict(items) for category, items in _original.plugin_config_overrides.items()}
+    _configs["routing"] = {**_configs.get("routing", {}), "experimental_no_global_capacity_v1": True}
+    ALL_BUILTIN_METHODS[_new_id] = _original.model_copy(deep=True, update={
+        "method_id": _new_id,
+        "display_name": _label,
+        "role": "custom",
+        "plugin_config_overrides": _configs,
+    })
 
 
 class FormalPlanValidationError(ValueError):
