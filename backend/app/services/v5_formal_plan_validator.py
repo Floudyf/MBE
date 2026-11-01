@@ -204,7 +204,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
     "metatrack_latest": V5FormalMethod(
         method_id="metatrack_latest",
-        display_name="Metatrack",
+        display_name="MetaTrack",
         role="main",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -217,7 +217,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
@@ -549,7 +549,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True},
             "block_producer": {"dependency_closed_consensus": False},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
@@ -590,7 +590,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": False, "ablation_on_demand_state_fetch_v661": True, "batch_remote_writeback": False, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": False, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True, "ablation_conservative_home_publish_v1": True},
         },
     ),
@@ -915,7 +915,24 @@ MT_BLOCKLANE_V1_METHODS: dict[str, V5FormalMethod] = {
     "metatrack_blockfifo": _mt_blocklane_variant_v1("metatrack_blockfifo", "去阻塞绕行（消融·8 Worker）", True),
 }
 
-ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **CALVIN_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS, **OPTME_TXALLO_BUILTIN_METHODS, **MT_OBS_PARITY_V1_METHODS, **MT_BLOCKLANE_V1_METHODS}
+# MBE_MT_LANE_FINAL_V1: isolated parity clones of current Full; no formal ablation modified.
+def _mt_lane_final_variant_v1(method_id: str, display_name: str, flag: str) -> V5FormalMethod:
+    full = BUILTIN_METHODS["metatrack_latest"]
+    config = {key: dict(value) for key, value in full.plugin_config_overrides.items()}
+    block_config = dict(config.get("block_executor", {}))
+    block_config[flag] = True
+    config["block_executor"] = block_config
+    return full.model_copy(deep=True, update={
+        "method_id": method_id, "display_name": display_name, "role": "custom",
+        "plugin_overrides": dict(full.plugin_overrides), "plugin_config_overrides": config,
+    })
+
+MT_LANE_FINAL_V1_METHODS = {
+    "metatrack_lane_same8": _mt_lane_final_variant_v1("metatrack_lane_same8", "终轮对照：同序统一Ready 8W", "mt_lane_same_order_ready_v1"),
+    "metatrack_lane_inherit": _mt_lane_final_variant_v1("metatrack_lane_inherit", "终轮候选：跨轨优先级继承", "mt_lane_inherit_v1"),
+}
+
+ALL_BUILTIN_METHODS: dict[str, V5FormalMethod] = {**BUILTIN_METHODS, **LITERATURE_BUILTIN_METHODS, **BATCH_SI_BUILTIN_METHODS, **STATELESS_BUILTIN_METHODS, **CALVIN_BUILTIN_METHODS, **PORYGON_BUILTIN_METHODS, **OPTME_TXALLO_BUILTIN_METHODS, **MT_OBS_PARITY_V1_METHODS, **MT_BLOCKLANE_V1_METHODS, **MT_LANE_FINAL_V1_METHODS}
 
 
 
@@ -935,6 +952,42 @@ for _source, _new_id, _label in (
         "role": "custom",
         "plugin_config_overrides": _configs,
     })
+
+
+# MT_BOUND_CARD_V1: isolated candidate; official Full and old Online IDs stay immutable.
+_bound_full = ALL_BUILTIN_METHODS["metatrack_latest"]
+_bound_configs = {k: dict(v) for k, v in _bound_full.plugin_config_overrides.items()}
+_bound_configs["routing"] = {**_bound_configs["routing"], "bounded_batch_routing_v1": True}
+ALL_BUILTIN_METHODS["metatrack_bound_v1"] = _bound_full.model_copy(deep=True, update={
+    "method_id": "metatrack_bound_v1",
+    "display_name": "MetaTrack：有界批次分片（micro10）",
+    "role": "main",
+    "plugin_config_overrides": _bound_configs,
+})
+
+
+# MT_SHADOW_CARD_V1: isolated overhead probe, cloned from existing micro10.
+_shadow_source = ALL_BUILTIN_METHODS["metatrack_bound_v1"]
+_shadow_configs = {category: dict(items) for category, items in _shadow_source.plugin_config_overrides.items()}
+_shadow_configs["routing"] = {**_shadow_configs.get("routing", {}), "shadow_full_probe_v1": True}
+ALL_BUILTIN_METHODS["metatrack_shadow_v1"] = _shadow_source.model_copy(deep=True, update={
+    "method_id": "metatrack_shadow_v1",
+    "display_name": "Shadow Full 在线维护开销探针（仅测量）",
+    "role": "main",
+    "plugin_config_overrides": _shadow_configs,
+})
+
+
+# MT_LOADISO_V1: REAL decisions. Clone the frozen Bound candidate configuration.
+_loadiso_base = ALL_BUILTIN_METHODS["metatrack_bound_v1"]
+_loadiso_configs = {category: dict(items) for category, items in _loadiso_base.plugin_config_overrides.items()}
+_loadiso_configs["routing"] = {**_loadiso_configs.get("routing", {}), "load_iso_shadow_v1": True}
+ALL_BUILTIN_METHODS["metatrack_loadiso_v1"] = _loadiso_base.model_copy(deep=True, update={
+    "method_id": "metatrack_loadiso_v1",
+    "display_name": "LoadIso：影子负载真实选片（候选）",
+    "role": "main",
+    "plugin_config_overrides": _loadiso_configs,
+})
 
 
 class FormalPlanValidationError(ValueError):
@@ -973,7 +1026,17 @@ def validate_request(payload: V5FormalRunRequest, *, allow_blocked_rows: bool = 
     row_errors: list[str] = []
     for row in rows:
         try:
-            result = validate(_spec_for(plan, row))
+            child_spec = _spec_for(plan, row)
+            # MBE_MT_FINAL_SWITCH_V1: fail closed before the Go LoadIso 100/2 gate.
+            routing_cfg = row.get("method", {}).get("plugin_config_overrides", {}).get("routing", {})
+            if routing_cfg.get("load_iso_shadow_v1") is True:
+                if child_spec.topology.shards != 2:
+                    raise ValueError("MetaTrack P2 requires exactly 2 execution shards")
+                if child_spec.tx_count < 100 or child_spec.tx_count % 100 != 0:
+                    raise ValueError("MetaTrack P2 requires positive complete RouteBatch=100 groups")
+                if child_spec.workload_source and child_spec.workload_source.use_full_dataset:
+                    raise ValueError("MetaTrack P2 requires a fixed validated transaction count; full-dataset auto count is unsupported")
+            result = validate(child_spec)
             if not result.valid:
                 row["blockers"] = sorted(set(row.get("blockers", []) + result.blockers))
                 row["warnings"] = sorted(set(row.get("warnings", []) + result.warnings))
@@ -1058,6 +1121,10 @@ def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:
     if not plan.suites:
         raise FormalPlanValidationError("at least one experiment suite is required")
     method_ids = [method.method_id for method in plan.methods]
+    if "metatrack_loadiso_v1" in method_ids and len(method_ids) != 1:
+        raise FormalPlanValidationError("LoadIso 候选必须单独运行，不能与其他方法并行启动")
+    if "metatrack_shadow_v1" in method_ids and len(method_ids) != 1:
+        raise FormalPlanValidationError("Shadow Full 探针必须单独运行，不能与其他方法并行启动")
     if len(set(method_ids)) != len(method_ids):
         raise FormalPlanValidationError("formal methods must be unique")
     for suite in plan.suites:

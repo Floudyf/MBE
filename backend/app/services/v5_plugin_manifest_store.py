@@ -131,6 +131,8 @@ _MANIFESTS = [
             "state_storage_unit_count": {"type": "integer", "minimum": 0, "maximum": 65536, "default": 0},
             "micro_batch_size": {"type": "integer", "minimum": 0, "maximum": 5000, "default": 0},
             "incremental_exact_continuity_routing_v65": {"type": "boolean", "default": False},
+            "bounded_batch_routing_v1": {"type": "boolean", "default": False},
+            "load_iso_shadow_v1": {"type": "boolean", "default": False},
             "ablation_ignore_exact_ready_routing_v660": {"type": "boolean", "default": False},
             "ablation_no_exact_version_routing_v1": {"type": "boolean", "default": False}, # MBE_MT_NOEXACT_ABL_V1
             "ablation_ignore_coaccess_routing_v661": {"type": "boolean", "default": False},
@@ -294,6 +296,8 @@ _MANIFESTS = [
             "single_final_seal": {"type": "boolean", "default": False},
             "diagnostic_single_business_execution_v28": {"type": "boolean", "default": False},
             "diagnostic_unified_ready_v1": {"type": "boolean", "default": False},
+            "mt_lane_same_order_ready_v1": {"type": "boolean", "default": False},
+            "mt_lane_inherit_v1": {"type": "boolean", "default": False},
             "diagnostic_single_business_execution_v1": {"type": "boolean", "default": False},
         }),
         capabilities=["metatrack_ready_queues", "dependency_release", "transaction_level_remote_state_ready", "state_wait_suspend_resume", "batch_local_exact_version_handoff", "batch_entry_state_prefetch", "batch_remote_writeback", "safe_state_fold", "version_dependency_liveness", "final_version_batch_writeback", "dependency_closed_consensus", "indexed_version_dependency_liveness", "single_final_seal", "deterministic_state_delta", "execution_plan_digest"],

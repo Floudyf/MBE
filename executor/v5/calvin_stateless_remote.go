@@ -175,16 +175,8 @@ func (r *NodeRuntime) calvinStatelessFetchState(ctx context.Context, input Calvi
 	// writer for this key in the consensus-bound Calvin block, so the exact
 	// predecessor is the durable value at the block boundary.
 	if dep.RequiredVersion == 0 {
-		if input.HomeShard == local {
-			return CalvinStatelessFetchResult{Value: r.db.Get(input.Access.Key), BlockStart: true, WaitMS: time.Since(started).Milliseconds()}, nil
-		}
-		currentItem := calvinWithoutConsensusVersions(input.Item)
-		response, latency, err := r.fetchRemoteState(ctx, input.Block, currentItem, input.Access, input.HomeShard)
-		if err != nil {
-			return CalvinStatelessFetchResult{}, err
-		}
-		r.recordRemoteStateAccess(input.Block, input.Item, input.Access, response, latency)
-		return CalvinStatelessFetchResult{Value: response.Value, Remote: true, BlockStart: true, WaitMS: latency.Milliseconds(), PhysicalFetch: 1}, nil
+		// No writer inside H: use the immutable H-1 boundary, never the current DB.
+		return r.calvinBoundaryFetchStateV1(ctx, input)
 	}
 	if input.HomeShard == local {
 		value, err := r.waitForLocalStateVersion(ctx, input.Access.Key, dep.RequiredVersion)

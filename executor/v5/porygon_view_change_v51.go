@@ -158,6 +158,9 @@ func (r *NodeRuntime) replayPorygonV51SelectedPrepare(ctx context.Context) {
 	view := r.currentPBFTView()
 	height := r.porygonConsensusNextHeight()
 	ready, _ := r.porygonPaperProposalValidationReady(height)
+	if r.isCurrentLeader() {
+		ready, _ = r.porygonV58SelectedLeaderReady(height)
+	}
 	if !ready {
 		return
 	}
@@ -170,9 +173,46 @@ func (r *NodeRuntime) replayPorygonV51SelectedPrepare(ctx context.Context) {
 		return
 	}
 	nv := pbft.NewView{View: pending.View, LeaderID: pending.LeaderID, Height: pending.Block.Height}
-	if err := r.porygonV51RecoverSelectedPrepare(ctx, nv, pending.Block); err != nil {
+	if r.isCurrentLeader() {
+		// Re-broadcast exactly the certified selected digest in this NEW-VIEW.
+		if err := r.porygonV58ResumeSelectedLeader(ctx, nv, pending.Block); err != nil {
+			r.setLastProposalError(err)
+			return
+		}
+	} else if err := r.porygonV51RecoverSelectedPrepare(ctx, nv, pending.Block); err != nil {
 		r.setLastProposalError(err)
 		return
 	}
 	r.addPorygonRuntimeMetric("porygon_v51_new_view_selected_prepare_replay_count", 1)
+}
+
+// porygonV58SelectedLeaderReady applies the existing paper E(h-2) / fault E(h-1)
+// dependencies to a NEW-VIEW selected proposal, not only a fresh candidate.
+func (r *NodeRuntime) porygonV58SelectedLeaderReady(height uint64) (bool, string) {
+	ready, reason := r.porygonPaperProposalValidationReady(height)
+	if !ready {
+		return false, reason
+	}
+	if r.porygonPaperProposalRoundBlocked(height) {
+		return false, "certified fault-recovery execution predecessor not ready"
+	}
+	return true, ""
+}
+
+// porygonV58ResumeSelectedLeader reuses the existing authenticated PBFT
+// begin-proposal path. It must never create a new candidate, rewrite the digest,
+// bypass a selected certificate, or skip original paper validation.
+func (r *NodeRuntime) porygonV58ResumeSelectedLeader(ctx context.Context, nv pbft.NewView, selected realblock.Block) error {
+	state := r.pbftState()
+	if !r.isCurrentLeader() || state == nil || state.View() != nv.View || state.Leader() != nv.LeaderID ||
+		selected.Height != nv.Height || selected.Height != r.porygonConsensusNextHeight() {
+		return fmt.Errorf("Porygon v58 stale NEW-VIEW selected leader replay: view=%d height=%d", nv.View, selected.Height)
+	}
+	if !state.IsDuplicatePrePrepare(nv.View, selected.Height, selected.BlockHash) {
+		return fmt.Errorf("Porygon v58 selected NEW-VIEW digest not installed: height=%d", selected.Height)
+	}
+	if ready, reason := r.porygonV58SelectedLeaderReady(selected.Height); !ready {
+		return fmt.Errorf("Porygon v58 selected NEW-VIEW predecessor not ready: %s", reason)
+	}
+	return r.beginPBFTProposal(ctx, selected, r.estimateProposalValidationWork(selected))
 }

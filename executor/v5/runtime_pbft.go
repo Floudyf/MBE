@@ -117,6 +117,13 @@ func validatePBFTEnvelope(msg p2p.MessageEnvelope, view, sequence, height uint64
 	return nil
 }
 
+// mtPBFTDeferFutureStreamingV1 never relaxes admission for the current height.
+// Only an already authenticated, fully hydrated streaming block can enter the
+// existing bounded deferred-PRE-PREPARE queue while a parent commit catches up.
+func mtPBFTDeferFutureStreamingV1(streaming bool, blockHeight, nextHeight uint64) bool {
+	return streaming && blockHeight > nextHeight
+}
+
 func (r *NodeRuntime) handlePBFTPrePrepare(ctx context.Context, msg p2p.MessageEnvelope) error {
 	pre, err := p2p.DecodePayload[pbft.PrePrepare](msg)
 	if err != nil {
@@ -142,6 +149,17 @@ func (r *NodeRuntime) handlePBFTPrePrepare(ctx context.Context, msg p2p.MessageE
 		return nil
 	}
 	pre = hydratedPre
+
+	// MBE_MT_FRONTIER_WAKE_V1: On an authenticated streaming MetaTrack
+	// PRE-PREPARE for a future durable height, the predecessor's ordinal may
+	// still be recorded by the preceding block's commit worker. Preserve the
+	// signed proposal for replay after that commit, rather than prematurely
+	// rejecting its frontier and waiting for the PBFT proposal timeout.
+	// The replay always re-enters this handler and performs the original full
+	// block body, exact-version, and PBFT checks before casting any vote.
+	if mtPBFTDeferFutureStreamingV1(metaTrackStreamingWindowMetadataV2(pre.Block), pre.Height, r.porygonConsensusNextHeight()) {
+		return r.deferPBFTPrePrepare(ctx, msg.FromNode, pre, false)
+	}
 	if err := r.validateConsensusBlockBody(pre.Block); err != nil {
 		return fmt.Errorf("pbft pre-prepare block body: %w", err)
 	}
@@ -892,6 +910,22 @@ func (r *NodeRuntime) onPBFTNewViewAccepted(ctx context.Context, nv pbft.NewView
 			return r.porygonV51RecoverSelectedPrepare(ctx, nv, selected)
 		}
 		return nil
+	}
+	// A certified NEW-VIEW selection may be ahead of this leader's local E/T/U.
+	// Backups already defer their PREPARE. Keep the same authenticated block
+	// until the leader's certified predecessor is available, then replay it.
+	if porygonMode {
+		if ready, reason := r.porygonV58SelectedLeaderReady(selected.Height); !ready {
+			if err := r.porygonV51RememberSelectedPrepare(nv, selected); err != nil {
+				return err
+			}
+			r.addPorygonRuntimeMetric("porygon_v58_new_view_leader_deferred_count", 1)
+			r.setLastProposalError(fmt.Errorf("porygon selected new-view leader predecessor not ready at height %d: %s", selected.Height, reason))
+			// Close the race where the predecessor finalized between the first
+			// readiness check and storing this authenticated selected block.
+			r.replayPorygonV51SelectedPrepare(ctx)
+			return nil
+		}
 	}
 
 	workUnits := r.estimateProposalValidationWork(selected)

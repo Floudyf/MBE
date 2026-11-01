@@ -447,12 +447,18 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 	if noExactV1 {
 		selector = metaTrackRankWithoutExactV1
 	}
+	// Only the experimental fork sets this key. Full's selector is unchanged.
+	if mode, ok := p.config["bound_selector_v1"].(string); ok && (mode == "exact" || mode == "remote") {
+		selector = func(items []metaTrackIncrementalCandidateV650) []metaTrackIncrementalCandidateV650 {
+			return mtBoundAlternativeRankV1(items, mode)
+		}
+	}
 	// MBE_MT_ONLINE_V1: only candidate ordering changes. No new signed
 	// state readiness token and no modification to exact dependency metadata.
 	onlineConfiguredV1 := boolFromAny(p.config["online_state_ready_routing_v1"])
 	feedbackColdstartV1 := onlineConfiguredV1 && boolFromAny(p.config["online_feedback_coldstart_v2"])
 	capacityGuardV1 := onlineConfiguredV1 && boolFromAny(p.config["online_capacity_guard_v2"])
-	onlineUsedV1 := false // MBE_MT_ONLINE_FIX_V1 reset per candidate selection
+	onlineUsedV1 := false  // MBE_MT_ONLINE_FIX_V1 reset per candidate selection
 	onlineProxyV1 := false // MBE_MT_ONLINE_DUAL_V1: reset per candidate selection
 	if onlineConfiguredV1 {
 		observed := input.OnlineFeedback

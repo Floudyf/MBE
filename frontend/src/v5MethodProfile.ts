@@ -100,7 +100,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   },
   {
     method_id: "metatrack_latest",
-    display_name: "Metatrack",
+    display_name: "MetaTrack",
     role: "main",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -113,7 +113,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true },
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
@@ -211,7 +211,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true },
       block_producer: { dependency_closed_consensus: false },
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
@@ -252,7 +252,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true },
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: false, ablation_on_demand_state_fetch_v661: true, batch_remote_writeback: false, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: false, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true, ablation_conservative_home_publish_v1: true },
     },
   },
@@ -474,6 +474,52 @@ for (const [methodId, name, coldstart, balance] of [
   });
 }
 
+// MT_BOUND_CARD_V1: isolated runnable candidate, identical to Full except routing flag.
+V5_BUILTIN_METHODS.push({
+  ...mtOnlineOriginalV1,
+  method_id: "metatrack_bound_v1",
+  display_name: "MetaTrack：有界批次分片（micro10）",
+  role: "main",
+  plugin_config_overrides: {
+    ...mtOnlineOriginalV1.plugin_config_overrides,
+    routing: {
+      ...mtOnlineOriginalV1.plugin_config_overrides?.routing,
+      bounded_batch_routing_v1: true,
+    },
+  },
+});
+
+// MT_LOADISO_V1: REAL routing candidate, separate from measurement-only Shadow.
+const mtLoadIsoBaseV1 = V5_BUILTIN_METHODS.find((m) => m.method_id === "metatrack_bound_v1");
+if (!mtLoadIsoBaseV1) throw new Error("micro10 source missing for LoadIso candidate");
+V5_BUILTIN_METHODS.push({
+  ...mtLoadIsoBaseV1,
+  method_id: "metatrack_loadiso_v1",
+  display_name: "LoadIso：影子负载真实选片（候选）",
+  role: "main",
+  plugin_config_overrides: {
+    ...mtLoadIsoBaseV1.plugin_config_overrides,
+    routing: { ...mtLoadIsoBaseV1.plugin_config_overrides?.routing, load_iso_shadow_v1: true },
+  },
+});
+
+// MT_SHADOW_CARD_V1: diagnostic only; real plan remains the micro10 plan.
+const mtShadowSourceV1 = V5_BUILTIN_METHODS.find((m) => m.method_id === "metatrack_bound_v1");
+if (!mtShadowSourceV1) throw new Error("micro10 source missing for Shadow Full probe");
+V5_BUILTIN_METHODS.push({
+  ...mtShadowSourceV1,
+  method_id: "metatrack_shadow_v1",
+  display_name: "Shadow Full 在线维护开销探针（仅测量）",
+  role: "main",
+  plugin_config_overrides: {
+    ...mtShadowSourceV1.plugin_config_overrides,
+    routing: {
+      ...mtShadowSourceV1.plugin_config_overrides?.routing,
+      shadow_full_probe_v1: true,
+    },
+  },
+});
+
 // MBE_MT_OBS_PARITY_V1: scheduler-only diagnostic methods copied from current Full.
 const mtObsParityFullV1 = V5_BUILTIN_METHODS.find((item) => item.method_id === "metatrack_latest");
 if (!mtObsParityFullV1) throw new Error("MetaTrack Full profile unavailable for parity diagnostics");
@@ -518,6 +564,23 @@ for (const [id, title, noBypass] of [
         blocking_lane_candidate_v1: true,
         blocking_lane_no_bypass_v1: noBypass,
       },
+    },
+  });
+}
+
+// MBE_MT_LANE_FINAL_V1: three-arm final control; clone current Full exactly.
+const mtLaneFinalFullV1 = V5_BUILTIN_METHODS.find((v) => v.method_id === "metatrack_latest");
+if (!mtLaneFinalFullV1) throw new Error("MTLaneFinal: current Full profile unavailable");
+for (const [id, title, flag] of [
+  ["metatrack_lane_same8", "终轮对照：同序统一Ready 8W", "mt_lane_same_order_ready_v1"],
+  ["metatrack_lane_inherit", "终轮候选：跨轨优先级继承", "mt_lane_inherit_v1"],
+] as const) {
+  V5_BUILTIN_METHODS.push({
+    ...mtLaneFinalFullV1, method_id: id, display_name: title, role: "custom",
+    plugin_overrides: { ...mtLaneFinalFullV1.plugin_overrides },
+    plugin_config_overrides: {
+      ...Object.fromEntries(Object.entries(mtLaneFinalFullV1.plugin_config_overrides ?? {}).map(([k,v]) => [k,{...v}])),
+      block_executor: { ...(mtLaneFinalFullV1.plugin_config_overrides?.block_executor ?? {}), [flag]: true },
     },
   });
 }

@@ -1093,6 +1093,10 @@ type metaTrackRouting struct {
 	basicPlugin
 	incrementalMu   sync.Mutex
 	incrementalV650 *metaTrackIncrementalRoutingStateV650
+	shadowOnceV1    sync.Once
+	shadowProbeV1   *mtShadowProbeStateV1
+	loadIsoOnceV1   sync.Once
+	loadIsoV1       *mtLoadIsoStateV1
 }
 
 func (p *metaTrackRouting) StatelessDirectExecution() bool     { return true }
@@ -1126,6 +1130,17 @@ func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 		return p.planHashBaselineAblationV662(input)
 	}
 	if p != nil && boolFromAny(p.config["incremental_exact_continuity_routing_v65"]) && input.ExpectedTransactionCount > 0 {
+		// MT_LOADISO_V1: independent candidate; real Full and Bound untouched.
+		if boolFromAny(p.config["load_iso_shadow_v1"]) {
+			return p.planLoadIsoV1(input)
+		}
+		// MT_SHADOW_CARD_V1: measurement-only candidate; Full and micro10 remain unchanged.
+		if boolFromAny(p.config["shadow_full_probe_v1"]) {
+			return p.planShadowProbeV1(input)
+		}
+		if boolFromAny(p.config["bounded_batch_routing_v1"]) {
+			return p.planBoundV1(input)
+		}
 		return p.planIncrementalExactContinuityV650(input)
 	}
 	if metaTrackLogicalDomainPolicyEnabled(p.config) {
@@ -3658,7 +3673,13 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 	}
 	// MBE_MT_WAIT_READY_V1: matched candidates only differ in canonical-prefix admission.
 	waitReadyCandidate := schedule.ReadyPriorityPolicy == metaTrackWaitReadyPolicy || schedule.ReadyPriorityPolicy == metaTrackWaitFIFOControlPolicy
-	singleReadyQueueV661 := singleConservativeSerialV675 || diagnosticUnifiedReadyV1 || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) || waitReadyCandidate // existing unified Ready worker implementation
+	// MBE_MT_LANE_FINAL_V1: same-order single Ready is distinct from legacy unified diag
+	matchedReadyV1 := boolFromAny(p.config["mt_lane_same_order_ready_v1"])
+	dualLaneInheritV1 := boolFromAny(p.config["mt_lane_inherit_v1"])
+	if matchedReadyV1 && dualLaneInheritV1 {
+		return BlockExecutionResult{}, fmt.Errorf("MTLaneFinal: mutually exclusive method flags")
+	}
+	singleReadyQueueV661 := singleConservativeSerialV675 || diagnosticUnifiedReadyV1 || boolFromAny(p.config[metaTrackAblationSingleReadyQueueV661]) || waitReadyCandidate || matchedReadyV1 // existing unified Ready worker implementation
 	// MBE_MT_BLOCKLANE_V1: no changes to Full or existing official ablations.
 	blockLaneCandidateV1 := boolFromAny(p.config["blocking_lane_candidate_v1"])
 	blockLaneNoBypassV1 := blockLaneCandidateV1 && boolFromAny(p.config["blocking_lane_no_bypass_v1"])
@@ -3672,7 +3693,7 @@ func (p metaTrackBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExe
 		batchFetch = input.RemoteStateBatchFetch
 	}
 	executionStarted := time.Now()
-	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithBlockingLaneV1(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661, blockLaneNoBypassV1)
+	planEvents, actualMetrics, outcomes, attempts, err := executeMetaTrackScheduleWithLaneFinalV1(ctx, schedule, classification, input.Block, input.BaseStateSnapshot, workerCount, businessDelay, input.RemoteStateFetch, batchFetch, input.StateVersionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661, blockLaneNoBypassV1, dualLaneInheritV1, matchedReadyV1)
 	executionDuration := time.Since(executionStarted)
 	if err != nil {
 		return BlockExecutionResult{}, err
@@ -3929,8 +3950,13 @@ func executeMetaTrackScheduleWithFullLocality(ctx context.Context, schedule Sche
 }
 
 func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661, blockLaneNoBypassV1 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
+	return executeMetaTrackScheduleWithLaneFinalV1(ctx, schedule, classification, block, baseSnapshot, workerCount, businessDelay, remoteFetch, batchFetch, versionPublish, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661, blockLaneNoBypassV1, false, false)
+}
+
+// MBE_MT_LANE_FINAL_V1: isolated optional policy; legacy public Go test signature is retained.
+func executeMetaTrackScheduleWithLaneFinalV1(ctx context.Context, schedule ScheduleResult, classification BatchClassificationResult, block realblock.Block, baseSnapshot map[string]string, workerCount int, businessDelay time.Duration, remoteFetch RemoteStateFetchFunc, batchFetch RemoteStateBatchFetchFunc, versionPublish StateVersionPublishFunc, strictFrontier, localExactVersionHandoff, singleReadyQueueV661, singleConservativeSerialV675, diagnosticSingleBusinessV28, onDemandStateFetchV661, blockLaneNoBypassV1, dualLaneInheritV1, matchedReadyV1 bool) ([]ScheduleEvent, map[string]any, []metaTrackExecutionOutcome, []BusinessExecutionAttempt, error) {
 	ordered := append([]tx.SignedTransaction(nil), schedule.Ordered...)
-	if singleReadyQueueV661 {
+	if singleReadyQueueV661 && !matchedReadyV1 {
 		ordered = append([]tx.SignedTransaction(nil), block.TxList...)
 	}
 	// MBE_METATRACK_READY_ROUND_SCHEDULER_V35
@@ -4763,6 +4789,8 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 	executionOutcomes := make([]metaTrackExecutionOutcome, 0, len(ordered))
 	attempts := make([]BusinessExecutionAttempt, 0, len(ordered))
 	attemptByID := map[string]int{}
+	// MBE_MT_LANE_FINAL_V1: chosen Conservative parents borrow the Fast worker channel, not the Fast safety class.
+	lanePromotedV1 := map[string]bool{}
 	workingSnapshot := copyRegistryStringMap(baseSnapshot)
 	locallyWrittenKeys := map[string]bool{}
 	transactionSnapshotTotalKeys := 0
@@ -4855,6 +4883,16 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 			case <-ctx.Done():
 				return ctx.Err()
 			case workerQueues[assignedWorker].influence <- nextJob:
+				return nil
+			}
+		}
+		// MBE_MT_LANE_FINAL_V1: worker preference is borrowed; execution track is NOT reclassified.
+		if dualLaneInheritV1 && lanePromotedV1[txID] {
+			delete(lanePromotedV1, txID)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case workerQueues[assignedWorker].fast <- nextJob:
 				return nil
 			}
 		}
@@ -4967,6 +5005,18 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 	unlockSelectedOpportunityCount := 0
 	seenReadyRounds := map[uint64]bool{}
 	seenMultiCandidateReadyRounds := map[uint64]bool{}
+	// MBE_MT_LANE_FINAL_V1: semantic tracks remain unchanged; only Ready competition arbitration is new.
+	fastIDsLaneV1 := map[string]bool{}
+	if dualLaneInheritV1 {
+		for id, d := range decisionByID {
+			if d.Track == "fast" {
+				fastIDsLaneV1[id] = true
+			}
+		}
+	}
+	lanePromoteCountV1 := 0
+	laneOpportunityCountV1 := 0
+	laneLastPromoteDispatchV1 := -8
 	nextReady := func(useInfluence, useUnlock bool) string {
 		if singleReadyQueueV661 {
 			if len(conservativeReady) == 0 {
@@ -4984,6 +5034,23 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 				return metaTrackPopDynamicRiskReady(&fastReady, &conservativeReady, readyRoundByTx, schedule, unlockCount, riskInFlight, workerCount)
 			}
 			return metaTrackPopReadyRoundChoice(&fastReady, &conservativeReady, readyRoundByTx, schedule, useInfluence)
+		}
+		// MBE_MT_LANE_FINAL_V1: inherit Fast queue service for one Ready Conservative
+		// producer that is the sole outstanding dependency of a Fast child.
+		// At most one promotion every 8 dispatches; bounded scan, no safety downgrade.
+		if dualLaneInheritV1 && len(fastReady) > 0 && len(conservativeReady) > 0 {
+			index := metaTrackLaneInheritIndexV1(fastReady, conservativeReady, reverse, depCount, fastIDsLaneV1, completed)
+			if index >= 0 {
+				laneOpportunityCountV1++
+				if dispatchSeq-laneLastPromoteDispatchV1 >= 8 {
+					txID := conservativeReady[index]
+					conservativeReady = append(conservativeReady[:index], conservativeReady[index+1:]...)
+					lanePromotedV1[txID] = true
+					lanePromoteCountV1++
+					laneLastPromoteDispatchV1 = dispatchSeq
+					return txID
+				}
+			}
 		}
 		if len(fastReady) > 0 {
 			txID := fastReady[0]
@@ -5480,6 +5547,10 @@ func executeMetaTrackScheduleWithBlockingLaneV1(ctx context.Context, schedule Sc
 	}
 	metrics := map[string]any{
 		"configured_worker_count":                           workerCount,
+		"mt_lane_inherit_enabled_v1":                        dualLaneInheritV1,
+		"mt_lane_same_order_ready_v1":                       matchedReadyV1,
+		"mt_lane_promotion_count_v1":                        lanePromoteCountV1,
+		"mt_lane_opportunity_count_v1":                      laneOpportunityCountV1,
 		"metatrack_commutative_dependency_suppressed_count": classification.CommutativeDependencySuppressedCount,
 		"metatrack_transaction_snapshot_total_key_count":    transactionSnapshotTotalKeys,
 		"metatrack_version_publish_async_enqueued_count":    versionPublishEnqueued,

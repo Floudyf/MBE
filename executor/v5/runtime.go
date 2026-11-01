@@ -1134,13 +1134,29 @@ func (r *NodeRuntime) noteCatchupTarget(height uint64) {
 	r.mu.Unlock()
 }
 
+// mtCatchupFutureUrgencyV1 uses already-retained same-view future PRE-PREPARE
+// evidence to schedule a timely certified catch-up request. It does not
+// validate, accept, commit, or sign any block, and never updates the stable
+// checkpoint/catch-up target state. Only the request schedule and bounded
+// requested height may change; received blocks still require PBFT certificates.
+func mtCatchupFutureUrgencyV1(knownHeight, checkpointTarget, view uint64, deferred map[uint64]deferredPrePrepare) (bool, uint64) {
+	target := checkpointTarget
+	for height, pending := range deferred {
+		if pending.View == view && height > knownHeight && height > target {
+			target = height
+		}
+	}
+	return target > knownHeight, target
+}
+
 func (r *NodeRuntime) requestCatchup(ctx context.Context) {
+	// Read the PBFT view outside r.mu to avoid cross-lock nesting.
+	currentView := r.currentPBFTView()
 	r.mu.Lock()
 	from := r.committedHeight + 1
 	knownHeight := r.committedHeight
 	knownHash := r.committedHash
-	targetHeight := r.catchupTargetHeight
-	urgent := targetHeight >= from && targetHeight > knownHeight
+	urgent, targetHeight := mtCatchupFutureUrgencyV1(knownHeight, r.catchupTargetHeight, currentView, r.deferredPrePrepares)
 	interval := r.catchupRequestInterval(urgent)
 	if !r.lastCatchupRequest.IsZero() && time.Since(r.lastCatchupRequest) < interval {
 		r.mu.Unlock()
@@ -3807,6 +3823,8 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 	// MBE_OPTME_V22_BLOCK_START_PROJECTION: freeze this partition's H-1 state
 	// under block H before any H materialization can race a remote projection read.
 	r.primeOptMEBlockStartProjectionSnapshot(block, stateBefore)
+	// Stateless Calvin reads the same immutable H-1 Home state for local/remote reads.
+	r.primeCalvinBoundarySnapshotV1(block, stateBefore)
 	stateCheckpoint, err := r.plugins.StateStorage.Checkpoint(r.db)
 	if err != nil {
 		r.setCommitPhase("state_checkpoint_error", block)
@@ -3886,7 +3904,12 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		// replicated local DB already holds the execution state. Only
 		// historical exact-version read overlays may change that view.
 		if len(r.shardIDs()) > 1 {
-			if !txalloIdentityPrefetchCanReuseCommitmentV1(
+			// The zero-user-transaction system-drain case cannot add remote
+			// access-list read overlays. Its certified system deltas already
+			// updated both the snapshot and commitment before this prefetch.
+			systemOnlyCertified := r.plugins.BlockExecutor != nil && mtSystemDrainCertifiedCommitmentV1(
+				block, r.plugins.BlockExecutor.ID(), txalloHistoricalProjectionV1, baseStateCommitment)
+			if !systemOnlyCertified && !txalloIdentityPrefetchCanReuseCommitmentV1(
 				r.txalloStatefulReplicaEnabled(), r.genericStatelessRemoteStateEnabled(),
 				txalloHistoricalProjectionV1, baseStateCommitment) {
 				baseStateCommitment = nil
@@ -5308,6 +5331,19 @@ func (r *NodeRuntime) metaTrackStateReadyInputs(block realblock.Block) (map[stri
 // Stateful paper-replicated substrate. A historical read overlay must
 // retain the previous executor construction behavior until the
 // execution-view versus physical-view root contract is separately audited.
+// mtSystemDrainCertifiedCommitmentV1 is deliberately narrower than normal
+// stateless prefetch reuse: a system-delta-only block has no signed user reads,
+// so prepareRemoteStateSnapshot has zero fetch tasks and cannot overlay the
+// authenticated execution view. The consensus system deltas are already
+// reflected in both views by applyStateDeltaToSnapshotWithCommitment.
+// Do not change other methods, historical read projections, or ordinary blocks.
+func mtSystemDrainCertifiedCommitmentV1(block realblock.Block, executorID string, historicalProjection bool, base *state.Commitment) bool {
+	if executorID != execution.SerialBlockExecutorID && executorID != execution.BlockSTMExecutorID {
+		return false
+	}
+	return len(block.TxList) == 0 && len(block.SystemStateDeltas) > 0 && !historicalProjection && base != nil
+}
+
 func txalloIdentityPrefetchCanReuseCommitmentV1(statefulReplica, genericStateless, historicalProjection bool, base *state.Commitment) bool {
 	return statefulReplica && !genericStateless && !historicalProjection && base != nil
 }
@@ -5890,6 +5926,10 @@ func (r *NodeRuntime) fetchRemoteState(ctx context.Context, block realblock.Bloc
 }
 
 func (r *NodeRuntime) handleStateFetchRequest(ctx context.Context, requester string, request StateFetchRequest) error {
+	// Calvin-only boundary requests must not fall through to generic live-DB snapshots.
+	if handled, err := r.handleCalvinBoundaryFetchRequestV1(ctx, requester, request); handled {
+		return err
+	}
 	if handled, err := r.handleOptMEProjectionFetchRequest(ctx, requester, request); handled {
 		return err
 	}

@@ -22,6 +22,8 @@ def test_official_flow_hash_replaces_only_full_routing_choice():
     original = dict(full.plugin_config_overrides['routing'])
     new = dict(flow.plugin_config_overrides['routing'])
     assert original.pop('incremental_exact_continuity_routing_v65') is True
+    assert original.pop('bounded_batch_routing_v1') is True
+    assert original.pop('load_iso_shadow_v1') is True
     assert new.pop('incremental_exact_continuity_routing_v65') is False
     assert new.pop('ablation_hash_routing_v662') is True
     assert new == original
