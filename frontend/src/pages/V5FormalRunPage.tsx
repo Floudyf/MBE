@@ -29,7 +29,7 @@ import {
 import WorkloadPreviewPanel from "../components/v5/WorkloadPreviewPanel";
 import WorkloadSourceEditor, { publishedWorkloadDatasets, canonicalFormalDatasetId, validDatasetCounts, chooseDatasetCount, type WorkloadEditorState } from "../components/v5/WorkloadSourceEditor";
 import { backendLabel, blockerLabel, faultModeLabel, statusLabel, suiteLabel } from "../v5Labels";
-import { BATCH_SI_ABLATION_METHOD_IDS, METATRACK_ABLATION_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
+import { MT_FROZEN_ABLATION_METHOD_IDS, MT_FROZEN_METHOD_ID_SET, BATCH_SI_ABLATION_METHOD_IDS, METATRACK_ABLATION_METHOD_IDS, BATCH_SI_WORKER_SCALING_METHOD_IDS, FORMAL_METHOD_DEFINITIONS, FORMAL_SUITE_DEFINITIONS, PARALLEL_WORKER_OPTIONS, WORKER_SCALING_OPTIONS, methodDefinition } from "../v5FormalExperimentCatalog";
 import { V5_BUILTIN_METHODS, V5_DEFAULT_METHOD_IDS, applyV5MethodSelections, defaultV5PluginSelections } from "../v5MethodProfile";
 import { buildThetaSweepPoints, compactCount, thetaOptionsForDataset, type SkewExperimentPreset } from "../v5SkewExperiment"; // V5_SKEW_MAIN_PRESET_V1
 import "../v5UiPolish.css";
@@ -39,6 +39,9 @@ const formalRunDraftKey = "mbe.v5FormalRunDraft.v1";
 const groundhogMethodId = "hash_groundhog";
 const alphaValues = [0, 0.2, 0.4, 0.6, 0.8, 1, 1.2, 1.4];
 const MAX_FORMAL_CHILD_RUNS = 1024;
+// MTBRIDGE_FROZEN10K_V1: scoped experiment selection, old drafts and IDs untouched.
+const frozenSelected = (ids: readonly string[]) => ids.some((id) => MT_FROZEN_METHOD_ID_SET.has(id));
+
 
 // MBE_MT_METHODSEL_V1: the visible/allowed list is the single source of truth
 // for ordinary method suites; hidden registered methods remain available for
@@ -509,7 +512,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     if (mode === "single") {
       setSelectedMethods([methodId]);
     } else if (mode === "ablation") {
-      const fullMethodId = selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack_latest" : "hash_batch_si";
+      const fullMethodId = frozenSelected(selectedMethods) || methodId.startsWith("mtf_") ? "mtf_full10" : selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack_latest" : "hash_batch_si";
       if (methodId === fullMethodId) return;
       setSelectedMethods((current) => {
         const next = toggle(methodId, current);
@@ -832,11 +835,25 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
 
     <article className="final-card wide">
       <div className="section-heading"><div><h3>② 选择实验对象</h3><p className="muted">{FORMAL_SUITE_DEFINITIONS.find((item) => item.id === selectedSuite)?.description}</p></div></div>
+      {/* MBE_MT_LANE_UI_SINGLE_V4: single-method controls, NEVER select all three together. */}
+      <div className="final-card" data-testid="v5-lane-final-panel">
+        <div className="section-heading"><div><h4>双轨终轮 · 三组独立实验</h4><p className="muted">仅选择一个方法；上一组运行完成并退出后，才能启动下一组。非论文正式消融。</p></div></div>
+        <div className="button-row compact-actions">
+          {([
+            ["metatrack_latest", "① Full（冻结基准）"],
+            ["metatrack_lane_same8", "② 同序统一Ready（8 Worker）"],
+            ["metatrack_lane_inherit", "③ 有界跨轨继承（8 Worker）"],
+          ] as const).map(([id, label]) => <button key={id} type="button" data-testid={`v5-lane-only-${id}`} className={`ghost-button ${selectedSuite === "comparison_experiment" && selectedMethods.length === 1 && selectedMethods[0] === id ? "selected" : ""}`} aria-pressed={selectedSuite === "comparison_experiment" && selectedMethods.length === 1 && selectedMethods[0] === id} onClick={() => {
+            selectSuite("comparison_experiment");
+            update(() => setSelectedMethods([id]));
+          }}>{label}</button>)}
+        </div>
+      </div>
       {selectedSuite === "comparison_experiment" && <div className="button-row compact-actions"><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["hash_serial", "hash_aria", "hash_block_stm", "hash_groundhog", "hash_batch_si"]))}>论文五方法</button><button type="button" className="ghost-button" onClick={() => update(() => setSelectedMethods(["metatrack_latest"]))}>MetaTrack 对照组</button>{/* MBE_METATRACK_UI_RETIRE_V1: obsolete four-routing preset removed; Full and official ablation suites unaffected. */}</div>}
-      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack</strong><small>完整 MetaTrack + 三项主要机制对照（状态供应暂为局部 exact/预取对照）。</small></button></div>}
+      {selectedSuite === "ablation_experiment" && <div className="ablation-target-grid" data-testid="v5-ablation-targets"><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) || frozenSelected(selectedMethods) ? "" : "selected"}`} aria-pressed={!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) && !frozenSelected(selectedMethods)} onClick={() => update(() => setSelectedMethods([...BATCH_SI_ABLATION_METHOD_IDS]))}><span className="choice-check">{!selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) && !frozenSelected(selectedMethods) ? "✓" : ""}</span><strong>Batch-SI</strong><small>已注册完整版本与四个针对性消融。</small></button><button type="button" className={`experiment-choice-card ${selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "selected" : ""}`} aria-pressed={selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_"))} onClick={() => update(() => setSelectedMethods([...METATRACK_ABLATION_METHOD_IDS]))}><span className="choice-check">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "✓" : ""}</span><strong>MetaTrack 旧消融</strong><small>保留历史方法与结果兼容。</small></button><button type="button" className={`experiment-choice-card ${frozenSelected(selectedMethods) ? "selected" : ""}`} aria-pressed={frozenSelected(selectedMethods)} onClick={() => update(() => { setSelectedMethods([...MT_FROZEN_ABLATION_METHOD_IDS]); setTopology({ nodes: 8, shards: 2, validators_per_shard: 4 }); setBlockProduction({ block_size: 1000, block_interval_ms: 100 }); setWorkerCount(8); setWorkload((w) => ({...w, mode: "dataset_original", variantMode: "original_window", variantParameters: {}, txCount: 10000, useFullDataset: false, replayMode: "max_throughput", seedText: "11"})); })}><span className="choice-check">{frozenSelected(selectedMethods) ? "✓" : ""}</span><strong>最新 MetaTwine（冻结10K）</strong><small>Full、三个单消融与 AllBasic；保留旧方法与历史归档。</small></button></div>}
       <div className="formal-method-groups">
         {(["stateful", "batch_si", "stateless", "metatrack"] as const).map((family) => {
-          const definitions = FORMAL_METHOD_DEFINITIONS.filter((definition) => definition.family === family && (selectedSuite === "ablation_experiment" ? definition.ablationTarget === (selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack" : "batch_si") : selectedSuite === "main_experiment" ? definition.mainVisible : definition.comparisonVisible));
+          const definitions = FORMAL_METHOD_DEFINITIONS.filter((definition) => definition.family === family && (selectedSuite === "ablation_experiment" ? definition.ablationTarget === (frozenSelected(selectedMethods) ? "metatrack_frozen" : selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "metatrack" : "batch_si") : selectedSuite === "main_experiment" ? definition.mainVisible : definition.comparisonVisible));
           if (!definitions.length) return null;
           const familyTitle = family === "stateful" ? "有状态执行方法" : family === "batch_si" ? (selectedSuite === "ablation_experiment" ? "Batch-SI 消融变体" : "Batch-SI") : family === "stateless" ? "无状态执行方法" : (selectedSuite === "ablation_experiment" ? "MetaTrack 消融变体" : "MetaTrack 方法");
           return <section key={family} className="method-family"><h4>{familyTitle}</h4><div className="selectable-card-grid">{definitions.map((definition) => {
@@ -852,7 +869,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
         })}
       </div>
       {!selected.length && <p className="file-error">尚未选择执行方法。</p>}
-      {selectedSuite === "ablation_experiment" && <p className="notice">{selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "完整 MetaTrack 始终作为主方法；三项主对照为去依赖感知增量执行分片、去本地 exact 状态供应与预取、去临界宽度共识窗口。当前状态对照仍保留版本生存期和可靠写回机制，不代表完整移除状态供应；双轨仍作为 Full 内部优化，历史双轨方法可用于单独诊断。" : "完整 Batch-SI 始终作为主方法；消融变体只复用 Batch-SI 自己的实现，不调用其他方案算法代码。"}</p>}
+      {selectedSuite === "ablation_experiment" && <p className="notice">{frozenSelected(selectedMethods) ? "最新 MetaTwine 冻结10K：Full、三个单消融及 AllBasic（WakeOn）；WakeOff 仅供单独基础参考，不能归因于三个机制。" : selectedMethods.some((item) => item === "metatrack_latest" || item.startsWith("metatrack_ab_")) ? "完整 MetaTrack 始终作为主方法；三项主对照为去依赖感知增量执行分片、去本地 exact 状态供应与预取、去临界宽度共识窗口。当前状态对照仍保留版本生存期和可靠写回机制，不代表完整移除状态供应；双轨仍作为 Full 内部优化，历史双轨方法可用于单独诊断。" : "完整 Batch-SI 始终作为主方法；消融变体只复用 Batch-SI 自己的实现，不调用其他方案算法代码。"}</p>}
       {groundhogSelected && <p className="notice" data-testid="v5-groundhog-topology-notice">Groundhog 使用当前选择的节点数、分片数和每片验证节点数。核心复现要求跨片交易比例为 0；多分片时，各分片独立运行 Groundhog。</p>}
     </article>
 
@@ -1276,6 +1293,14 @@ function formError(input: { catalogReady: boolean; selected: V5FormalMethod[]; s
   if (!input.seeds.length) return "随机种子必须是一到十个不重复整数。";
   if (!input.source) return "workload_source 无法构造，请检查数据集和 seed。";
   if (!input.workloadRunnable) return "配置已变化，请先重新运行 workload preview。";
+  if (input.selected.some((method) => MT_FROZEN_METHOD_ID_SET.has(method.method_id))) {
+    if (input.selected.some((method) => !MT_FROZEN_METHOD_ID_SET.has(method.method_id))) return "冻结 MetaTwine 方法不能与旧方法混用。";
+    if (!["ablation_experiment", "comparison_experiment"].includes(input.selectedSuite)) return "冻结 MetaTwine 仅支持消融或对比实验。";
+    if (input.selectedSuite === "ablation_experiment" && input.selected.some((method) => method.method_id === "mtf_wakeoff10")) return "WakeOff 仅限独立对比，不能进入三机制消融。";
+    if (input.topology.nodes !== 8 || input.topology.shards !== 2 || input.topology.validators_per_shard !== 4 || input.workerCount !== 8) return "冻结10K仅支持8节点、2分片、每片4副本、8 Worker。";
+    if (input.source?.source_type !== "dataset" || input.source.requested_tx_count !== 10000 || input.source.use_full_dataset || input.source.replay_mode !== "max_throughput") return "冻结10K只支持四组真实数据集的原始10K窗口和最大速率。";
+    if (input.blockProduction.block_size !== 1000 || input.blockProduction.block_interval_ms !== 100) return "冻结10K必须使用1000交易/块、100ms提案间隔。";
+  }
   if (input.topology.nodes < 1 || input.topology.shards < 1 || input.topology.validators_per_shard < 1 || input.topology.nodes !== input.topology.shards * input.topology.validators_per_shard) return "节点数必须等于分片数乘以每片验证节点数。";
   if (!PARALLEL_WORKER_OPTIONS.includes(input.workerCount as (typeof PARALLEL_WORKER_OPTIONS)[number])) return "Worker 数量必须为 1、2、4 或 8。";
   if (!globalThis.Number.isInteger(input.repeats) || input.repeats < 1 || input.repeats > 20) return "重复次数必须是 1 到 20 的整数。";

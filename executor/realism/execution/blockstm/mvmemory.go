@@ -89,6 +89,29 @@ func (m *MVMemory) Read(key string, reader TxnIndex, base map[string]string) Rea
 	return ReadDescriptor{Key: key, FromBase: true, Value: base[key]}
 }
 
+// MT_STM_SINGLE_CONTEXT_V1: an exact signed required version overrides
+// speculative lower-index writes. The override is transaction-scoped:
+// it must never alter the shared MVMemory or the block's immutable base.
+func (m *MVMemory) ReadWithBaseOverride(key string, reader TxnIndex, base, overrides map[string]string) ReadDescriptor {
+	if value, exists := overrides[key]; exists {
+		return ReadDescriptor{Key: key, FromBase: true, Value: value}
+	}
+	return m.Read(key, reader, base)
+}
+
+func (m *MVMemory) ValidateWithBaseOverrides(reader TxnIndex, base, overrides map[string]string, captured CapturedReads) ValidationResult {
+	for _, expected := range captured.Reads {
+		observed := m.ReadWithBaseOverride(expected.Key, reader, base, overrides)
+		if observed.Estimate {
+			return ValidationResult{Valid: false, FailedKey: expected.Key, Expected: expected, Observed: observed, Dependency: observed.DependencyOn}
+		}
+		if !sameRead(expected, observed) {
+			return ValidationResult{Valid: false, FailedKey: expected.Key, Expected: expected, Observed: observed}
+		}
+	}
+	return ValidationResult{Valid: true}
+}
+
 func (m *MVMemory) Validate(reader TxnIndex, base map[string]string, captured CapturedReads) ValidationResult {
 	for _, expected := range captured.Reads {
 		observed := m.Read(expected.Key, reader, base)

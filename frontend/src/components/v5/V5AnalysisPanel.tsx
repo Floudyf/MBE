@@ -7,7 +7,10 @@ import type { V5FormalAnalysis, V5PaperMetricRow, V5PaperResultAnalysis } from "
 const baseWidth = 520;
 const height = 286;
 const chartPadding = { top: 30, right: 24, bottom: 88, left: 58 };
+// MTBRIDGE_FROZEN10K_V1: historical method labels retain their old IDs.
 const methodOrder = [
+  "mtf_full10", "mtf_noflow10", "mtf_nocons10", "mtf_nosup10",
+  "mtf_basic10", "mtf_wakeoff10",
   "metatrack_latest",
   "metatrack_ab_flow",
   "metatrack_ab_supply",
@@ -41,6 +44,9 @@ const methodColors: Record<string, string> = {
   metatrack_block_stm: "#56B76A",
 };
 const methodLabels: Record<string, string[]> = {
+  mtf_full10: ["MetaTwine Full"], mtf_noflow10: ["去执行分片"],
+  mtf_nocons10: ["去共识聚合"], mtf_nosup10: ["去状态供应"],
+  mtf_basic10: ["AllBasic WakeOn"], mtf_wakeoff10: ["BasicReference WakeOff"],
   hash_serial: ["Serial"],
   hash_cg: ["CG"],
   hash_acg: ["ACG/Nezha"],

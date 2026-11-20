@@ -204,7 +204,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
     "metatrack_latest": V5FormalMethod(
         method_id="metatrack_latest",
-        display_name="MetaTrack",
+        display_name="最新的MetaTwine",
         role="main",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -217,7 +217,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True, "mt_parallel_admission_v1": True},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
@@ -323,7 +323,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     # MBE_MT_FLOW_ABL_V1: official mechanism-wide hash control
     "metatrack_ab_flow": V5FormalMethod(
         method_id="metatrack_ab_flow",
-        display_name="去依赖感知增量分流",
+        display_name="去依赖感知执行分片（哈希对照）",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -336,7 +336,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": False, "ablation_hash_routing_v662": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": False, "ablation_hash_routing_v662": True, "mt_parallel_admission_v1": True},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
     ),
@@ -536,7 +536,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     ),
     "metatrack_ab_cons": V5FormalMethod(
         method_id="metatrack_ab_cons",
-        display_name="去掉共识聚合",
+        display_name="去共识聚合",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -549,7 +549,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True, "mt_parallel_admission_v1": True},
             "block_producer": {"dependency_closed_consensus": False},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": True, "batch_remote_writeback": True, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": True, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True},
         },
@@ -577,7 +577,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
     # MBE_MT3_FORMAL_V1: formal no-fault ablation; runtime P1 flags remain byte-for-byte unchanged.
     "metatrack_ab_supply": V5FormalMethod(
         method_id="metatrack_ab_supply",
-        display_name="去状态供应组合优化",
+        display_name="去协同状态供应",
         role="ablation",
         plugin_overrides={
             "transaction_admission": "metatrack_strict_admission_v1",
@@ -590,7 +590,7 @@ BUILTIN_METHODS: dict[str, V5FormalMethod] = {
             "commit": "commutative_hot_update_aggregation",
         },
         plugin_config_overrides={
-            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True},
+            "routing": {"control_policy": "declared_access_frontier_v2", "micro_batch_size": 100, "incremental_exact_continuity_routing_v65": True, "bounded_batch_routing_v1": True, "load_iso_shadow_v1": True, "mt_parallel_admission_v1": True},
             "block_executor": {"control_policy": "declared_access_frontier_v2", "batch_entry_state_prefetch": False, "ablation_on_demand_state_fetch_v661": True, "batch_remote_writeback": False, "safe_state_fold": True, "version_liveness": True, "final_version_batch_writeback": False, "dependency_closed_consensus": True, "version_liveness_indexed": True, "single_final_seal": True, "ablation_conservative_home_publish_v1": True},
         },
     ),
@@ -990,6 +990,57 @@ ALL_BUILTIN_METHODS["metatrack_loadiso_v1"] = _loadiso_base.model_copy(deep=True
 })
 
 
+# MTBRIDGE_FROZEN10K_V1: independent profiles; legacy method IDs untouched.
+_MT_FROZEN10K_METHOD_DATA = {'mtf_full10': {'method_id': 'mtf_full10', 'display_name': 'MetaTwine Full（冻结10K）', 'role': 'main', 'plugin_overrides': {'block_executor': 'metatrack_block_executor', 'block_producer': 'metatrack_nl_window_v669', 'commit': 'commutative_hot_update_aggregation', 'consensus': 'pbft_style_consensus', 'cross_shard': 'relay_certificate_protocol', 'execution': 'dual_track_execution', 'metrics': 'runtime_core_metrics', 'network': 'localhost_tcp_typed_network', 'observability': 'node_network_consensus_observer', 'routing': 'metatrack_coaccess_routing', 'scheduler': 'fast_first_scheduler', 'sharding': 'deterministic_state_key_sharding', 'state_access': 'metatrack_local_exact_access', 'state_storage': 'persistent_local_state_store', 'transaction_admission': 'metatrack_strict_admission_v1', 'txpool': 'fifo_per_node_mempool'}, 'plugin_config_overrides': {'block_executor': {'batch_entry_state_prefetch': True, 'batch_remote_writeback': True, 'control_policy': 'declared_access_frontier_v2', 'dependency_closed_consensus': True, 'diagnostic_single_business_execution_v1': False, 'diagnostic_single_business_execution_v28': False, 'diagnostic_unified_ready_v1': False, 'final_version_batch_writeback': True, 'safe_state_fold': True, 'single_final_seal': True, 'version_liveness': True, 'version_liveness_indexed': True, 'worker_count': 8, 'mt_bridge_fanout_v1': True, 'metatrack_durable_proposal_wakeup_v654': True}, 'block_producer': {'block_size': 1000, 'interval_ms': 100}, 'routing': {'control_policy': 'declared_access_frontier_v2', 'incremental_exact_continuity_routing_v65': True, 'micro_batch_size': 100, 'routing_epoch': 0, 'mt_bridge_frozen10k_v1': True}, 'txpool': {'capacity': 10000}}}, 'mtf_noflow10': {'method_id': 'mtf_noflow10', 'display_name': '去依赖感知执行分片（随机）', 'role': 'ablation', 'plugin_overrides': {'block_executor': 'metatrack_block_executor', 'block_producer': 'metatrack_nl_window_v669', 'commit': 'commutative_hot_update_aggregation', 'consensus': 'pbft_style_consensus', 'cross_shard': 'relay_certificate_protocol', 'execution': 'dual_track_execution', 'metrics': 'runtime_core_metrics', 'network': 'localhost_tcp_typed_network', 'observability': 'node_network_consensus_observer', 'routing': 'metatrack_coaccess_routing', 'scheduler': 'fast_first_scheduler', 'sharding': 'deterministic_state_key_sharding', 'state_access': 'metatrack_local_exact_access', 'state_storage': 'persistent_local_state_store', 'transaction_admission': 'metatrack_strict_admission_v1', 'txpool': 'fifo_per_node_mempool'}, 'plugin_config_overrides': {'block_executor': {'batch_entry_state_prefetch': True, 'batch_remote_writeback': True, 'control_policy': 'declared_access_frontier_v2', 'dependency_closed_consensus': True, 'diagnostic_single_business_execution_v1': False, 'diagnostic_single_business_execution_v28': False, 'diagnostic_unified_ready_v1': False, 'final_version_batch_writeback': True, 'safe_state_fold': True, 'single_final_seal': True, 'version_liveness': True, 'version_liveness_indexed': True, 'worker_count': 8, 'mt_bridge_fanout_v1': True, 'metatrack_durable_proposal_wakeup_v654': True}, 'block_producer': {'block_size': 1000, 'interval_ms': 100}, 'routing': {'control_policy': 'declared_access_frontier_v2', 'incremental_exact_continuity_routing_v65': False, 'micro_batch_size': 100, 'routing_epoch': 0, 'ablation_pure_random_v1': True, 'mt_random_seed_v1': 20261116, 'mt_bridge_frozen10k_v1': True}, 'txpool': {'capacity': 10000}}}, 'mtf_nocons10': {'method_id': 'mtf_nocons10', 'display_name': '去共识聚合', 'role': 'ablation', 'plugin_overrides': {'block_executor': 'metatrack_block_executor', 'block_producer': 'time_or_count_block_producer', 'commit': 'commutative_hot_update_aggregation', 'consensus': 'pbft_style_consensus', 'cross_shard': 'relay_certificate_protocol', 'execution': 'dual_track_execution', 'metrics': 'runtime_core_metrics', 'network': 'localhost_tcp_typed_network', 'observability': 'node_network_consensus_observer', 'routing': 'metatrack_coaccess_routing', 'scheduler': 'fast_first_scheduler', 'sharding': 'deterministic_state_key_sharding', 'state_access': 'metatrack_local_exact_access', 'state_storage': 'persistent_local_state_store', 'transaction_admission': 'metatrack_strict_admission_v1', 'txpool': 'fifo_per_node_mempool'}, 'plugin_config_overrides': {'block_executor': {'batch_entry_state_prefetch': True, 'batch_remote_writeback': True, 'control_policy': 'declared_access_frontier_v2', 'dependency_closed_consensus': True, 'diagnostic_single_business_execution_v1': False, 'diagnostic_single_business_execution_v28': False, 'diagnostic_unified_ready_v1': False, 'final_version_batch_writeback': True, 'safe_state_fold': True, 'single_final_seal': True, 'version_liveness': True, 'version_liveness_indexed': True, 'worker_count': 8, 'mt_bridge_fanout_v1': True, 'metatrack_durable_proposal_wakeup_v654': True}, 'block_producer': {'block_size': 1000, 'interval_ms': 100, 'dependency_closed_consensus': False}, 'routing': {'control_policy': 'declared_access_frontier_v2', 'incremental_exact_continuity_routing_v65': True, 'micro_batch_size': 100, 'routing_epoch': 0, 'mt_bridge_frozen10k_v1': True}, 'txpool': {'capacity': 10000}}}, 'mtf_nosup10': {'method_id': 'mtf_nosup10', 'display_name': '去协同状态供应', 'role': 'ablation', 'plugin_overrides': {'block_executor': 'metatrack_block_executor', 'block_producer': 'metatrack_nl_window_v669', 'commit': 'commutative_hot_update_aggregation', 'consensus': 'pbft_style_consensus', 'cross_shard': 'relay_certificate_protocol', 'execution': 'dual_track_execution', 'metrics': 'runtime_core_metrics', 'network': 'localhost_tcp_typed_network', 'observability': 'node_network_consensus_observer', 'routing': 'metatrack_coaccess_routing', 'scheduler': 'fast_first_scheduler', 'sharding': 'deterministic_state_key_sharding', 'state_access': 'metatrack_home_exact_access', 'state_storage': 'persistent_local_state_store', 'transaction_admission': 'metatrack_strict_admission_v1', 'txpool': 'fifo_per_node_mempool'}, 'plugin_config_overrides': {'block_executor': {'batch_entry_state_prefetch': False, 'batch_remote_writeback': False, 'control_policy': 'declared_access_frontier_v2', 'dependency_closed_consensus': True, 'diagnostic_single_business_execution_v1': False, 'diagnostic_single_business_execution_v28': False, 'diagnostic_unified_ready_v1': False, 'final_version_batch_writeback': False, 'safe_state_fold': True, 'single_final_seal': True, 'version_liveness': True, 'version_liveness_indexed': True, 'worker_count': 8, 'ablation_on_demand_state_fetch_v661': True, 'ablation_conservative_home_publish_v1': True, 'mt_bridge_fanout_v1': True, 'metatrack_durable_proposal_wakeup_v654': True}, 'block_producer': {'block_size': 1000, 'interval_ms': 100}, 'routing': {'control_policy': 'declared_access_frontier_v2', 'incremental_exact_continuity_routing_v65': True, 'micro_batch_size': 100, 'routing_epoch': 0, 'mt_bridge_frozen10k_v1': True}, 'txpool': {'capacity': 10000}}}, 'mtf_basic10': {'method_id': 'mtf_basic10', 'display_name': 'AllBasic（唤醒开启）', 'role': 'ablation', 'plugin_overrides': {'block_executor': 'metatrack_block_executor', 'block_producer': 'time_or_count_block_producer', 'commit': 'commutative_hot_update_aggregation', 'consensus': 'pbft_style_consensus', 'cross_shard': 'relay_certificate_protocol', 'execution': 'dual_track_execution', 'metrics': 'runtime_core_metrics', 'network': 'localhost_tcp_typed_network', 'observability': 'node_network_consensus_observer', 'routing': 'metatrack_coaccess_routing', 'scheduler': 'fast_first_scheduler', 'sharding': 'deterministic_state_key_sharding', 'state_access': 'metatrack_home_exact_access', 'state_storage': 'persistent_local_state_store', 'transaction_admission': 'metatrack_strict_admission_v1', 'txpool': 'fifo_per_node_mempool'}, 'plugin_config_overrides': {'block_executor': {'batch_entry_state_prefetch': False, 'batch_remote_writeback': False, 'control_policy': 'declared_access_frontier_v2', 'dependency_closed_consensus': True, 'diagnostic_single_business_execution_v1': False, 'diagnostic_single_business_execution_v28': False, 'diagnostic_unified_ready_v1': False, 'final_version_batch_writeback': False, 'safe_state_fold': True, 'single_final_seal': True, 'version_liveness': True, 'version_liveness_indexed': True, 'worker_count': 8, 'ablation_on_demand_state_fetch_v661': True, 'ablation_conservative_home_publish_v1': True, 'mt_bridge_fanout_v1': True, 'metatrack_durable_proposal_wakeup_v654': True}, 'block_producer': {'block_size': 1000, 'interval_ms': 100, 'dependency_closed_consensus': False}, 'routing': {'control_policy': 'declared_access_frontier_v2', 'incremental_exact_continuity_routing_v65': False, 'micro_batch_size': 100, 'routing_epoch': 0, 'ablation_pure_random_v1': True, 'mt_random_seed_v1': 20261116, 'mt_bridge_frozen10k_v1': True}, 'txpool': {'capacity': 10000}}}, 'mtf_wakeoff10': {'method_id': 'mtf_wakeoff10', 'display_name': 'BasicReference（关闭唤醒）', 'role': 'baseline', 'plugin_overrides': {'block_executor': 'metatrack_block_executor', 'block_producer': 'time_or_count_block_producer', 'commit': 'commutative_hot_update_aggregation', 'consensus': 'pbft_style_consensus', 'cross_shard': 'relay_certificate_protocol', 'execution': 'dual_track_execution', 'metrics': 'runtime_core_metrics', 'network': 'localhost_tcp_typed_network', 'observability': 'node_network_consensus_observer', 'routing': 'metatrack_coaccess_routing', 'scheduler': 'fast_first_scheduler', 'sharding': 'deterministic_state_key_sharding', 'state_access': 'metatrack_home_exact_access', 'state_storage': 'persistent_local_state_store', 'transaction_admission': 'metatrack_strict_admission_v1', 'txpool': 'fifo_per_node_mempool'}, 'plugin_config_overrides': {'block_executor': {'batch_entry_state_prefetch': False, 'batch_remote_writeback': False, 'control_policy': 'declared_access_frontier_v2', 'dependency_closed_consensus': True, 'diagnostic_single_business_execution_v1': False, 'diagnostic_single_business_execution_v28': False, 'diagnostic_unified_ready_v1': False, 'final_version_batch_writeback': False, 'safe_state_fold': True, 'single_final_seal': True, 'version_liveness': True, 'version_liveness_indexed': True, 'worker_count': 8, 'ablation_on_demand_state_fetch_v661': True, 'ablation_conservative_home_publish_v1': True, 'mt_bridge_fanout_v1': True, 'metatrack_durable_proposal_wakeup_v654': False}, 'block_producer': {'block_size': 1000, 'interval_ms': 100, 'dependency_closed_consensus': False}, 'routing': {'control_policy': 'declared_access_frontier_v2', 'incremental_exact_continuity_routing_v65': False, 'micro_batch_size': 100, 'routing_epoch': 0, 'ablation_pure_random_v1': True, 'mt_random_seed_v1': 20261116, 'mt_bridge_frozen10k_v1': True}, 'txpool': {'capacity': 10000}}}}
+MT_FROZEN10K_METHOD_IDS = frozenset(_MT_FROZEN10K_METHOD_DATA)
+MT_FROZEN10K_ABLATION_IDS = frozenset(_MT_FROZEN10K_METHOD_DATA) - {"mtf_wakeoff10"}
+for _mt_id, _mt_body in _MT_FROZEN10K_METHOD_DATA.items():
+    if _mt_id in ALL_BUILTIN_METHODS:
+        raise RuntimeError("MTBRIDGE_ID_ALREADY_REGISTERED " + _mt_id)
+    ALL_BUILTIN_METHODS[_mt_id] = V5FormalMethod(**_mt_body)
+
+# The frozen experiment uses one measured 10K original-window input at a time.
+# These dataset IDs are those from actual MTBAS/MTWAK source materialization.
+MT_FROZEN10K_SOURCES = {
+    "alien_worlds_layered_v2_historical": ("validated_prefix", "5a29e6842cd6d01006b857ef590ee77dceed5b5ea8a4eebd9c2e927bfd348ba9"),
+    "dcl_sales_layered_v4": ("contiguous_window", "f690db630e061a15dfab3f2b8a654006bccb010517a8d67379817fdda522474e"),
+    "fw_20260908_roles_v2": ("contiguous_window", "033e93f3c65627fc97ee4271da00a9a46d1a1b75de2e170969cd7a28c5852411"),
+    "henesys_20250824_v4": ("validated_prefix", "5b7e66f0a2cfbaf85f8738942859f8bf4612994f006382aeabc8ecfe6d8e1d07"),
+}
+MT_FROZEN10K_DATASET_IDS = frozenset(MT_FROZEN10K_SOURCES)
+
+
+def _mt_frozen10k_child_guard(plan: V5FormalExperimentPlan, child_spec) -> None:
+    if plan.suites != ["ablation_experiment"] and plan.suites != ["comparison_experiment"]:
+        raise ValueError("MetaTwine frozen10K only supports ablation or comparison suite")
+    if len(plan.suites) != 1:
+        raise ValueError("MetaTwine frozen10K requires exactly one suite")
+    if plan.worker_count != 8 or child_spec.tx_count != 10000:
+        raise ValueError("MetaTwine frozen10K requires 10000 transactions and 8 workers")
+    t=child_spec.topology
+    if t.nodes != 8 or t.shards != 2 or t.validators_per_shard != 4:
+        raise ValueError("MetaTwine frozen10K requires 8 nodes, 2 shards, 4 validators/shard")
+    source=child_spec.workload_source
+    if (source is None or source.source_type != "dataset" or
+        source.dataset_id not in MT_FROZEN10K_DATASET_IDS or
+        source.variant_mode != "original_window" or
+        source.requested_tx_count != 10000 or source.use_full_dataset or
+        source.replay_mode != "max_throughput" or
+        source.selection_mode != MT_FROZEN10K_SOURCES.get(source.dataset_id,(None,None))[0] or
+        source.source_sha256 != MT_FROZEN10K_SOURCES.get(source.dataset_id,(None,None))[1] or
+        source.seed != 11):
+        raise ValueError("MetaTwine frozen10K requires the exact validated original 10K window (seed 11 and source SHA)")
+    bp=next((sel for sel in child_spec.plugin_selections if sel.category=="block_producer"),None)
+    be=next((sel for sel in child_spec.plugin_selections if sel.category=="block_executor"),None)
+    routing=next((sel for sel in child_spec.plugin_selections if sel.category=="routing"),None)
+    if (bp is None or int(bp.config.get("block_size",0)) != 1000 or
+        int(bp.config.get("interval_ms",0)) != 100 or
+        be is None or int(be.config.get("worker_count",0)) != 8 or
+        routing is None or not routing.config.get("mt_bridge_frozen10k_v1")):
+        raise ValueError("MetaTwine frozen10K requires 1000/block, 100 ms, 8 workers and frozen route flag")
+    if child_spec.execution_backend != "real_cluster":
+        raise ValueError("MetaTwine frozen10K requires real_cluster")
+
 class FormalPlanValidationError(ValueError):
     pass
 
@@ -1027,6 +1078,10 @@ def validate_request(payload: V5FormalRunRequest, *, allow_blocked_rows: bool = 
     for row in rows:
         try:
             child_spec = _spec_for(plan, row)
+            if set(method.method_id for method in plan.methods) & MT_FROZEN10K_METHOD_IDS:
+                if any(method.method_id not in MT_FROZEN10K_METHOD_IDS for method in plan.methods):
+                    raise ValueError("MetaTwine frozen10K methods cannot mix legacy profiles")
+                _mt_frozen10k_child_guard(plan, child_spec)
             # MBE_MT_FINAL_SWITCH_V1: fail closed before the Go LoadIso 100/2 gate.
             routing_cfg = row.get("method", {}).get("plugin_config_overrides", {}).get("routing", {})
             if routing_cfg.get("load_iso_shadow_v1") is True:
@@ -1137,6 +1192,12 @@ def _validate_suite_shape(plan: V5FormalExperimentPlan) -> None:
             # and independent diagnostic runs, but not new formal paper suites.
             # The formal state treatment is the conservative Home-supply P1 combination.
             # Old ab_state stays registered for historical comparison/sub-ablation.
+            frozen_ids = set(method_ids) & MT_FROZEN10K_METHOD_IDS
+            if frozen_ids:
+                if set(method_ids) - MT_FROZEN10K_ABLATION_IDS:
+                    raise FormalPlanValidationError("frozen MetaTwine cannot mix legacy methods or WakeOff in main ablation")
+                if "mtf_full10" not in method_ids:
+                    raise FormalPlanValidationError("frozen MetaTwine ablation requires mtf_full10")
             if "metatrack_latest" in method_ids:
                 official_metatrack_ids = {
                     "metatrack_latest",

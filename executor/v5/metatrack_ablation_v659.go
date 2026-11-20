@@ -1,6 +1,6 @@
 package v5
 
-import "fmt"
+import ("bytes"; "crypto/sha256"; "encoding/binary"; "fmt"; "sort"; "sync")
 
 const (
 	metaTrackAblationForceAllConservativeV659      = "ablation_force_all_conservative_v659"
@@ -267,4 +267,157 @@ func (p *metaTrackRouting) planHashBaselineAblationV662(input BatchRoutingInput)
 		base.PlanDigest = routingPlanDigest(base)
 	}
 	return base
+}
+
+// MTRandAbl_v1: DO NOT use sender, SourceShard, state keys, Home, reads, writes,
+// dependencies, routing histories or workload-derived scores in shard choice.
+// The SHA256 keyed sort is an independent seeded random permutation of ordinal
+// slots 0..N-1; sorted ranks are evenly split among shard identifiers.
+// A fixed seed is for reproducibility, NOT for adversarial unpredictability.
+const mtRandomSeedV1 uint64 = 20261116
+const mtRandomFlagV1 = "ablation_pure_random_v1"
+const mtRandomSeedFlagV1 = "mt_random_seed_v1"
+const mtRandomPolicyV1 = "mt_pure_seeded_balanced_random_v1"
+
+type mtRandomSlotV1 struct { ordinal int; digest [32]byte }
+type mtRandomScheduleKeyV1 struct { n, shards int; seed uint64 }
+var mtRandomSchedulesV1 sync.Map
+
+func mtRandomScheduleV1(n, shards int, seed uint64) []int {
+    if n <= 0 || shards < 2 { panic("MT_RANDOM_BAD_N_OR_SHARDS") }
+    key := mtRandomScheduleKeyV1{n:n, shards:shards, seed:seed}
+    if cached, found := mtRandomSchedulesV1.Load(key); found { return cached.([]int) }
+    slots := make([]mtRandomSlotV1, n)
+    for i := range slots {
+        var buf [16]byte
+        binary.BigEndian.PutUint64(buf[:8],seed)
+        binary.BigEndian.PutUint64(buf[8:],uint64(i))
+        slots[i] = mtRandomSlotV1{ordinal:i,digest:sha256.Sum256(buf[:])}
+    }
+    sort.Slice(slots,func(i,j int)bool {
+        if cmp:=bytes.Compare(slots[i].digest[:],slots[j].digest[:]); cmp!=0 { return cmp<0 }
+        return slots[i].ordinal<slots[j].ordinal
+    })
+    assignment:=make([]int,n)
+    for rank,slot:=range slots { assignment[slot.ordinal]=rank%shards }
+    val,_:=mtRandomSchedulesV1.LoadOrStore(key,assignment)
+    return val.([]int)
+}
+
+// Independent ablation router: the ONLY source of ExecutionShard is
+// mtRandomScheduleV1(record.Index). Metadata is rebuilt afterwards so M2/M3
+// still receive valid signed versions, frontiers and state Home relationships.
+func (p *metaTrackRouting) planPureRandomAblationV1(input BatchRoutingInput) BatchRoutingPlan {
+    p.incrementalMu.Lock()
+    defer p.incrementalMu.Unlock()
+    if input.ExpectedTransactionCount!=10000 || len(input.ShardIDs)!=2 ||
+       intValue(p.config[mtRandomSeedFlagV1])!=int(mtRandomSeedV1) ||
+       boolFromAny(p.config[metaTrackAblationHashRoutingV662]) ||
+       boolFromAny(p.config["incremental_exact_continuity_routing_v65"]) {
+        panic("MT_RANDOM_FLAG_OR_TOPOLOGY_CONTRACT_BREACH")
+    }
+    newRun:=input.BatchIndex==0 && p.incrementalV650!=nil && p.incrementalV650.Processed>0
+    if p.incrementalV650==nil || !p.incrementalV650.compatible(input) || newRun {
+        p.incrementalV650=newMetaTrackIncrementalRoutingStateV650(input)
+    }
+    state:=p.incrementalV650
+    schedule:=mtRandomScheduleV1(input.ExpectedTransactionCount,len(input.ShardIDs),mtRandomSeedV1)
+    plan:=BatchRoutingPlan{
+        BatchIndex:input.BatchIndex,
+        ShardingPluginID:shardingPluginID(input.Sharding),
+        StateStorageUnitCount:p.StateStorageUnitCount(input.ShardIDs),
+        PlacementPolicy:mtRandomPolicyV1,
+        TransactionPolicy:"ordinal_seed_only_balanced_random_v1",
+        IncrementalRoutingPolicy:mtRandomPolicyV1,
+        IncrementalExpectedTransactionCount:input.ExpectedTransactionCount,
+        IncrementalExecutionShardCapacity:state.Capacity,
+        IncrementalHistoryTransactionCountBefore:state.Processed,
+        IncrementalHistoryDigestBefore:state.HistoryDigest,
+        IncrementalBatchPartitionInvariant:true,
+        ShardLoadBefore:make(map[string]int,len(input.ShardIDs)),
+        ShardLoadAfter:make(map[string]int,len(input.ShardIDs)),
+    }
+    if policy,ok:=p.config["control_policy"].(string);ok { plan.ControlPolicy=policy }
+    for _,shard:=range input.ShardIDs { plan.ShardLoadBefore[shard]=state.ShardLoad[shard] }
+
+    // Required explanatory metadata; NEVER consulted in mtRandomScheduleV1.
+    frequency:=make(map[string]*StateFrequencyRow)
+    for _,record:=range input.Records {
+        logicalID:=firstNonEmpty(record.LogicalID,fmt.Sprintf("tx-%d",record.Index))
+        for _,access:=range normalizedAccessItems(record) {
+            if access.Key=="" {continue}
+            plan.AccessMatrix=append(plan.AccessMatrix,AccessMatrixRow{LogicalID:logicalID,TxIndex:record.Index,Key:access.Key,Mode:access.Mode})
+            row:=frequency[access.Key]
+            if row==nil {row=&StateFrequencyRow{Key:access.Key};frequency[access.Key]=row}
+            row.Frequency++
+            if isReadMode(access.Mode) {row.ReadCount++}
+            if isWriteMode(access.Mode) {row.WriteCount++}
+        }
+    }
+    for _,row:=range frequency {
+        plan.StateFrequency=append(plan.StateFrequency,*row)
+        home:=shardFor(input.Sharding,[]string{row.Key},input.ShardIDs)
+        plan.StatePlacements=append(plan.StatePlacements,StatePlacement{Key:row.Key,HomeShard:home,ExecutionShard:home,Frequency:row.Frequency,Reason:"deterministic_state_home"})
+    }
+    sort.Slice(plan.StateFrequency,func(i,j int)bool{return plan.StateFrequency[i].Key<plan.StateFrequency[j].Key})
+    sort.Slice(plan.StatePlacements,func(i,j int)bool{return plan.StatePlacements[i].Key<plan.StatePlacements[j].Key})
+
+    for _,record:=range input.Records {
+        // This line (and no workload field) determines ExecutionShard.
+        if record.Index<0 || record.Index>=len(schedule) || record.Index!=state.Processed {
+            panic("MT_RANDOM_INDEX_OR_PREFIX_MISMATCH")
+        }
+        chosen:=input.ShardIDs[schedule[record.Index]]
+        if state.Capacity>0 && state.ShardLoad[chosen]>=state.Capacity {
+            panic("MT_RANDOM_CAPACITY_BREACH_NO_ADAPTIVE_REASSIGNMENT")
+        }
+        logicalID:=firstNonEmpty(record.LogicalID,fmt.Sprintf("tx-%d",record.Index))
+        readsWrites:=metaTrackBuildRoutingRecordContextV669(p,record,input.Sharding,input.ShardIDs,state)
+        reads,writes:=metaTrackRemoteCountsFromContextV669(readsWrites,chosen)
+        plan.RemoteAccessEstimate+=reads+writes
+        homeShard:=firstNonEmpty(record.SourceShard,shardFor(input.Sharding,record.StateKeys,input.ShardIDs))
+        plan.TransactionPlacements=append(plan.TransactionPlacements,TransactionPlacement{
+            LogicalID:logicalID,TxIndex:record.Index,SenderGroupID:metaTrackSenderGroupID(record),
+            HomeShard:homeShard,ExecutionShard:chosen,TargetShard:record.TargetShard,
+            Reason:"seeded_balanced_random_ordinal_only_v1",
+            PredictedRemoteReads:reads,PredictedRemoteWrites:writes,RemoteAccessCount:reads+writes,
+            QueueLoadBefore:state.ShardLoad[chosen],
+        })
+        seenPred:=map[uint64]bool{}
+        for _,dep:=range readsWrites.ExactDeps {
+            plan.IncrementalExactStateEdgeCount++
+            if dep.Producer.Shard==chosen {plan.IncrementalExactLocalStateEdgeCount++} else {plan.IncrementalExactCrossShardStateEdgeCount++}
+            if !seenPred[dep.Producer.Ordinal] {
+                seenPred[dep.Producer.Ordinal]=true
+                plan.IncrementalExactPredecessorEdgeCount++
+                if dep.Producer.Shard==chosen {plan.IncrementalExactLocalPredecessorCount++} else {plan.IncrementalExactCrossShardPredecessorCount++}
+            }
+        }
+        state.ShardLoad[chosen]++
+        state.Processed++
+        for _,version:=range record.StateVersions {
+            if version.Key!="" && version.ProducedVersion>0 {
+                state.ProducerByVersion[metaTrackIncrementalVersionSlotV650{Key:version.Key,Version:version.ProducedVersion}]=metaTrackIncrementalProducerV650{Shard:chosen,Ordinal:record.RoutingOrdinal}
+            }
+        }
+        state.HistoryDigest=stableDigest(struct{
+            Previous string `json:"previous"`
+            Ordinal uint64 `json:"ordinal"`
+            LogicalID string `json:"logical_id"`
+            ExecutionShard string `json:"execution_shard"`
+        }{state.HistoryDigest,record.RoutingOrdinal,logicalID,chosen})
+    }
+    for _,shard:=range input.ShardIDs {plan.ShardLoadAfter[shard]=state.ShardLoad[shard]}
+    plan.IncrementalExecutionShardSwitchCount=plan.IncrementalExactCrossShardPredecessorCount
+    plan.PlacementCapacity=state.Capacity
+    plan.PlacementMinBudget=1
+    plan.PlacementBudget=len(plan.StatePlacements)
+    plan.IncrementalHistoryTransactionCountAfter=state.Processed
+    plan.IncrementalHistoryDigestAfter=state.HistoryDigest
+    plan.RoutingOverhead=plan.RemoteAccessEstimate+plan.IncrementalExactStateEdgeCount
+    if !input.DeferFinalSeal {
+        if metaTrackDeclaredAccessFrontierPolicyEnabled(p.config) {applyMetaTrackDeclaredAccessFrontierV2(&plan,input.Records)}
+        plan.PlanDigest=routingPlanDigest(plan)
+    }
+    return plan
 }

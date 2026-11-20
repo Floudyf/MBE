@@ -14,7 +14,7 @@ export type FormalMethodDefinition = {
   family: "stateful" | "stateless" | "metatrack" | "batch_si";
   comparisonVisible: boolean;
   mainVisible: boolean;
-  ablationTarget?: "batch_si" | "metatrack";
+  ablationTarget?: "batch_si" | "metatrack" | "metatrack_frozen";
   isFullVariant?: boolean;
 };
 
@@ -55,7 +55,13 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "stateless_txallo", title: "Stateless-TxAllo", description: "TxAllo 无状态适配：与 TxAllo 使用完全相同的预评测 G-TxAllo 冻结映射；仅把状态承载替换为 MBE 无状态 exact-version 远程获取/写回，PBFT 与 FIFO/串行执行保持共享基线。", family: "stateless", comparisonVisible: true, mainVisible: false },
   { methodId: "metatrack_serial", title: "MetaTrack（初始版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_full_locality", title: "MetaTrack（当前版）", description: "历史兼容方法；保留旧结果解析，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
-{ methodId: "metatrack_latest", title: "MetaTrack", description: "依赖感知在线协同执行分片、精确版本状态供应与依赖感知共识聚合。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
+{ methodId: "metatrack_latest", title: "最新的MetaTwine", description: "依赖感知增量执行分片（P2）、依赖感知共识聚合与协同状态供应。四数据集10K、双分片max_throughput可启用parallel2；原有机制和其他输入模式保持不变。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack", isFullVariant: true },
+  { methodId: "mtf_full10", title: "MetaTwine Full（10K）", description: "冻结 P2 + M2 + M3；与已验证 Full 同一三机制配置。", family: "metatrack", comparisonVisible: true, mainVisible: true, ablationTarget: "metatrack_frozen", isFullVariant: true },
+  { methodId: "mtf_noflow10", title: "去执行分片（随机）", description: "只将 P2 替换为固定种子随机放置，保留 M2/M3 和依赖正确性。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack_frozen", isFullVariant: false },
+  { methodId: "mtf_nocons10", title: "去共识聚合", description: "只将 M2 替换为基础 time/count PBFT，其他机制不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack_frozen", isFullVariant: false },
+  { methodId: "mtf_nosup10", title: "去协同状态供应", description: "只将 M3 替换为 Home exact 按需供应，其他机制不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack_frozen", isFullVariant: false },
+  { methodId: "mtf_basic10", title: "AllBasic（WakeOn）", description: "三机制整体替换；保留提交后提案唤醒，用于严格组合消融。", family: "metatrack", comparisonVisible: true, mainVisible: false, ablationTarget: "metatrack_frozen", isFullVariant: false },
+  { methodId: "mtf_wakeoff10", title: "BasicReference（WakeOff）", description: "AllBasic 额外关闭提案唤醒，仅作基础系统参考，不计入三机制贡献。", family: "metatrack", comparisonVisible: true, mainVisible: false, isFullVariant: false },
   // MBE_MT_ONLINE_DUAL_V1: candidate experiments; Full and Online original unchanged.
   { methodId: "metatrack_online_feed", title: "Online：仅反馈冷启动", description: "候选；无 RTT 时使用透明代理，其余为原版排序。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_online_balance", title: "Online：仅负载保护", description: "候选；保留反馈门槛，预测完成序位与分片负载序位组合。", family: "metatrack", comparisonVisible: false, mainVisible: false },
@@ -72,7 +78,7 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   // MBE_MT_NOCAP_SOLO_V1: two separately selectable NoCap variants; original Full/Online unchanged.
   { methodId: "metatrack_nocap_full", title: "Full-NoCap（独立实验）", description: "仅取消每片累计 N/分片数硬上限，沿用原 Full 路由；一次只运行本方法，不会联动启动 Online-NoCap。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_nocap_online", title: "Online-NoCap（独立实验）", description: "沿用保护型 Online 反馈与 exact 依赖保护，仅取消累计 N/分片数硬上限；单独选择、单独运行。", family: "metatrack", comparisonVisible: false, mainVisible: false },
-  { methodId: "metatrack_ab_flow", title: "去依赖感知增量分流", description: "以同容量约束的确定性哈希执行分片替代依赖感知增量分流；保留精确版本依赖图、双轨、共识聚合、状态供应及全部 PBFT 参数。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_flow", title: "去依赖感知执行分片（哈希对照）", description: "以同容量约束的确定性哈希执行分片替代依赖感知增量分流；保留精确版本依赖图、双轨、共识聚合、状态供应及全部 PBFT 参数。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   // MBE_MT3_P0_V1: exact-version placement is a retained routing sub-ablation, not a primary paper ablation.
   { methodId: "metatrack_ab_exact", title: "分片子消融：去精确版本评分", description: "仅从增量执行位置选择评分中删除 ReadyRank 和 ExactCross；保留精确版本正确性、StateReady 与共识。历史/分片子实验保留，不进入三创新主矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   // MBE_MT_DUAL_READY_V1: candidate in MetaTrack method family, not formal ablation
@@ -82,10 +88,10 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_unified", title: "历史实验版（V668）", description: "历史兼容：保留原 V668 N/L-only 自适应共识实验及固定100笔 RouteBatch 配置；不进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_ab_route", title: "历史子消融-无局部性放置", description: "状态局部化内部子消融：只把依赖/共现 placement 替换为历史 frequency/load-only 放置，仍保留预取与本地 exact；不进入正式三机制主矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_ab_track", title: "历史诊断：去双轨（串行）", description: "历史调度诊断：不仅取消双轨，还限制为一次一个 business execution；不能用于双轨单因素归因。保留历史方法 ID 与执行逻辑，不进入三创新主矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
-  { methodId: "metatrack_ab_cons", title: "去掉共识聚合", description: "去掉依赖感知共识聚合：恢复历史 time/count + 单 signed shard projection PBFT 路径；PBFT 协议本身不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_cons", title: "去共识聚合", description: "去掉依赖感知共识聚合：恢复历史 time/count + 单 signed shard projection PBFT 路径；PBFT 协议本身不变。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   { methodId: "metatrack_ab_state", title: "状态供应子消融：去本地 exact/预取", description: "历史及子机制对照：仅关闭本地 exact 状态访问与 batch-entry prefetch，保留批量/最终 Home 写回和 Version Liveness。可在方法对比单独选择，不占三创新正式主消融位置。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   // MBE_MT3_FORMAL_V1: normal/fault-free four-dataset observed equivalence accepted; strict global serial oracle and recovery are separate gates.
-  { methodId: "metatrack_ab_supply", title: "去状态供应组合优化", description: "正式无故障三创新消融：保守 Home exact 按需访问，关闭本地 exact、批次预取及批量/最终版本写回优化；可靠 Home 单条 ACK 和 Version Liveness 仍保留。已完成四数据集正常执行阶段验收；不能宣称故障恢复与全局严格串行化已证明。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
+  { methodId: "metatrack_ab_supply", title: "去协同状态供应", description: "正式无故障三创新消融：保守 Home exact 按需访问，关闭本地 exact、批次预取及批量/最终版本写回优化；可靠 Home 单条 ACK 和 Version Liveness 仍保留。已完成四数据集正常执行阶段验收；不能宣称故障恢复与全局严格串行化已证明。", family: "metatrack", comparisonVisible: false, mainVisible: false, ablationTarget: "metatrack" },
   { methodId: "metatrack_ab_handoff", title: "历史子消融-无本地版本交接", description: "历史结果兼容项；不再进入新的正式消融矩阵。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_exp", title: "实验版（旧）", description: "历史流式实验结果兼容项，不再作为新实验卡片显示。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   // MBE_METATRACK_SHARD4_V1_1: routing comparisons only; all nonrouting Full components unchanged
@@ -110,6 +116,13 @@ export const FORMAL_METHOD_DEFINITIONS: FormalMethodDefinition[] = [
   { methodId: "metatrack_slowstate", title: "就绪驱动双轨（候选）", description: "直接复用既有 blocked/stateBlocked、精确版本 StateReady、统一 Ready Worker；未就绪交易挂起，独立 Ready 交易绕行并行执行。保留原 Fast/Conservative 语义安全判定，但不再据此进行二次 Ready 排队。非正式四消融。", family: "metatrack", comparisonVisible: false, mainVisible: false },
   { methodId: "metatrack_waitfifo", title: "消融：禁止未就绪绕行（FIFO 并行）", description: "与就绪驱动双轨完全相同的依赖 DAG、StateReady、语义安全和 Worker 上限；仅要求按共识原顺序放行就绪前缀，后续 Ready 不得绕过未就绪队首。前缀可并行派发，不强制单业务串行；独立候选对照，非正式四消融。", family: "metatrack", comparisonVisible: false, mainVisible: false },
 ];
+
+// MTBRIDGE_FROZEN10K_V1: five-mechanism matrix; WakeOff only a separate comparison.
+export const MT_FROZEN_ABLATION_METHOD_IDS = [
+  "mtf_full10", "mtf_noflow10", "mtf_nocons10", "mtf_nosup10", "mtf_basic10",
+] as const;
+export const MT_FROZEN_REFERENCE_ID = "mtf_wakeoff10" as const;
+export const MT_FROZEN_METHOD_ID_SET = new Set<string>([...MT_FROZEN_ABLATION_METHOD_IDS, MT_FROZEN_REFERENCE_ID]);
 
 export const BATCH_SI_ABLATION_METHOD_IDS = [
   "hash_batch_si",

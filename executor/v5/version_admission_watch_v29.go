@@ -14,6 +14,20 @@ import (
 const statelessVersionAdmissionWatchAccessKind = "state_version_admission_watch"
 const statelessVersionAdmissionWatchRetryInterval = 2 * time.Second
 
+// Only the retry interval changes. Each missing response is eventually retried,
+// while already-published exact versions still wake subscribers immediately.
+// The bound protects recovery after an accidentally lost request/notification.
+func statelessVersionAdmissionWatchRetryDelay(retryCount int) time.Duration {
+	switch {
+	case retryCount <= 0:
+		return statelessVersionAdmissionWatchRetryInterval
+	case retryCount == 1:
+		return 2 * statelessVersionAdmissionWatchRetryInterval
+	default:
+		return 4 * statelessVersionAdmissionWatchRetryInterval
+	}
+}
+
 type stateVersionAdmissionWatch struct {
 	Token      string
 	RequestID  string
@@ -22,6 +36,7 @@ type stateVersionAdmissionWatch struct {
 	HomeShard  string
 	TargetNode string
 	StartedAt  time.Time
+	RetryCount int
 }
 
 // selectMetaTrackLivenessSafePBFTProjection deliberately keeps one complete
@@ -61,10 +76,17 @@ func (r *NodeRuntime) ensureStatelessVersionAdmissionWatch(ctx context.Context, 
 		r.mu.Unlock()
 		return true, nil
 	}
+	retryCount := 0
 	if current, exists := r.stateVersionAdmissionWatches[requirement.token]; exists {
-		if now.Sub(current.StartedAt) < statelessVersionAdmissionWatchRetryInterval {
+		if current.TargetNode == targetNode && now.Sub(current.StartedAt) < statelessVersionAdmissionWatchRetryDelay(current.RetryCount) {
 			r.mu.Unlock()
 			return false, nil
+		}
+		if current.TargetNode == targetNode {
+			retryCount = current.RetryCount + 1
+			if retryCount > 2 {
+				retryCount = 2
+			}
 		}
 		delete(r.stateVersionAdmissionRequestTokens, current.RequestID)
 		delete(r.stateVersionAdmissionWatches, requirement.token)
@@ -79,7 +101,7 @@ func (r *NodeRuntime) ensureStatelessVersionAdmissionWatch(ctx context.Context, 
 	watch := stateVersionAdmissionWatch{
 		Token: requirement.token, RequestID: requestID, Key: requirement.key,
 		Version: requirement.version, HomeShard: requirement.homeShard,
-		TargetNode: targetNode, StartedAt: now,
+		TargetNode: targetNode, StartedAt: now, RetryCount: retryCount,
 	}
 	r.stateVersionAdmissionWatches[requirement.token] = watch
 	r.stateVersionAdmissionRequestTokens[requestID] = requirement.token

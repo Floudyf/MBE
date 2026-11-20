@@ -90,15 +90,17 @@ func TestShutdownBudgetScalesForLargeArtifactFlush(t *testing.T) {
 	}
 }
 
-func TestRuntimePlanForNodesExtendsShortExperimentDuration(t *testing.T) {
+func TestRuntimePlanForNodesUsesSupervisorLifecycle(t *testing.T) {
 	plan := drainBudgetTestPlan(10000, 100, 75)
 	plan.DurationMS = 180000
 	runtimePlan := runtimePlanForNodes(plan)
-	if runtimePlan.DurationMS <= plan.DurationMS {
-		t.Fatalf("node runtime duration was not extended: plan=%d runtime=%d", plan.DurationMS, runtimePlan.DurationMS)
+	// MBE_MT_LIFE_V1: the supervisor now owns the Drain clock; nodes have no
+	// independent deadline. The lease watchdog bounds orphaned children.
+	if runtimePlan.DurationMS != 0 {
+		t.Fatalf("supervisor node plan must not have a node-started deadline: %d", runtimePlan.DurationMS)
 	}
-	if runtimePlan.WorkloadPlan.TxCount != plan.WorkloadPlan.TxCount {
-		t.Fatal("node runtime plan changed workload semantics")
+	if plan.DurationMS != 180000 || runtimePlan.WorkloadPlan.TxCount != plan.WorkloadPlan.TxCount {
+		t.Fatal("node runtime plan changed source experiment or workload semantics")
 	}
 }
 

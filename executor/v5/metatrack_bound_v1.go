@@ -152,7 +152,6 @@ func mtBoundRunWithStateV2(p *metaTrackRouting, working *metaTrackIncrementalRou
 	delete(config, "online_state_ready_routing_v1")
 	delete(config, "online_feedback_coldstart_v2")
 	delete(config, "online_capacity_guard_v2")
-	delete(config, "experimental_no_global_capacity_v1")
 	delete(config, "bound_selector_v1")
 	if mode != "full" {
 		config["bound_selector_v1"] = mode

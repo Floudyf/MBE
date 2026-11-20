@@ -174,10 +174,7 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 	if err != nil {
 		return WorkloadRecord{}, err
 	}
-	sourceShard := canonicalRuntimeSourceShardWithSharding(it.plan, senderID, it.shards, it.sharding)
-	if (wire.SchemaVersion == "mbe_workload_record_v3" || wire.SchemaVersion == "mbe_workload_record_v4") && accessSchema != "dcl_sale_access_template_v1" {
-		sourceShard = shardIndexFor(it.sharding, []string{strings.ToLower(wire.RoutingSourceKey)}, it.shards)
-	}
+	sourceShard := canonicalReplaySourceShardMTCodeHotV1(it.plan, senderID, wire.RoutingSourceKey, wire.SchemaVersion, accessSchema, it.shards, it.sharding)
 	targetShard := sourceShard
 	if wire.RoutingTargetKey != "" {
 		targetShard = shardIndexFor(it.sharding, []string{strings.ToLower(wire.RoutingTargetKey)}, it.shards)
@@ -194,6 +191,22 @@ func (it *CanonicalTraceIterator) Next(context.Context) (WorkloadRecord, error) 
 	it.summary.ReadCount++
 	it.index++
 	return WorkloadRecord{Index: it.index - 1, LogicalID: firstNonEmpty(wire.LogicalEventID, wire.SourceEventID), SenderID: senderID, ReceiverID: strings.ToLower(wire.ReceiverID), OperationType: wire.OperationType, RoutingSourceKey: wire.RoutingSourceKey, RoutingTargetKey: wire.RoutingTargetKey, Payload: payload, StateKeys: wire.StateKeys, AccessList: accessList, AccessListSchema: accessSchema, AccessListSource: accessSource, AccessListDigest: accessDigest, SchedulingAccessList: schedulingAccess, SchedulingAccessSchema: schedulingSchema, SchedulingAccessSource: schedulingSource, SchedulingAccessDigest: schedulingDigest, CrossShard: cross, SourceShard: fmt.Sprintf("s%d", sourceShard), TargetShard: target, SourceEventID: wire.SourceEventID, TimestampMS: wire.TimestampMS, Value: maxInt64(1, wire.RuntimeValue)}, nil
+}
+
+// canonicalReplaySourceShardMTCodeHotV1 omits a source-shard calculation
+// only when the sharding plugin is the pure built-in implementation. A custom
+// plugin may have side effects, so preserve the historical two-call sequence.
+func canonicalReplaySourceShardMTCodeHotV1(plan WorkloadPlan, senderID, routingSourceKey, schemaVersion, accessSchema string, shards int, sharding ShardingPlugin) int {
+	if (schemaVersion == "mbe_workload_record_v3" || schemaVersion == "mbe_workload_record_v4") && accessSchema != "dcl_sale_access_template_v1" {
+		switch sharding.(type) {
+		case nil, builtinSharding, *builtinSharding:
+			// The built-in ShardFor is a pure deterministic function.
+		default:
+			_ = canonicalRuntimeSourceShardWithSharding(plan, senderID, shards, sharding)
+		}
+		return shardIndexFor(sharding, []string{strings.ToLower(routingSourceKey)}, shards)
+	}
+	return canonicalRuntimeSourceShardWithSharding(plan, senderID, shards, sharding)
 }
 
 func (it *CanonicalTraceIterator) Close() error {

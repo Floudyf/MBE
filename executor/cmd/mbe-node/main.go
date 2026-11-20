@@ -94,6 +94,16 @@ func main() {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		// MBE_MT_LIFE_V1: supervisor-managed nodes get a heartbeat lease rather
+		// than an independently-started 90-minute deadline.
+		if leasePath := os.Getenv("MBE_V5_SUPERVISOR_LEASE"); leasePath != "" {
+			var leaseCancel context.CancelFunc
+			ctx, leaseCancel, err = mtLifeWatchContext(ctx, leasePath)
+			if err != nil {
+				break
+			}
+			defer leaseCancel()
+		}
 		if plan.DurationMS > 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, time.Duration(plan.DurationMS)*time.Millisecond)

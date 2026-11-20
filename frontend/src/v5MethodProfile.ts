@@ -100,7 +100,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   },
   {
     method_id: "metatrack_latest",
-    display_name: "MetaTrack",
+    display_name: "最新的MetaTwine",
     role: "main",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -113,7 +113,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true , mt_parallel_admission_v1: true},
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
@@ -198,7 +198,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   },
   {
     method_id: "metatrack_ab_cons",
-    display_name: "去掉共识聚合",
+    display_name: "去共识聚合",
     role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -211,7 +211,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true , mt_parallel_admission_v1: true},
       block_producer: { dependency_closed_consensus: false },
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
@@ -239,7 +239,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   // MBE_MT3_FORMAL_V1: formally selectable normal-execution ablation; Go flags unchanged.
   {
     method_id: "metatrack_ab_supply",
-    display_name: "去状态供应组合优化",
+    display_name: "去协同状态供应",
     role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -252,7 +252,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: true , bounded_batch_routing_v1: true, load_iso_shadow_v1: true , mt_parallel_admission_v1: true},
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: false, ablation_on_demand_state_fetch_v661: true, batch_remote_writeback: false, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: false, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true, ablation_conservative_home_publish_v1: true },
     },
   },
@@ -277,7 +277,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
   // MBE_MT_FLOW_ABL_V1: official fixed-hash replacement; old A1 remains historical.
   {
     method_id: "metatrack_ab_flow",
-    display_name: "去依赖感知增量分流",
+    display_name: "去依赖感知执行分片（哈希对照）",
     role: "ablation",
     plugin_overrides: {
       transaction_admission: "metatrack_strict_admission_v1",
@@ -290,7 +290,7 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
       commit: "commutative_hot_update_aggregation",
     },
     plugin_config_overrides: {
-      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: false, ablation_hash_routing_v662: true },
+      routing: { control_policy: "declared_access_frontier_v2", micro_batch_size: 100, incremental_exact_continuity_routing_v65: false, ablation_hash_routing_v662: true , mt_parallel_admission_v1: true},
       block_executor: { control_policy: "declared_access_frontier_v2", batch_entry_state_prefetch: true, batch_remote_writeback: true, safe_state_fold: true, version_liveness: true, final_version_batch_writeback: true, dependency_closed_consensus: true, version_liveness_indexed: true, single_final_seal: true },
     },
   },
@@ -431,6 +431,362 @@ export const V5_BUILTIN_METHODS: V5FormalMethod[] = [
     },
   },
 ];
+
+// MTBRIDGE_FROZEN10K_V1: no existing method or ID is modified.
+// Explicit operational gates exist in both backend validation and Go execution.
+V5_BUILTIN_METHODS.push(...([
+  {
+    "method_id": "mtf_full10",
+    "display_name": "MetaTwine Full（冻结10K）",
+    "role": "main",
+    "plugin_overrides": {
+      "block_executor": "metatrack_block_executor",
+      "block_producer": "metatrack_nl_window_v669",
+      "commit": "commutative_hot_update_aggregation",
+      "consensus": "pbft_style_consensus",
+      "cross_shard": "relay_certificate_protocol",
+      "execution": "dual_track_execution",
+      "metrics": "runtime_core_metrics",
+      "network": "localhost_tcp_typed_network",
+      "observability": "node_network_consensus_observer",
+      "routing": "metatrack_coaccess_routing",
+      "scheduler": "fast_first_scheduler",
+      "sharding": "deterministic_state_key_sharding",
+      "state_access": "metatrack_local_exact_access",
+      "state_storage": "persistent_local_state_store",
+      "transaction_admission": "metatrack_strict_admission_v1",
+      "txpool": "fifo_per_node_mempool"
+    },
+    "plugin_config_overrides": {
+      "block_executor": {
+        "batch_entry_state_prefetch": true,
+        "batch_remote_writeback": true,
+        "control_policy": "declared_access_frontier_v2",
+        "dependency_closed_consensus": true,
+        "diagnostic_single_business_execution_v1": false,
+        "diagnostic_single_business_execution_v28": false,
+        "diagnostic_unified_ready_v1": false,
+        "final_version_batch_writeback": true,
+        "safe_state_fold": true,
+        "single_final_seal": true,
+        "version_liveness": true,
+        "version_liveness_indexed": true,
+        "worker_count": 8,
+        "mt_bridge_fanout_v1": true,
+        "metatrack_durable_proposal_wakeup_v654": true
+      },
+      "block_producer": {
+        "block_size": 1000,
+        "interval_ms": 100
+      },
+      "routing": {
+        "control_policy": "declared_access_frontier_v2",
+        "incremental_exact_continuity_routing_v65": true,
+        "micro_batch_size": 100,
+        "routing_epoch": 0,
+        "mt_bridge_frozen10k_v1": true
+      },
+      "txpool": {
+        "capacity": 10000
+      }
+    }
+  },
+  {
+    "method_id": "mtf_noflow10",
+    "display_name": "去依赖感知执行分片（随机）",
+    "role": "ablation",
+    "plugin_overrides": {
+      "block_executor": "metatrack_block_executor",
+      "block_producer": "metatrack_nl_window_v669",
+      "commit": "commutative_hot_update_aggregation",
+      "consensus": "pbft_style_consensus",
+      "cross_shard": "relay_certificate_protocol",
+      "execution": "dual_track_execution",
+      "metrics": "runtime_core_metrics",
+      "network": "localhost_tcp_typed_network",
+      "observability": "node_network_consensus_observer",
+      "routing": "metatrack_coaccess_routing",
+      "scheduler": "fast_first_scheduler",
+      "sharding": "deterministic_state_key_sharding",
+      "state_access": "metatrack_local_exact_access",
+      "state_storage": "persistent_local_state_store",
+      "transaction_admission": "metatrack_strict_admission_v1",
+      "txpool": "fifo_per_node_mempool"
+    },
+    "plugin_config_overrides": {
+      "block_executor": {
+        "batch_entry_state_prefetch": true,
+        "batch_remote_writeback": true,
+        "control_policy": "declared_access_frontier_v2",
+        "dependency_closed_consensus": true,
+        "diagnostic_single_business_execution_v1": false,
+        "diagnostic_single_business_execution_v28": false,
+        "diagnostic_unified_ready_v1": false,
+        "final_version_batch_writeback": true,
+        "safe_state_fold": true,
+        "single_final_seal": true,
+        "version_liveness": true,
+        "version_liveness_indexed": true,
+        "worker_count": 8,
+        "mt_bridge_fanout_v1": true,
+        "metatrack_durable_proposal_wakeup_v654": true
+      },
+      "block_producer": {
+        "block_size": 1000,
+        "interval_ms": 100
+      },
+      "routing": {
+        "control_policy": "declared_access_frontier_v2",
+        "incremental_exact_continuity_routing_v65": false,
+        "micro_batch_size": 100,
+        "routing_epoch": 0,
+        "ablation_pure_random_v1": true,
+        "mt_random_seed_v1": 20261116,
+        "mt_bridge_frozen10k_v1": true
+      },
+      "txpool": {
+        "capacity": 10000
+      }
+    }
+  },
+  {
+    "method_id": "mtf_nocons10",
+    "display_name": "去共识聚合",
+    "role": "ablation",
+    "plugin_overrides": {
+      "block_executor": "metatrack_block_executor",
+      "block_producer": "time_or_count_block_producer",
+      "commit": "commutative_hot_update_aggregation",
+      "consensus": "pbft_style_consensus",
+      "cross_shard": "relay_certificate_protocol",
+      "execution": "dual_track_execution",
+      "metrics": "runtime_core_metrics",
+      "network": "localhost_tcp_typed_network",
+      "observability": "node_network_consensus_observer",
+      "routing": "metatrack_coaccess_routing",
+      "scheduler": "fast_first_scheduler",
+      "sharding": "deterministic_state_key_sharding",
+      "state_access": "metatrack_local_exact_access",
+      "state_storage": "persistent_local_state_store",
+      "transaction_admission": "metatrack_strict_admission_v1",
+      "txpool": "fifo_per_node_mempool"
+    },
+    "plugin_config_overrides": {
+      "block_executor": {
+        "batch_entry_state_prefetch": true,
+        "batch_remote_writeback": true,
+        "control_policy": "declared_access_frontier_v2",
+        "dependency_closed_consensus": true,
+        "diagnostic_single_business_execution_v1": false,
+        "diagnostic_single_business_execution_v28": false,
+        "diagnostic_unified_ready_v1": false,
+        "final_version_batch_writeback": true,
+        "safe_state_fold": true,
+        "single_final_seal": true,
+        "version_liveness": true,
+        "version_liveness_indexed": true,
+        "worker_count": 8,
+        "mt_bridge_fanout_v1": true,
+        "metatrack_durable_proposal_wakeup_v654": true
+      },
+      "block_producer": {
+        "block_size": 1000,
+        "interval_ms": 100,
+        "dependency_closed_consensus": false
+      },
+      "routing": {
+        "control_policy": "declared_access_frontier_v2",
+        "incremental_exact_continuity_routing_v65": true,
+        "micro_batch_size": 100,
+        "routing_epoch": 0,
+        "mt_bridge_frozen10k_v1": true
+      },
+      "txpool": {
+        "capacity": 10000
+      }
+    }
+  },
+  {
+    "method_id": "mtf_nosup10",
+    "display_name": "去协同状态供应",
+    "role": "ablation",
+    "plugin_overrides": {
+      "block_executor": "metatrack_block_executor",
+      "block_producer": "metatrack_nl_window_v669",
+      "commit": "commutative_hot_update_aggregation",
+      "consensus": "pbft_style_consensus",
+      "cross_shard": "relay_certificate_protocol",
+      "execution": "dual_track_execution",
+      "metrics": "runtime_core_metrics",
+      "network": "localhost_tcp_typed_network",
+      "observability": "node_network_consensus_observer",
+      "routing": "metatrack_coaccess_routing",
+      "scheduler": "fast_first_scheduler",
+      "sharding": "deterministic_state_key_sharding",
+      "state_access": "metatrack_home_exact_access",
+      "state_storage": "persistent_local_state_store",
+      "transaction_admission": "metatrack_strict_admission_v1",
+      "txpool": "fifo_per_node_mempool"
+    },
+    "plugin_config_overrides": {
+      "block_executor": {
+        "batch_entry_state_prefetch": false,
+        "batch_remote_writeback": false,
+        "control_policy": "declared_access_frontier_v2",
+        "dependency_closed_consensus": true,
+        "diagnostic_single_business_execution_v1": false,
+        "diagnostic_single_business_execution_v28": false,
+        "diagnostic_unified_ready_v1": false,
+        "final_version_batch_writeback": false,
+        "safe_state_fold": true,
+        "single_final_seal": true,
+        "version_liveness": true,
+        "version_liveness_indexed": true,
+        "worker_count": 8,
+        "ablation_on_demand_state_fetch_v661": true,
+        "ablation_conservative_home_publish_v1": true,
+        "mt_bridge_fanout_v1": true,
+        "metatrack_durable_proposal_wakeup_v654": true
+      },
+      "block_producer": {
+        "block_size": 1000,
+        "interval_ms": 100
+      },
+      "routing": {
+        "control_policy": "declared_access_frontier_v2",
+        "incremental_exact_continuity_routing_v65": true,
+        "micro_batch_size": 100,
+        "routing_epoch": 0,
+        "mt_bridge_frozen10k_v1": true
+      },
+      "txpool": {
+        "capacity": 10000
+      }
+    }
+  },
+  {
+    "method_id": "mtf_basic10",
+    "display_name": "AllBasic（唤醒开启）",
+    "role": "ablation",
+    "plugin_overrides": {
+      "block_executor": "metatrack_block_executor",
+      "block_producer": "time_or_count_block_producer",
+      "commit": "commutative_hot_update_aggregation",
+      "consensus": "pbft_style_consensus",
+      "cross_shard": "relay_certificate_protocol",
+      "execution": "dual_track_execution",
+      "metrics": "runtime_core_metrics",
+      "network": "localhost_tcp_typed_network",
+      "observability": "node_network_consensus_observer",
+      "routing": "metatrack_coaccess_routing",
+      "scheduler": "fast_first_scheduler",
+      "sharding": "deterministic_state_key_sharding",
+      "state_access": "metatrack_home_exact_access",
+      "state_storage": "persistent_local_state_store",
+      "transaction_admission": "metatrack_strict_admission_v1",
+      "txpool": "fifo_per_node_mempool"
+    },
+    "plugin_config_overrides": {
+      "block_executor": {
+        "batch_entry_state_prefetch": false,
+        "batch_remote_writeback": false,
+        "control_policy": "declared_access_frontier_v2",
+        "dependency_closed_consensus": true,
+        "diagnostic_single_business_execution_v1": false,
+        "diagnostic_single_business_execution_v28": false,
+        "diagnostic_unified_ready_v1": false,
+        "final_version_batch_writeback": false,
+        "safe_state_fold": true,
+        "single_final_seal": true,
+        "version_liveness": true,
+        "version_liveness_indexed": true,
+        "worker_count": 8,
+        "ablation_on_demand_state_fetch_v661": true,
+        "ablation_conservative_home_publish_v1": true,
+        "mt_bridge_fanout_v1": true,
+        "metatrack_durable_proposal_wakeup_v654": true
+      },
+      "block_producer": {
+        "block_size": 1000,
+        "interval_ms": 100,
+        "dependency_closed_consensus": false
+      },
+      "routing": {
+        "control_policy": "declared_access_frontier_v2",
+        "incremental_exact_continuity_routing_v65": false,
+        "micro_batch_size": 100,
+        "routing_epoch": 0,
+        "ablation_pure_random_v1": true,
+        "mt_random_seed_v1": 20261116,
+        "mt_bridge_frozen10k_v1": true
+      },
+      "txpool": {
+        "capacity": 10000
+      }
+    }
+  },
+  {
+    "method_id": "mtf_wakeoff10",
+    "display_name": "BasicReference（关闭唤醒）",
+    "role": "baseline",
+    "plugin_overrides": {
+      "block_executor": "metatrack_block_executor",
+      "block_producer": "time_or_count_block_producer",
+      "commit": "commutative_hot_update_aggregation",
+      "consensus": "pbft_style_consensus",
+      "cross_shard": "relay_certificate_protocol",
+      "execution": "dual_track_execution",
+      "metrics": "runtime_core_metrics",
+      "network": "localhost_tcp_typed_network",
+      "observability": "node_network_consensus_observer",
+      "routing": "metatrack_coaccess_routing",
+      "scheduler": "fast_first_scheduler",
+      "sharding": "deterministic_state_key_sharding",
+      "state_access": "metatrack_home_exact_access",
+      "state_storage": "persistent_local_state_store",
+      "transaction_admission": "metatrack_strict_admission_v1",
+      "txpool": "fifo_per_node_mempool"
+    },
+    "plugin_config_overrides": {
+      "block_executor": {
+        "batch_entry_state_prefetch": false,
+        "batch_remote_writeback": false,
+        "control_policy": "declared_access_frontier_v2",
+        "dependency_closed_consensus": true,
+        "diagnostic_single_business_execution_v1": false,
+        "diagnostic_single_business_execution_v28": false,
+        "diagnostic_unified_ready_v1": false,
+        "final_version_batch_writeback": false,
+        "safe_state_fold": true,
+        "single_final_seal": true,
+        "version_liveness": true,
+        "version_liveness_indexed": true,
+        "worker_count": 8,
+        "ablation_on_demand_state_fetch_v661": true,
+        "ablation_conservative_home_publish_v1": true,
+        "mt_bridge_fanout_v1": true,
+        "metatrack_durable_proposal_wakeup_v654": false
+      },
+      "block_producer": {
+        "block_size": 1000,
+        "interval_ms": 100,
+        "dependency_closed_consensus": false
+      },
+      "routing": {
+        "control_policy": "declared_access_frontier_v2",
+        "incremental_exact_continuity_routing_v65": false,
+        "micro_batch_size": 100,
+        "routing_epoch": 0,
+        "ablation_pure_random_v1": true,
+        "mt_random_seed_v1": 20261116,
+        "mt_bridge_frozen10k_v1": true
+      },
+      "txpool": {
+        "capacity": 10000
+      }
+    }
+  }
+]) as V5FormalMethod[]);
 
 // MBE_MT_ONLINE_V1: method cloned from original; only router policy differs.
 const mtOnlineOriginalV1 = V5_BUILTIN_METHODS.find((m) => m.method_id === "metatrack_latest");

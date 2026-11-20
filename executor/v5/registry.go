@@ -479,6 +479,10 @@ type BlockExecutionInput struct {
 	RemoteStateBatchFetch            RemoteStateBatchFetchFunc
 	StateVersionPublish              StateVersionPublishFunc
 	MetaTrackExactAccessPolicy       string
+	// MT_STM_SINGLE_CONTEXT_V1: only the Block-STM full-block adapter uses
+	// these callbacks; all other registered executors ignore them.
+	BlockSTMTxReadiness func(context.Context, int) (map[string]string, error)
+	BlockSTMTxFinalized func(context.Context, int, execution.TxDelta) error
 }
 type BlockExecutionResult struct {
 	ExecutionResult                 execution.Result                `json:"execution_result"`
@@ -1125,6 +1129,9 @@ func (p *metaTrackRouting) Route(input RoutingInput) RoutingDecision {
 func (p *metaTrackRouting) PlanBatch(input BatchRoutingInput) BatchRoutingPlan {
 	if p != nil && boolFromAny(p.config["ablation_no_coaccess_sharding_v675"]) {
 		return p.planNoCoaccessShardingV675(input)
+	}
+	if p != nil && boolFromAny(p.config[mtRandomFlagV1]) {
+		return p.planPureRandomAblationV1(input)
 	}
 	if p != nil && boolFromAny(p.config[metaTrackAblationHashRoutingV662]) {
 		return p.planHashBaselineAblationV662(input)
@@ -3508,6 +3515,8 @@ func (p blockSTMBlockExecutor) ExecuteBlock(ctx context.Context, input BlockExec
 	workerCount := configuredWorkerCount(p.config, input.WorkerCount)
 	executor := execution.NewBlockSTMExecutor(workerCount)
 	executor.Progress = input.Progress
+	executor.TxReadiness = input.BlockSTMTxReadiness // MT_STM_SINGLE_CONTEXT_V1
+	executor.OnStableTx = input.BlockSTMTxFinalized
 	if mode := strings.TrimSpace(fmt.Sprint(p.config["execution_mode"])); mode == "correctness" || mode == "performance" {
 		executor.ExecutionMode = mode
 	}

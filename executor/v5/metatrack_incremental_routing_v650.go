@@ -93,17 +93,14 @@ func metaTrackBuildRoutingRecordContextV669(p *metaTrackRouting, record Workload
 		ReadHomeCount:  map[string]int{},
 		WriteHomeCount: map[string]int{},
 	}
+	// MTP2SWEEP_V1: the first-access map is also the exact dedupe set.
 	accessByKey := map[string]tx.AccessItem{}
-	seenKey := map[string]bool{}
 	for _, access := range ctx.Accesses {
 		if access.Key == "" {
 			continue
 		}
 		if _, ok := accessByKey[access.Key]; !ok {
 			accessByKey[access.Key] = access
-		}
-		if !seenKey[access.Key] {
-			seenKey[access.Key] = true
 			ctx.Keys = append(ctx.Keys, access.Key)
 		}
 		home, cached := state.HomeShardByKey[access.Key]
@@ -124,9 +121,14 @@ func metaTrackBuildRoutingRecordContextV669(p *metaTrackRouting, record Workload
 		}
 	}
 	sort.Strings(ctx.Keys)
+	// MTP2SWEEP_V1: keys are unique and sorted, so the keyPair reordering
+	// branch is redundant. Preallocate exact pair count for ordinary-width records.
+	if n := len(ctx.Keys); n > 1 && n <= 256 {
+		ctx.Pairs = make([]string, 0, n*(n-1)/2)
+	}
 	for left := 0; left < len(ctx.Keys); left++ {
 		for right := left + 1; right < len(ctx.Keys); right++ {
-			ctx.Pairs = append(ctx.Pairs, keyPair(ctx.Keys[left], ctx.Keys[right]))
+			ctx.Pairs = append(ctx.Pairs, ctx.Keys[left]+"\x00"+ctx.Keys[right])
 		}
 	}
 	for _, dep := range record.StateVersions {
@@ -517,6 +519,7 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 
 	batchFrequency := map[string]*StateFrequencyRow{}
 	batchCoaccess := map[string]int{}
+	batchCoaccessHasEmbeddedNUL := false
 	batchKeys := map[string]bool{}
 	routingEpoch := uint64(maxInt(0, intValue(p.config["routing_epoch"])))
 
@@ -524,6 +527,11 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 	// incremental history; only committed placement updates it.
 	for _, record := range input.Records {
 		routingCtx := metaTrackBuildRoutingRecordContextV669(p, record, input.Sharding, input.ShardIDs, state)
+		if len(routingCtx.Pairs) > 0 && !batchCoaccessHasEmbeddedNUL {
+			for _, key := range routingCtx.Keys {
+				if strings.IndexByte(key, 0) >= 0 { batchCoaccessHasEmbeddedNUL = true; break }
+			}
+		}
 		accesses := routingCtx.Accesses
 		keys := routingCtx.Keys
 		logicalID := firstNonEmpty(record.LogicalID, fmt.Sprintf("tx-%d", record.Index))
@@ -695,17 +703,22 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 
 		state.ShardLoad[selected.Shard]++
 		state.Processed++
+		// MTP2SWEEP_V1: cache the inner map reference during each update.
 		for _, key := range keys {
-			if state.KeyShardSupport[key] == nil {
-				state.KeyShardSupport[key] = map[string]int{}
+			shares := state.KeyShardSupport[key]
+			if shares == nil {
+				shares = make(map[string]int, 2)
+				state.KeyShardSupport[key] = shares
 			}
-			state.KeyShardSupport[key][selected.Shard]++
+			shares[selected.Shard]++
 		}
 		for _, pair := range routingCtx.Pairs {
-			if state.PairShardSupport[pair] == nil {
-				state.PairShardSupport[pair] = map[string]int{}
+			shares := state.PairShardSupport[pair]
+			if shares == nil {
+				shares = make(map[string]int, 2)
+				state.PairShardSupport[pair] = shares
 			}
-			state.PairShardSupport[pair][selected.Shard]++
+			shares[selected.Shard]++
 			plan.IncrementalCoaccessPairUpdateCount++
 		}
 		for _, dep := range record.StateVersions {
@@ -730,16 +743,33 @@ func (p *metaTrackRouting) planIncrementalExactContinuityV650(input BatchRouting
 		}
 	}
 	sort.Slice(plan.StateFrequency, func(i, j int) bool { return plan.StateFrequency[i].Key < plan.StateFrequency[j].Key })
-	for pair, weight := range batchCoaccess {
-		left, right, _ := strings.Cut(pair, "\x00")
-		plan.CoaccessEdges = append(plan.CoaccessEdges, CoaccessEdge{LeftKey: left, RightKey: right, Weight: weight})
+	// MTP2STOREOPT_V1: sort the already-materialized encoded pair keys.
+	// A single NUL is the canonical keyPair separator; encoded lexicographic
+	// order then equals the original (LeftKey, RightKey) lexicographic order.
+	// Unusual keys containing NUL use the exact legacy comparator below.
+	pairKeys := make([]string, 0, len(batchCoaccess))
+	legacyEdgeOrder := batchCoaccessHasEmbeddedNUL
+	for pair := range batchCoaccess {
+		pairKeys = append(pairKeys, pair)
 	}
-	sort.Slice(plan.CoaccessEdges, func(i, j int) bool {
-		if plan.CoaccessEdges[i].LeftKey != plan.CoaccessEdges[j].LeftKey {
-			return plan.CoaccessEdges[i].LeftKey < plan.CoaccessEdges[j].LeftKey
+	if legacyEdgeOrder {
+		for pair, weight := range batchCoaccess {
+			left, right, _ := strings.Cut(pair, "\x00")
+			plan.CoaccessEdges = append(plan.CoaccessEdges, CoaccessEdge{LeftKey: left, RightKey: right, Weight: weight})
 		}
-		return plan.CoaccessEdges[i].RightKey < plan.CoaccessEdges[j].RightKey
-	})
+		sort.Slice(plan.CoaccessEdges, func(i, j int) bool {
+			if plan.CoaccessEdges[i].LeftKey != plan.CoaccessEdges[j].LeftKey {
+				return plan.CoaccessEdges[i].LeftKey < plan.CoaccessEdges[j].LeftKey
+			}
+			return plan.CoaccessEdges[i].RightKey < plan.CoaccessEdges[j].RightKey
+		})
+	} else {
+		sort.Strings(pairKeys)
+		for _, pair := range pairKeys {
+			left, right, _ := strings.Cut(pair, "\x00")
+			plan.CoaccessEdges = append(plan.CoaccessEdges, CoaccessEdge{LeftKey: left, RightKey: right, Weight: batchCoaccess[pair]})
+		}
+	}
 	for key := range batchKeys {
 		home := p.LogicalStateHome(key, input.Sharding, input.ShardIDs)
 		best := ""

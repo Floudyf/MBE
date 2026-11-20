@@ -178,11 +178,32 @@ func (t *Transport) handleConn(ctx context.Context, conn net.Conn) {
 			}
 		}
 		t.Log.Add(entry)
-		if t.handler != nil {
-			if err := t.handler(ctx, msg); err != nil {
-				t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "handler", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: err.Error()})
+		var handlerErr error
+		if t.handler == nil {
+			handlerErr = fmt.Errorf("p2p handler is not configured")
+		} else {
+			handlerErr = t.handler(ctx, msg)
+		}
+		if handlerErr != nil {
+			t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "handler", MessageType: msg.MessageType, MessageID: msg.MessageID, Height: msg.Height, View: msg.View, Sequence: msg.Sequence, Success: false, Error: handlerErr.Error()})
+		}
+		// Only the explicit client admission protocol receives a reply on the
+		// same connection. Ordinary gossip, PBFT and state lanes are unchanged.
+		if msg.MessageType == MessageTXGossip && msg.FromNode == ClientAdmissionOriginV1 {
+			receipt := ClientAdmissionReceiptV1{ReferenceMessageID: msg.MessageID, Accepted: handlerErr == nil}
+			if handlerErr != nil { receipt.Reason = handlerErr.Error() }
+			ack, ackErr := NewEnvelope(MessageClientAdmissionAckV1, t.NodeID, ClientAdmissionOriginV1, msg.ShardID, 0, 0, 0, receipt)
+			if ackErr == nil {
+				_ = conn.SetWriteDeadline(time.Now().Add(5*time.Second))
+				ackErr = Encode(conn, ack)
+				_ = conn.SetWriteDeadline(time.Time{})
+			}
+			if ackErr != nil {
+				t.Log.Add(NetworkLogEntry{Timestamp: time.Now().UnixMilli(), NodeID: t.NodeID, PeerID: msg.FromNode, Direction: "client_admission_ack_v1", MessageType: msg.MessageType, MessageID: msg.MessageID, Success: false, Error: ackErr.Error()})
+				return
 			}
 		}
+
 	}
 }
 

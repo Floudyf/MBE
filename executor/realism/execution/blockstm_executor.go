@@ -86,6 +86,10 @@ type BlockSTMExecutor struct {
 	Progress               func(BlockSTMProgress)
 	serialSemantics        *SerialExecutor
 	deltaOnly              bool // MBE_VERSIONED_WAVE_DELTA_ONLY_V14B
+	// MT_STM_SINGLE_CONTEXT_V1: optional stateless whole-block admission hooks.
+	// Nil leaves native stateful and all existing Block-STM behavior unchanged.
+	TxReadiness func(context.Context, int) (map[string]string, error)
+	OnStableTx  func(context.Context, int, TxDelta) error
 }
 
 func NewBlockSTMExecutor(workerCount int) *BlockSTMExecutor {
@@ -116,6 +120,12 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	// MT_STM_SINGLE_CONTEXT_V1: transaction-specific external versions are
+	// incompatible with a global-base serial oracle or an unfenced fallback.
+	if e.TxReadiness != nil && (e.shouldRunSerialOracle() ||
+		(e.MaximumIncarnations > 0 && e.IncarnationLimitAction == "serial_fallback")) {
+		return Result{}, fmt.Errorf("Block-STM single-context exact reads require oracle off and no serial fallback")
+	}
 	workerCount := e.WorkerCount
 	if workerCount < 1 {
 		workerCount = 1
@@ -128,6 +138,33 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 	receipts := make([]Receipt, len(b.TxList))
 	incarnations := make([]int, len(b.TxList))
 	validationGeneration := make([]uint64, len(b.TxList))
+	// MT_STM_SINGLE_CONTEXT_V1: transaction-level exact-version readiness.
+	// Probes run independently; unready tasks are suspended rather than
+	// occupying workers or forcing a whole-block StateReady barrier.
+	type txAdmission struct {
+		index  int
+		values map[string]string
+		err    error
+	}
+	admission := make(chan txAdmission, len(b.TxList))
+	admissionCtx, stopAdmission := context.WithCancel(ctx)
+	defer stopAdmission()
+	ready := make([]bool, len(b.TxList))
+	baseOverrides := make([]map[string]string, len(b.TxList))
+	pendingReady := make([]*blockstm.SchedulerTask, len(b.TxList))
+	if e.TxReadiness == nil {
+		for index := range ready {
+			ready[index] = true
+		}
+	} else {
+		for index := range ready {
+			go func(i int) {
+				values, err := e.TxReadiness(admissionCtx, i)
+				admission <- txAdmission{index: i, values: values, err: err}
+			}(index)
+		}
+	}
+	stablePrefix := 0
 	metrics := BlockSTMMetrics{WorkerCount: workerCount, SchedulerMode: e.SchedulerMode, DependencyWaitMode: e.DependencyWaitMode, IncarnationHistogram: map[int]int{}}
 	uniqueAborted := make([]bool, len(b.TxList))
 	uniqueReexecuted := make([]bool, len(b.TxList))
@@ -279,29 +316,82 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 	}()
 	activeTasks := 0
 	dispatch := func() bool {
-		task, ok := scheduler.Next()
-		if !ok {
-			return false
-		}
-		if queueLen := scheduler.QueueLen(); queueLen+activeTasks+1 > metrics.SchedulerQueuePeak {
-			metrics.SchedulerQueuePeak = queueLen + activeTasks + 1
-		}
-		input := blockSTMTaskInput{Task: task}
-		index := int(task.Version.Txn)
-		if index >= 0 && index < len(b.TxList) {
-			if task.Kind == blockstm.TaskValidate {
-				input.Captured = cloneCapturedReads(captured[index])
-			} else {
-				input.PreviousWrites = copyStringMap(writeSets[index])
+		for {
+			task, ok := scheduler.Next()
+			if !ok {
+				return false
+			}
+			if queueLen := scheduler.QueueLen(); queueLen+activeTasks+1 > metrics.SchedulerQueuePeak {
+				metrics.SchedulerQueuePeak = queueLen + activeTasks + 1
+			}
+			input := blockSTMTaskInput{Task: task}
+			index := int(task.Version.Txn)
+			if index < 0 || index >= len(ready) {
+				return false
+			}
+			if task.Kind == blockstm.TaskExecute && !ready[index] {
+				held := task
+				pendingReady[index] = &held
+				scheduler.Wait(task.Version)
+				// Keep searching for independent ready tasks. The suspended task
+				// is resumed after its own exact state becomes available.
+				continue
+			}
+			input.BaseOverrides = baseOverrides[index]
+			if index >= 0 && index < len(b.TxList) {
+				if task.Kind == blockstm.TaskValidate {
+					input.Captured = cloneCapturedReads(captured[index])
+				} else {
+					input.PreviousWrites = copyStringMap(writeSets[index])
+				}
+			}
+			select {
+			case jobs <- input:
+				activeTasks++
+				return true
+			case <-ctx.Done():
+				return false
 			}
 		}
-		select {
-		case jobs <- input:
-			activeTasks++
-			return true
-		case <-ctx.Done():
-			return false
+	}
+
+	// MT_STM_SINGLE_CONTEXT_V1: external admission completion is handled by
+	// the scheduler owner; no worker mutates its status or incarnation.
+	handleAdmission := func(row txAdmission) error {
+		if row.err != nil {
+			return fmt.Errorf("Block-STM StateReady tx %d: %w", row.index, row.err)
 		}
+		if row.index < 0 || row.index >= len(ready) {
+			return fmt.Errorf("Block-STM readiness index %d invalid", row.index)
+		}
+		if ready[row.index] {
+			return fmt.Errorf("Block-STM duplicate readiness for tx %d", row.index)
+		}
+		ready[row.index] = true
+		baseOverrides[row.index] = row.values
+		if held := pendingReady[row.index]; held != nil {
+			pendingReady[row.index] = nil
+			scheduler.ResumeTask(*held)
+		}
+		return nil
+	}
+	publishStablePrefix := func() error {
+		for stablePrefix < len(validated) && validated[stablePrefix] {
+			index := stablePrefix
+			if e.OnStableTx != nil {
+				receipt := receipts[index]
+				delta := TxDelta{
+					TxID: b.TxList[index].TxID, OriginalIndex: index,
+					ReadSet: readSets[index], WriteSet: writeSets[index],
+					Receipt: receipt, Success: receipt.Success, Error: receipt.Error,
+				}
+				if err := e.OnStableTx(ctx, index, delta); err != nil {
+					return err
+				}
+			}
+			stablePrefix++
+		}
+		return nil
 	}
 
 	reportProgress(-1, 0, 0)
@@ -315,7 +405,7 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 		if activeTasks == 0 {
 			scheduled := scheduleReadyValidations()
 			for index := range b.TxList {
-				if validated[index] || waiting[index] || executed[index] {
+				if validated[index] || waiting[index] || executed[index] || pendingReady[index] != nil {
 					continue
 				}
 				scheduler.ScheduleExecution(blockstm.Version{Txn: blockstm.TxnIndex(index), Incarnation: blockstm.Incarnation(incarnations[index])})
@@ -323,6 +413,26 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 			}
 			if scheduled && dispatch() {
 				continue
+			}
+			pendingExternal := false
+			for _, held := range pendingReady {
+				if held != nil {
+					pendingExternal = true
+					break
+				}
+			}
+			if pendingExternal {
+				select {
+				case row := <-admission:
+					if err := handleAdmission(row); err != nil {
+						return Result{}, err
+					}
+					continue
+				case <-ctx.Done():
+					return Result{}, ctx.Err()
+				case <-time.After(30 * time.Second):
+					return Result{}, fmt.Errorf("Block-STM exact-version StateReady made no progress while transactions waited")
+				}
 			}
 			for index := range b.TxList {
 				if !validated[index] && waiting[index] {
@@ -332,6 +442,10 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 			return Result{}, fmt.Errorf("block-stm scheduler stalled without runnable work: validated=%d total=%d", validatedCount, len(b.TxList))
 		}
 		select {
+		case row := <-admission:
+			if err := handleAdmission(row); err != nil {
+				return Result{}, err
+			}
 		case taskResult := <-results:
 			activeTasks--
 			if taskResult.Err != nil {
@@ -464,6 +578,9 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 					validatedCount++
 					metrics.ValidatedSpeculativeResultCount++
 					scheduler.Commit(taskResult.Version)
+					if err := publishStablePrefix(); err != nil {
+						return Result{}, err
+					}
 					break
 				}
 
@@ -581,6 +698,14 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 		return result, nil
 	}
 
+	// MT_STM_P0_INCREMENTAL_V1: only the already-validated whole-block
+	// Stateless Block-STM adapter can use the certified block-start root.
+	// Every other Block-STM path preserves historical full-state validation.
+	fastMaterialization := e.TxReadiness != nil && e.OnStableTx != nil && baseCommitment != nil && e.ExecutionMode == "performance" && e.OracleMode == "off"
+	var touchedFinal map[string]string
+	if fastMaterialization {
+		touchedFinal = make(map[string]string)
+	}
 	serialWorking := copySnapshot(base)
 	commitmentStarted := time.Now()
 	commitment := state.CloneOrBuild(baseCommitment, serialWorking)
@@ -600,7 +725,12 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 		sort.Strings(keys)
 		materializeStarted := time.Now()
 		for _, key := range keys {
-			serialWorking[qualifyKey(b.ShardID, key)] = writeSets[index][key]
+			qualified := qualifyKey(b.ShardID, key)
+			value := writeSets[index][key]
+			serialWorking[qualified] = value
+			if fastMaterialization {
+				touchedFinal[qualified] = value
+			}
 		}
 		materializationDuration += time.Since(materializeStarted)
 		receipt := receipts[index]
@@ -629,10 +759,29 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 	}
 	result.StateRootAfter = commitment.Root()
 	result.ReceiptRoot = ReceiptRoot(result.Receipts)
-	for key, value := range serialWorking {
-		result.StateUpdates[key] = value
+	if fastMaterialization {
+		// Preserve the existing full-snapshot StateUpdates contract while
+		// avoiding a second copy of the same final state map.
+		result.StateUpdates = serialWorking
+		// Only touched keys can have changed. Replicate stateDelta's exact
+		// before[key] != after[key] semantics and sorted output ordering.
+		changed := make([]string, 0, len(touchedFinal))
+		for key, value := range touchedFinal {
+			if base[key] != value {
+				changed = append(changed, key)
+			}
+		}
+		sort.Strings(changed)
+		result.StateDelta = make([]StateUpdate, 0, len(changed))
+		for _, key := range changed {
+			result.StateDelta = append(result.StateDelta, StateUpdate{Key: key, Value: touchedFinal[key]})
+		}
+	} else {
+		for key, value := range serialWorking {
+			result.StateUpdates[key] = value
+		}
+		result.StateDelta = stateDelta(base, serialWorking)
 	}
-	result.StateDelta = stateDelta(base, serialWorking)
 	metrics.MaterializationMS = materializationDuration.Milliseconds()
 	metrics.StateCommitmentMS = stateCommitmentDuration.Milliseconds()
 	result.TransactionExecutionMS = metrics.TransactionExecutionMS
@@ -653,7 +802,11 @@ func (e *BlockSTMExecutor) ExecuteBlockWithCommitment(ctx context.Context, b blo
 	result.PlanDigest = plan.PlanDigest
 	result.BlockSTMMetrics = metrics
 	e.Metrics = metrics
-	if result.StateRootAfter != state.RootOfSnapshot(serialWorking) {
+	// The certified commitment is cloned, then updated per transaction.
+	// Native P0 regressions independently compare every incremental root
+	// and full output against the unmodified full-reconstruction path.
+	// On any uncertified/native path, retain the runtime full-tree check.
+	if !fastMaterialization && result.StateRootAfter != state.RootOfSnapshot(serialWorking) {
 		return Result{}, fmt.Errorf("block-stm ordered materialization root mismatch")
 	}
 	result.SerialEquivalent = true
@@ -684,6 +837,7 @@ func (e *BlockSTMExecutor) serialFallbackResult(b block.Block, base map[string]s
 }
 
 type blockSTMTaskInput struct {
+	BaseOverrides  map[string]string // MT_STM_SINGLE_CONTEXT_V1
 	Task           blockstm.SchedulerTask
 	Captured       blockstm.CapturedReads
 	PreviousWrites map[string]string
@@ -719,15 +873,16 @@ type blockSTMTaskResult struct {
 }
 
 type stmOverlay struct {
-	shardID     string
-	base        map[string]string
-	logicalBase map[string]string
-	memory      *blockstm.MVMemory
-	reader      blockstm.TxnIndex
-	writes      map[string]string
-	reads       []ReadObservation
-	captured    blockstm.CapturedReads
-	dependency  *blockstm.Version
+	baseOverrides map[string]string // MT_STM_SINGLE_CONTEXT_V1
+	shardID       string
+	base          map[string]string
+	logicalBase   map[string]string
+	memory        *blockstm.MVMemory
+	reader        blockstm.TxnIndex
+	writes        map[string]string
+	reads         []ReadObservation
+	captured      blockstm.CapturedReads
+	dependency    *blockstm.Version
 }
 
 func newSTMOverlay(shardID string, base, logicalBase map[string]string, memory *blockstm.MVMemory, reader blockstm.TxnIndex) *stmOverlay {
@@ -741,7 +896,9 @@ func (o *stmOverlay) get(key string) string {
 		o.reads = append(o.reads, ReadObservation{Key: key, Value: value, ValueDigest: digestValue(value), Source: "stm_local_write"})
 		return value
 	}
-	read := o.memory.Read(key, o.reader, o.logicalBase)
+	read := o.memory.ReadWithBaseOverride(key, o.reader, o.logicalBase, o.baseOverrides)
+	// MT_STM_SINGLE_CONTEXT_V1: exact historical version takes precedence
+	// even if a lower speculative index has published a newer MV write.
 	if read.Estimate && read.DependencyOn != nil {
 		dependency := *read.DependencyOn
 		o.dependency = &dependency
@@ -835,6 +992,7 @@ func (e *BlockSTMExecutor) runBlockSTMTask(ctx context.Context, b block.Block, b
 		defer atomic.AddInt64(activeExecutions, -1)
 		txnIndex := blockstm.TxnIndex(index)
 		overlay := newSTMOverlay(b.ShardID, base, logicalBase, memory, txnIndex)
+		overlay.baseOverrides = input.BaseOverrides // MT_STM_SINGLE_CONTEXT_V1
 		receipt := e.executeTx(b, overlay, b.TxList[index])
 		writes := overlay.logicalWrites()
 		if overlay.dependency != nil {
@@ -862,6 +1020,9 @@ func (e *BlockSTMExecutor) runBlockSTMTask(ctx context.Context, b block.Block, b
 		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Captured: overlay.captured, ReadSet: append([]ReadObservation(nil), overlay.reads...), WriteSet: writes, WroteNewLocation: wroteNewLocation, Receipt: receipt}
 	case blockstm.TaskValidate:
 		validation := memory.Validate(blockstm.TxnIndex(index), logicalBase, input.Captured)
+		if len(input.BaseOverrides) != 0 {
+			validation = memory.ValidateWithBaseOverrides(blockstm.TxnIndex(index), logicalBase, input.BaseOverrides, input.Captured)
+		} // MT_STM_SINGLE_CONTEXT_V1: nil overrides preserve native validator
 		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Validation: validation}
 	default:
 		return blockSTMTaskResult{Kind: task.Kind, Version: task.Version, Generation: task.Generation, Err: fmt.Errorf("unknown block-stm task kind %s", task.Kind)}
@@ -1184,7 +1345,7 @@ func speculativeSnapshot(memory *blockstm.MVMemory, base, logicalBase map[string
 }
 
 func logicalSnapshot(shardID string, snapshot map[string]string) map[string]string {
-	out := map[string]string{}
+	out := make(map[string]string, len(snapshot)) // MBE_MT_ONESTEP_V1_PREALLOC
 	prefix := shardID + "::"
 	for key, value := range snapshot {
 		if len(key) >= len(prefix) && key[:len(prefix)] == prefix {

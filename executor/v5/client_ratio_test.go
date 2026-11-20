@@ -36,8 +36,19 @@ func TestSubmitWorkloadUsesConfiguredCrossShardRatioAcrossStream(t *testing.T) {
 							defer conn.Close()
 							reader := bufio.NewReader(conn)
 							for {
-								if _, _, err := p2p.DecodeReader(reader); err != nil {
+								msg, _, err := p2p.DecodeReader(reader)
+								if err != nil {
 									return
+								}
+								if msg.MessageType == p2p.MessageTXGossip && msg.FromNode == p2p.ClientAdmissionOriginV1 {
+									receipt := p2p.ClientAdmissionReceiptV1{ReferenceMessageID: msg.MessageID, Accepted: true}
+									ack, err := p2p.NewEnvelope(p2p.MessageClientAdmissionAckV1, msg.ToNode, p2p.ClientAdmissionOriginV1, msg.ShardID, 0, 0, 0, receipt)
+									if err != nil {
+										return
+									}
+									if err := p2p.Encode(conn, ack); err != nil {
+										return
+									}
 								}
 							}
 						}()
@@ -186,8 +197,19 @@ func TestSubmitDatasetWorkloadUsesBuyerHomeShardAsIngress(t *testing.T) {
 					defer conn.Close()
 					reader := bufio.NewReader(conn)
 					for {
-						if _, _, err := p2p.DecodeReader(reader); err != nil {
+						msg, _, err := p2p.DecodeReader(reader)
+						if err != nil {
 							return
+						}
+						if msg.MessageType == p2p.MessageTXGossip && msg.FromNode == p2p.ClientAdmissionOriginV1 {
+							receipt := p2p.ClientAdmissionReceiptV1{ReferenceMessageID: msg.MessageID, Accepted: true}
+							ack, err := p2p.NewEnvelope(p2p.MessageClientAdmissionAckV1, msg.ToNode, p2p.ClientAdmissionOriginV1, msg.ShardID, 0, 0, 0, receipt)
+							if err != nil {
+								return
+							}
+							if err := p2p.Encode(conn, ack); err != nil {
+								return
+							}
 						}
 					}
 				}()

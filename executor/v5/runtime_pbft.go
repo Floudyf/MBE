@@ -149,6 +149,13 @@ func (r *NodeRuntime) handlePBFTPrePrepare(ctx context.Context, msg p2p.MessageE
 		return nil
 	}
 	pre = hydratedPre
+	// MTCF_V1: authenticated compact PRE-PREPAREs have TxList=nil on the
+	// wire. Gate only AFTER hydration, BEFORE exact-frontier validation.
+	// Retention never casts a PBFT vote; replay returns through this
+	// original handler and checks the full signed body, parent, and view.
+	if retained, gateErr := r.mtGuardHydratedFrontierPrePrepareV2(msg, pre); retained || gateErr != nil {
+		return gateErr
+	}
 
 	// MBE_MT_FRONTIER_WAKE_V1: On an authenticated streaming MetaTrack
 	// PRE-PREPARE for a future durable height, the predecessor's ordinal may

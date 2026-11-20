@@ -336,6 +336,7 @@ type NodeRuntime struct {
 	db                           *state.DB
 	store                        *storage.BlockStore
 	mu                           sync.Mutex
+	mtAdmissionR1                mtAdmissionR1Memo // MT_ADMIT_R1_V1 immutable metadata only
 	commitMu                     sync.Mutex
 	commitTasks                  chan commitTask
 	proposalWakeup               chan struct{}
@@ -1386,15 +1387,23 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		}
 		result := r.pool.Admit(item)
 		if !result.Accepted && result.RejectReason != "duplicate_tx" {
-			r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "failed", NodeID: r.node.NodeID, ShardID: r.node.ShardID, Success: false, Error: result.RejectReason})
+			stage := "failed"
+			if msg.FromNode == p2p.ClientAdmissionOriginV1 && result.RejectReason == "capacity_exceeded" {
+				// A retryable capacity result is not a terminal transaction failure.
+				stage = "admission_deferred"
+			}
+			r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: stage, NodeID: r.node.NodeID, ShardID: r.node.ShardID, Success: false, Error: result.RejectReason})
 			return fmt.Errorf("admission %s", result.RejectReason)
 		}
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "admitted", NodeID: r.node.NodeID, ShardID: r.node.ShardID, Success: true})
-		if msg.FromNode == "mbe-client" {
+		if msg.FromNode == "mbe-client" || msg.FromNode == p2p.ClientAdmissionOriginV1 {
 			// Transaction gossip is not a primary-only consensus action. If the
 			// client is still connected to the initial ingress node after a view
 			// change, gossiping from that validator ensures the new primary sees
 			// subsequent transactions without requiring client-side leader discovery.
+			if msg.FromNode == p2p.ClientAdmissionOriginV1 && r.metaTrackBlockExecutorFlag("mt_bridge_fanout_v1") {
+				return r.gossipAdmissionFanV1(ctx, item)
+			}
 			return r.gossip(ctx, item)
 		}
 	case p2p.MessagePBFTPrePrepare:
@@ -1724,6 +1733,42 @@ func (r *NodeRuntime) admitTransaction(item tx.SignedTransaction) error {
 		return fmt.Errorf("transaction admission plugin is not configured")
 	}
 	return r.plugins.Admission.Admit(item)
+}
+
+// MTAdmitFan_v1: verified client ingress only. All fanout sends complete
+// before this function returns and before the transport writes admission ACK.
+// This preserves the original local-admit + full-fanout success condition.
+func (r *NodeRuntime) gossipAdmissionFanV1(ctx context.Context, item tx.SignedTransaction) error {
+    msg, err := p2p.NewEnvelope(p2p.MessageTXGossip, r.node.NodeID, "", r.node.ShardID, 0, 0, 0, item)
+    if err != nil { return err }
+    peerIDs := make([]string, 0, len(r.transport.Peers))
+    for peerID, peer := range r.transport.Peers {
+        // Same predicate as Transport.Broadcast; no changes to target set.
+        if msg.ShardID != "" && peer.ShardID != "" && peer.ShardID != msg.ShardID {
+            continue
+        }
+        peerIDs = append(peerIDs, peerID)
+    }
+    type sendResult struct { index int; err error }
+    completed := make(chan sendResult, len(peerIDs))
+    for index, peerID := range peerIDs {
+        go func(index int, peerID string) {
+            next := msg
+            next.ToNode = peerID
+            // Transport.Send remains responsible for per-peer locking,
+            // envelope finalization, fault policy and bounded retries.
+            completed <- sendResult{index: index, err: r.transport.Send(ctx, peerID, next)}
+        }(index, peerID)
+    }
+    errorsByOrder := make([]error, len(peerIDs))
+    for range peerIDs {
+        result := <-completed
+        errorsByOrder[result.index] = result.err
+    }
+    for _, sendErr := range errorsByOrder {
+        if sendErr != nil { return sendErr }
+    }
+    return nil
 }
 
 func (r *NodeRuntime) gossip(ctx context.Context, item tx.SignedTransaction) error {
@@ -2215,46 +2260,43 @@ func (r *NodeRuntime) admitStatelessVersionCandidate(ctx context.Context, block 
 		return block, nil, nil
 	}
 	shardIDs := r.shardIDs()
+	// MT_ADMIT_R1_V1: signed dependency declarations do not change across
+	// candidate rounds. Build candidate-specific indexes in original FIFO order.
+	metadata := make([]mtAdmissionR1Metadata, len(block.TxList))
 	producerIndex := map[string]int{}
 	for index, item := range block.TxList {
 		if item.ExecutionRouting == nil {
 			continue
 		}
-		for _, dependency := range item.ExecutionRouting.StateVersions {
-			if dependency.Key == "" || dependency.ProducedVersion == 0 {
-				continue
-			}
-			producerIndex[statelessVersionAdmissionToken(dependency.Key, dependency.ProducedVersion)] = index
+		metadata[index] = r.mtAdmissionR1Metadata(item)
+		for _, token := range metadata[index].produced {
+			producerIndex[token] = index
 		}
 	}
 
+	requiredByTx := make([][]string, len(block.TxList))
 	external := map[string]statelessVersionAdmissionRequirement{}
 	externalDependencyTxIDs := map[string]bool{}
 	externalDependencyEdgeCount := int64(0)
 	internalDependencyEdgeCount := int64(0)
-	for _, item := range block.TxList {
+	for index, item := range block.TxList {
 		if item.ExecutionRouting == nil {
 			continue
 		}
-		for _, dependency := range item.ExecutionRouting.StateVersions {
-			if dependency.Key == "" || dependency.RequiredVersion == 0 {
-				continue
-			}
-			if !transactionRequiresExactStateValue(item, dependency.Key) {
-				continue
-			}
-			token := statelessVersionAdmissionToken(dependency.Key, dependency.RequiredVersion)
+		for _, requirement := range metadata[index].required {
+			token := requirement.token
+			requiredByTx[index] = append(requiredByTx[index], token)
 			if _, internal := producerIndex[token]; internal {
 				internalDependencyEdgeCount++
 				continue
 			}
 			externalDependencyTxIDs[item.TxID] = true
 			externalDependencyEdgeCount++
-			homeShard := r.stateHomeShardForKey(dependency.Key, shardIDs)
+			homeShard := r.stateHomeShardForKey(requirement.key, shardIDs)
 			if homeShard == "" {
-				return realblock.Block{}, nil, fmt.Errorf("stateless version admission has no home shard for %s", dependency.Key)
+				return realblock.Block{}, nil, fmt.Errorf("stateless version admission has no home shard for %s", requirement.key)
 			}
-			external[token] = statelessVersionAdmissionRequirement{token: token, key: dependency.Key, version: dependency.RequiredVersion, homeShard: homeShard, transaction: item}
+			external[token] = statelessVersionAdmissionRequirement{token: token, key: requirement.key, version: requirement.version, homeShard: homeShard, transaction: item}
 		}
 	}
 
@@ -2271,43 +2313,10 @@ func (r *NodeRuntime) admitStatelessVersionCandidate(ctx context.Context, block 
 			externalNotReadyTokenCount++
 		}
 	}
-	selected := make([]bool, len(block.TxList))
-	progress := true
-	for progress {
-		progress = false
-		for index, item := range block.TxList {
-			if selected[index] {
-				continue
-			}
-			ready := true
-			if item.ExecutionRouting != nil {
-				for _, dependency := range item.ExecutionRouting.StateVersions {
-					if dependency.Key == "" || dependency.RequiredVersion == 0 {
-						continue
-					}
-					if !transactionRequiresExactStateValue(item, dependency.Key) {
-						continue
-					}
-					token := statelessVersionAdmissionToken(dependency.Key, dependency.RequiredVersion)
-					if producer, internal := producerIndex[token]; internal {
-						if !selected[producer] {
-							ready = false
-							break
-						}
-						continue
-					}
-					if !externalReady[token] {
-						ready = false
-						break
-					}
-				}
-			}
-			if ready {
-				selected[index] = true
-				progress = true
-			}
-		}
-	}
+	// P1: the original monotonically growing fixed point is computed through
+	// a per-candidate immutable dependency index. Remote exact-version readiness
+	// and all admission observability counters are evaluated on every attempt.
+	selected := mtAdmissionReadyClosureP1(requiredByTx, producerIndex, externalReady)
 
 	admittedItems := make([]tx.SignedTransaction, 0, len(block.TxList))
 	deferred := make([]tx.SignedTransaction, 0, len(block.TxList))
@@ -2326,11 +2335,7 @@ func (r *NodeRuntime) admitStatelessVersionCandidate(ctx context.Context, block 
 		}
 		directMissing := false
 		internalMissing := false
-		for _, dependency := range item.ExecutionRouting.StateVersions {
-			if dependency.Key == "" || dependency.RequiredVersion == 0 || !transactionRequiresExactStateValue(item, dependency.Key) {
-				continue
-			}
-			token := statelessVersionAdmissionToken(dependency.Key, dependency.RequiredVersion)
+		for _, token := range requiredByTx[index] {
 			if producer, internal := producerIndex[token]; internal {
 				if !selected[producer] {
 					internalMissing = true
@@ -2384,6 +2389,7 @@ func (r *NodeRuntime) probeStatelessVersionAdmissionRequirements(ctx context.Con
 		items = append(items, requirement)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].token < items[j].token })
+	items, knownNotReady := r.mtP4FilterKnownAdmission(items, ready)
 	workerCount := 16
 	if len(items) < workerCount {
 		workerCount = len(items)
@@ -2408,7 +2414,7 @@ func (r *NodeRuntime) probeStatelessVersionAdmissionRequirements(ctx context.Con
 	wg.Wait()
 	close(results)
 	var firstErr error
-	notReady := int64(0)
+	notReady := knownNotReady
 	for result := range results {
 		if result.err != nil && firstErr == nil {
 			firstErr = result.err
@@ -2418,7 +2424,7 @@ func (r *NodeRuntime) probeStatelessVersionAdmissionRequirements(ctx context.Con
 			notReady++
 		}
 	}
-	r.addRuntimeMetric("stateless_version_admission_probe_count", int64(len(items)))
+	r.addRuntimeMetric("stateless_version_admission_probe_count", int64(len(requirements)))
 	r.addRuntimeMetric("stateless_version_admission_probe_not_ready_count", notReady)
 	if firstErr != nil {
 		return ready, firstErr
@@ -2961,13 +2967,23 @@ func (r *NodeRuntime) recordScheduleEvents(block realblock.Block, events []Sched
 	if plugin, ok := r.pluginSnapshot["scheduler"]; ok {
 		schedulerPlugin = plugin.PluginID
 	}
-	rows := make([][]string, 0, len(events))
+	// Snapshot a safe upper bound for trace formatting. The second check
+	// under the lock below determines the final retained prefix.
+	r.mu.Lock()
+	retentionHint := schedulerTraceRetentionLimit - len(r.schedulerRows)
+	r.mu.Unlock()
+	if retentionHint < 0 {
+		retentionHint = 0
+	}
 	now := time.Now().UnixMilli()
 	txByID := map[string]tx.SignedTransaction{}
 	for _, item := range block.TxList {
 		txByID[item.TxID] = item
 	}
-	for index, event := range events {
+	// Preserve the original event slice for TxBlocked/TxWoken events below.
+	// The CSV normalization only affects the scheduler trace and its summary.
+	prepared := make([]ScheduleEvent, 0, len(events))
+	for _, event := range events {
 		if planned {
 			if event.Blocked {
 				event.QueueName = "planned_blocked"
@@ -2980,15 +2996,23 @@ func (r *NodeRuntime) recordScheduleEvents(block realblock.Block, events []Sched
 			event.Wakeup = false
 		}
 		if item, ok := txByID[event.TxID]; ok && r.executesRemoteHomeState(item) {
-			// Remote state ownership does not make computation non-local.
-			// LocalExecution describes where the scheduler dispatches business
-			// execution; remote-home access is orthogonal evidence carried in the
-			// reason and the remote-state metrics.
 			if event.DecisionReason != "" {
 				event.DecisionReason += ";"
 			}
 			event.DecisionReason += "remote_home_access"
 		}
+		prepared = append(prepared, event)
+	}
+	// Aggregate typed fields rather than formatting every event to 18 strings
+	// and then parsing the same fields back. All events are still counted.
+	batchSummary := summarizeSchedulerEventsMTCodeHotV1(prepared)
+	if retentionHint > len(prepared) {
+		retentionHint = len(prepared)
+	}
+	rows := make([][]string, 0, retentionHint)
+	// The expensive formatting stays outside r.mu, like the old code.
+	for index := 0; index < retentionHint; index++ {
+		event := prepared[index]
 		timestamp := now + int64(index)
 		rows = append(rows, []string{
 			fmt.Sprint(timestamp),
@@ -3011,22 +3035,17 @@ func (r *NodeRuntime) recordScheduleEvents(block realblock.Block, events []Sched
 			fmt.Sprint(event.SchedulerIdleMS),
 		})
 	}
-	batchSummary := summarizeSchedulerRows(rows)
 	r.mu.Lock()
 	mergeSchedulerSummary(&r.schedulerAggregate, batchSummary)
 	remaining := schedulerTraceRetentionLimit - len(r.schedulerRows)
-	if remaining > 0 {
-		keep := len(rows)
-		if keep > remaining {
-			keep = remaining
-		}
-		r.schedulerRows = append(r.schedulerRows, rows[:keep]...)
-		if keep < len(rows) {
-			r.schedulerRowsDropped += int64(len(rows) - keep)
-		}
-	} else {
-		r.schedulerRowsDropped += int64(len(rows))
+	if remaining > len(rows) {
+		remaining = len(rows)
 	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	r.schedulerRows = append(r.schedulerRows, rows[:remaining]...)
+	r.schedulerRowsDropped += int64(len(prepared) - remaining)
 	r.mu.Unlock()
 	if planned {
 		return
@@ -3039,6 +3058,38 @@ func (r *NodeRuntime) recordScheduleEvents(block realblock.Block, events []Sched
 			r.emitRuntimeEvent(RuntimeEvent{Type: "TxWoken", TxID: event.TxID, BlockHash: block.BlockHash, Height: block.Height, Success: true, Attributes: map[string]any{"track": event.Track, "queue": event.QueueName, "reason": event.DecisionReason}})
 		}
 	}
+}
+
+// summarizeSchedulerEventsMTCodeHotV1 is equivalent to summarizing the
+// corresponding 18-column CSV rows. The CSV rows themselves are only needed
+// for the bounded retained trace.
+func summarizeSchedulerEventsMTCodeHotV1(events []ScheduleEvent) schedulerSummary {
+	summary := schedulerSummary{total: len(events)}
+	for _, event := range events {
+		if event.LocalExecution {
+			summary.local++
+		}
+		if event.StolenWork {
+			summary.stolen++
+		}
+		if event.Blocked {
+			summary.blocked++
+		}
+		if event.Wakeup {
+			summary.wakeup++
+		}
+		summary.readyMax = maxInt(summary.readyMax, event.ReadyQueueDepth)
+		summary.fastMax = maxInt(summary.fastMax, event.FastQueueDepth)
+		summary.conservativeMax = maxInt(summary.conservativeMax, event.ConservativeQueueDepth)
+		waitMS := int(event.DependencyWaitMS)
+		idleMS := int(event.SchedulerIdleMS)
+		summary.dependencyWaitMS += waitMS
+		summary.idleMS += idleMS
+		if idleMS > 0 {
+			summary.idlePositiveCount++
+		}
+	}
+	return summary
 }
 
 func (r *NodeRuntime) executesRemoteHomeState(item tx.SignedTransaction) bool {
@@ -3650,8 +3701,15 @@ func (r *NodeRuntime) commitWithDisposition(ctx context.Context, block realblock
 func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Block, origin CommitOrigin) (CommitResult, error) {
 	r.commitMu.Lock()
 	wakeProposal := false
+	replayReady := false
 	defer func() {
+		// An inbound signed PRE-PREPARE may have been deferred while the
+		// parent was committing. Release commitMu before replay: otherwise
+		// the hydration-stage frontier gate would defer the same proposal.
 		r.commitMu.Unlock()
+		if replayReady {
+			r.replayDeferredPrePrepare(ctx)
+		}
 		if wakeProposal {
 			r.signalMetaTrackDurableProposalWakeupV654()
 		}
@@ -3679,7 +3737,7 @@ func (r *NodeRuntime) commitWithOrigin(ctx context.Context, block realblock.Bloc
 			r.porygonMarkPBFTDurableWhenSafe(block)
 			r.maybeBroadcastPBFTCheckpoint(ctx, block)
 		}
-		r.replayDeferredPrePrepare(ctx)
+		replayReady = true
 	}
 	if result.Disposition == CommitApplied && result.Block.BlockHash != "" {
 		r.drainPendingCommits(ctx, result.Block, origin)
@@ -3950,6 +4008,10 @@ func (r *NodeRuntime) commitOnce(ctx context.Context, block realblock.Block, ori
 		r.updateBlockExecutionProgress(execution.BlockSTMProgress{BlockHeight: block.Height, TransactionCount: len(block.TxList), CurrentTxnIndex: -1, LastProgressAtMS: time.Now().UnixMilli()})
 		if versionedWaveExecution {
 			executed, err = r.executeVersionedRemoteBlockWithCommitment(ctx, block, executionSnapshot, baseStateCommitment)
+		} else if r.mtDrainP2Eligible(block, baseStateCommitment, txalloHistoricalProjectionV1) {
+			// P2: zero signed user transactions, certified system-only state view.
+			// The common WAL/durable commit/version publication below remains intact.
+			executed, err = r.mtDrainP2Execute(ctx, block, executionSnapshot, baseStateCommitment)
 		} else {
 			executed, err = r.plugins.BlockExecutor.ExecuteBlock(ctx, BlockExecutionInput{Block: block, BaseStateSnapshot: executionSnapshot, BaseStateCommitment: baseStateCommitment, NodeID: r.node.NodeID, ShardID: r.node.ShardID, ExecutionShardID: effectiveExecutionShardID(r.node), PorygonExecutionShardID: r.porygonExecutionRoleShardID(block.Height), PorygonWaveExchange: r.porygonWaveExchange, PorygonBatchExchange: r.porygonBatchExchange, PorygonMultiShardUpdate: r.porygonMultiShardUpdate, PorygonStateFetch: porygonStateFetch, PorygonCrossBatchWitnessOverlap: r.porygonCrossBatchWitnessOverlapObserved(block.Height), CalvinReadExchange: r.calvinReadExchange, CalvinOutcomeExchange: r.calvinOutcomeExchange, CalvinStateHome: r.calvinStateHome, CalvinExecutionShards: calvinExecutionShardIDsFromPlan(r.plan), CalvinStatelessFetch: r.calvinStatelessFetchState, CalvinStatelessWriteback: r.calvinStatelessWriteback, CalvinStatelessCollectWritebacks: r.calvinStatelessCollectWritebacks, WorkerCount: blockExecutorWorkerCountFromProfile(r.pluginSnapshot), Execution: r.plugins.Execution, Scheduler: r.plugins.Scheduler, ExecutionPlanVerified: executionPlanVerified, Progress: r.updateBlockExecutionProgress, RemoteStateReadiness: remoteStateReadiness, RemoteStateFetch: remoteStateFetch, RemoteStateBatchFetch: r.metaTrackBatchStateFetcher(block), StateVersionPublish: r.stateVersionPublisher(block), MetaTrackExactAccessPolicy: metaTrackExactAccessPolicyID(r.plugins.StateAccess)})
 		}
@@ -4761,6 +4823,12 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 	if r.plugins.BlockExecutor == nil {
 		return BlockExecutionResult{}, fmt.Errorf("versioned remote execution requires block executor")
 	}
+	// MT_STM_SINGLE_CONTEXT_V1: unlike Serial/other methods, Block-STM must
+	// own one MVMemory over the entire certified consensus block. Individual
+	// external exact-version dependencies suspend only their own transactions.
+	if r.plugins.BlockExecutor.ID() == "block_stm_block_executor" {
+		return r.executeVersionedBlockSTMFullV1(ctx, block, base, baseCommitment)
+	}
 	shardIDs := r.shardIDs()
 	indexByTxID := map[string]int{}
 	ordinalOwner := map[uint64]string{}
@@ -5027,7 +5095,7 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 			maxWaveWidth = len(wave)
 		}
 		waveCount++
-		waveSnapshot := copyStringMap(working)
+		waveSnapshot := mtWaveViewV1(working, wave, block.ShardID, r.plugins.BlockExecutor)
 		for _, item := range wave {
 			for _, probe := range probesByTx[item.TxID] {
 				if value, ok := resolved[probe.token]; ok {
@@ -5125,6 +5193,8 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 	// response timing and wave grouping cannot change receipt roots or state roots.
 	// Build once, then update only keys written by each successful transaction.
 	normalized := copyStringMap(base)
+	// MBE_P3B_SPARSE_RESULT: track exactly which physical keys were written.
+	mtP3BWrittenKeys := make(map[string]struct{})
 	// V14-A reuses the authenticated execution-view commitment when available.
 	// CloneOrBuild preserves the exact fallback for storage plugins that cannot
 	// supply an atomically matching commitment.
@@ -5141,7 +5211,9 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 		delta := resultByIndex[index]
 		if delta.Success {
 			for key, value := range delta.WriteSet {
-				normalized[qualifyStateKey(block.ShardID, key)] = value
+				qualified := qualifyStateKey(block.ShardID, key)
+				normalized[qualified] = value
+				mtP3BWrittenKeys[qualified] = struct{}{}
 			}
 			materializationCommitment.Apply(delta.WriteSet, func(key string) string {
 				return qualifyStateKey(block.ShardID, key)
@@ -5159,10 +5231,19 @@ func (r *NodeRuntime) executeVersionedRemoteBlockWithCommitment(ctx context.Cont
 	}
 	merged.StateRootAfter = materializationCommitment.Root()
 	merged.ReceiptRoot = execution.ReceiptRoot(merged.Receipts)
-	for key, value := range normalized {
-		merged.StateUpdates[key] = value
+	if r.plugins.BlockExecutor.ID() == execution.SerialBlockExecutorID ||
+		r.plugins.BlockExecutor.ID() == execution.BlockSTMExecutorID {
+		// normalized is private to this call; transfer its ownership to the result.
+		// Delta output remains sorted and identical to the former full-state scan.
+		merged.StateUpdates = normalized
+		merged.StateDelta = mtP3BSparseStateDelta(base, normalized, mtP3BWrittenKeys)
+	} else {
+		// Other executors retain the historical output path.
+		for key, value := range normalized {
+			merged.StateUpdates[key] = value
+		}
+		merged.StateDelta = executionStateDelta(base, normalized)
 	}
-	merged.StateDelta = executionStateDelta(base, normalized)
 	materializationDuration := time.Since(materializationStarted)
 	if merged.BlockExecutorID == execution.BlockSTMExecutorID {
 		// Temporary Block-STM waves no longer report discarded materialization.
@@ -5365,11 +5446,8 @@ func (r *NodeRuntime) prepareRemoteStateSnapshot(ctx context.Context, block real
 		return stateBefore, nil
 	}
 
-	next := make(map[string]string, len(stateBefore))
-	for key, value := range stateBefore {
-		next[key] = value
-	}
-
+	// MBE_P3A_WAVE_NO_PREFETCH_COPY: delay the copy until tasks are known.
+	// The versioned-wave caller already owns a private waveSnapshot.
 	type prefetchTask struct {
 		rowKey    string
 		item      tx.SignedTransaction
@@ -5413,9 +5491,17 @@ func (r *NodeRuntime) prepareRemoteStateSnapshot(ctx context.Context, block real
 		}
 	}
 	if len(tasks) == 0 {
-		return next, nil
+		if skipVersioned && stateBefore != nil && r.plugins.BlockExecutor != nil &&
+			(r.plugins.BlockExecutor.ID() == execution.SerialBlockExecutorID ||
+				r.plugins.BlockExecutor.ID() == execution.BlockSTMExecutorID) {
+			// Only Serial/Block-STM versioned-wave callers reuse their owned view.
+			return stateBefore, nil
+		}
+		// Preserve historical independent-copy semantics for generic prefetch.
+		return copyStringMap(stateBefore), nil
 	}
-
+	// Fetch overlays must never mutate the caller's original state view.
+	next := copyStringMap(stateBefore)
 	workerCount := stateFetchWorkerCount
 	if workerCount > len(tasks) {
 		workerCount = len(tasks)
@@ -6608,7 +6694,24 @@ func writeSetContainsStateKey(writeSet map[string]string, stateKey string) bool 
 	return false
 }
 
+// MT_STM_EXACT_ACK_V1: only Stateless Hash + Block-STM exact-version
+// remote-home publication may reuse the already-tested Home-ACK retry contract.
+// Other routing modes, executors, and non-versioned state writes retain their
+// existing behavior. This does NOT make a Home-queued update durable.
+func (r *NodeRuntime) statelessHashSTMExactAckV1(item state.StateKV) bool {
+	return r != nil && r.plugins.Routing != nil && r.plugins.BlockExecutor != nil &&
+		r.plugins.Routing.ID() == "stateless_hash_routing" &&
+		r.plugins.BlockExecutor.ID() == "block_stm_block_executor" &&
+		item.ApplyOrigin == "versioned_remote_home" && item.ProducedVersion > 0
+}
+
 func (r *NodeRuntime) applyRemoteStateDelta(ctx context.Context, block realblock.Block, item state.StateKV, unqualifiedKey, homeShard string, txDeltas []execution.TxDelta) ([]StateDeltaApplyAck, time.Duration, error) {
+	// MT_STM_EXACT_ACK_V1: preserve the logical RequestID across retries,
+	// reconstruct a fresh P2P envelope for each attempt, validate ACK fields and
+	// witness digest, and fail boundedly if Home remains unreachable.
+	if r.statelessHashSTMExactAckV1(item) {
+		return r.applyMetaTrackSingleDeltaReliableV1(ctx, block, item, unqualifiedKey, homeShard, txDeltas)
+	}
 	// MBE_MT_TAPOS_V1: only MetaTrack gets bounded, validated, retryable
 	// single Home ACKs. Other methods retain their existing contracts.
 	if r.metaTrackBlockExecutorFlag("version_liveness") && r.metaTrackBlockExecutorFlag("dependency_closed_consensus") {
@@ -7547,6 +7650,15 @@ func (r *NodeRuntime) emitRuntimeEventLocked(event RuntimeEvent) {
 		}
 	}
 	if r.plugins.Observability != nil {
+		// builtinObserver has no side effects and always emits one row.
+		// After the retention cap, avoid JSON/SHA256 and string formatting;
+		// retain Metrics.Consume, total events and dropped-event counters.
+		// Other observer implementations still receive every event.
+		if _, builtin := r.plugins.Observability.(builtinObserver); builtin && len(r.runtimeEventRows) >= runtimeEventTraceRetentionLimit {
+			r.runtimeEventTotal++
+			r.runtimeEventRowsDropped++
+			return
+		}
 		row := r.plugins.Observability.Observe(event)
 		if len(row) > 0 {
 			r.runtimeEventTotal++

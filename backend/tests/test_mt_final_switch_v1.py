@@ -8,7 +8,7 @@ IDS = ("metatrack_latest", "metatrack_ab_flow", "metatrack_ab_supply", "metatrac
 
 def test_official_three_core_switch():
     full, flow, supply, cons = (BUILTIN_METHODS[mid] for mid in IDS)
-    assert full.display_name == "MetaTrack"
+    assert full.display_name == "最新的MetaTwine"
     for m in (full, supply, cons):
         assert m.plugin_config_overrides["routing"]["load_iso_shadow_v1"] is True
         assert m.plugin_config_overrides["routing"]["bounded_batch_routing_v1"] is True

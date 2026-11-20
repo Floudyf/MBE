@@ -262,6 +262,13 @@ func runV5(planPath, dataDir string) error {
 	if err := buildBinary(clientBinary, "./cmd/mbe-client"); err != nil {
 		return err
 	}
+	// MBE_MT_LIFE_V1: keep a supervisor-owned lease alive across client submit,
+	// Drain, and node artifact shutdown; orphaned nodes expire if we disappear.
+	lease, err := mtLifeStartLease(filepath.Join(dataDir, "mt_supervisor_lease_v1"))
+	if err != nil {
+		return err
+	}
+	defer lease.Close()
 	processes := []v5NodeProcess{}
 	commands := []*exec.Cmd{}
 	for _, nodePlan := range plan.NodeConfigs {
@@ -283,7 +290,7 @@ func runV5(planPath, dataDir string) error {
 			return fmt.Errorf("pbft private key missing for node %s", nodePlan.NodeID)
 		}
 		cmd := exec.Command(nodeBinary, "--run-mode", "v5-server", "--v5-node-config", configPath)
-		cmd.Env = nodePBFTEnvironment(privateKey)
+		cmd.Env = mtLifeNodeEnvironment(nodePBFTEnvironment(privateKey), lease.Path())
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		if err := cmd.Start(); err != nil {
@@ -320,7 +327,9 @@ func runV5(planPath, dataDir string) error {
 	_ = copyIfExists(filepath.Join(dataDir, "client", "workload_replay_summary.json"), filepath.Join(dataDir, "workload_replay_summary.json"))
 	_ = copyIfExists(filepath.Join(dataDir, "client", "workload_identity_mapping_summary.json"), filepath.Join(dataDir, "workload_identity_mapping_summary.json"))
 	if err := drainV5(plan, dataDir); err != nil {
-		reap(commands)
+		// MBE_MT_DRAIN_SAVE_V1: preserve diagnostic artifacts on failure.
+		// The error remains authoritative; never relabel failed Drain as success.
+		mtDrainSaveAfterFailure(plan, dataDir, commands, err)
 		return err
 	}
 	// Stop before shutdown so RSS/CPU describe workload+drain, not teardown.
@@ -492,7 +501,13 @@ func drainV5(plan v5.Plan, dataDir string) error {
 		fatalExecution := ""
 		heights := map[string]map[string]bool{}
 		for _, node := range plan.NodeConfigs {
-			status, ok := readRuntimeStatusWithRetry(filepath.Join(node.DataDir, "node_runtime_status.json"), 20, 5*time.Millisecond)
+			statusPath := filepath.Join(node.DataDir, "node_runtime_status.json")
+			// MBE_MT_LIFE_V1: never treat a dead node's frozen status as live Drain truth.
+			if mtLifeNodeStatusStale(statusPath, time.Now()) {
+				_ = v5.SaveJSON(filepath.Join(dataDir, "drain_status.json"), map[string]any{"phase": "FAILED", "completion_reason": "node_status_stale", "node_id": node.NodeID, "submitted": submitted, "terminal": len(terminalSeen), "incomplete": submitted - len(terminalSeen)})
+				return fmt.Errorf("V5 Drain node %s status stale; refusing old snapshot", node.NodeID)
+			}
+			status, ok := readRuntimeStatusWithRetry(statusPath, 20, 5*time.Millisecond)
 			if !ok {
 				allEmpty = false
 				continue
@@ -672,10 +687,10 @@ type drainTimeoutBudget struct {
 
 func runtimePlanForNodes(plan v5.Plan) v5.Plan {
 	runtimePlan := plan
-	runtimeMS := int(drainBudget(plan).HardTimeout.Milliseconds())
-	if runtimeMS > runtimePlan.DurationMS {
-		runtimePlan.DurationMS = runtimeMS
-	}
+	// MBE_MT_LIFE_V1: the supervisor owns the entire Drain lifetime and stop.
+	// Zero disables the node-started deadline only in supervisor-launched nodes.
+	// An independent heartbeat lease still bounds orphan-node lifetime.
+	runtimePlan.DurationMS = 0
 	return runtimePlan
 }
 

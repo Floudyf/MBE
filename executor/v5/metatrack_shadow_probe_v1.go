@@ -30,7 +30,7 @@ func mtShadowFullFromBoundV1(p *metaTrackRouting) *metaTrackRouting {
 	for _, key := range []string{
 		"bounded_batch_routing_v1", "shadow_full_probe_v1", "bound_selector_v1",
 		"online_state_ready_routing_v1", "online_feedback_coldstart_v2",
-		"online_capacity_guard_v2", "experimental_no_global_capacity_v1",
+		"online_capacity_guard_v2",
 	} {
 		delete(config, key)
 	}

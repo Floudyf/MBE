@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv" // MBE_MT_ONLINE_FIX_V1 read per-tx evidence counts
 	"strings"
+	"sync"
 	"time"
 
 	"metaverse-chainlab/executor/realism/metrics"
@@ -145,6 +146,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	var txalloBlockIndex *txalloDynamicBlockIndexV222
 	resolvedAccessRows := []resolvedAccessEntry{}
 	connections := map[string]net.Conn{}
+	capacityRetryCountV1 := 0
 	generatedCrossShardCount := 0
 	var firstSubmissionTime time.Time
 	var lastSubmissionTime time.Time
@@ -251,6 +253,9 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	consensusPredecessorsV656 := newMetaTrackConsensusPredecessorTrackerV656()
 	criticalWidthWindowV6568 := newMetaTrackCriticalWidthWindowPlannerV6568()
 
+	var mtOverlapIteratorMu sync.Mutex
+	var mtParallelSenderV1 *mtParallelSubmitV1
+	var mtFirstAckAtV1, mtLastAckAtV1 time.Time
 	submitRecord := func(record WorkloadRecord, route RoutingDecision) error {
 		executionShard := route.ShardID
 		if plugins.Routing.ID() == porygonRoutingID && strings.TrimSpace(record.RoutingSourceKey) != "" && len(shardIDs) > 0 {
@@ -323,13 +328,15 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 			// MBE_MV_COMPAT_V1: the MBE mempool checks Nonce within each PBFT
 			// admission domain. V4 layered replays cannot reuse a global
 			// sender nonce across dynamically selected ingress domains.
+			mtOverlapIteratorMu.Lock()
 			if record.SchedulingAccessSchema != "" && record.SchedulingAccessDigest != "" {
 				item, err = datasetIterator.SignedTransactionForAdmissionDomain(record, shardID)
 			} else {
 				item, err = datasetIterator.SignedTransaction(record)
 			}
-			sender = item.Sender
 			generatedCrossShardCount = datasetIterator.summary.ActualCrossShardCount
+			mtOverlapIteratorMu.Unlock()
+			sender = item.Sender
 		} else {
 			seed := fmt.Sprintf("%d:%s", plan.WorkloadPlan.Seed, logicalSourceShard)
 			receiver := "receiver_" + logicalSourceShard
@@ -358,29 +365,113 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		if err != nil {
 			return err
 		}
-		envelope, err := p2p.NewEnvelope(p2p.MessageTXGossip, "mbe-client", leader.NodeID, shardID, 0, 0, 0, item)
+		envelope, err := p2p.NewEnvelope(p2p.MessageTXGossip, p2p.ClientAdmissionOriginV1, leader.NodeID, shardID, 0, 0, 0, item)
 		if err != nil {
 			return err
 		}
 		if err := pacer.Wait(ctx); err != nil {
 			return err
 		}
+		// Shared completion path for serial and the gated two-FIFO experiment.
+		// The signer (and nonce mutation) remains on the original single sender.
+		finalizeAck := func(ack mtParallelAckV1) error {
+			capacityRetryCountV1 += ack.retries
+			if firstSubmissionTime.IsZero() || ack.started.Before(firstSubmissionTime) { firstSubmissionTime = ack.started }
+			if lastSubmissionTime.IsZero() || ack.finished.After(lastSubmissionTime) { lastSubmissionTime = ack.finished }
+			ackErr := ack.err
+			if mtParallelSenderV1 != nil {
+				if mtFirstAckAtV1.IsZero() || ack.finished.Before(mtFirstAckAtV1) { mtFirstAckAtV1 = ack.finished }
+				if mtLastAckAtV1.IsZero() || ack.finished.After(mtLastAckAtV1) { mtLastAckAtV1 = ack.finished }
+			}
+			rows = append(rows, []string{fmt.Sprint(ack.finished.UnixMilli()), item.TxID, sender, leader.NodeID, shardID, payload, fmt.Sprint(isCrossShard), logicalSourceShard, targetShard, fmt.Sprint(ackErr == nil), fmt.Sprint(ack.finished.Sub(ack.started).Milliseconds()), errorString(ackErr)})
+			lifecycleRows = append(lifecycleRows, lifecycleRow(LifecycleEvent{TimestampMS: ack.finished.UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "submitted", NodeID: "mbe-client", ShardID: shardID, Success: ackErr == nil, Error: errorString(ackErr)}))
+			reason := firstNonEmpty(record.RoutingReason, route.Reason)
+			if executionShard != "" && executionShard != shardID {
+				reason = strings.TrimSuffix(reason+";execution_shard="+executionShard, ";")
+			}
+			routingRows = append(routingRows, []string{fmt.Sprint(ack.finished.UnixMilli()), item.TxID, plugins.Routing.ID(), strings.Join(item.StateKeys, "|"), shardID, fmt.Sprint(isCrossShard), reason})
+			resolvedAccessRows = append(resolvedAccessRows, resolvedAccessEntryFromTransaction(record, item, logicalSourceShard, executionShard, reason))
+			if ackErr != nil {
+				_ = SaveJSON(filepath.Join(outDir, "client_admission_failure_v1.json"), map[string]any{"tx_id": item.TxID, "shard_id": shardID, "reason": ackErr.Error(), "confirmed_before_failure": len(rows)-1, "capacity_retries": capacityRetryCountV1, "status": "INCOMPLETE_UNCONFIRMED"})
+			}
+			return ackErr
+		}
+		if mtParallelSenderV1 != nil {
+			return mtParallelSenderV1.enqueue(shardID, leader.ListenAddr, envelope, finalizeAck)
+		}
 		start := time.Now()
-		if firstSubmissionTime.IsZero() {
-			firstSubmissionTime = start
-		}
-		err = sendPersistent(ctx, connections, leader.ListenAddr, envelope)
-		lastSubmissionTime = time.Now()
-		rows = append(rows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, sender, leader.NodeID, shardID, payload, fmt.Sprint(isCrossShard), logicalSourceShard, targetShard, fmt.Sprint(err == nil), fmt.Sprint(time.Since(start).Milliseconds()), errorString(err)})
-		lifecycleRows = append(lifecycleRows, lifecycleRow(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "submitted", NodeID: "mbe-client", ShardID: shardID, Success: err == nil, Error: errorString(err)}))
-		reason := firstNonEmpty(record.RoutingReason, route.Reason)
-		if executionShard != "" && executionShard != shardID {
-			reason = strings.TrimSuffix(reason+";execution_shard="+executionShard, ";")
-		}
-		routingRows = append(routingRows, []string{fmt.Sprint(time.Now().UnixMilli()), item.TxID, plugins.Routing.ID(), strings.Join(item.StateKeys, "|"), shardID, fmt.Sprint(isCrossShard), reason})
-		resolvedAccessRows = append(resolvedAccessRows, resolvedAccessEntryFromTransaction(record, item, logicalSourceShard, executionShard, reason))
-		return err
+		retriesV1, admissionErrV1 := sendAdmissionVerifiedV1(ctx, connections, leader.ListenAddr, envelope)
+		return finalizeAck(mtParallelAckV1{retries: retriesV1, err: admissionErrV1, started: start, finished: time.Now()})
 	}
+
+	// MTBASIC_V1_ONLINE_PIPELINE: the original source is streamed, not preloaded.
+	// The same iterator must not execute Next and signCanonicalTransaction together.
+	mtOverlapMode := strings.TrimSpace(os.Getenv("MT_PIPELINE_MODE"))
+	mtRoutingV2 := metaTrackRoutingConfig(plugins.Routing)
+	mtFrozen := boolFromAny(mtRoutingV2["mt_bridge_frozen10k_v1"])
+	// MTMERGE_V2: opt-in affects client admission only; routing and protocol
+	// decisions remain unchanged. Historical frozen plans remain supported.
+	mtOfficialOptInV2 := boolFromAny(mtRoutingV2["mt_parallel_admission_v1"])
+	mtParallelProfileV2 := mtFrozen || mtOfficialOptInV2
+	mtParallelDatasetV2 := false
+	switch strings.ToLower(strings.TrimSpace(plan.WorkloadPlan.DatasetID)) {
+	case "alien_worlds_layered_v2_historical", "dcl_sales_layered_v4", "fw_20260908_roles_v2", "henesys_20250824_v4":
+		mtParallelDatasetV2 = true
+	}
+	mtParallelEligibleV2 := mtParallelProfileV2 && mtParallelDatasetV2 &&
+		strings.TrimSpace(plan.WorkloadPlan.ReplayMode) == "max_throughput" &&
+		plan.WorkloadPlan.TxCount == 10000 &&
+		len(shardIDs) == 2 && len(leaders) == 2
+	// Explicit serial/pipeline are retained for controlled paired comparisons.
+	if mtOverlapMode == "" && mtParallelEligibleV2 { mtOverlapMode = "parallel2" }
+	parallelRequestedV1 := mtOverlapMode == "parallel2"
+	if parallelRequestedV1 && !mtParallelEligibleV2 {
+		return fmt.Errorf("MTPARALLEL requires opted-in/frozen four-dataset 10K, two shards, max_throughput")
+	}
+	if !mtParallelProfileV2 { mtOverlapMode = "" } // Untouched legacy methods.
+	if mtFrozen && mtOverlapMode == "" { mtOverlapMode = "pipeline" }
+	if mtOverlapMode != "" && mtOverlapMode != "serial" && mtOverlapMode != "pipeline" && mtOverlapMode != "parallel2" {
+		return fmt.Errorf("MTSTREAM unknown mode %q", mtOverlapMode)
+	}
+	mtOverlapEvidenceModeV1 := mtOverlapMode
+	if parallelRequestedV1 { mtOverlapEvidenceModeV1 = "parallel2" }
+	if parallelRequestedV1 {
+		if strings.TrimSpace(plan.WorkloadPlan.ReplayMode) != "max_throughput" { return fmt.Errorf("MTPARALLEL only max_throughput is supported") }
+		if len(shardIDs) != 2 || len(leaders) != 2 { return fmt.Errorf("MTPARALLEL requires exactly two distinct ingress shards") }
+		for _, shard := range shardIDs {
+			if leaders[shard].ListenAddr == "" { return fmt.Errorf("MTPARALLEL missing distinct ingress leader for %s", shard) }
+		}
+		if leaders[shardIDs[0]].ListenAddr == leaders[shardIDs[1]].ListenAddr { return fmt.Errorf("MTPARALLEL cannot share a physical admission connection") }
+		mtParallelSenderV1 = newMTParallelSubmitV1(ctx, shardIDs, sendAdmissionVerifiedV1)
+		defer mtParallelSenderV1.close()
+		mtOverlapMode = "pipeline"
+	}
+	type mtOverlapJob struct {
+		items []metaTrackPreparedRecordV6568
+		index int
+		count int
+		readyAt time.Time
+		planUS int64
+		digest string
+		timeline bool
+	}
+	mtOverlapQueue := make(chan mtOverlapJob, 1)
+	mtOverlapDone := make(chan struct{})
+	var mtOverlapSendErr error
+	mtOverlapPlanRows := [][]string{}
+	mtOverlapSendRows := [][]string{}
+	mtOverlapDispatch := func(job mtOverlapJob) error {
+		select {
+		case <-mtOverlapDone:
+			if mtOverlapSendErr != nil { return fmt.Errorf("MTSTREAM sender failed: %w", mtOverlapSendErr) }
+			return fmt.Errorf("MTSTREAM sender stopped before final drain")
+		case mtOverlapQueue <- job:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
 	submitBatch := func(records []WorkloadRecord) error {
 		if len(records) == 0 {
 			return nil
@@ -446,6 +537,7 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				observedV1 = onlineSamplerV1.snapshot()
 			}
 			routePlanStarted := time.Now()
+			mtPlanCPUStart := mtOverlapCPUSeconds()
 			routePlan := planner.PlanBatch(BatchRoutingInput{BatchIndex: batchIndex, Records: routingRecords, ShardIDs: shardIDs, Sharding: plugins.Sharding, DeferFinalSeal: deferFinalSeal, ExpectedTransactionCount: plan.WorkloadPlan.TxCount, OnlineFeedback: observedV1})
 			if onlineSamplerV1 != nil {
 				fresh := 0
@@ -475,6 +567,15 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				onlineFeedbackRowsV1 = append(onlineFeedbackRowsV1, []string{fmt.Sprint(batchIndex), fmt.Sprint(len(records)), fmt.Sprint(fresh), fmt.Sprint(len(shardIDs)), routePlan.TransactionPolicy, fmt.Sprint(routePlanUS), fmt.Sprint(onlineTxV1), fmt.Sprint(fallbackTxV1), fmt.Sprint(changedTxV1)})
 			}
 			routePlanUS = time.Since(routePlanStarted).Microseconds()
+			if mtOverlapMode != "" {
+				mtOverlapPlanRows = append(mtOverlapPlanRows, []string{
+					fmt.Sprint(batchIndex),fmt.Sprint(routePlanUS),
+					fmt.Sprint(mtOverlapCPUSeconds()-mtPlanCPUStart),
+					fmt.Sprint(routePlanStarted.UnixMicro()),fmt.Sprint(time.Now().UnixMicro()),
+					fmt.Sprint(mtOverlapMaxProcs()),fmt.Sprint(mtOverlapNumCPU()),
+				})
+			}
+
 			if onlineSamplerV1 != nil && len(onlineFeedbackRowsV1) > 0 {
 				onlineFeedbackRowsV1[len(onlineFeedbackRowsV1)-1][5] = fmt.Sprint(routePlanUS)
 			}
@@ -612,42 +713,31 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 				return err
 			}
 		}
+
 		if transactionFrontierV656Enabled {
-			routeBatchSubmissionStartedAtV30 = time.Now()
-			if leaderStreamingWindowV2 {
-				// MBE_METATRACK_COMPLETE_WINDOW_V671_CLIENT
-				// Close the logical N/L window before its members are submitted.
-				// The existing per-transaction pacer still controls physical rate.
-				closed, err := windowProducerV663.PushMetaTrackRouteBatch(criticalWidthWindowV6568, preparedV6568, plugins.BlockProducer.BlockSize())
-				if err != nil {
-					return err
-				}
-				for _, prepared := range closed {
-					if err := submitRecord(prepared.Record, prepared.Route); err != nil {
-						return err
-					}
-				}
-			} else if !clientWindowBufferingV6568 {
-				// Partition-invariant mode and the formal w/o-consensus profile keep
-				// signed predecessor/round metadata but do not wait for a future batch.
-				for _, prepared := range preparedV6568 {
-					if err := submitRecord(prepared.Record, prepared.Route); err != nil {
-						return err
-					}
-				}
+			var mtClosed []metaTrackPreparedRecordV6568
+			if leaderStreamingWindowV2 || clientWindowBufferingV6568 {
+				// Consensus window closure stays on the planner goroutine.
+				var err error
+				mtClosed, err = windowProducerV663.PushMetaTrackRouteBatch(criticalWidthWindowV6568, preparedV6568, plugins.BlockProducer.BlockSize())
+				if err != nil { return err }
 			} else {
-				closed, err := windowProducerV663.PushMetaTrackRouteBatch(criticalWidthWindowV6568, preparedV6568, plugins.BlockProducer.BlockSize())
-				if err != nil {
-					return err
-				}
-				for _, prepared := range closed {
-					if err := submitRecord(prepared.Record, prepared.Route); err != nil {
-						return err
-					}
+				mtClosed = preparedV6568
+			}
+			if mtOverlapMode == "pipeline" {
+				if err := mtOverlapDispatch(mtOverlapJob{
+					items: append([]metaTrackPreparedRecordV6568(nil), mtClosed...),
+					index: batchIndex, count: len(records), readyAt: routeBatchReadyAtV30,
+					planUS: routePlanUS, digest: routePlanDigest, timeline: bindBatchProjectionMetadata,
+				}); err != nil { return err }
+			} else {
+				routeBatchSubmissionStartedAtV30 = time.Now()
+				for _, prepared := range mtClosed {
+					if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
 				}
 			}
 		}
-		if bindBatchProjectionMetadata && !routeBatchSubmissionStartedAtV30.IsZero() {
+		if mtOverlapMode != "pipeline" && bindBatchProjectionMetadata && !routeBatchSubmissionStartedAtV30.IsZero() {
 			routeBatchSubmissionFinishedAtV30 := time.Now()
 			metatrackRouteBatchTimelineRowsV30 = append(metatrackRouteBatchTimelineRowsV30, []string{
 				fmt.Sprint(batchIndex), fmt.Sprint(batchIndex + 1), fmt.Sprint(len(records)),
@@ -729,14 +819,77 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 		}
 		return nil
 	}
-	for {
-		record, err := iterator.Next(ctx)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
+
+	// MTBASIC_V1_ONLINE_PIPELINE: no 10K prefetch, no future lookahead.
+	// All input records arrive from the original iterator.Next in source order.
+	if mtOverlapMode != "" {
+		if _, ok := iterator.(*CanonicalTraceIterator); !ok {
+			return fmt.Errorf("MTSTREAM requires the original canonical trace iterator")
+		}
+		// Match the four actual canonical dataset IDs, not UI display names.
+		// v1 mistakenly accepted "decentraland*" but rejected dcl_sales_layered_v4.
+		validDataset := map[string]bool{
+			"alien_worlds_layered_v2_historical": true,
+			"dcl_sales_layered_v4": true,
+			"fw_20260908_roles_v2": true,
+			"henesys_20250824_v4": true,
+		}[strings.ToLower(plan.WorkloadPlan.DatasetID)]
+		if txalloDynamicEnabled || onlineSamplerV1 != nil || streamPartitionInvariantV658 ||
+			!transactionFrontierV656Enabled ||
+			(!leaderStreamingWindowV2 && plugins.BlockProducer.ID() != "time_or_count_block_producer") || !statelessDirect ||
+			!bindExecutionRouting || len(shardIDs) != 2 ||
+			plan.WorkloadPlan.TxCount != 10000 || !validDataset || pacer.mode != "max_throughput" {
+			return fmt.Errorf("MTSTREAM requires frozen four-dataset stateless 10K, no online feedback or TxAllo")
+		}
+	}
+	if mtOverlapMode == "pipeline" {
+		go func() {
+			defer close(mtOverlapDone)
+			for job := range mtOverlapQueue {
+				mtStart := time.Now()
+				for _, prepared := range job.items {
+					if submitErr := submitRecord(prepared.Record, prepared.Route); submitErr != nil {
+						mtOverlapSendErr = submitErr
+						return
+					}
+				}
+				// One window may overlap ACK waits across shards, but the next
+				// window cannot start signing until BOTH FIFO tails finish.
+				if mtParallelSenderV1 != nil {
+					if submitErr := mtParallelSenderV1.drainWindow(); submitErr != nil {
+						mtOverlapSendErr = submitErr
+						return
+					}
+				}
+				mtEnd := time.Now()
+				mtOverlapSendRows = append(mtOverlapSendRows, []string{
+					fmt.Sprint(job.index), fmt.Sprint(len(job.items)),
+					fmt.Sprint(mtStart.UnixMicro()), fmt.Sprint(mtEnd.UnixMicro()),
+					fmt.Sprint(mtEnd.Sub(mtStart).Microseconds()),
+				})
+				if job.timeline {
+					metatrackRouteBatchTimelineRowsV30 = append(metatrackRouteBatchTimelineRowsV30, []string{
+						fmt.Sprint(job.index), fmt.Sprint(job.index+1), fmt.Sprint(job.count),
+						fmt.Sprint(job.readyAt.UnixMilli()), fmt.Sprint(mtStart.UnixMilli()),
+						fmt.Sprint(mtEnd.UnixMilli()),
+						fmt.Sprint(mtStart.Sub(job.readyAt).Milliseconds()),
+						fmt.Sprint(mtEnd.Sub(mtStart).Milliseconds()),
+						fmt.Sprint(job.planUS), job.digest,
+					})
+				}
 			}
+		}()
+	}
+	mtOverlapReadCount := 0
+	for {
+		mtOverlapIteratorMu.Lock()
+		record, err := iterator.Next(ctx)
+		mtOverlapIteratorMu.Unlock()
+		if err != nil {
+			if errors.Is(err, io.EOF) { break }
 			return err
 		}
+		mtOverlapReadCount++
 		if txalloDynamicEnabled {
 			blockNum, err := txalloBlockIndex.BlockForRecord(record)
 			if err != nil {
@@ -781,13 +934,43 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	}
 	// Do not feed the final partial source-block epoch back into TxAllo: no
 	// later evaluation transaction is allowed to learn from it.
+
 	if clientWindowBufferingV6568 {
 		closed := windowProducerV663.FlushMetaTrackWindow(criticalWidthWindowV6568)
-		for _, prepared := range closed {
-			if err := submitRecord(prepared.Record, prepared.Route); err != nil {
-				return err
+		if mtOverlapMode == "pipeline" {
+			if err := mtOverlapDispatch(mtOverlapJob{
+				items: append([]metaTrackPreparedRecordV6568(nil), closed...),
+				index: batchIndex, count: 0, timeline: false,
+			}); err != nil { return err }
+		} else {
+			for _, prepared := range closed {
+				if err := submitRecord(prepared.Record, prepared.Route); err != nil { return err }
 			}
 		}
+	}
+	if mtOverlapMode == "pipeline" {
+		close(mtOverlapQueue)
+		select {
+		case <-mtOverlapDone:
+			if mtOverlapSendErr != nil { return fmt.Errorf("MTSTREAM sender failed: %w", mtOverlapSendErr) }
+		case <-ctx.Done(): return ctx.Err()
+		}
+	}
+	if mtOverlapMode != "" {
+		if mtOverlapReadCount != plan.WorkloadPlan.TxCount { return fmt.Errorf("MTSTREAM expected %d streamed records got %d", plan.WorkloadPlan.TxCount, mtOverlapReadCount) }
+		if err := metrics.WriteCSV(filepath.Join(outDir, "mtoverlap_plan_cpu.csv"),
+			[]string{"batch_index","plan_wall_us","process_go_cpu_s_delta","plan_started_unix_us","plan_finished_unix_us","gomaxprocs","num_cpu"}, mtOverlapPlanRows); err != nil { return err }
+		if err := metrics.WriteCSV(filepath.Join(outDir, "mtoverlap_send_timeline.csv"),
+			[]string{"batch_index","tx_count","started_unix_us","ended_unix_us","duration_us"}, mtOverlapSendRows); err != nil { return err }
+		if err := SaveJSON(filepath.Join(outDir, "mtoverlap_cpu_info.json"), map[string]any{
+			"schema": "mtstream_cpu_v1", "mode": mtOverlapEvidenceModeV1,
+			"go_max_procs": mtOverlapMaxProcs(), "logical_cpus": mtOverlapNumCPU(),
+			"preload_ms": -1, "input_mode": "continuous_iterator_next",
+			"streamed_record_count": mtOverlapReadCount,
+			"sender_and_reader_shared_iterator_lock": true,
+			"planner_serial_critical_section": true, "queue_capacity_batches": 1,
+			"plan_cpu_metric": "process-wide Go runtime user CPU seconds; pipeline samples also contain sender CPU",
+		}); err != nil { return err }
 	}
 	if streamPartitionInvariantV658 {
 		if err := SaveJSON(filepath.Join(outDir, "metatrack_partition_invariant_summary.json"), map[string]any{
@@ -958,7 +1141,11 @@ func SubmitWorkload(ctx context.Context, plan Plan, outDir string) error {
 	if err := SaveJSON(filepath.Join(outDir, "workload_identity_mapping_summary.json"), map[string]any{"identity_count": replaySummary.IdentityCount, "mapping_digest": replaySummary.MappingDigest, "nonce_continuity": replaySummary.NonceContinuity, "signature_pass_count": replaySummary.SignaturePassCount, "identity_mapping_version": replaySummary.IdentityMappingVersion}); err != nil {
 		return err
 	}
-	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "first_submitted_at": rows[0][0], "last_submitted_at": rows[len(rows)-1][0], "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "replay_mode": replaySummary.ReplayMode, "target_submission_tps": replaySummary.TargetSubmissionTPS, "observed_submission_tps": replaySummary.ObservedSubmissionTPS, "submission_duration_ms": replaySummary.SubmissionDurationMS, "pacing_schedule": replaySummary.PacingSchedule, "pacing_late_release_count": replaySummary.PacingLateReleaseCount, "pacing_max_schedule_lag_ms": replaySummary.PacingMaxScheduleLagMS, "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows)), "cross_shard_execution_mode": finalityMode})
+	firstAckField, lastAckField := rows[0][0], rows[len(rows)-1][0]
+	if mtParallelSenderV1 != nil {
+		firstAckField, lastAckField = fmt.Sprint(mtFirstAckAtV1.UnixMilli()), fmt.Sprint(mtLastAckAtV1.UnixMilli())
+	}
+	return SaveJSON(filepath.Join(outDir, "client_submission_complete.json"), map[string]any{"submitted_unique_logical_tx_count": len(rows), "submitted_tx_count": len(rows), "rejected_during_submission": 0, "admission_ack_verified_v1": true, "admission_confirmed_tx_count_v1": len(rows), "admission_capacity_retry_count_v1": capacityRetryCountV1, "first_submitted_at": firstAckField, "last_submitted_at": lastAckField, "submission_finished_at": fmt.Sprint(time.Now().UnixMilli()), "replay_mode": replaySummary.ReplayMode, "target_submission_tps": replaySummary.TargetSubmissionTPS, "observed_submission_tps": replaySummary.ObservedSubmissionTPS, "submission_duration_ms": replaySummary.SubmissionDurationMS, "pacing_schedule": replaySummary.PacingSchedule, "pacing_late_release_count": replaySummary.PacingLateReleaseCount, "pacing_max_schedule_lag_ms": replaySummary.PacingMaxScheduleLagMS, "requested_cross_shard_ratio": plan.WorkloadPlan.CrossShardRatio, "requested_cross_shard_count": requestedCrossShardCount, "generated_cross_shard_count": generatedCrossShardCount, "observed_cross_shard_ratio": float64(generatedCrossShardCount) / float64(len(rows)), "cross_shard_execution_mode": finalityMode})
 }
 
 func optmeTxAlloNeedsStateHomeEvidence(plugins RuntimePlugins) bool {
@@ -1490,4 +1677,85 @@ func errorString(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+
+// MBE_MTPARALLEL_V1_EXPERIMENT: exact-order signing, two independent FIFO ACK
+// connections. Nothing is enabled unless MT_PIPELINE_MODE=parallel2. The
+// existing per-shard admission receipt is still mandatory, and uncertain
+// delivery still fails the whole run. No intra-shard parallel socket writes.
+type mtParallelAckV1 struct {
+    retries int
+    err error
+    started time.Time
+    finished time.Time
+}
+type mtParallelAckTaskV1 struct {
+    address string
+    envelope p2p.MessageEnvelope
+    result chan mtParallelAckV1
+    finalize func(mtParallelAckV1) error
+}
+type mtParallelSubmitV1 struct {
+    ctx context.Context
+    cancel context.CancelFunc
+    queues map[string]chan *mtParallelAckTaskV1
+    pending []*mtParallelAckTaskV1
+    workers sync.WaitGroup
+    closeOnce sync.Once
+}
+func newMTParallelSubmitV1(parent context.Context, shards []string, send func(context.Context,map[string]net.Conn,string,p2p.MessageEnvelope)(int,error)) *mtParallelSubmitV1 {
+    ctx,cancel:=context.WithCancel(parent)
+    p:=&mtParallelSubmitV1{ctx:ctx,cancel:cancel,queues:make(map[string]chan *mtParallelAckTaskV1,len(shards))}
+    for _,shard:=range shards {
+        queue:=make(chan *mtParallelAckTaskV1,1)
+        p.queues[shard]=queue
+        p.workers.Add(1)
+        go func(queue <-chan *mtParallelAckTaskV1) {
+            defer p.workers.Done()
+            connections:=map[string]net.Conn{}
+            defer func(){for _,c:=range connections { _=c.Close() }}()
+            for {
+                select {
+                case <-ctx.Done(): return
+                case task := <-queue:
+                    if task==nil { continue }
+                    start:=time.Now()
+                    retries,err:=send(ctx,connections,task.address,task.envelope)
+                    task.result <- mtParallelAckV1{retries:retries,err:err,started:start,finished:time.Now()}
+                    if err!=nil { cancel();return }
+                }
+            }
+        }(queue)
+    }
+    return p
+}
+func (p *mtParallelSubmitV1) enqueue(shard,address string,envelope p2p.MessageEnvelope,finalize func(mtParallelAckV1) error) error {
+    if p==nil {return fmt.Errorf("MTPARALLEL sender uninitialized")}
+    q,ok:=p.queues[shard];if !ok {return fmt.Errorf("MTPARALLEL unknown ingress shard %s",shard)}
+    task:=&mtParallelAckTaskV1{address:address,envelope:envelope,result:make(chan mtParallelAckV1,1),finalize:finalize}
+    select {
+    case <-p.ctx.Done():return fmt.Errorf("MTPARALLEL sender stopped: %w",p.ctx.Err())
+    case q<-task:
+        p.pending=append(p.pending,task)
+        return nil
+    }
+}
+func (p *mtParallelSubmitV1) drainWindow() error {
+    // Called only by the original signer goroutine. Finalization is replayed
+    // in signing order, so the exported rows retain their old transaction order.
+    for _,task:=range p.pending {
+        select {
+        case ack:=<-task.result:
+            if err:=task.finalize(ack);err!=nil {p.cancel();return err}
+        case <-p.ctx.Done():
+            return fmt.Errorf("MTPARALLEL ACK incomplete or uncertain: %w",p.ctx.Err())
+        }
+    }
+    p.pending=nil
+    return nil
+}
+func (p *mtParallelSubmitV1) close() {
+    if p==nil {return}
+    p.closeOnce.Do(func(){p.cancel();p.workers.Wait()})
 }

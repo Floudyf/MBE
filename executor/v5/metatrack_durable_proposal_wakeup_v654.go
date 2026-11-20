@@ -14,7 +14,16 @@ func newMetaTrackDurableProposalWakeupV654() chan struct{} {
 }
 
 func (r *NodeRuntime) metaTrackDurableProposalWakeupEnabledV654() bool {
-	return r != nil && r.metaTrackBlockExecutorFlag("dependency_closed_consensus")
+	if r == nil || r.pluginSnapshot == nil {
+		return false
+	}
+	if executor, ok := r.pluginSnapshot["block_executor"]; ok && executor.Config != nil {
+		if configured, explicitlySet := executor.Config["metatrack_durable_proposal_wakeup_v654"]; explicitlySet {
+			return boolFromAny(configured)
+		}
+	}
+	// Legacy profiles retain their previous behavior when no explicit switch is set.
+	return r.metaTrackBlockExecutorFlag("dependency_closed_consensus")
 }
 
 func (r *NodeRuntime) signalMetaTrackDurableProposalWakeupV654() {
