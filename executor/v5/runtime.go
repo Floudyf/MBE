@@ -340,6 +340,7 @@ type NodeRuntime struct {
 	commitMu                     sync.Mutex
 	commitTasks                  chan commitTask
 	proposalWakeup               chan struct{}
+	metaTrackWindowWake          metaTrackWindowWake
 	commitWorkerCancel           context.CancelFunc
 	commitWorkerContext          context.Context
 	commitWorkerWG               sync.WaitGroup
@@ -513,6 +514,11 @@ func RunNode(ctx context.Context, plan Plan, nodeID string) error {
 			return r.WriteArtifacts()
 		case <-r.proposalWakeup:
 			r.handleMetaTrackDurableProposalWakeupV654(ctx)
+		case <-r.metaTrackWindowWake.ready:
+			r.addRuntimeMetric("metatrack_window_ready_wakeup_count", 1)
+			if r.isCurrentLeader() && !r.catchupNeeded() {
+				r.propose(ctx)
+			}
 		case <-ticker.C:
 			r.porygonV54SweepLocalLease()
 			r.retryPendingRelays()
@@ -1295,6 +1301,9 @@ func newNodeRuntime(plan Plan, node NodePlan) (*NodeRuntime, error) {
 	policy.Capacity = plugins.TxPool.Capacity()
 	pool := plugins.TxPool.CreatePool(TxPoolInput{NodeID: node.NodeID, ShardID: node.ShardID, Policy: policy})
 	r := &NodeRuntime{plan: plan, node: node, peers: peers, pool: pool, proposer: realblock.NewProposer(node.NodeID, node.ShardID), db: db, store: store, consensus: pbft.NewState(node.NodeID, node.ShardID, initialLeaderID(plan, node.ShardID), node.Validators), proposals: map[string]realblock.Block{}, verifiedExecutionPlans: map[string]verifiedExecutionPlanRecord{}, deferredPrePrepares: map[uint64]deferredPrePrepare{}, votes: map[string]map[string]bool{}, committed: map[string]bool{}, committing: map[string]bool{}, queuedCommitTasks: map[string]bool{}, proposalWakeup: newMetaTrackDurableProposalWakeupV654(), pendingCommits: map[uint64]realblock.Block{}, pendingCommitErrors: map[uint64]string{}, committedHash: "genesis", lastProgressAt: time.Now().UnixMilli(), relaySource: map[string]Relay{}, pendingOutboundRelays: map[string]Relay{}, pendingFinalizeMessages: map[string]Finalize{}, outboundRelaySendErrors: map[string]string{}, finalizeSendErrors: map[string]string{}, crossEventSeen: map[string]bool{}, relayAdmissionFailures: map[string]string{}, runtimeMetricCounts: map[string]int64{}, stateFetchWaiters: map[string]chan StateFetchResponse{}, pendingStateFetches: map[string]StateFetchDiagnostic{}, stateFetchWitnesses: map[string]StateFetchResponse{}, stateFetchSnapshots: map[string]map[string]string{}, stateFetchSnapshotRoots: map[string]string{}, stateVersionInitial: map[string]string{}, stateVersionValues: map[string]map[uint64]string{}, stateVersionMaterialized: map[string]uint64{}, stateVersionSignals: map[string]chan struct{}{}, stateVersionRemoteSubscriptions: map[string]map[string]stateVersionRemoteSubscription{}, stateVersionAdmissionReady: map[string]bool{}, stateVersionAdmissionWatches: map[string]stateVersionAdmissionWatch{}, stateVersionAdmissionRequestTokens: map[string]string{}, stateApplyWaiters: map[string]chan StateDeltaApplyAck{}, pendingStateDeltaKeys: map[string]bool{}, appliedStateDeltaKeys: map[string]bool{}, pluginSnapshot: node.PluginProfile, plugins: plugins}
+	if plugins.BlockProducer.ID() == metaTrackNLWindowProducerV669ID && r.metaTrackBlockExecutorFlag("mt_window_ready_wakeup_v1") {
+		r.metaTrackWindowWake.ready = make(chan struct{}, 1)
+	}
 	initialSnapshotV204 := plugins.StateStorage.Snapshot(db)
 	r.initialBusinessStateV204 = map[string]string{}
 	for physicalKey, value := range initialSnapshotV204 {
@@ -1396,6 +1405,9 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 			return fmt.Errorf("admission %s", result.RejectReason)
 		}
 		r.recordLifecycle(LifecycleEvent{TimestampMS: time.Now().UnixMilli(), TxID: item.TxID, LogicalTxID: tx.SemanticID(item), Stage: "admitted", NodeID: r.node.NodeID, ShardID: r.node.ShardID, Success: true})
+		if result.Accepted && r.metaTrackWindowWake.ready != nil {
+			r.metaTrackWindowWake.observe(item)
+		}
 		if msg.FromNode == "mbe-client" || msg.FromNode == p2p.ClientAdmissionOriginV1 {
 			// Transaction gossip is not a primary-only consensus action. If the
 			// client is still connected to the initial ingress node after a view
@@ -1669,15 +1681,23 @@ func (r *NodeRuntime) handle(ctx context.Context, msg p2p.MessageEnvelope) error
 		}
 		r.handleStateFetchResponse(response)
 	case stateFetchBatchRequestMessage:
+		decodeStarted := time.Now()
 		request, err := p2p.DecodePayload[StateFetchBatchRequest](msg)
 		if err != nil {
 			return err
 		}
+		if os.Getenv("MT_HOME_PREFETCH_PROFILE") == "1" {
+			r.recordMetaTrackHomePrefetchPhase("home_decode", time.Since(decodeStarted))
+		}
 		return r.handleStateFetchBatchRequest(ctx, msg.FromNode, request)
 	case stateFetchBatchResponseMessage:
+		decodeStarted := time.Now()
 		response, err := p2p.DecodePayload[StateFetchBatchResponse](msg)
 		if err != nil {
 			return err
+		}
+		if os.Getenv("MT_HOME_PREFETCH_PROFILE") == "1" {
+			r.recordMetaTrackHomePrefetchPhase("response_decode", time.Since(decodeStarted))
 		}
 		r.handleStateFetchBatchResponse(response)
 	case stateDeltaApplyMessage:
@@ -1927,6 +1947,14 @@ func (r *NodeRuntime) propose(ctx context.Context) {
 
 	r.porygonProposalPhaseV532("BUILD_CANDIDATE_BEGIN", nextHeight, "", true, "")
 	block, err := r.plugins.BlockProducer.BuildCandidate(input)
+	if r.metaTrackWindowWake.ready != nil {
+		var incomplete *metaTrackIncompleteWindow
+		if errors.As(err, &incomplete) {
+			r.metaTrackWindowWake.arm(r.pool, incomplete.projection)
+		} else {
+			r.metaTrackWindowWake.clear()
+		}
+	}
 	r.porygonProposalPhaseV532("BUILD_CANDIDATE_END", nextHeight, block.BlockHash, err == nil, porygonProposalPhaseErrV532(err))
 	if err != nil && errors.Is(err, errMetaTrackBatchProjectionIncomplete) {
 		if systemDrainPending {

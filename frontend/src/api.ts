@@ -1323,6 +1323,7 @@ export type V5FormalExperimentPlan = {
   fault_points?: Array<Record<string, unknown>>;
   source_label?: "user" | "e2e" | "script";
   tags?: string[];
+  metatwine_runtime?: { window_ready_wakeup: boolean; home_prefetch_fast: boolean };
 };
 export type V5FormalRunRequest = { execution_backend: "preview" | "simulation" | "real_cluster"; plan: V5FormalExperimentPlan };
 export type V5FormalMatrixRow = {

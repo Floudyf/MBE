@@ -286,6 +286,8 @@ _MANIFESTS = [
             "ablation_on_demand_state_fetch_v661": {"type": "boolean", "default": False},
             "ablation_single_ready_queue_v661": {"type": "boolean", "default": False},
             "ablation_force_home_exact_v660": {"type": "boolean", "default": False},
+            "mt_window_ready_wakeup_v1": {"type": "boolean"},
+            "mt_home_prefetch_fast_v1": {"type": "boolean"},
             "batch_entry_state_prefetch": {"type": "boolean", "default": False},
             "batch_remote_writeback": {"type": "boolean", "default": False},
             "safe_state_fold": {"type": "boolean", "default": False},

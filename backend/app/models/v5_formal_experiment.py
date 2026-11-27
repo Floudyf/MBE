@@ -17,6 +17,11 @@ class V5FormalMethod(BaseModel):
     role: Literal["main", "baseline", "ablation", "compatibility", "custom"] = "custom"
 
 
+class V5MetaTwineRuntimeOptions(BaseModel):
+    window_ready_wakeup: bool = False
+    home_prefetch_fast: bool = False
+
+
 class V5FormalExperimentPlan(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     saved_config_id: str = ""
@@ -31,6 +36,7 @@ class V5FormalExperimentPlan(BaseModel):
     fault_points: list[dict[str, object]] = Field(default_factory=list)
     source_label: Literal["user", "e2e", "script"] = "user"
     tags: list[str] = Field(default_factory=list)
+    metatwine_runtime: V5MetaTwineRuntimeOptions | None = None
 
 
 class V5FormalRunRequest(BaseModel):

@@ -24,6 +24,36 @@ def test_v5_formal_preview_expands_persistent_shape_without_running_cluster():
     assert body["paper_candidate"] is False
 
 
+def test_frozen_metatwine_runtime_options_preserve_ablation_boundaries():
+    from backend.app.models.v5_formal_experiment import V5FormalExperimentPlan, V5MetaTwineRuntimeOptions
+    from backend.app.services.v5_formal_plan_validator import ALL_BUILTIN_METHODS
+    from backend.app.services.v5_formal_scheduler import _spec_for
+
+    payload = _payload()
+    payload["plan"]["metatwine_runtime"] = {"window_ready_wakeup": True, "home_prefetch_fast": True}
+    assert client.post("/api/v5/formal/preview", json=payload).status_code == 422
+
+    plan = V5FormalExperimentPlan.model_validate(payload["plan"])
+    for method_id, wake, prefetch in (
+        ("mtf_full10", True, True),
+        ("mtf_noflow10", True, True),
+        ("mtf_nocons10", False, True),
+        ("mtf_nosup10", True, False),
+        ("mtf_basic10", False, False),
+    ):
+        row = {"method": ALL_BUILTIN_METHODS[method_id].model_dump(), "seed": 11, "method_config_id": method_id}
+        spec = _spec_for(plan, row)
+        config = next(sel.config for sel in spec.plugin_selections if sel.category == "block_executor")
+        assert config.get("mt_window_ready_wakeup_v1", False) is wake
+        assert config.get("mt_home_prefetch_fast_v1", False) is prefetch
+
+    plan.metatwine_runtime = V5MetaTwineRuntimeOptions()
+    spec = _spec_for(plan, {"method": ALL_BUILTIN_METHODS["mtf_full10"].model_dump(), "seed": 11})
+    config = next(sel.config for sel in spec.plugin_selections if sel.category == "block_executor")
+    assert "mt_window_ready_wakeup_v1" not in config
+    assert "mt_home_prefetch_fast_v1" not in config
+
+
 def test_v5_formal_preview_rejects_backend_mismatch_and_suite_degradation():
     mismatch = _payload()
     mismatch["execution_backend"] = "preview"

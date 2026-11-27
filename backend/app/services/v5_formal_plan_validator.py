@@ -1069,6 +1069,10 @@ def validate_request(payload: V5FormalRunRequest, *, allow_blocked_rows: bool = 
 
     plan = payload.plan.model_copy(deep=True)
     plan.methods = [_verified_method(method) for method in plan.methods]
+    if plan.metatwine_runtime is not None and (
+        not plan.methods or any(method.method_id not in MT_FROZEN10K_METHOD_IDS for method in plan.methods)
+    ):
+        raise FormalPlanValidationError("MetaTwine runtime options require frozen10K methods")
     _validate_fault_points(plan)
     _validate_suite_shape(plan)
     rows = expand(plan, payload.execution_backend)

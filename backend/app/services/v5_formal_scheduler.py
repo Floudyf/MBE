@@ -1976,6 +1976,7 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
     method = row["method"]
     overrides = method.get("plugin_overrides", {})
     config_overrides = method.get("plugin_config_overrides", {})
+    runtime_options = plan.metatwine_runtime
     next_selections: list[V5PluginSelection] = []
     for item in spec.plugin_selections:
         plugin_id = overrides.get(item.category, item.plugin_id)
@@ -1991,6 +1992,13 @@ def _spec_for(plan: V5FormalExperimentPlan, row: dict, *, formal_plan_config_id:
         if item.category == "block_executor" and item.category not in overrides and method.get("method_id") != "v5_catalog_default":
             config["migrated_default"] = True
         config |= dict(config_overrides.get(item.category, {}))
+        if runtime_options is not None and plugin_id == "metatrack_block_executor":
+            config.pop("mt_window_ready_wakeup_v1", None)
+            config.pop("mt_home_prefetch_fast_v1", None)
+            if runtime_options.window_ready_wakeup and overrides.get("block_producer") == "metatrack_nl_window_v669":
+                config["mt_window_ready_wakeup_v1"] = True
+            if runtime_options.home_prefetch_fast and config.get("batch_entry_state_prefetch") is True:
+                config["mt_home_prefetch_fast_v1"] = True
         # MBE_MT_100K_INGRESS_V1: real-dataset runs must not overrun an unacknowledged 10K FIFO pool.
         # Same admission capacity for every formal method (Full and ablations).
         # Larger runs require a real node-acceptance ACK and bounded backpressure protocol.

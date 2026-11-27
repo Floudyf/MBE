@@ -113,6 +113,8 @@ type FormalRunDraftV1 = {
   workloadPoints: WorkloadPoint[];
   topologyPoints: TopologyPoint[];
   faultPoints: FaultPoint[];
+  windowReadyWakeup: boolean;
+  homePrefetchFast: boolean;
 };
 
 function cloneDefaultWorkload(): WorkloadEditorState {
@@ -207,6 +209,8 @@ function readFormalRunDraft(): FormalRunDraftV1 | null {
         ? effectiveRunMethodIdsV1(suite, migratedDiagnosticMethods)
         : effectiveRunMethodIdsV1(suite, V5_DEFAULT_METHOD_IDS),
       selectedSuite: suite,
+      windowReadyWakeup: parsed.windowReadyWakeup !== false,
+      homePrefetchFast: parsed.homePrefetchFast === true,
       workerCount: positiveInteger(parsed.workerCount, 4, 8),
       topology: {
         nodes: positiveInteger(topologyRaw.nodes, defaultTopology.nodes, 128),
@@ -254,6 +258,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   const [topology, setTopology] = useState<Topology>(() => restoredDraft?.topology ?? { ...defaultTopology });
   const [blockProduction, setBlockProduction] = useState<BlockProduction>(() => restoredDraft?.blockProduction ?? { ...defaultBlockProduction });
   const [workload, setWorkload] = useState<WorkloadEditorState>(() => restoredDraft?.workload ?? cloneDefaultWorkload());
+  const [windowReadyWakeup, setWindowReadyWakeup] = useState(() => restoredDraft?.windowReadyWakeup ?? true);
+  const [homePrefetchFast, setHomePrefetchFast] = useState(() => restoredDraft?.homePrefetchFast ?? false);
   const [skewPreset, setSkewPreset] = useState<SkewExperimentPreset>(() => restoredDraft?.skewPreset ?? "single_theta");
   const [repeats, setRepeats] = useState(() => restoredDraft?.repeats ?? 1);
   const [workloadPoints, setWorkloadPoints] = useState<WorkloadPoint[]>(() => restoredDraft?.workloadPoints ?? []);
@@ -295,6 +301,7 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
   const diagnosticMigratedSelectedMethodIds = Array.from(new Set(effectiveSelectedMethodIds.map((item) => item === "metatrack_diag_parallel" ? "metatrack_diag_ready8" : item === "metatrack_diag_serial" ? "metatrack_diag_dual1" : item).map((item) => ["metatrack_diag_dual1", "metatrack_diag_fifo1", "metatrack_sh_hash", "metatrack_sh_coacc"].includes(item) ? "metatrack_latest" : item)));
   const selectedRaw = methods.filter((method) => diagnosticMigratedSelectedMethodIds.includes(method.method_id));
   const selected = selectedRaw;
+  const frozenRuntime = selected.length > 0 && selected.every(({ method_id }) => MT_FROZEN_METHOD_ID_SET.has(method_id));
   const groundhogSelected = diagnosticMigratedSelectedMethodIds.includes(groundhogMethodId);
   const previewRunnable = Boolean(preview?.rows.length && preview.rows.every((row) => row.runnable && !row.blockers.length));
   const previewBlockers = useMemo(() => preview?.rows.flatMap((row) => row.blockers.map((blocker) => `${row.method.display_name}: ${blockerLabel(blocker)}`)) ?? [], [preview]);
@@ -339,13 +346,13 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       const draft: FormalRunDraftV1 = {
         schema_version: "mbe_v5_formal_run_draft_v1",
         saved_at: new Date().toISOString(),
-        selectedMethods, selectedSuite, workerCount, topology, blockProduction, workload, skewPreset, repeats, workloadPoints, topologyPoints, faultPoints,
+        selectedMethods, selectedSuite, workerCount, topology, blockProduction, workload, skewPreset, repeats, workloadPoints, topologyPoints, faultPoints, windowReadyWakeup, homePrefetchFast,
       };
       window.localStorage.setItem(formalRunDraftKey, JSON.stringify(draft));
       setDraftStatus("当前实验配置已自动保存。");
     }, 150);
     return () => window.clearTimeout(timer);
-  }, [selectedMethods, selectedSuite, workerCount, topology, blockProduction, workload, skewPreset, repeats, workloadPoints, topologyPoints, faultPoints]);
+  }, [selectedMethods, selectedSuite, workerCount, topology, blockProduction, workload, skewPreset, repeats, workloadPoints, topologyPoints, faultPoints, windowReadyWakeup, homePrefetchFast]);
 
   async function loadCatalog() {
     setBusy(true);
@@ -408,6 +415,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     setSelectedMethods([...V5_DEFAULT_METHOD_IDS]);
     setSelectedSuite("comparison_experiment");
     setWorkerCount(4);
+    setWindowReadyWakeup(true);
+    setHomePrefetchFast(false);
     setTopology({ ...defaultTopology });
     setBlockProduction({ ...defaultBlockProduction });
     setWorkload({ ...cloneDefaultWorkload(), datasetId: datasets[0]?.dataset_id ?? "" });
@@ -540,9 +549,12 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
     } else if (!validDatasetCounts(dataset).includes(workload.txCount)) return null;
     const definitions = dataset.variant_definitions ?? [];
     const expectedKind = workload.mode === "dataset_derived" ? "derived" : "original";
-    const definition = definitions.find((item) => item.variant_mode === workload.variantMode) ?? definitions.find((item) => (item.kind ?? "original") === expectedKind);
+    const frozenOriginal = frozenRuntime && workload.mode === "dataset_original";
+    const definition = frozenOriginal
+      ? definitions.find((item) => item.variant_mode === "original_window")
+      : definitions.find((item) => item.variant_mode === workload.variantMode) ?? definitions.find((item) => (item.kind ?? "original") === expectedKind);
     if (!definition) return null;
-    const variantParameters = { ...workload.variantParameters };
+    const variantParameters = frozenOriginal ? {} : { ...workload.variantParameters };
     const targetAlpha = typeof variantParameters.target_alpha === "number" ? variantParameters.target_alpha : undefined;
     const skewAxis = typeof variantParameters.skew_axis === "string" ? variantParameters.skew_axis : undefined;
     return {
@@ -640,7 +652,8 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       requested_metrics: [],
     };
     const e2e = new URLSearchParams(window.location.search).get("e2e") === "1";
-    return { execution_backend: "real_cluster", plan: { name: "v5_formal_real_cluster", base_spec, suites: [selectedSuite], methods: selected, seeds, repeats, worker_count: workerCount, workload_points: cleanWorkloadPoints(workloadPoints), topology_points: topologyPoints, fault_points: faultPoints, source_label: e2e ? "e2e" : "user", tags: e2e ? ["e2e"] : [] } };
+    const metatwine_runtime = frozenRuntime ? { window_ready_wakeup: windowReadyWakeup, home_prefetch_fast: homePrefetchFast } : undefined;
+    return { execution_backend: "real_cluster", plan: { name: "v5_formal_real_cluster", base_spec, suites: [selectedSuite], methods: selected, seeds, repeats, worker_count: workerCount, workload_points: cleanWorkloadPoints(workloadPoints), topology_points: topologyPoints, fault_points: faultPoints, source_label: e2e ? "e2e" : "user", tags: e2e ? ["e2e"] : [], metatwine_runtime } };
   }
 
   async function previewWorkload() {
@@ -873,7 +886,12 @@ export default function V5FormalRunPage({ onOpenResults, onPreferredMethodConsum
       {groundhogSelected && <p className="notice" data-testid="v5-groundhog-topology-notice">Groundhog 使用当前选择的节点数、分片数和每片验证节点数。核心复现要求跨片交易比例为 0；多分片时，各分片独立运行 Groundhog。</p>}
     </article>
 
-    <WorkloadSourceEditor state={workload} datasets={datasets} onChange={updateWorkload} />
+    {frozenRuntime && <article className="final-card wide">
+      <h3>MetaTwine 运行优化</h3>
+      <label><input type="checkbox" checked={windowReadyWakeup} onChange={(event) => update(() => setWindowReadyWakeup(event.target.checked))} /> 完整投影到齐后唤醒提案（Full、NoM1、NoM3）</label>
+      <label><input type="checkbox" checked={homePrefetchFast} onChange={(event) => update(() => setHomePrefetchFast(event.target.checked))} /> Home 批量预取快路径（实验性，Full、NoM1、NoM2）</label>
+    </article>}
+    <WorkloadSourceEditor state={workload} datasets={datasets} onChange={updateWorkload} requireOriginalWindow={frozenRuntime} />
     {workload.mode === "dataset_derived" && thetaOptions.length > 1 && <article className="final-card wide" data-testid="v5-skew-main-preset-panel">
       <div className="section-heading"><div><h3>真实派生/重构负载 · 实验预设</h3><p className="muted">偏斜度主实验直接使用数据集 manifest 已注册的 target_theta 档位，不生成或插值不存在的负载。</p></div></div>
       <div className="experiment-condition-grid">

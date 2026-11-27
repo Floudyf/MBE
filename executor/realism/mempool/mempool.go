@@ -172,6 +172,18 @@ func (m *Mempool) ReleaseReserved(items []tx.SignedTransaction) {
 	}
 }
 
+// VisitReady visits unreserved transactions under the pool lock. The visitor
+// must not call back into the pool. Returning false stops the scan.
+func (m *Mempool) VisitReady(visit func(tx.SignedTransaction) bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, entry := range m.byID {
+		if !m.reserved[id] && !visit(entry.tx) {
+			return
+		}
+	}
+}
+
 // MBE_PBFT_COMPACT_TRANSPORT_V1
 // LookupMany returns the exact immutable signed transaction bodies already held
 // by this node. One lock covers the complete lookup so compact PBFT proposal

@@ -383,7 +383,10 @@ func selectMetaTrackCriticalWidthWindowV6568(items []tx.SignedTransaction, limit
 		return nil, nil, nil, fmt.Errorf("metatrack v6.5.6.8 signed consensus window exceeds block limit")
 	}
 	if len(selected) < expectedShard {
-		return nil, nil, nil, fmt.Errorf("metatrack v6.5.6.8 consensus window incomplete: have=%d expected=%d", len(selected), expectedShard)
+		return nil, nil, nil, &metaTrackIncompleteWindow{
+			projection: metaTrackWindowProjectionFor(first),
+			have:       len(selected),
+		}
 	}
 	if len(selected) > expectedShard {
 		return nil, nil, nil, fmt.Errorf("metatrack v6.5.6.8 consensus window overfilled: have=%d expected=%d", len(selected), expectedShard)

@@ -3,6 +3,7 @@ package v5
 import (
 	"context"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -100,6 +101,43 @@ func (r *NodeRuntime) incrementFullLocalityMetric(key string, delta int64) {
 // Missing exact versions are returned as not-ready immediately; the scheduler
 // then falls back to the legacy long-lived exact-version subscription for those
 // future versions. This avoids a block-wide future-version barrier.
+func receiveMetaTrackBatchPrefetch(ctx context.Context, waiter <-chan StateFetchResponse, fast bool, timeout time.Duration) (StateFetchResponse, error) {
+	if fast {
+		if err := ctx.Err(); err != nil {
+			return StateFetchResponse{}, err
+		}
+		select {
+		case response := <-waiter:
+			return response, nil
+		default:
+		}
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case response := <-waiter:
+			return response, nil
+		case <-ctx.Done():
+			return StateFetchResponse{}, ctx.Err()
+		case <-timer.C:
+			return StateFetchResponse{}, context.DeadlineExceeded
+		}
+	}
+	select {
+	case response := <-waiter:
+		return response, nil
+	case <-ctx.Done():
+		return StateFetchResponse{}, ctx.Err()
+	case <-time.After(timeout):
+		return StateFetchResponse{}, context.DeadlineExceeded
+	}
+}
+
+// Both experiment arms emit the same per-batch timing counters.
+func (r *NodeRuntime) recordMetaTrackHomePrefetchPhase(phase string, duration time.Duration) {
+	r.addRuntimeMetric("metatrack_home_prefetch_"+phase+"_us", duration.Microseconds())
+	r.addRuntimeMetric("metatrack_home_prefetch_"+phase+"_count", 1)
+}
+
 func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteStateBatchFetchFunc {
 	if !r.metaTrackBlockExecutorFlag("batch_entry_state_prefetch") || len(r.shardIDs()) < 2 || !r.hasBatchRoutingControlPlane() {
 		return nil
@@ -109,6 +147,9 @@ func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteSt
 		if len(entries) == 0 {
 			return outcome, nil
 		}
+		profile := os.Getenv("MT_HOME_PREFETCH_PROFILE") == "1"
+		fast := r.metaTrackBlockExecutorFlag("mt_home_prefetch_fast_v1")
+		prepareStarted := time.Now()
 		shardIDs := r.shardIDs()
 		type prepared struct {
 			token   string
@@ -144,13 +185,31 @@ func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteSt
 			requestID := stableTextDigest(strings.Join([]string{"batch_entry", r.node.NodeID, entry.Item.TxID, block.BlockHash, entry.Access.Key, homeShard, r.stateAccessPartitionID(), fmt.Sprint(required), fmt.Sprint(versioned)}, "|"))
 			request := r.plugins.StateAccess.BuildFetchRequest(StateFetchInput{RequestID: requestID, TxID: entry.Item.TxID, BlockHash: block.BlockHash, Key: entry.Access.Key, HomeShard: homeShard, ExecutionShard: r.stateAccessPartitionID(), AccessKind: string(entry.Access.Mode), RequiredVersion: required, Versioned: versioned})
 			waiter := make(chan StateFetchResponse, 1)
+			if !fast {
+				r.mu.Lock()
+				if r.stateFetchWaiters == nil {
+					r.stateFetchWaiters = map[string]chan StateFetchResponse{}
+				}
+				r.stateFetchWaiters[requestID] = waiter
+				r.mu.Unlock()
+			}
+			groups[homeShard] = append(groups[homeShard], prepared{token: entry.Token, item: entry.Item, access: entry.Access, request: request, waiter: waiter, priorityH: entry.PriorityH, priorityD: entry.PriorityD, priorityWaiters: entry.PriorityWaiters})
+		}
+		if fast && len(groups) > 0 {
+			// Publish every waiter before the first request is put on the wire.
 			r.mu.Lock()
 			if r.stateFetchWaiters == nil {
 				r.stateFetchWaiters = map[string]chan StateFetchResponse{}
 			}
-			r.stateFetchWaiters[requestID] = waiter
+			for _, items := range groups {
+				for _, item := range items {
+					r.stateFetchWaiters[item.request.RequestID] = item.waiter
+				}
+			}
 			r.mu.Unlock()
-			groups[homeShard] = append(groups[homeShard], prepared{token: entry.Token, item: entry.Item, access: entry.Access, request: request, waiter: waiter, priorityH: entry.PriorityH, priorityD: entry.PriorityD, priorityWaiters: entry.PriorityWaiters})
+		}
+		if profile {
+			r.recordMetaTrackHomePrefetchPhase("request_prepare", time.Since(prepareStarted))
 		}
 		defer func() {
 			r.mu.Lock()
@@ -202,36 +261,53 @@ func (r *NodeRuntime) metaTrackBatchStateFetcher(block realblock.Block) RemoteSt
 			}
 			batchID := stableTextDigest(strings.Join([]string{r.node.NodeID, block.BlockHash, home, r.stateAccessPartitionID(), fmt.Sprint(len(requests))}, "|"))
 			payload := StateFetchBatchRequest{BatchID: batchID, BlockHash: block.BlockHash, HomeShard: home, ExecutionShard: r.stateAccessPartitionID(), Items: requests}
+			encodeStarted := time.Now()
 			envelope, err := p2p.NewEnvelope(stateFetchBatchRequestMessage, r.node.NodeID, target, r.node.ShardID, block.Height, 0, block.Height, payload)
 			if err != nil {
 				return outcome, err
 			}
+			if profile {
+				r.recordMetaTrackHomePrefetchPhase("request_encode", time.Since(encodeStarted))
+			}
+			sendStarted := time.Now()
 			if err := r.sendStateAccessToNode(ctx, target, envelope); err != nil {
 				return outcome, err
+			}
+			if profile {
+				r.recordMetaTrackHomePrefetchPhase("request_send", time.Since(sendStarted))
 			}
 			outcome.RequestCount++
 			outcome.ItemCount += len(items)
 			r.incrementFullLocalityMetric("metatrack_batch_entry_request_count", 1)
 			r.incrementFullLocalityMetric("metatrack_batch_entry_item_count", int64(len(items)))
+			collectStarted := time.Now()
+			var receiveWait time.Duration
 			for _, item := range items {
 				started := time.Now()
-				select {
-				case response := <-item.waiter:
-					if response.Success {
-						r.recordRemoteStateAccess(block, item.item, item.access, response, time.Since(started))
-						outcome.Events[item.token] = RemoteStateReadyEvent{TxID: item.item.TxID, Key: item.access.Key, ReadinessToken: item.token, Value: response.Value, HomeShard: response.HomeShard, StateVersion: response.StateVersion, LatencyMS: time.Since(started).Milliseconds()}
-						r.incrementFullLocalityMetric("metatrack_batch_entry_ready_item_count", 1)
-					} else if response.Versioned && response.Error == "state_version_not_ready" {
-						outcome.NotReady[item.token] = true
-						r.incrementFullLocalityMetric("metatrack_batch_entry_not_ready_item_count", 1)
-					} else {
-						return outcome, fmt.Errorf("batch entry state fetch failed for %s: %s", item.access.Key, response.Error)
+				response, err := receiveMetaTrackBatchPrefetch(ctx, item.waiter, fast, 10*time.Second)
+				if err != nil {
+					if ctx.Err() != nil {
+						return outcome, ctx.Err()
 					}
-				case <-ctx.Done():
-					return outcome, ctx.Err()
-				case <-time.After(10 * time.Second):
 					return outcome, fmt.Errorf("batch entry state fetch timed out for %s from %s", item.access.Key, home)
 				}
+				waited := time.Since(started)
+				receiveWait += waited
+				if response.Success {
+					r.recordRemoteStateAccess(block, item.item, item.access, response, waited)
+					outcome.Events[item.token] = RemoteStateReadyEvent{TxID: item.item.TxID, Key: item.access.Key, ReadinessToken: item.token, Value: response.Value, HomeShard: response.HomeShard, StateVersion: response.StateVersion, LatencyMS: waited.Milliseconds()}
+					r.incrementFullLocalityMetric("metatrack_batch_entry_ready_item_count", 1)
+				} else if response.Versioned && response.Error == "state_version_not_ready" {
+					outcome.NotReady[item.token] = true
+					r.incrementFullLocalityMetric("metatrack_batch_entry_not_ready_item_count", 1)
+				} else {
+					return outcome, fmt.Errorf("batch entry state fetch failed for %s: %s", item.access.Key, response.Error)
+				}
+			}
+			if profile {
+				collectWall := time.Since(collectStarted)
+				r.recordMetaTrackHomePrefetchPhase("response_wait", receiveWait)
+				r.recordMetaTrackHomePrefetchPhase("response_consume", collectWall-receiveWait)
 			}
 		}
 		_ = localOrUnsupported
@@ -243,6 +319,8 @@ func (r *NodeRuntime) handleStateFetchBatchRequest(ctx context.Context, requeste
 	// MBE_MT_HOME_CAUSE_TRACE_V1: candidate-only, no service-order changes.
 	finishHomeFetchTrace := r.mtHomeTraceSpanV1("home_fetch_batch", request.HomeShard, request.BlockHash, requester, 0, len(request.Items), -1)
 	defer func() { finishHomeFetchTrace(traceErr) }()
+	profile := os.Getenv("MT_HOME_PREFETCH_PROFILE") == "1"
+	buildStarted := time.Now()
 	responses := make([]StateFetchResponse, 0, len(request.Items))
 	for _, item := range request.Items {
 		qualifiedKey := item.HomeShard + "::" + item.Key
@@ -272,17 +350,33 @@ func (r *NodeRuntime) handleStateFetchBatchRequest(ctx context.Context, requeste
 		response.WitnessDigest = stateFetchWitnessDigest(response, item.AccessKind)
 		responses = append(responses, response)
 	}
+	if profile {
+		r.recordMetaTrackHomePrefetchPhase("home_build", time.Since(buildStarted))
+	}
+	encodeStarted := time.Now()
 	payload := StateFetchBatchResponse{BatchID: request.BatchID, BlockHash: request.BlockHash, HomeShard: request.HomeShard, ExecutionShard: request.ExecutionShard, Items: responses}
 	envelope, err := p2p.NewEnvelope(stateFetchBatchResponseMessage, r.node.NodeID, requester, r.node.ShardID, 0, 0, 0, payload)
 	if err != nil {
 		return err
 	}
-	return r.sendStateAccessToNode(ctx, requester, envelope)
+	if profile {
+		r.recordMetaTrackHomePrefetchPhase("home_encode", time.Since(encodeStarted))
+	}
+	sendStarted := time.Now()
+	err = r.sendStateAccessToNode(ctx, requester, envelope)
+	if profile {
+		r.recordMetaTrackHomePrefetchPhase("home_send", time.Since(sendStarted))
+	}
+	return err
 }
 
 func (r *NodeRuntime) handleStateFetchBatchResponse(response StateFetchBatchResponse) {
+	started := time.Now()
 	for _, item := range response.Items {
 		r.handleStateFetchResponse(item)
+	}
+	if os.Getenv("MT_HOME_PREFETCH_PROFILE") == "1" {
+		r.recordMetaTrackHomePrefetchPhase("response_deliver", time.Since(started))
 	}
 }
 

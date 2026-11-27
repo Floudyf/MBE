@@ -105,10 +105,11 @@ export function publishedWorkloadDatasets(datasets: V5WorkloadDatasetSummary[], 
   return datasets.filter((dataset) => PUBLISHED_V5_DATASETS.has(dataset.dataset_id) && !FORMAL_HIDDEN_SEMANTIC.has(dataset.dataset_id) && definitionsForMode(dataset, mode).length > 0);
 }
 
-export default function WorkloadSourceEditor({ state, datasets, onChange }: { state: WorkloadEditorState; datasets: V5WorkloadDatasetSummary[]; onChange: (state: WorkloadEditorState) => void }) {
+export default function WorkloadSourceEditor({ state, datasets, onChange, requireOriginalWindow = false }: { state: WorkloadEditorState; datasets: V5WorkloadDatasetSummary[]; onChange: (state: WorkloadEditorState) => void; requireOriginalWindow?: boolean }) {
   const visibleDatasets = publishedWorkloadDatasets(datasets, state.mode);
   const dataset = visibleDatasets.find((item) => item.dataset_id === state.datasetId);
-  const modeDefinitions = definitionsForMode(dataset, state.mode);
+  const originalWindow = (item: V5WorkloadVariantDefinition) => item.variant_mode === "original_window";
+  const modeDefinitions = definitionsForMode(dataset, state.mode).filter((item) => !requireOriginalWindow || state.mode !== "dataset_original" || originalWindow(item));
   const selectedDefinition = modeDefinitions.find((item) => item.variant_mode === state.variantMode) ?? modeDefinitions[0];
   const hasOriginalDataset = publishedWorkloadDatasets(datasets, "dataset_original").some((item) => item.selectable);
   const hasDerivedDataset = publishedWorkloadDatasets(datasets, "dataset_derived").some((item) => item.selectable);
@@ -122,11 +123,18 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
 
   function patch(next: Partial<WorkloadEditorState>) { onChange({ ...state, ...next }); }
 
+  function defaultDefinition(candidate: V5WorkloadDatasetSummary | undefined, mode: WorkloadMode) {
+    if (requireOriginalWindow && mode === "dataset_original") {
+      return definitionsForMode(candidate, mode).find(originalWindow);
+    }
+    return preferredHeneDefinition(candidate, mode);
+  }
+
   function selectMode(mode: WorkloadMode) {
     if (mode === "synthetic") { patch({ mode, useFullDataset: false }); return; }
     const choices = publishedWorkloadDatasets(datasets, mode);
     const candidateDataset = choices.find((item) => item.dataset_id === state.datasetId && item.selectable) ?? choices.find((item) => item.selectable);
-    const definition = preferredHeneDefinition(candidateDataset, mode);
+    const definition = defaultDefinition(candidateDataset, mode);
     const parameters = initialParameters(definition);
     patch({
       mode,
@@ -143,7 +151,7 @@ export default function WorkloadSourceEditor({ state, datasets, onChange }: { st
   function selectDataset(datasetId: string) {
     const nextDataset = visibleDatasets.find((item) => item.dataset_id === datasetId);
     if (!nextDataset) return;
-    const definition = preferredHeneDefinition(nextDataset, state.mode);
+    const definition = defaultDefinition(nextDataset, state.mode);
     const parameters = initialParameters(definition);
     patch({
       datasetId,

@@ -439,6 +439,12 @@ func annotateCalvinStatelessLocalStateDelta(items []state.StateKV, block realblo
 		}
 		dep := latest[logicalKey]
 		if dep.ProducedVersion > 0 {
+			// The home executor already combined local and remote writes in
+			// consensus order. The generic commit annotator can infer a delta
+			// from only this replica's local transaction results. Persist the
+			// complete home value instead of applying that partial delta.
+			next.UpdateSemantics = "set"
+			next.Delta = 0
 			next.RoutingOrdinal = dep.ProducedVersion
 			next.PreviousVersion = dep.RequiredVersion
 			next.ProducedVersion = dep.ProducedVersion

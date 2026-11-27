@@ -1226,14 +1226,23 @@ func (r *NodeRuntime) handleCertifiedCatchupBlock(ctx context.Context, fromNode 
 	r.mu.Lock()
 	r.incrementRuntimeMetricLocked("pbft_catchup_block_count")
 	r.mu.Unlock()
-	if err := r.enqueueCommitTask(commitTaskCatchUp, item.Block, CommitOriginCatchUp); err != nil {
+	var enqueueErr error
+	if r.porygonPipelineEnabledRuntime() {
+		// A certified Porygon block proves Ordering. Execution and durability
+		// must still pass through the normal pipeline, using Proposal.T/U and
+		// the current ESC/partition-root certificates. The generic catch-up
+		// worker would re-execute with the legacy multi-shard update protocol.
+		enqueueErr = r.porygonPipelineOnOrderingCertified(item.Block)
+	} else {
+		enqueueErr = r.enqueueCommitTask(commitTaskCatchUp, item.Block, CommitOriginCatchUp)
+	}
+	if enqueueErr != nil {
 		r.mu.Lock()
 		r.incrementRuntimeMetricLocked("pbft_catchup_failure_count")
 		r.incrementRuntimeMetricLocked("pbft_catchup_enqueue_failure_count")
 		r.mu.Unlock()
-		return err
 	}
-	return nil
+	return enqueueErr
 }
 
 func (r *NodeRuntime) deferPBFTPrePrepare(ctx context.Context, fromNode string, pre pbft.PrePrepare, replayed bool) error {
